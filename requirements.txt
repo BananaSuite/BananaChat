@@ -4,7 +4,7 @@ Werkzeug==3.1.8
 markupsafe>=2.0.0,<3.0
 gunicorn>=26.2.0,<27; sys_platform != "win32"
 waitress>=3.0.0,<4.0; sys_platform == "win32"
-filelock>=3.0.0,<4.0
+filelock>=4.0.1,<5.0
 # Optional: psutil for CPU/RAM metrics collection in compute snapshots
 psutil>=6.0.0
 Pillow>=12.3.0,<13.0
