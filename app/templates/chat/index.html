@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Chat | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="chat-layout">
+
+  {# Sidebar #}
+  <aside class="chat-sidebar">
+    <div class="chat-sidebar-header">
+      <form method="POST" action="{{ url_for('chat_new') }}" id="new-chat-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="incognito" id="incognito-input" value="0">
+
+        <select name="model_hint" id="sidebar-model-select" style="width:100%;margin-bottom:0.5rem;font-size:0.82rem;">
+          <option value="auto">Auto (best available)</option>
+          {% for model in models %}
+            <option value="{{ model.ollama_name }}">{{ model.display_name or model.ollama_name }}</option>
+          {% endfor %}
+        </select>
+
+        <div style="display:flex;gap:0.4rem;">
+          <button type="submit" class="btn btn-primary" style="flex:1;font-size:0.85rem;">+ New Chat</button>
+          <button type="button" id="incognito-toggle" class="btn btn-sm"
+                  title="{{ t('private_explainer') }}" style="font-size:0.75rem;">
+            Incognito: Off
+          </button>
+        </div>
+      </form>
+
+      <input id="sidebar-search" class="sidebar-search" type="search" placeholder="Search chats…">
+    </div>
+
+    <div class="chat-sidebar-body">
+      {% if sessions %}
+        {% for sess in sessions %}
+          <a href="{{ url_for('chat_session', session_id=sess.id) }}" class="session-item"
+             data-session-id="{{ sess.id }}"
+             data-title="{{ sess.title or 'New Chat' }}"
+             data-shared-token="{{ sess.shared_token or '' }}">
+            <span class="session-title">{{ sess.title or 'New Chat' }}</span>
+            {% if sess.is_incognito %}<span class="session-incognito" title="Incognito">&#128065;</span>{% endif %}
+            <span class="session-menu-btn" role="button" tabindex="0" title="Options">&#8943;</span>
+          </a>
+        {% endfor %}
+      {% else %}
+        <p class="sidebar-empty">No chats yet</p>
+      {% endif %}
+    </div>
+  </aside>
+
+  {# Main: empty state #}
+  <main class="chat-main">
+    <div class="chat-empty">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+      <h3>Start a new chat</h3>
+      <p class="text-sm text-muted">Select a model and click <strong>+ New Chat</strong> to begin.</p>
+    </div>
+  </main>
+
+</div>
+{% endblock %}

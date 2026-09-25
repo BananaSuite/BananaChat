@@ -1,0 +1,45 @@
+[Unit]
+Description=BananaChat ComfyUI Checkpoint Download Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=comfyui
+Group=comfyui
+WorkingDirectory=/opt/bananachat-checkpoint-agent
+EnvironmentFile=/etc/bananachat/checkpoint-agent.env
+ExecStart=/opt/bananachat-checkpoint-agent/.venv/bin/python -m compute.checkpoint_agent
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @reboot @swap
+ReadWritePaths=/srv/comfyui/models/checkpoints /var/lib/bananachat-checkpoint-agent
+
+[Install]
+WantedBy=multi-user.target

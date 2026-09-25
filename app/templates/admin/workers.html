@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Workers | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-header">
+    <h1>Worker Nodes</h1>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Back to Dashboard</a>
+  </div>
+
+  {% if not workers_enabled %}
+  <div class="alert alert-warning mb-2">
+    <strong>Workers are disabled.</strong>
+    Set <code>BC_WORKERS_ENABLED=1</code> on the server and restart to enable remote worker dispatch.
+    Workers can be registered and tokens generated now; dispatch will begin once the flag is set.
+  </div>
+  {% endif %}
+
+  {# New worker token flash #}
+  {% set new_token = session.pop('new_worker_token', None) %}
+  {% set new_id    = session.pop('new_worker_id',    None) %}
+  {% if new_token %}
+  <div class="card mb-2" style="border:2px solid var(--color-success, #22c55e);">
+    <div class="card-title">New Worker Token: copy now</div>
+    <p class="text-muted mb-1">This token is shown <strong>once</strong>. Store it in the worker's
+    <code>BC_WORKER_TOKEN</code> environment variable.</p>
+    <div style="display:flex;gap:0.5rem;align-items:center;">
+      <code id="new-token-val" style="word-break:break-all;flex:1;background:var(--color-bg-alt,#f4f4f5);padding:0.4rem 0.6rem;border-radius:4px;">{{ new_token }}</code>
+      <button class="btn btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('new-token-val').textContent).then(()=>this.textContent='Copied!').catch(()=>{})">Copy</button>
+    </div>
+    <p class="text-muted mt-1" style="font-size:0.85em;">Worker ID: {{ new_id }}</p>
+  </div>
+  {% endif %}
+
+  {# Register new worker #}
+  <div class="card mb-2">
+    <div class="card-title">Add Worker</div>
+    <form method="POST" action="{{ url_for('admin_worker_create') }}"
+          style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group mb-0" style="flex:1;min-width:200px;">
+        <label class="form-label">Worker Name</label>
+        <input type="text" name="name" placeholder="e.g. Gaming PC, Home Server"
+               maxlength="80" required autocomplete="off">
+      </div>
+      <button type="submit" class="btn btn-primary" style="align-self:flex-end;">Register &amp; Get Token</button>
+    </form>
+  </div>
+
+  {# Worker list #}
+  <div class="card">
+    <div class="card-title">
+      Registered Workers
+      <span class="text-muted" style="font-weight:400;font-size:0.9em;"
+            id="worker-live-hint">(auto-refreshes every 15 s)</span>
+    </div>
+    {% if workers %}
+    <div class="table-wrap">
+      <table id="workers-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Activity</th>
+            <th>GPU</th>
+            <th>GPU Util</th>
+            <th>Models</th>
+            <th>Ollama</th>
+            <th>Last Seen</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for w in workers %}
+          <tr id="worker-row-{{ w.id }}">
+            <td><strong>{{ w.name }}</strong><br>
+                <span class="text-muted" style="font-size:0.78em;">{{ w.id[:12] }}…</span>
+            </td>
+            <td>
+              {% if w.status == 'online' %}
+                <span class="badge badge-success">online</span>
+              {% elif w.status == 'busy' %}
+                <span class="badge badge-warning">busy</span>
+              {% elif w.status == 'disabled' %}
+                <span class="badge badge-error">disabled</span>
+              {% else %}
+                <span class="badge">offline</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if w.activity_state %}
+                <span class="badge {% if w.activity_state == 'gaming' %}badge-error{% elif w.activity_state == 'idle' %}badge-success{% else %}badge-warning{% endif %}">
+                  {{ w.activity_state }}
+                </span>
+              {% else %}-{% endif %}
+            </td>
+            <td>{{ w.gpu_name or '-' }}</td>
+            <td>
+              {% if w.gpu_util is not none %}
+                {{ "%.0f"|format(w.gpu_util) }}%
+              {% else %}-{% endif %}
+            </td>
+            <td>
+              {% set caps = w.capabilities if w.capabilities is mapping else {} %}
+              {% set models = caps.get('models', []) if caps else [] %}
+              {% if models %}
+                <span title="{{ models | join(', ') }}">{{ plural(models | length, 'model') }}</span>
+              {% else %}-{% endif %}
+            </td>
+            <td>{{ w.ollama_version or '-' }}</td>
+            <td>
+              {% if w.last_heartbeat_iso %}
+                <span class="text-muted" style="font-size:0.85em;">
+                  {{ time_ago(w.last_heartbeat_iso) }}
+                </span>
+              {% else %}never{% endif %}
+            </td>
+            <td>
+              <form method="POST" action="{{ url_for('admin_worker_toggle', worker_id=w.id) }}"
+                    style="display:inline;" onsubmit="return confirm('Toggle worker status?')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm">
+                  {{ 'Enable' if w.status == 'disabled' else 'Disable' }}
+                </button>
+              </form>
+              <form method="POST" action="{{ url_for('admin_worker_delete', worker_id=w.id) }}"
+                    style="display:inline;" onsubmit="return confirm('Delete this worker? The token will stop working immediately.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted">No workers registered yet. Add one above.</p>
+    {% endif %}
+  </div>
+
+  {# Setup guide #}
+  <div class="card mt-2">
+    <div class="card-title">Setup Guide</div>
+    <ol style="line-height:1.8;padding-left:1.2rem;">
+      <li>Click <strong>Register &amp; Get Token</strong> above and copy the one-time token.</li>
+      <li>On the PC that will run inference, clone / copy the <code>worker/</code> directory.</li>
+      <li>Install optional dependencies:
+        <code>pip install nvidia-ml-py3 psutil</code></li>
+      <li>Set environment variables (or create a <code>.env</code> file):
+        <pre style="margin:0.4rem 0;padding:0.5rem;background:var(--color-bg-alt,#f4f4f5);border-radius:4px;">BC_SERVER_URL={{ request.host_url.rstrip('/') }}
+BC_WORKER_TOKEN=&lt;paste token here&gt;
+BC_WORKER_NAME=My Gaming PC</pre>
+      </li>
+      <li>Test manually:
+        <code>python bananachat_worker.py run</code></li>
+      <li>Install as a service (runs on login / at boot):
+        <br>Linux: <code>python bananachat_worker.py install</code>
+        <br>Windows: <code>python bananachat_worker.py install</code> (run as Administrator)</li>
+      <li>Enable worker dispatch on the server by setting
+        <code>BC_WORKERS_ENABLED=1</code> and restarting.</li>
+    </ol>
+  </div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+// Live-refresh the worker table every 15 seconds
+(function () {
+  var interval = 15000;
+  function refresh() {
+    fetch("{{ url_for('admin_api_workers') }}")
+      .then(function (r) { return r.json(); })
+      .then(function (workers) {
+        workers.forEach(function (w) {
+          var row = document.getElementById("worker-row-" + w.id);
+          if (!row) return;
+          var cells = row.querySelectorAll("td");
+          if (cells.length < 8) return;
+          // Status badge
+          var s = w.status;
+          var badge = s === "online"    ? '<span class="badge badge-success">online</span>'
+                    : s === "busy"      ? '<span class="badge badge-warning">busy</span>'
+                    : s === "disabled"  ? '<span class="badge badge-error">disabled</span>'
+                    :                     '<span class="badge">offline</span>';
+          cells[1].innerHTML = badge;
+          // Activity
+          var a = w.activity_state || "";
+          cells[2].innerHTML = a
+            ? '<span class="badge ' + (a==="gaming"?"badge-error":a==="idle"?"badge-success":"badge-warning") + '">' + a + '</span>'
+            : "-";
+          // GPU util
+          cells[4].textContent = (w.gpu_util != null) ? Math.round(w.gpu_util) + "%" : "-";
+        });
+      })
+      .catch(function () {});
+  }
+  setTimeout(function loop() { refresh(); setTimeout(loop, interval); }, interval);
+})();
+</script>
+{% endblock %}

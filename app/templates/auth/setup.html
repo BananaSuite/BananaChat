@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="{{ current_language }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>{{ t('complete_setup') }} | {{ display_name }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% include "_theme_style.html" %}
+</head>
+<body>
+
+<div class="auth-page">
+  <div class="auth-card" style="max-width:460px">
+    <div class="auth-language language-switcher"><a href="{{ url_for('set_language', language='it', next=request.full_path) }}" class="{% if current_language == 'it' %}active{% endif %}">IT</a><a href="{{ url_for('set_language', language='en', next=request.full_path) }}" class="{% if current_language == 'en' %}active{% endif %}">EN</a></div>
+    <div class="auth-logo">
+      <h1>{{ display_name }}</h1>
+      <p>{{ t('first_setup') }}</p>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }} mb-2">
+            <span class="flash-msg">{{ message }}</span>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST" action="{{ url_for('setup') }}">
+      {% if not setup_authorized() %}
+      <div class="form-group">
+        <label class="form-label" for="setup_token">{{ t('installation_token') }}</label>
+        <input id="setup_token" type="password" name="setup_token" autocomplete="off" required>
+        <span class="form-hint">{{ t('installation_token_help') }}</span>
+      </div>
+      {% endif %}
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="_form_time" value="{{ bot_form_token }}">
+      {# Honeypot #}
+      <div style="display:none" aria-hidden="true">
+        <input type="text" name="website" tabindex="-1" autocomplete="off" value="">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="site_name">{{ t('site_name') }}</label>
+        <input type="text" id="site_name" name="site_name" value="{{ display_name }}"
+               maxlength="100" placeholder="{{ display_name }}" autofocus>
+        <span class="form-hint">{{ t('site_name_hint') }}</span>
+      </div>
+
+      <hr>
+
+      <div class="form-group">
+        <label class="form-label" for="username">{{ t('admin_username') }}</label>
+        <input type="text" id="username" name="username" autocomplete="username"
+               required maxlength="32" placeholder="admin">
+        <span class="form-hint">{{ t('username_hint') }}</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="password">{{ t('password') }}</label>
+        <input type="password" id="password" name="password" autocomplete="new-password"
+               required placeholder="{{ t('password_hint') }}">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="confirm_password">{{ t('confirm_password') }}</label>
+        <input type="password" id="confirm_password" name="confirm_password"
+               autocomplete="new-password" required placeholder="{{ t('repeat_password') }}">
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-full mt-2">{{ t('complete_setup') }}</button>
+    </form>
+  </div>
+</div>
+
+<script nonce="{{ csp_nonce }}">window.BC_LANG = {{ current_language | tojson }}; window.BC_I18N = {{ browser_i18n | tojson }};</script><script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/main.js') }}"></script>
+{% include "_source_link.html" %}
+</body>
+</html>

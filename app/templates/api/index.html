@@ -1,0 +1,274 @@
+{% extends "base.html" %}
+{% block title %}API | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-header">
+    <div>
+      <h1>API Access</h1>
+      <div class="subtitle">Manage tokens, check credits, explore the API.</div>
+    </div>
+    <div style="display:flex;gap:0.5rem;">
+      <a href="{{ url_for('api_usage') }}" class="btn btn-sm">Usage History</a>
+      <a href="{{ url_for('api_playground') }}" class="btn btn-sm btn-primary">Playground</a>
+    </div>
+  </div>
+
+  {# Token Management #}
+  <div class="card mb-2">
+    <div class="card-title lg">API Tokens</div>
+
+    {% if tokens %}
+      <div class="table-wrap mb-2">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Prefix</th>
+              <th>Created</th>
+              <th>Last Used</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for token in tokens %}
+              <tr>
+                <td>
+                  <span class="token-name">{{ token.name or '(unnamed)' }}</span>
+                </td>
+                <td class="td-mono">{{ token.prefix }}…</td>
+                <td class="text-muted text-sm">{{ time_ago(token.created_at) }}</td>
+                <td class="text-muted text-sm">{{ time_ago(token.last_used_at) if token.last_used_at else 'Never' }}</td>
+                <td>
+                  <div class="td-actions">
+                    {# Rename #}
+                    <form method="POST" action="{{ url_for('api_token_rename', token_id=token.id) }}"
+                          class="token-rename-form" style="display:inline-flex;gap:0.3rem;align-items:center;">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="text" name="name" class="token-rename-input"
+                             style="display:none;width:120px;" value="{{ token.name or '' }}"
+                             placeholder="Token name" maxlength="64">
+                      <button type="button" class="btn btn-sm token-rename-btn">Rename</button>
+                    </form>
+
+                    {# Rotate #}
+                    <form method="POST" action="{{ url_for('api_token_rotate', token_id=token.id) }}"
+                          data-confirm="Rotate this token? The old key will stop working immediately.">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button type="submit" class="btn btn-sm">Rotate</button>
+                    </form>
+
+                    {# Delete #}
+                    <form method="POST" action="{{ url_for('api_token_delete', token_id=token.id) }}"
+                          data-confirm="Delete this token? This cannot be undone.">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="text-muted text-sm mb-2">No tokens yet.</p>
+    {% endif %}
+
+    {% if tokens | length < max_tokens %}
+      <form method="POST" action="{{ url_for('api_token_create') }}" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="name" placeholder="Token name (optional)" maxlength="64" style="flex:1;min-width:180px;">
+        <button type="submit" class="btn btn-primary">Create Token</button>
+      </form>
+    {% else %}
+      <p class="text-sm text-muted">Maximum of {{ max_tokens }} tokens reached.</p>
+    {% endif %}
+  </div>
+
+  {# Credit Status #}
+  <div class="card mb-2">
+    <div class="card-title lg">Credit Status</div>
+    {% if current_user.role == 'admin' %}
+      <p class="text-sm" style="color:#86efac;">Unlimited: admin accounts have no daily credit limit.</p>
+    {% else %}
+    <div class="card-section" style="padding-top:0;margin-top:0;border-top:none;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;flex-wrap:wrap;">
+        <div>
+          <div class="progress-label">
+            <span>Regular credits used today</span>
+            <span>{{ reg_used | round(1) }} / {{ quota.daily_credits }}</span>
+          </div>
+          {% set reg_pct = ((reg_used / quota.daily_credits) * 100) | int if quota.daily_credits > 0 else 0 %}
+          <div class="progress-wrap">
+            <div class="progress-bar {% if reg_pct >= 90 %}danger{% elif reg_pct >= 70 %}warning{% endif %}"
+                 style="width: {{ [reg_pct, 100] | min }}%"></div>
+          </div>
+          <div class="text-xs text-muted mt-1">{{ [quota.daily_credits - reg_used, 0]|max | round(1) }} remaining</div>
+        </div>
+        <div>
+          <div class="progress-label">
+            <span>Slow credits used today</span>
+            <span>{{ slow_used | round(1) }} / {{ quota.daily_slow_credits }}</span>
+          </div>
+          {% set slow_pct = ((slow_used / quota.daily_slow_credits) * 100) | int if quota.daily_slow_credits > 0 else 0 %}
+          <div class="progress-wrap">
+            <div class="progress-bar {% if slow_pct >= 90 %}danger{% elif slow_pct >= 70 %}warning{% endif %}"
+                 style="width: {{ [slow_pct, 100] | min }}%"></div>
+          </div>
+          <div class="text-xs text-muted mt-1">{{ [quota.daily_slow_credits - slow_used, 0]|max | round(1) }} remaining</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  {# API Reference #}
+  <div class="card">
+    <div class="card-title lg">API Reference</div>
+    <p class="text-sm text-muted mb-2">
+      OpenAI-compatible API. Use your token as a Bearer in the <code class="mono" style="font-size:0.82rem;color:#7e9ada;">Authorization</code> header.
+      Base URL: <code class="mono" style="font-size:0.82rem;color:#7e9ada;">{{ request.host_url }}v1</code>
+    </p>
+
+    {# Tab bar #}
+    <div class="api-tabs" id="api-tabs">
+      <button class="api-tab active" data-tab="curl">curl</button>
+      <button class="api-tab" data-tab="python">Python</button>
+      <button class="api-tab" data-tab="js">JavaScript</button>
+      <button class="api-tab" data-tab="models">List Models</button>
+    </div>
+
+    {# curl #}
+    <div class="api-tab-panel active" id="tab-curl">
+      <pre class="api-code"><span class="api-c">curl</span> {{ request.host_url }}v1/chat/completions \
+  -H <span class="api-s">"Authorization: Bearer &lt;your-token&gt;"</span> \
+  -H <span class="api-s">"Content-Type: application/json"</span> \
+  -d <span class="api-s">'{
+    "model": "auto",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user",   "content": "Explain quantum entanglement briefly."}
+    ],
+    "stream": false
+  }'</span></pre>
+    </div>
+
+    {# Python #}
+    <div class="api-tab-panel" id="tab-python">
+      <pre class="api-code"><span class="api-k">from</span> openai <span class="api-k">import</span> OpenAI
+
+client = OpenAI(
+    base_url=<span class="api-s">"{{ request.host_url }}v1"</span>,
+    api_key=<span class="api-s">"&lt;your-token&gt;"</span>,
+)
+
+response = client.chat.completions.create(
+    model=<span class="api-s">"auto"</span>,
+    messages=[
+        {<span class="api-s">"role"</span>: <span class="api-s">"system"</span>,  <span class="api-s">"content"</span>: <span class="api-s">"You are a helpful assistant."</span>},
+        {<span class="api-s">"role"</span>: <span class="api-s">"user"</span>,    <span class="api-s">"content"</span>: <span class="api-s">"Explain quantum entanglement briefly."</span>},
+    ],
+)
+
+<span class="api-k">print</span>(response.choices[<span class="api-n">0</span>].message.content)</pre>
+      <p class="text-xs text-muted mt-1">Install: <code class="mono" style="font-size:0.78rem;">pip install openai</code></p>
+    </div>
+
+    {# JavaScript #}
+    <div class="api-tab-panel" id="tab-js">
+      <pre class="api-code"><span class="api-k">import</span> OpenAI <span class="api-k">from</span> <span class="api-s">"openai"</span>;
+
+<span class="api-k">const</span> client = <span class="api-k">new</span> OpenAI({
+  baseURL: <span class="api-s">"{{ request.host_url }}v1"</span>,
+  apiKey:  <span class="api-s">"&lt;your-token&gt;"</span>,
+});
+
+<span class="api-k">const</span> response = <span class="api-k">await</span> client.chat.completions.create({
+  model: <span class="api-s">"auto"</span>,
+  messages: [
+    { role: <span class="api-s">"system"</span>, content: <span class="api-s">"You are a helpful assistant."</span> },
+    { role: <span class="api-s">"user"</span>,   content: <span class="api-s">"Explain quantum entanglement briefly."</span> },
+  ],
+});
+
+console.log(response.choices[<span class="api-n">0</span>].message.content);</pre>
+      <p class="text-xs text-muted mt-1">Install: <code class="mono" style="font-size:0.78rem;">npm install openai</code></p>
+    </div>
+
+    {# List models #}
+    <div class="api-tab-panel" id="tab-models">
+      <pre class="api-code"><span class="api-c">curl</span> {{ request.host_url }}v1/models \
+  -H <span class="api-s">"Authorization: Bearer &lt;your-token&gt;"</span>
+
+<span class="api-c"># Available models on this instance:</span>
+{% for m in models %}<span class="api-c">#   {{ m.ollama_name }}{% if m.display_name and m.display_name != m.ollama_name %}  ({{ m.display_name }}){% endif %}</span>
+{% else %}<span class="api-c">#   (no models configured yet)</span>
+{% endfor %}</pre>
+    </div>
+
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:1.25rem;">
+      <a href="{{ url_for('api_usage') }}" class="btn btn-sm">View Usage History</a>
+      <a href="{{ url_for('api_playground') }}" class="btn btn-sm btn-primary">Open Playground</a>
+    </div>
+  </div>
+
+<style>
+.api-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0;
+  border-bottom: 1px solid #2d2d4a;
+  padding-bottom: 0;
+}
+.api-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #8fa0d4;
+  font-size: 0.82rem;
+  font-family: inherit;
+  padding: 0.4rem 0.85rem 0.5rem;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.api-tab:hover { color: #c8ccd8; }
+.api-tab.active { color: #7e9ada; border-bottom-color: #7e9ada; }
+.api-tab-panel { display: none; }
+.api-tab-panel.active { display: block; }
+.api-code {
+  background: #11111a;
+  border: 1px solid #2d2d4a;
+  border-top: none;
+  border-radius: 0 0 7px 7px;
+  padding: 1rem 1.1rem;
+  font-family: "Menlo", "Monaco", "Consolas", monospace;
+  font-size: 0.8rem;
+  color: #c8ccd8;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+}
+.api-k { color: #8fa0d4; }
+.api-s { color: #86efac; }
+.api-c { color: #5a6b98; }
+.api-n { color: #fdba74; }
+</style>
+<script nonce="{{ csp_nonce }}">
+document.addEventListener("DOMContentLoaded", function() {
+  var tabs = document.querySelectorAll("#api-tabs .api-tab");
+  tabs.forEach(function(tab) {
+    tab.addEventListener("click", function() {
+      tabs.forEach(function(t) { t.classList.remove("active"); });
+      document.querySelectorAll(".api-tab-panel").forEach(function(p) { p.classList.remove("active"); });
+      tab.classList.add("active");
+      var panel = document.getElementById("tab-" + tab.dataset.tab);
+      if (panel) panel.classList.add("active");
+    });
+  });
+});
+</script>
+</div>
+{% endblock %}

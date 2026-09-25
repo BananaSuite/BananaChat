@@ -1,0 +1,358 @@
+{% extends "base.html" %}
+{% block title %}Account | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-narrow">
+  <div class="page-header">
+    <h1>Account</h1>
+  </div>
+
+  {# Profile #}
+  <div class="card mb-2">
+    <div class="card-title lg">Profile</div>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:0.4rem 1.25rem;font-size:0.9rem;">
+      <span class="text-muted">Username</span>
+      <span><strong>{{ user.username }}</strong></span>
+      <span class="text-muted">User ID</span>
+      <span class="mono text-xs" style="color:#555;">{{ user.id }}</span>
+      <span class="text-muted">Role</span>
+      <span>
+        {% if user.role == 'admin' %}
+          <span class="badge badge-admin">admin</span>
+        {% else %}
+          <span class="badge badge-user">user</span>
+        {% endif %}
+      </span>
+      <span class="text-muted">Member since</span>
+      <span class="text-sm">{{ format_datetime(user.created_at) if user.created_at else '-' }}</span>
+    </div>
+  </div>
+
+  <div class="card mb-2">
+    <div class="card-title lg">UI Customization</div>
+    <p class="text-sm text-muted mb-2">
+      Your theme, accessibility, color, language, and background preferences are synchronized with your account on every device. Personal choices override the administrator's site defaults.
+    </p>
+    <button type="button" class="btn btn-primary" data-open-customization>Open Customization</button>
+  </div>
+
+  {# Change Password #}
+  <div class="card mb-2">
+    <div class="card-title lg">Change Password</div>
+    <form method="POST" action="{{ url_for('account_change_password') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group">
+        <label class="form-label" for="current_password">Current Password</label>
+        <input type="password" id="current_password" name="current_password"
+               autocomplete="current-password" required placeholder="••••••••">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="new_password">New Password</label>
+        <input type="password" id="new_password" name="new_password"
+               autocomplete="new-password" required placeholder="At least 8 characters">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="confirm_password">Confirm New Password</label>
+        <input type="password" id="confirm_password" name="confirm_password"
+               autocomplete="new-password" required placeholder="Repeat new password">
+      </div>
+      <button type="submit" class="btn btn-primary">Update Password</button>
+    </form>
+  </div>
+
+  {# Credit Quota #}
+  <div class="card mb-2">
+    <div class="card-title lg">Credit Quota</div>
+    {% if user.role == 'admin' %}
+      <p class="text-sm" style="color:#86efac;">Unlimited: admin accounts have no daily credit limit.</p>
+    {% else %}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
+        <div>
+          <div class="progress-label">
+            <span>Regular credits</span>
+            <span>{{ reg_used | round(1) }} / {{ quota.daily_credits }}</span>
+          </div>
+          {% set pct = ((reg_used / quota.daily_credits) * 100) | int if quota.daily_credits > 0 else 0 %}
+          <div class="progress-wrap">
+            <div class="progress-bar {% if pct >= 90 %}danger{% elif pct >= 70 %}warning{% endif %}"
+                 style="width:{{ [pct,100]|min }}%"></div>
+          </div>
+          <div class="text-xs text-muted mt-1">{{ [quota.daily_credits - reg_used, 0]|max | round(1) }} remaining today</div>
+        </div>
+        <div>
+          <div class="progress-label">
+            <span>Slow credits</span>
+            <span>{{ slow_used | round(1) }} / {{ quota.daily_slow_credits }}</span>
+          </div>
+          {% set pct2 = ((slow_used / quota.daily_slow_credits) * 100) | int if quota.daily_slow_credits > 0 else 0 %}
+          <div class="progress-wrap">
+            <div class="progress-bar {% if pct2 >= 90 %}danger{% elif pct2 >= 70 %}warning{% endif %}"
+                 style="width:{{ [pct2,100]|min }}%"></div>
+          </div>
+          <div class="text-xs text-muted mt-1">{{ [quota.daily_slow_credits - slow_used, 0]|max | round(1) }} remaining today</div>
+        </div>
+      </div>
+      <p class="text-xs text-muted mt-2">Quotas reset at midnight UTC.</p>
+    {% endif %}
+  </div>
+
+  {# Chat Quota (when enabled) #}
+  {% if chat_limit_enabled and user.role != 'admin' %}
+  <div class="card mb-2">
+    <div class="card-title lg">Chat Quota</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;">
+      <div>
+        <div class="progress-label">
+          <span>Chat regular credits</span>
+          <span>{{ chat_reg_used | round(1) }} / {{ chat_reg_limit }}</span>
+        </div>
+        {% set cpct = ((chat_reg_used / chat_reg_limit) * 100) | int if chat_reg_limit > 0 else 0 %}
+        <div class="progress-wrap">
+          <div class="progress-bar {% if cpct >= 90 %}danger{% elif cpct >= 70 %}warning{% endif %}"
+               style="width:{{ [cpct,100]|min }}%"></div>
+        </div>
+        <div class="text-xs text-muted mt-1">{{ [chat_reg_limit - chat_reg_used, 0]|max | round(1) }} remaining today</div>
+      </div>
+      {% if chat_slow_limit > 0 %}
+      <div>
+        <div class="progress-label">
+          <span>Chat slow credits</span>
+          <span>{{ chat_slow_used | round(1) }} / {{ chat_slow_limit }}</span>
+        </div>
+        {% set cpct2 = ((chat_slow_used / chat_slow_limit) * 100) | int if chat_slow_limit > 0 else 0 %}
+        <div class="progress-wrap">
+          <div class="progress-bar {% if cpct2 >= 90 %}danger{% elif cpct2 >= 70 %}warning{% endif %}"
+               style="width:{{ [cpct2,100]|min }}%"></div>
+        </div>
+        <div class="text-xs text-muted mt-1">{{ [chat_slow_limit - chat_slow_used, 0]|max | round(1) }} remaining today</div>
+      </div>
+      {% endif %}
+    </div>
+    <p class="text-xs text-muted mt-2">Chat and API credits are tracked separately.</p>
+  </div>
+  {% endif %}
+
+  {# Quota Request (non-admin only) #}
+  {% if user.role != 'admin' %}
+  <div class="card mb-2">
+    <div class="card-title lg">Request Quota Increase</div>
+
+    {% if pending_request %}
+      <div class="flash flash-info mb-2">
+        <span class="flash-msg">
+          You have a pending quota request submitted {{ time_ago(pending_request.created_at) }}.
+          Requested: <strong>{{ pending_request.new_credits }}</strong> regular /
+          <strong>{{ pending_request.new_slow_credits }}</strong> slow credits per day.
+          {% if pending_request.reason %}
+            <br><em>Reason: {{ pending_request.reason }}</em>
+          {% endif %}
+        </span>
+      </div>
+    {% else %}
+      <form method="POST" action="{{ url_for('account_quota_request') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="new_credits">Requested Regular Credits / day</label>
+            <input type="number" id="new_credits" name="new_credits" min="1" max="10000"
+                   value="{{ quota.daily_credits }}" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="new_slow_credits">Requested Slow Credits / day</label>
+            <input type="number" id="new_slow_credits" name="new_slow_credits" min="0" max="10000"
+                   value="{{ quota.daily_slow_credits }}" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="reason">Reason for increase</label>
+          <textarea id="reason" name="reason" rows="3"
+                    placeholder="Describe how you plan to use the additional credits…" required maxlength="1000"></textarea>
+        </div>
+        <input type="hidden" name="duration_type" value="permanent">
+        <p class="form-hint">Approved quota increases remain active until an administrator changes them.</p>
+        <button type="submit" class="btn btn-primary">Submit Request</button>
+      </form>
+    {% endif %}
+  </div>
+
+  <div class="card mb-2">
+    <div class="card-title lg">Quota Request History</div>
+    {% if quota_requests %}
+      <div style="display:flex;flex-direction:column;gap:0.75rem;">
+        {% for req in quota_requests %}
+          <section style="border:1px solid var(--border);border-radius:8px;padding:0.9rem 1rem;">
+            <div style="display:flex;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;">
+              <span class="text-sm">
+                <strong>{{ req.new_credits }}</strong> regular /
+                <strong>{{ req.new_slow_credits }}</strong> slow per day
+                <span class="text-muted">({{ req.duration_type }})</span>
+              </span>
+              {% if req.status == 'pending' %}
+                <span class="badge badge-pending">pending</span>
+              {% elif req.status == 'approved' %}
+                <span class="badge badge-approved">approved</span>
+              {% else %}
+                <span class="badge badge-denied">denied</span>
+              {% endif %}
+            </div>
+            <div class="text-sm mt-1" style="white-space:pre-wrap;overflow-wrap:anywhere;"><strong>Your reason:</strong> {{ req.reason }}</div>
+            <div class="text-xs text-muted mt-1">Submitted {{ format_datetime(req.created_at) }}</div>
+            {% if req.resolved_at %}
+              <div class="text-xs text-muted mt-1">
+                Resolved {{ format_datetime(req.resolved_at) }} by
+                <strong>{% if req.resolution_source == 'automatic' %}Automatic policy{% else %}{{ req.resolved_by_username or 'Unavailable' }}{% endif %}</strong>
+              </div>
+            {% else %}
+              <div class="text-xs text-muted mt-1">Awaiting admin review</div>
+            {% endif %}
+            {% if req.admin_message %}
+              <div class="text-sm mt-1"><strong>Decision message:</strong> {{ req.admin_message }}</div>
+            {% endif %}
+          </section>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="text-muted text-sm">No quota requests yet.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# Access policies and request history (non-admin only) #}
+  {% if user.role != 'admin' and access_policies %}
+  <div class="card mb-2">
+    <div class="card-title lg">Model &amp; Capability Access</div>
+    <p class="text-sm text-muted mb-2">
+      Capability policies are shown here along with restricted categories and models relevant to the current catalog.
+      Access is granted only when every policy applying to a model allows it.
+    </p>
+    <div style="display:flex;flex-direction:column;gap:1rem;">
+      {% for policy in access_policies %}
+        <section style="border:1px solid var(--border);border-radius:8px;padding:1rem;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem;flex-wrap:wrap;">
+            <div>
+              <strong>{{ policy.label }}</strong>
+              <div class="text-xs text-muted">{{ policy.scope_label }} policy - {{ policy.mode_label }}</div>
+            </div>
+            {% if policy.allowed %}
+              <span class="badge badge-approved">access allowed</span>
+            {% else %}
+              <span class="badge badge-denied">access denied</span>
+            {% endif %}
+          </div>
+
+          {% if policy.history %}
+            <div style="margin-top:0.75rem;display:flex;flex-direction:column;gap:0.5rem;">
+              {% for req in policy.history %}
+                <div style="background:#111;border-radius:6px;padding:0.65rem 0.75rem;">
+                  <div style="display:flex;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;">
+                    <span class="text-sm">
+                      Request #{{ req.id }}
+                      {% if req.status == 'pending' %}<span class="badge badge-pending">pending</span>
+                      {% elif req.status == 'approved' %}<span class="badge badge-approved">approved</span>
+                      {% else %}<span class="badge badge-denied">denied</span>{% endif %}
+                    </span>
+                    <span class="text-xs text-muted">{{ format_datetime(req.created_at) }}</span>
+                  </div>
+                  <div class="text-sm text-muted mt-1" style="white-space:pre-wrap;overflow-wrap:anywhere;">{{ req.use_case }}</div>
+                  <div class="text-xs text-muted mt-1">
+                    Safety confirmation: <strong>{{ 'Yes' if req.confirmed_safe else 'No' }}</strong> |
+                    Logging/review confirmation: <strong>{{ 'Yes' if req.confirmed_logging else 'No' }}</strong>
+                  </div>
+                  {% if req.admin_message %}
+                    <div class="text-sm mt-1"><strong>Admin message:</strong> {{ req.admin_message }}</div>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          {% if policy.can_request %}
+            <form method="POST" action="{{ url_for('account_access_request') }}" style="margin-top:1rem;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="scope" value="{{ policy.scope }}">
+              <input type="hidden" name="resource_id" value="{{ policy.resource_id }}">
+              <div class="form-group">
+                <label class="form-label" for="use-case-{{ policy.scope }}-{{ policy.resource_id }}">How will you use this access?</label>
+                <textarea id="use-case-{{ policy.scope }}-{{ policy.resource_id }}" name="use_case" rows="3" maxlength="2000" required placeholder="Describe your intended use case"></textarea>
+              </div>
+              <label class="form-check" style="margin-bottom:0.6rem;align-items:flex-start;">
+                <input type="checkbox" name="confirmed_safe" value="1" required>
+                <span>I confirm I will not use this access for harmful or illegal activity.</span>
+              </label>
+              <label class="form-check" style="margin-bottom:0.75rem;align-items:flex-start;">
+                <input type="checkbox" name="confirmed_logging" value="1" required>
+                <span>I understand that relevant chats and prompts may be logged and reviewed.</span>
+              </label>
+              <button type="submit" class="btn btn-sm btn-primary">Request Access</button>
+            </form>
+          {% elif policy.pending_request %}
+            <p class="text-sm text-muted mt-1">Your request is awaiting administrator review.</p>
+          {% elif not policy.allowed and not policy.requests_enabled %}
+            <p class="text-sm text-muted mt-1">Requests are not enabled for this policy.</p>
+          {% endif %}
+        </section>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# Your Data #}
+  <div class="card mb-2">
+    <div class="card-title lg">Your Data</div>
+    <p class="text-sm text-muted mb-2">
+      Download a complete copy of all data associated with your account (GDPR data export).
+      The file includes your profile, chat history, credit usage, and API token metadata.
+    </p>
+    <a href="{{ url_for('account_export_gdpr') }}" class="btn btn-primary">Download All Account Data</a>
+  </div>
+
+  {# Chat Management #}
+  <div class="card mb-2">
+    <div class="card-title lg">Chat Management</div>
+    <p class="text-sm text-muted mb-2">Export or bulk-delete your chat history.</p>
+    <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-start;">
+      <a href="{{ url_for('account_export_chats') }}" class="btn">Export All Chats</a>
+    </div>
+    <hr style="border:none;border-top:1px solid rgba(255,255,255,0.07);margin:1.25rem 0;">
+    <p class="text-sm text-muted mb-2">
+      Permanently remove all your chat sessions. This cannot be undone.
+    </p>
+    <form method="POST" action="{{ url_for('account_delete_all_chats') }}"
+          data-confirm="This will delete all your chats. Are you sure?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group" style="max-width:320px;">
+        <label class="form-label" for="del_chats_password">Confirm with your password</label>
+        <input type="password" id="del_chats_password" name="password"
+               autocomplete="current-password" required placeholder="••••••••">
+      </div>
+      <button type="submit" class="btn btn-danger">Delete All Chats</button>
+    </form>
+  </div>
+
+  {# Delete Account #}
+  <div class="card" style="border-color:rgba(239,68,68,0.25);">
+    <div class="card-title lg" style="color:#fca5a5;">Delete Account</div>
+    <p class="text-sm text-muted mb-2">
+      This action is permanent and cannot be undone. All your chats, tokens, and data will be deleted.
+    </p>
+    <form method="POST" action="{{ url_for('account_delete') }}"
+          data-confirm="Are you absolutely sure? This will permanently delete your account and all data.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group">
+        <label class="form-label" for="confirm_username">
+          Type your username <strong>{{ user.username }}</strong> to confirm
+        </label>
+        <input type="text" id="confirm_username" name="confirm_username"
+               autocomplete="off" placeholder="{{ user.username }}" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="del_password">Password</label>
+        <input type="password" id="del_password" name="password"
+               autocomplete="current-password" required placeholder="••••••••">
+      </div>
+      <button type="submit" class="btn btn-danger">Permanently Delete Account</button>
+    </form>
+  </div>
+
+</div>
+{% endblock %}

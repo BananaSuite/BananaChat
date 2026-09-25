@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "files": {
+    "banana_backup/__init__.py": "b97a54fce6c906f048f17791ced5e01efcba0d756f03792d508391062b89e2be",
+    "banana_backup/cli.py": "4fa12394b1cd6a677457fe5ae3da72da737f9207366bb0ca2e30f65dfd49fd5c",
+    "banana_backup/crypto.py": "71b5e9625b9cfa0967ecaabca8bbeecf95630e95a56ac5ec651ac1e9b3ddccb4",
+    "banana_backup/files.py": "9c1f041d4eb5386904bbfd3ef19819bac993cf76357c4204de16a75b86fe6676",
+    "banana_backup/git.py": "68c6c1e073e57cfebc702b0b8d3be01fe3ff5c513d886488eb910367dbaf0222",
+    "banana_backup/store.py": "99a2bb0e317b0a9fb465d4b9be47190fc393672abb8c262ce53eee11e8983a81",
+    "scripts/sync_backups.py": "b0ab9d2fbcabb44c446360eb1be0c1b1a1cd7e40860d8a7f71bd0059c7e373c8",
+    "tests/test_git_backups.py": "66aeeb981748864026e08c910996ac0ef09dd2027a6806903c1e49e5f1a928c7"
+  }
+}

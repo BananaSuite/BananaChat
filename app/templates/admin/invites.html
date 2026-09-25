@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Invite Codes | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-header">
+    <h1>Invite Codes</h1>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Back to Dashboard</a>
+  </div>
+
+  {# Create form #}
+  <div class="card mb-2">
+    <div class="card-title">Create Invite Code</div>
+    <form method="POST" action="{{ url_for('admin_invite_create') }}" style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="form-group mb-0" style="flex:1;min-width:160px;">
+        <label class="form-label">Custom Code <span class="text-muted">(optional)</span></label>
+        <input type="text" name="custom_code" placeholder="Leave blank for random" maxlength="32" autocomplete="off" pattern="[A-Za-z0-9]*" title="Alphanumeric characters only (A-Z, 0-9)">
+      </div>
+
+      <div class="form-group mb-0" style="min-width:100px;">
+        <label class="form-label">Max Uses</label>
+        <input type="number" name="max_uses" value="1" min="1" max="1000">
+      </div>
+
+      <div class="form-group mb-0" style="min-width:120px;">
+        <label class="form-label">Assigned Role</label>
+        <select name="assigned_role">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="align-self:flex-end;">Create</button>
+    </form>
+  </div>
+
+  {# Active invites #}
+  <div class="card mb-2">
+    <div class="card-title">Active Invite Codes</div>
+    {% if invites %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Role</th>
+              <th>Uses</th>
+              <th>Max Uses</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in invites %}
+              <tr>
+                <td class="mono text-sm" style="display:flex;align-items:center;gap:0.4rem;">
+                  <span>{{ inv.code }}</span>
+                  <button type="button" class="btn btn-sm"
+                          style="padding:0.1rem 0.4rem;font-size:0.72rem;"
+                          data-code="{{ inv.code }}"
+                          onclick="var b=this,code=this.dataset.code;navigator.clipboard&&navigator.clipboard.writeText(code).then(function(){b.textContent='Copied!';setTimeout(function(){b.textContent='Copy'},1500)})">Copy</button>
+                </td>
+                <td>
+                  {% if inv.assigned_role == 'admin' %}
+                    <span class="badge badge-admin">admin</span>
+                  {% else %}
+                    <span class="badge badge-user">user</span>
+                  {% endif %}
+                </td>
+                <td class="mono text-sm">{{ inv.use_count or 0 }}</td>
+                <td class="mono text-sm">{{ inv.max_uses }}</td>
+                <td class="text-sm text-muted">{{ time_ago(inv.created_at) }}</td>
+                <td>
+                  <form method="POST" action="{{ url_for('admin_invite_delete', code_id=inv.id) }}"
+                        data-confirm="Delete invite code '{{ inv.code }}'?">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="text-muted text-sm">No active invite codes.</p>
+    {% endif %}
+  </div>
+
+  {# Expired / used invites #}
+  {% if expired %}
+    <div class="card">
+      <div class="card-title">Expired / Used Codes</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Role</th>
+              <th>Uses / Max</th>
+              <th>Created At</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in expired %}
+              <tr>
+                <td class="mono text-sm" style="color:#555;">{{ inv.code }}</td>
+                <td><span class="badge badge-user">{{ inv.assigned_role or 'user' }}</span></td>
+                <td class="mono text-sm">{{ inv.use_count or 0 }} / {{ inv.max_uses }}</td>
+                <td class="text-sm text-muted">{{ time_ago(inv.created_at) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% if model_recovery %}
+<section class="card mb-2" aria-labelledby="model-recovery-heading">
+  <h2 id="model-recovery-heading">Models after restore</h2>
+  <p>Your chats and model settings have been restored. Model weights are downloaded separately.
+    Choose which models to download from Ollama or Hugging Face, or leave this for later.
+    Already installed models are skipped. Downloads use your configured compute servers.</p>
+  {% if model_recovery.state == 'deferred' %}
+  <p>Downloads are deferred. You can use any available models or change the selection below.</p>
+  {% elif model_recovery.state == 'requested' %}
+  <p>Your selected downloads have been queued. Check the pull queue below for progress or errors.</p>
+  {% endif %}
+  <form method="POST" action="{{ url_for('admin_model_recovery') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% for choice in recovery_choices %}
+    <label style="display:block;margin:0.5rem 0;overflow-wrap:anywhere;">
+      <input type="checkbox" name="models" value="{{ choice.id }}" checked>
+      {{ choice.label }} <span class="text-muted">({{ choice.source }})</span>
+    </label>
+    {% endfor %}
+    {% if model_recovery.inventory.manual %}
+    <p>These models need a source or a separate copy of their weights:</p>
+    <ul>
+      {% for item in model_recovery.inventory.manual %}
+      <li>{{ item.name }}: {{ item.reason }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <p>Custom or removed models may need manual installation. Original model access rules still apply.</p>
+    {% if recovery_choices %}
+    <button type="submit" name="action" value="download" class="btn btn-primary">Download selected models</button>
+    {% endif %}
+    <button type="submit" name="action" value="defer" class="btn">Not now</button>
+  </form>
+</section>
+{% endif %}

@@ -1,0 +1,73 @@
+    <div class="chat-input-zone">
+
+      <!-- Parameters panel -->
+      <div id="chat-params-panel" class="params-panel" hidden>
+        <div class="personality-control">
+          {% if personality_access %}
+          <label class="personality-picker-label" for="personality-select-chat">{{ t('personality') }}</label>
+          <select id="personality-select-chat" class="personality-picker">
+            <option value="0">{{ t('no_personality') }}</option>
+            {% for personality in personalities %}<option value="{{ personality.id }}" {% if sess.personality_id == personality.id %}selected{% endif %}>{{ personality.name }}</option>{% endfor %}
+          </select>
+          {% endif %}
+        </div>
+        <div class="params-grid">
+          <div class="param-item">
+            <div class="param-lbl"><span class="param-name">{{ t('temperature') }}</span><span class="param-val" id="pbadge-temperature">{{ t('automatic') }}</span></div>
+            <input type="range" class="param-range inactive" id="pslider-temperature" min="0" max="2" step="0.05" value="0.7" data-param="temperature">
+          </div>
+          <div class="param-item">
+            <div class="param-lbl"><span class="param-name">{{ t('top_p') }}</span><span class="param-val" id="pbadge-top_p">{{ t('automatic') }}</span></div>
+            <input type="range" class="param-range inactive" id="pslider-top_p" min="0" max="1" step="0.05" value="0.9" data-param="top_p">
+          </div>
+          <div class="param-item">
+            <div class="param-lbl"><span class="param-name">{{ t('top_k') }}</span><span class="param-val" id="pbadge-top_k">{{ t('automatic') }}</span></div>
+            <input type="range" class="param-range inactive" id="pslider-top_k" min="0" max="200" step="1" value="40" data-param="top_k">
+          </div>
+          <div class="param-item">
+            <div class="param-lbl"><span class="param-name">{{ t('context') }}</span><span class="param-val" id="pbadge-num_ctx">{{ t('automatic') }}</span></div>
+            <input type="range" class="param-range inactive" id="pslider-num_ctx" min="512" max="32768" step="512" value="4096" data-param="num_ctx">
+          </div>
+        </div>
+        <div class="params-foot">
+          <span class="params-hint">{{ t('overrides_hint') }}</span>
+          <button id="params-reset-btn" class="btn btn-ghost btn-sm">{{ t('reset') }}</button>
+        </div>
+      </div>
+
+      <!-- Input card: model picker + textarea + actions -->
+      <div class="input-card{% if sess.is_incognito %} is-incognito{% endif %}">
+        <div class="input-toolbar">
+          <div id="input-model-picker-mount" class="model-btn-wrap"></div>
+          <input type="hidden" id="model-select-chat" value="auto">
+          <button type="button" id="incognito-toggle" class="input-toolbar-btn privacy-control{% if sess.is_incognito %} active{% endif %}"
+                  aria-pressed="{{ 'true' if sess.is_incognito else 'false' }}" aria-label="{{ t('private_mode_title') }}" title="{{ t('private_mode_title') }}">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
+            <span class="privacy-label">{{ t('private_mode') }}</span>
+          </button>
+          <button id="params-toggle-btn" class="input-toolbar-btn" aria-pressed="false">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+            {{ t('controls') }}
+          </button>
+        </div>
+        <textarea id="chat-input" rows="1" maxlength="100000"
+          placeholder="{% if sess.is_incognito %}{{ t('private_message') }}{% else %}{{ t('message') }}{% endif %}"></textarea>
+        <input id="chat-file-input" type="file" multiple hidden accept=".png,.jpg,.jpeg,.webp,.pdf,.txt,.md,.csv,.json,.yaml,.yml,.xml,.html,.css,.scss,.py,.js,.ts,.tsx,.jsx,.java,.c,.h,.cpp,.hpp,.cs,.go,.rs,.rb,.php,.sh,.sql,.toml,.ini,.conf,.log">
+        <div id="chat-file-list" class="chat-file-list" hidden></div>
+        <div class="input-bottom">
+          <span class="input-hint">{{ t('enter_send') }}</span>
+          <div class="input-btns">
+            {% if not sess.is_incognito %}<button type="button" id="chat-attach-btn" class="composer-icon-btn" title="Attach image, PDF, text, or code" aria-label="Attach files"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>{% endif %}
+            <button type="button" id="voice-input-btn" class="composer-icon-btn" hidden aria-pressed="false" title="Dictate message" aria-label="Dictate message"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></button>
+            <button id="chat-send-btn" class="send-btn" title="{{ t('send') }}" aria-label="{{ t('send') }}">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+            <button id="chat-stop-btn" class="stop-btn" title="{{ t('stop') }}" aria-label="{{ t('stop') }}" style="display:none">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+            </button>
+          </div>
+        </div>
+        <span id="voice-status" class="visually-hidden" role="status" aria-live="polite"></span>
+      </div>
+
+    </div>

@@ -1,0 +1,72 @@
+name: Tests
+
+on:
+  push:
+    paths-ignore:
+      - '.bananavibe-state/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install backup encryption tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y age
+      - name: Verify shared backup sources
+        run: python3 scripts/sync_backups.py --check
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Verify shared lifecycle sources
+        run: python scripts/sync_lifecycle.py --check
+      - run: |
+          python -m pip install --only-binary=:all: --no-deps --upgrade 'pip>=26.2.1'
+      - run: python -m pip install -r requirements.txt pytest ruff==0.16.6
+      - name: Lint
+        run: python -m ruff check .
+      - run: python -m pytest -q
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: |
+          python -m pip install --only-binary=:all: --no-deps --upgrade 'pip>=26.2.1'
+      - run: python -m pip install -r requirements.txt -r requirements-browser.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Check desktop and mobile chat
+        run: python scripts/check_browser.py
+      - name: Retain browser results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-results
+          path: .browser-artifacts/
+          include-hidden-files: true
+          retention-days: 7

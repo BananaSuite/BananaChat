@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Chat Audit | Admin | {{ site_name }}{% endblock %}
+
+{% block head %}
+<style>
+.audit-filter {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  padding: 1rem 1.25rem;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 1.25rem;
+}
+.audit-filter-group { display: flex; flex-direction: column; gap: 0.3rem; }
+.audit-filter-label { font-size: 0.72rem; color: var(--text-2); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.session-title-cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-id-mono { font-family: monospace; font-size: 0.72rem; color: var(--text-2); }
+.type-status-cell { display: flex; flex-direction: column; gap: 0.25rem; }
+tr.deleted-row { opacity: 0.5; }
+tr.deleted-row td { color: var(--text-2); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-wide">
+  <div class="page-header">
+    <div>
+      <h1>Chat Audit</h1>
+      <div class="subtitle">All user chat sessions, including deleted ones.</div>
+    </div>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Dashboard</a>
+  </div>
+
+  <form method="GET" action="{{ url_for('admin_chats') }}" class="audit-filter">
+    <div class="audit-filter-group">
+      <label class="audit-filter-label" for="user-filter">User</label>
+      <select id="user-filter" name="user" style="min-width:160px;">
+        <option value="">All users</option>
+        {% for u in users %}
+          <option value="{{ u.id }}" {% if user_filter == u.id %}selected{% endif %}>{{ u.username }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="audit-filter-group" style="justify-content:flex-end;padding-bottom:0.15rem;">
+      <label class="form-check" style="cursor:pointer;gap:0.4rem;display:flex;align-items:center;">
+        <input type="checkbox" name="deleted" value="1" {% if include_deleted %}checked{% endif %}>
+        <span class="text-sm">Include deleted</span>
+      </label>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-self:flex-end;">
+      <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+      <a href="{{ url_for('admin_chats') }}" class="btn btn-sm">Reset</a>
+    </div>
+  </form>
+
+  <div class="subtitle text-sm text-muted" style="margin-bottom:0.75rem;">
+    {{ plural(total, 'session') }} total
+  </div>
+
+  {% if sessions %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Title</th>
+            <th>Type / Status</th>
+            <th>Updated</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in sessions %}
+            <tr {% if s.deleted_at %}class="deleted-row"{% endif %}>
+              <td>
+                <strong class="text-sm">{{ s.username or s.user_id or '-' }}</strong>
+              </td>
+              <td>
+                <div class="session-title-cell text-sm">{{ s.title or 'New Chat' }}</div>
+                <div class="session-id-mono">{{ s.id[:14] }}…</div>
+              </td>
+              <td>
+                <div class="type-status-cell">
+                  {% if s.is_incognito %}
+                    <span class="badge badge-incognito">private</span>
+                  {% else %}
+                    <span class="badge badge-rolled-out">regular</span>
+                  {% endif %}
+                  {% if s.deleted_at %}
+                    <span class="badge badge-denied">deleted</span>
+                  {% else %}
+                    <span class="badge badge-approved">active</span>
+                  {% endif %}
+                </div>
+              </td>
+              <td class="text-sm text-muted">{{ time_ago(s.updated_at) }}</td>
+              <td>
+                <div class="td-actions">
+                  <a href="{{ url_for('admin_chat_view', session_id=s.id) }}" class="btn btn-sm btn-primary">View</a>
+                  <form method="POST" action="{{ url_for('admin_chat_delete', session_id=s.id) }}"
+                        data-confirm="Permanently delete this session and all its messages? This cannot be undone.">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-sm btn-danger">Purge</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="card" style="text-align:center;color:var(--text-2);padding:3rem;">
+      No chat sessions found.
+    </div>
+  {% endif %}
+
+  {% if total_pages > 1 %}
+  <div style="display:flex;align-items:center;gap:0.75rem;margin-top:1rem;flex-wrap:wrap;">
+    {% if page > 1 %}
+      <a href="{{ url_for('admin_chats', page=page-1, user=user_filter or '', deleted='1' if include_deleted else '') }}" class="btn btn-sm">← Prev</a>
+    {% else %}
+      <span class="btn btn-sm" style="opacity:0.35;cursor:default;">← Prev</span>
+    {% endif %}
+    <span class="text-sm text-muted">Page {{ page }} of {{ total_pages }}</span>
+    {% if page < total_pages %}
+      <a href="{{ url_for('admin_chats', page=page+1, user=user_filter or '', deleted='1' if include_deleted else '') }}" class="btn btn-sm">Next →</a>
+    {% else %}
+      <span class="btn btn-sm" style="opacity:0.35;cursor:default;">Next →</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="{{ current_language }}" data-theme="{{ effective_theme_mode }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maintenance | {{ site_name if site_name is defined else display_name }}</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  {% include "_theme_style.html" %}
+</head>
+<body>
+<div class="error-page">
+  <div class="error-card">
+    <div style="font-size:2.5rem;margin-bottom:0.75rem;">
+      <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:#f0ad4e">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </div>
+    <div class="error-title" style="font-size:1.4rem;">Under Maintenance</div>
+    <div class="error-msg">
+      {% if message %}
+        {{ message }}
+      {% else %}
+        The system is temporarily unavailable for scheduled maintenance. Please check back shortly.
+      {% endif %}
+    </div>
+    <a href="/admin-access" class="btn btn-primary" style="margin-top:1.5rem;">Admin Access</a>
+  </div>
+</div>
+</body>
+</html>

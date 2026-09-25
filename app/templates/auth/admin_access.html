@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="{{ current_language }}" data-theme="{{ effective_theme_mode }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>Admin Access | {{ site_name }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% include "_theme_style.html" %}
+</head>
+<body>
+
+<div class="auth-page">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <h1>{{ site_name }}</h1>
+      <p>Admin access only</p>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }} mb-2">
+            <span class="flash-msg">{{ message }}</span>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST" action="{{ url_for('admin_access') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" class="input" required autofocus autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" class="input" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn btn-primary w-full">Sign in as admin</button>
+    </form>
+    <div class="auth-links" style="margin-top:1rem;text-align:center">
+      <a href="{{ url_for('login') }}" style="font-size:.85rem;opacity:.7">Back to regular login</a>
+    </div>
+  </div>
+</div>
+{% include "_source_link.html" %}
+</body>
+</html>

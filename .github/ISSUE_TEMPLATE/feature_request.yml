@@ -1,0 +1,60 @@
+name: Feature request
+description: Suggest a new feature or improvement for BananaChat.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an idea!
+        Larger features (changes to the permission model or the OpenAI API)
+        benefit from a short design discussion before code is written.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the user need or pain point first, before the proposed solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like this to work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you considered and why you chose this one.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Which area is most affected?
+      options:
+        - Chat / sessions
+        - API / tokens
+        - Admin / users
+        - Model catalog / Ollama
+        - Credits / quotas
+        - Documentation
+        - i18n / localisation
+        - Other
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Mockups, examples from other projects, related issues, etc.
+    validations:
+      required: false

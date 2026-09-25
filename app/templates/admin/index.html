@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-header">
+    <div>
+      <h1>Admin Dashboard</h1>
+      <div class="subtitle">System overview and quick stats.</div>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+      <span id="queue-status-badge" class="queue-badge">
+        <span class="queue-dot"></span>
+        <span class="queue-text">Checking…</span>
+      </span>
+      <a href="{{ url_for('admin_users') }}" class="btn btn-sm">Users</a>
+      <a href="{{ url_for('admin_models') }}" class="btn btn-sm">Models</a>
+      <a href="{{ url_for('admin_access_policies') }}" class="btn btn-sm">Access</a>
+      <a href="{{ url_for('admin_personalities') }}" class="btn btn-sm">Personalities</a>
+      <a href="{{ url_for('admin_metrics') }}" class="btn btn-sm">Metrics</a>
+    </div>
+  </div>
+
+  {% if model_recovery and model_recovery.state == 'pending' %}
+  <div class="card mb-2">
+    <p>Model downloads are waiting for your decision after the restore. You can download the saved models or choose to do it later.</p>
+    <a class="btn btn-primary" href="{{ url_for('admin_models') }}">Review restored models</a>
+  </div>
+  {% endif %}
+
+  {# Stat cards #}
+  <div class="card-grid mb-2">
+    <div class="stat-card">
+      <div class="stat-num">{{ stats.user_count }}</div>
+      <div class="stat-label">Total Users</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">{{ stats.model_count }}</div>
+      <div class="stat-label">Models in Catalog</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num">{{ stats.rolled_out_count }}</div>
+      <div class="stat-label">Models Rolled Out</div>
+    </div>
+    {% if latest_snapshot %}
+      <div class="stat-card">
+        <div class="stat-num" style="font-size:1.5rem;">
+          {{ latest_snapshot.gpu_memory_used_display }}
+        </div>
+        <div class="stat-label">{{ 'VRAM Used' if latest_snapshot.metrics_source == 'nvidia-smi' else 'Model VRAM Allocation' }}</div>
+      </div>
+    {% endif %}
+  </div>
+
+  {# Latest compute snapshot #}
+  {% if latest_snapshot %}
+    <div class="card mb-2">
+      <div class="card-title">Latest Compute Snapshot</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:0.75rem 1.5rem;font-size:0.875rem;">
+        <div>
+          <div class="text-muted text-xs">GPU</div>
+          <div>{{ latest_snapshot.gpu_name or 'N/A' }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">VRAM</div>
+          <div>
+            {{ latest_snapshot.gpu_memory_used_display }} / {{ latest_snapshot.gpu_memory_total_display }}
+          </div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">CPU</div>
+          <div>{{ ('%.1f%%'|format(latest_snapshot.cpu_percent)) if latest_snapshot.cpu_percent is not none else '-' }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">System RAM</div>
+          <div>{{ latest_snapshot.system_memory_used_display }} / {{ latest_snapshot.system_memory_total_display }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">Queue Depth</div>
+          <div>{{ latest_snapshot.queue_depth or 0 }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">Active Models</div>
+          <div>
+            {% set active = latest_snapshot.active_models %}
+            {% if active %}
+              {% if active is string %}{{ active }}{% else %}{{ active | join(', ') }}{% endif %}
+            {% else %}
+              None
+            {% endif %}
+          </div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">Recorded</div>
+          <div class="text-sm">{{ time_ago(latest_snapshot.recorded_at) }}{% if latest_snapshot.stale %} <span class="badge badge-pending">stale</span>{% endif %}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">Telemetry Source</div>
+          <div class="text-sm">{{ latest_snapshot.source_label }}</div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="card mb-2 db-health-card {% if not db_health.healthy %}has-warning{% endif %}">
+    <div class="card-title">Database Health</div>
+    <div class="health-grid">
+      <div><span>Status</span><strong class="{% if db_health.healthy %}text-success{% else %}text-danger{% endif %}">{{ 'Healthy' if db_health.healthy else 'Needs attention' }}</strong></div>
+      <div><span>Integrity</span><strong>{{ db_health.quick_check }}</strong></div>
+      <div><span>Foreign keys</span><strong>{{ db_health.foreign_key_violations if db_health.foreign_key_violations is not none else '-' }} violations</strong></div>
+      <div><span>Journal</span><strong>{{ db_health.journal_mode | upper if db_health.journal_mode else '-' }}</strong></div>
+      <div><span>Durability</span><strong>{{ db_health.synchronous or '-' }}</strong></div>
+      <div><span>Busy timeout</span><strong>{{ db_health.busy_timeout_ms or '-' }} ms</strong></div>
+      <div><span>File permissions</span><strong>{{ db_health.database_file_mode or 'platform default' }}</strong></div>
+    </div>
+    <p class="health-note">Integrity checks protect detection, not recovery. Keep encrypted backups outside this server.</p>
+  </div>
+
+  {# 24h request stats #}
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+      <div class="card-title mb-0">Request Stats: Last 24h</div>
+      <a href="{{ url_for('admin_metrics') }}" class="btn btn-sm">Full Metrics</a>
+    </div>
+
+    {% if req_stats %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Type</th>
+              <th>Requests</th>
+              <th>Tokens In</th>
+              <th>Tokens Out</th>
+              <th>Avg Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in req_stats %}
+              <tr>
+                <td class="text-sm">{{ row.model_name or '-' }}</td>
+                <td class="text-sm text-muted">{{ row.request_type or '-' }}</td>
+                <td class="mono text-sm">{{ row.request_count or 0 }}</td>
+                <td class="mono text-sm">{{ row.total_tokens_in or 0 }}</td>
+                <td class="mono text-sm">{{ row.total_tokens_out or 0 }}</td>
+                <td class="text-sm text-muted">
+                  {{ '%.0f'|format(row.avg_duration_ms) if row.avg_duration_ms else '-' }} ms
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="text-muted text-sm">No requests in the last 24 hours.</p>
+    {% endif %}
+  </div>
+
+  {# Quick navigation #}
+  <div class="card mt-2" style="padding:1.1rem 1.25rem;">
+    <div class="card-title mb-1">Quick Links</div>
+    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">
+      <a href="{{ url_for('admin_users') }}" class="btn btn-sm">Users</a>
+      <a href="{{ url_for('admin_invites') }}" class="btn btn-sm">Invites</a>
+      <a href="{{ url_for('admin_models') }}" class="btn btn-sm">Models</a>
+      <a href="{{ url_for('admin_categories') }}" class="btn btn-sm">Categories</a>
+      <a href="{{ url_for('admin_access_policies') }}" class="btn btn-sm">Access Policies</a>
+      <a href="{{ url_for('admin_personalities') }}" class="btn btn-sm">Personalities</a>
+      <a href="{{ url_for('admin_quota_requests') }}" class="btn btn-sm">Quota Requests</a>
+      <a href="{{ url_for('admin_quotas') }}" class="btn btn-sm">Quotas & Limits</a>
+      <a href="{{ url_for('admin_settings') }}" class="btn btn-sm">Settings</a>
+      <a href="{{ url_for('admin_metrics') }}" class="btn btn-sm">Metrics</a>
+      <a href="{{ url_for('admin_incognito') }}" class="btn btn-sm">Incognito Audit</a>
+      <a href="{{ url_for('admin_chats') }}" class="btn btn-sm">Chat Audit</a>
+      <a href="{{ url_for('admin_migration') }}" class="btn btn-sm">Migration</a>
+      <a href="{{ url_for('admin_music') }}" class="btn btn-sm">Music Program</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

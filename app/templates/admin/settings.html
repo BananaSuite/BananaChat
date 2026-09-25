@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Settings | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-narrow">
+  <div class="page-header">
+    <h1>Site Settings</h1>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Dashboard</a>
+  </div>
+
+  <div class="card">
+    <form method="POST" action="{{ url_for('admin_settings') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="form-group">
+        <label class="form-label" for="site_name">Site Name</label>
+        <input type="text" id="site_name" name="site_name" autofocus
+               value="{{ settings.site_name or display_name }}" maxlength="100">
+        <span class="form-hint">Shown in the navigation bar and browser tab.</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="signup_mode">Signup Mode</label>
+        <select id="signup_mode" name="signup_mode">
+          <option value="invite"   {% if settings.signup_mode == 'invite'   %}selected{% endif %}>
+            Invite only: new users need an invite code
+          </option>
+          <option value="open"     {% if settings.signup_mode == 'open'     %}selected{% endif %}>
+            Open: anyone can register
+          </option>
+          <option value="disabled" {% if settings.signup_mode == 'disabled' %}selected{% endif %}>
+            Disabled: no new registrations
+          </option>
+        </select>
+      </div>
+
+      <hr>
+
+      <section class="admin-theme-settings">
+        <div class="card-title lg">Appearance</div>
+        <p class="form-hint mb-2">Set the site-wide default. A user's personal customization takes priority over these values.</p>
+        <div class="form-group">
+          <label class="form-label" for="default_theme_mode">Default Theme</label>
+          <select id="default_theme_mode" name="default_theme_mode">
+            <option value="dark" {% if settings.default_theme_mode != 'light' %}selected{% endif %}>Dark</option>
+            <option value="light" {% if settings.default_theme_mode == 'light' %}selected{% endif %}>Light</option>
+          </select>
+        </div>
+
+        {% set dark_colors = [
+          ('bg_color', 'Background'), ('text_color', 'Text'),
+          ('primary_color', 'Primary'), ('secondary_color', 'Cards / Raised Surface'),
+          ('accent_color', 'Accent'), ('sidebar_color', 'Navigation / Sidebar')
+        ] %}
+        {% set light_colors = [
+          ('light_bg_color', 'Background'), ('light_text_color', 'Text'),
+          ('light_primary_color', 'Primary'), ('light_secondary_color', 'Cards / Raised Surface'),
+          ('light_accent_color', 'Accent'), ('light_sidebar_color', 'Navigation / Sidebar')
+        ] %}
+        <div class="admin-theme-columns">
+          <fieldset class="admin-theme-palette">
+            <legend>Dark Palette</legend>
+            {% for field, label in dark_colors %}
+            <label class="admin-color-row" for="{{ field }}">
+              <span>{{ label }}</span>
+              <input type="color" id="{{ field }}" name="{{ field }}" value="{{ settings[field] }}">
+              <code>{{ settings[field] }}</code>
+            </label>
+            {% endfor %}
+          </fieldset>
+          <fieldset class="admin-theme-palette">
+            <legend>Light Palette</legend>
+            {% for field, label in light_colors %}
+            <label class="admin-color-row" for="{{ field }}">
+              <span>{{ label }}</span>
+              <input type="color" id="{{ field }}" name="{{ field }}" value="{{ settings[field] }}">
+              <code>{{ settings[field] }}</code>
+            </label>
+            {% endfor %}
+          </fieldset>
+        </div>
+      </section>
+
+      <hr>
+
+      <div class="form-group">
+        <span class="form-hint">
+          Credit quotas, rate limits, and the music bonus are now managed from the
+          <a href="{{ url_for('admin_quotas') }}"><strong>Quotas & Limits</strong></a> page.
+        </span>
+      </div>
+
+      <hr>
+
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="maintenance_mode" value="1"
+                 {% if settings.maintenance_mode %}checked{% endif %}>
+          <span><strong>Maintenance Mode</strong></span>
+        </label>
+        <span class="form-hint">
+          When enabled, non-admin users are shown the maintenance page instead of the normal interface.
+        </span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="maintenance_message">Maintenance Message</label>
+        <textarea id="maintenance_message" name="maintenance_message" rows="3" maxlength="500"
+                  placeholder="We'll be back shortly. Scheduled maintenance in progress.">{{ settings.maintenance_message or '' }}</textarea>
+        <span class="form-hint">Shown to users on the maintenance page. Supports plain text.</span>
+      </div>
+
+      <hr>
+
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="warning_banner_enabled" value="1"
+                 {% if settings.warning_banner_enabled %}checked{% endif %}>
+          <span><strong>Warning Banner</strong></span>
+        </label>
+        <span class="form-hint">
+          Shows a dismissible warning banner at the top of every page (e.g. for capacity notices).
+        </span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="warning_banner_message">Banner Message</label>
+        <textarea id="warning_banner_message" name="warning_banner_message" rows="3" maxlength="500"
+                  placeholder="We are currently experiencing constrained capacity. Chat and API responses may be slower than usual. Sorry for the outage.">{{ settings.warning_banner_message or '' }}</textarea>
+        <span class="form-hint">Plain text shown in the banner when enabled.</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="warning_banner_dismissible" value="1"
+                 {% if settings.warning_banner_dismissible %}checked{% endif %}>
+          <span><strong>Dismissible</strong></span>
+        </label>
+        <span class="form-hint">
+          When checked, users can dismiss the banner with a close button. When unchecked, the banner stays until the admin disables it.
+        </span>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Save Settings</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

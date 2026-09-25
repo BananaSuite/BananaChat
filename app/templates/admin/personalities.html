@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Personalities - Admin - {{ site_name }}{% endblock %}
+{% block content %}
+<div class="page-wide">
+  <div class="page-header"><div><h1>Personality Moderation</h1><div class="subtitle">Inspect, edit, create, temporarily disable, or delete user personalities.</div></div><a href="{{ url_for('admin_access_policies', scope='custom_personality', resource_id=0) }}" class="btn btn-sm">Access policy</a></div>
+  <section class="card mb-2">
+    <div class="card-title lg">Create for a User</div>
+    <form method="POST" action="{{ url_for('admin_personalities') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="create">
+      <div class="form-row"><div class="form-group"><label class="form-label">Username</label><input name="username" required></div><div class="form-group"><label class="form-label">Name</label><input name="name" maxlength="{{ max_name }}" required></div></div>
+      <div class="form-group"><label class="form-label">Instructions</label><textarea name="instructions" rows="5" maxlength="{{ max_instructions }}" required></textarea></div>
+      <label class="form-check mb-2"><input type="checkbox" name="enabled" value="1" checked><span>Enabled for the user</span></label><button class="btn btn-primary" type="submit">Create</button>
+    </form>
+  </section>
+  <div class="personality-grid">
+  {% for personality in personalities %}
+    <article class="card personality-card{% if not personality.active %} is-disabled{% endif %}">
+      <div class="personality-card-head"><div><strong>{{ personality.name }}</strong><div class="text-xs text-muted">Owner: {{ personality.username }} | Creator: {{ personality.created_by_username or 'user' }}</div></div><span class="badge {{ 'badge-approved' if personality.active else 'badge-denied' }}">{{ 'active' if personality.active else 'inactive' }}</span></div>
+      <form method="POST" action="{{ url_for('admin_personalities') }}" class="mt-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="update"><input type="hidden" name="personality_id" value="{{ personality.id }}">
+        <div class="form-group"><label class="form-label">Name</label><input name="name" value="{{ personality.name }}" maxlength="{{ max_name }}" required></div>
+        <div class="form-group"><label class="form-label">Instructions</label><textarea name="instructions" rows="6" maxlength="{{ max_instructions }}" required>{{ personality.instructions }}</textarea></div>
+        <label class="form-check mb-2"><input type="checkbox" name="enabled" value="1" {% if personality.is_enabled %}checked{% endif %}><span>User enabled</span></label><button class="btn btn-sm btn-primary" type="submit">Save Changes</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_personalities') }}" class="personality-moderation mt-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="moderate"><input type="hidden" name="personality_id" value="{{ personality.id }}">
+        <label class="form-check mb-1"><input type="checkbox" name="disabled" value="1" {% if personality.admin_disabled and not personality.active %}checked{% endif %}><span>Disable this personality</span></label>
+        <div class="form-row"><div class="form-group"><label class="form-label">Until (optional, UTC)</label><input type="datetime-local" name="disabled_until"></div><div class="form-group"><label class="form-label">Reason</label><input name="reason" maxlength="1000" value="{{ personality.disabled_reason }}"></div></div><button class="btn btn-sm" type="submit">Apply Moderation</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_personalities') }}" class="mt-1" data-confirm="Permanently delete this user's personality?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><input type="hidden" name="personality_id" value="{{ personality.id }}"><button class="btn btn-sm btn-danger" type="submit">Delete</button>
+      </form>
+    </article>
+  {% else %}<div class="card"><p class="text-muted">No personalities have been created.</p></div>{% endfor %}
+  </div>
+</div>
+{% endblock %}

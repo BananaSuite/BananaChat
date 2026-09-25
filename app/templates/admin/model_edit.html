@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Edit Model | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-narrow">
+  <div class="page-header">
+    <div>
+      <h1>Edit Model</h1>
+      <div class="subtitle mono text-sm">
+        {{ model.backend | default('ollama') }}: {{ model.backend_model_name or model.ollama_name }}
+      </div>
+    </div>
+    <a href="{{ url_for('admin_models') }}" class="btn btn-sm">Back to Models</a>
+  </div>
+
+  <div class="card">
+    <form method="POST" action="{{ url_for('admin_model_edit', model_id=model.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="form-group">
+        <label class="form-label" for="display_name">Display Name</label>
+        <input type="text" id="display_name" name="display_name" autofocus
+               value="{{ model.display_name or '' }}" maxlength="200"
+               placeholder="{{ model.ollama_name }}">
+        <span class="form-hint">Shown to users. Defaults to the backend model name if blank.</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="description">Description <span class="text-muted">(optional)</span></label>
+        <textarea id="description" name="description" rows="3" maxlength="1000"
+                  placeholder="Brief description of this model's capabilities…">{{ model.description or '' }}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Categories</label>
+        <div style="display:flex;flex-direction:column;gap:0.4rem;margin-top:0.25rem;">
+          {% for cat in categories %}
+            <label class="form-check">
+              <input type="checkbox" name="categories" value="{{ cat.id }}"
+                     {% if cat.id in model_cats %}checked{% endif %}>
+              <span>{{ cat.name }}</span>
+              {% if cat.description %}
+                <span class="text-muted text-xs">: {{ cat.description }}</span>
+              {% endif %}
+              <span class="badge badge-user text-xs" style="margin-left:0.25rem;">{{ cat.scope }}</span>
+            </label>
+          {% else %}
+            <p class="text-muted text-sm">
+              No categories defined. <a href="{{ url_for('admin_categories') }}">Create some</a>.
+            </p>
+          {% endfor %}
+        </div>
+      </div>
+
+      {% if model.backend != 'comfyui' %}
+      <div class="form-group">
+        <label class="form-check">
+          <input type="checkbox" name="is_reasoning" value="1"
+                 {% if model.is_reasoning %}checked{% endif %}>
+          <span>Reasoning model</span>
+        </label>
+        <span class="form-hint">
+          Mark if this model outputs <code>&lt;think&gt;…&lt;/think&gt;</code> blocks (e.g. DeepSeek-R1, QwQ).
+          The UI will show a collapsible "Reasoning" section instead of raw tags.
+        </span>
+      </div>
+      <div class="form-group">
+        <label class="form-check">
+          <input type="checkbox" name="supports_vision" value="1"
+                 {% if model.supports_vision %}checked{% endif %}>
+          <span>Accepts image input</span>
+        </label>
+        <span class="form-hint">Enable only for Ollama vision models. This is separate from ComfyUI image generation.</span>
+      </div>
+      {% endif %}
+
+      <div class="form-group">
+        <label class="form-check">
+          <input type="checkbox" name="is_uncensored" value="1"
+                 {% if model.is_uncensored %}checked{% endif %}>
+          <span>Uncensored model</span>
+        </label>
+        <span class="form-hint">
+          Applies the global uncensored access policy to this model, in addition to its category and individual model policies.
+        </span>
+      </div>
+
+      {% if model.backend == 'comfyui' %}
+      <input type="hidden" name="is_image_generation" value="1">
+      <div class="form-group">
+        <span class="badge badge-user">ComfyUI image generation</span>
+        <span class="form-hint">ComfyUI catalog entries are always image-generation models.</span>
+      </div>
+      {% endif %}
+
+      {# Inference parameters #}
+      {% if model.backend != 'comfyui' %}
+      <div class="card-section">
+        <div class="card-title" style="margin-bottom:0.5rem;">
+          Inference Parameters
+          <span class="text-muted text-xs" style="font-weight:400;">: leave blank to use Ollama defaults</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="system_prompt">System Prompt</label>
+          <textarea id="system_prompt" name="system_prompt" rows="4" maxlength="4000"
+                    placeholder="You are a helpful assistant.">{{ model.system_prompt or '' }}</textarea>
+          <span class="form-hint">Prepended as a system message to every conversation with this model.</span>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="temperature">Temperature <span class="text-muted">(0–2)</span></label>
+            <input type="number" id="temperature" name="temperature"
+                   min="0" max="2" step="0.05"
+                   value="{{ model.temperature if model.temperature is not none else '' }}"
+                   placeholder="Ollama default">
+            <span class="form-hint">Higher = more creative output.</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="top_p">Top-P <span class="text-muted">(0–1)</span></label>
+            <input type="number" id="top_p" name="top_p"
+                   min="0" max="1" step="0.05"
+                   value="{{ model.top_p if model.top_p is not none else '' }}"
+                   placeholder="Ollama default">
+            <span class="form-hint">Nucleus sampling threshold.</span>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="top_k">Top-K <span class="text-muted">(0–200)</span></label>
+            <input type="number" id="top_k" name="top_k"
+                   min="0" max="200" step="1"
+                   value="{{ model.top_k if model.top_k is not none else '' }}"
+                   placeholder="Ollama default">
+            <span class="form-hint">0 = disabled.</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="repeat_penalty">Repeat Penalty <span class="text-muted">(0.1–3)</span></label>
+            <input type="number" id="repeat_penalty" name="repeat_penalty"
+                   min="0.1" max="3" step="0.05"
+                   value="{{ model.repeat_penalty if model.repeat_penalty is not none else '' }}"
+                   placeholder="Ollama default">
+            <span class="form-hint">Penalises repeated tokens.</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="num_ctx">Context Window <span class="text-muted">(num_ctx, 512–131072)</span></label>
+          <input type="number" id="num_ctx" name="num_ctx"
+                 min="512" max="131072" step="512"
+                 value="{{ model.num_ctx if model.num_ctx is not none else '' }}"
+                 placeholder="Ollama default">
+          <span class="form-hint" style="color:#fdba74;">
+            ⚠ Larger values consume significantly more VRAM. Typical range: 2048–8192.
+            Setting this too high may cause Ollama to fail to load the model.
+          </span>
+        </div>
+      </div>
+      {% endif %}
+
+      <div style="display:flex;gap:0.5rem;margin-top:1.25rem;">
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+        <a href="{{ url_for('admin_models') }}" class="btn">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

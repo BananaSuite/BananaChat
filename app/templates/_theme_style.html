@@ -1,0 +1,22 @@
+<meta name="color-scheme" content="{{ effective_theme_mode }}">
+<style nonce="{{ csp_nonce }}">
+  :root {
+    color-scheme: {{ effective_theme_mode }};
+    --bg: {{ user_accessibility.custom_bg if user_accessibility and user_accessibility.custom_bg else theme_palette.bg }};
+    --text: {{ user_accessibility.custom_text if user_accessibility and user_accessibility.custom_text else theme_palette.text }};
+    --accent: {{ user_accessibility.custom_primary if user_accessibility and user_accessibility.custom_primary else theme_palette.primary }};
+    --raised: {{ user_accessibility.custom_secondary if user_accessibility and user_accessibility.custom_secondary else theme_palette.secondary }};
+    --accent-d: {{ user_accessibility.custom_accent if user_accessibility and user_accessibility.custom_accent else theme_palette.accent }};
+    --surf: {{ user_accessibility.custom_sidebar if user_accessibility and user_accessibility.custom_sidebar else theme_palette.sidebar }};
+    --overlay: color-mix(in srgb, var(--raised) 88%, var(--text));
+    --border: color-mix(in srgb, var(--text) 16%, var(--bg));
+    --bdr-hi: color-mix(in srgb, var(--text) 28%, var(--bg));
+    --text-2: color-mix(in srgb, var(--text) 72%, var(--bg));
+    --text-3: color-mix(in srgb, var(--text) 52%, var(--bg));
+    --text-4: color-mix(in srgb, var(--text) 34%, var(--bg));
+    --a11y-font-scale: {{ user_accessibility.font_scale if user_accessibility else 1 }};
+    --a11y-line-height-mul: {{ ['1', '1.18', '1.36'][user_accessibility.line_height|int] if user_accessibility and user_accessibility.line_height|int in [0, 1, 2] else '1' }};
+    --a11y-letter-spacing: {{ ['normal', '0.04em', '0.08em'][user_accessibility.letter_spacing|int] if user_accessibility and user_accessibility.letter_spacing|int in [0, 1, 2] else 'normal' }};
+    --bg-image: {% if user_accessibility and user_accessibility.background_image %}url("{{ url_for('customization_background', filename=user_accessibility.background_image) }}"){% else %}none{% endif %};
+  }
+</style>

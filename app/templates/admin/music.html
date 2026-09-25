@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}{{ t('music_admin_title') }} | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-narrow">
+  <div class="page-header">
+    <h1>{{ t('music_admin_title') }}</h1>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Dashboard</a>
+  </div>
+
+  <p class="text-sm text-muted" style="margin-bottom:1.5rem;">{{ t('music_admin_desc') }}</p>
+
+  {# Status overview #}
+  <div class="card mb-2">
+    <div class="card-title lg">Status</div>
+    <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;">
+      <div class="stat-card" style="min-width:120px;">
+        <div class="stat-num">{{ opted_in_count }}</div>
+        <div class="stat-label">{{ t('music_admin_opted_in_count') }}</div>
+      </div>
+      <div style="font-size:0.85rem;">
+        {% if music.music_enabled %}
+          <span style="color:#86efac;">Program enabled</span>
+        {% else %}
+          <span style="color:#fca5a5;">Program disabled</span>
+        {% endif %}
+        &middot;
+        {% if music.music_visible %}
+          <span style="color:#93c5fd;">Visible</span>
+        {% else %}
+          <span style="color:#fca5a5;">Hidden</span>
+        {% endif %}
+        &middot;
+        Multiplier: <strong>{{ music.music_credit_multiplier }}x</strong>
+        &middot;
+        {{ plural(tracks | length, 'track') }}
+      </div>
+    </div>
+  </div>
+
+  {# Settings form #}
+  <div class="card mb-2">
+    <div class="card-title lg">Settings</div>
+    <form method="POST" action="{{ url_for('admin_music_settings') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="music_enabled" value="1"
+                 {% if music.music_enabled %}checked{% endif %}>
+          <span><strong>{{ t('music_admin_enable') }}</strong></span>
+        </label>
+        <span class="form-hint">Master switch. When disabled, the program is completely hidden and inactive.</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="music_visible" value="1"
+                 {% if music.music_visible %}checked{% endif %}>
+          <span><strong>{{ t('music_admin_visible') }}</strong></span>
+        </label>
+        <span class="form-hint">When unchecked, the "Free Quota" link is hidden and the opt-in page is inaccessible. Users already opted in keep their bonus and music.</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="music_opt_in_allowed" value="1"
+                 {% if music.music_opt_in_allowed %}checked{% endif %}>
+          <span><strong>{{ t('music_admin_opt_in_allowed') }}</strong></span>
+        </label>
+        <span class="form-hint">When unchecked, users cannot opt in (but existing opt-ins remain).</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="music_opt_out_allowed" value="1"
+                 {% if music.music_opt_out_allowed %}checked{% endif %}>
+          <span><strong>{{ t('music_admin_opt_out_allowed') }}</strong></span>
+        </label>
+        <span class="form-hint">When unchecked, users cannot opt out.</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="music_credit_multiplier">{{ t('music_admin_multiplier') }}</label>
+        <input type="number" id="music_credit_multiplier" name="music_credit_multiplier"
+               value="{{ music.music_credit_multiplier }}" min="1.0" max="10.0" step="0.5" style="width:100px;">
+        <span class="form-hint">Daily credits and slow credits are multiplied by this factor for opted-in users.</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="music_playback_mode">{{ t('music_admin_playback_mode') }}</label>
+        <select id="music_playback_mode" name="music_playback_mode" style="width:180px;">
+          <option value="sequential" {% if music.music_playback_mode == 'sequential' %}selected{% endif %}>{{ t('music_admin_sequential') }}</option>
+          <option value="shuffle" {% if music.music_playback_mode == 'shuffle' %}selected{% endif %}>{{ t('music_admin_shuffle') }}</option>
+        </select>
+        <span class="form-hint">Sequential plays tracks in the listed order. Shuffle randomises per-user.</span>
+      </div>
+
+      <button type="submit" class="btn btn-primary">{{ t('music_admin_save') }}</button>
+    </form>
+  </div>
+
+  {# Tracks #}
+  <div class="card mb-2">
+    <div class="card-title lg">{{ t('music_tracks') }}</div>
+    <p class="text-sm text-muted" style="margin-bottom:1rem;">{{ t('music_tracks_desc') }}</p>
+
+    {# Upload form #}
+    <form method="POST" action="{{ url_for('admin_music_upload_track') }}" enctype="multipart/form-data"
+          style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1.25rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="file" name="track_file" accept=".mp3,.ogg,.wav,.m4a" required
+             style="font-size:0.85rem;flex:1;min-width:200px;">
+      <button type="submit" class="btn btn-primary btn-sm">{{ t('music_upload_track') }}</button>
+    </form>
+
+    {% if tracks %}
+      <div id="track-list" style="display:flex;flex-direction:column;gap:4px;">
+        {% for track in tracks %}
+        <div class="sort-item" data-sort-id="{{ track.id }}"
+             style="display:flex;align-items:center;gap:0.75rem;padding:0.6rem 0.75rem;background:var(--surf);border:1px solid var(--border);border-radius:6px;">
+          <span class="sort-handle" style="cursor:grab;color:var(--text-3);font-size:1.1rem;" title="{{ t('drag_to_reorder') }}">&#9776;</span>
+          <span style="flex:1;font-size:0.88rem;font-weight:500;">{{ track.display_name }}</span>
+          <span class="text-xs text-muted mono">{{ track.filename[-12:] }}</span>
+          {# Inline rename #}
+          <form method="POST" action="{{ url_for('admin_music_rename_track', track_id=track.id) }}"
+                style="display:flex;gap:4px;align-items:center;margin:0;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="text" name="display_name" value="{{ track.display_name }}" maxlength="200"
+                   style="width:140px;font-size:0.78rem;padding:2px 6px;">
+            <button type="submit" class="btn btn-sm" style="font-size:0.72rem;padding:2px 8px;">{{ t('music_rename') }}</button>
+          </form>
+          {# Delete #}
+          <form method="POST" action="{{ url_for('admin_music_delete_track', track_id=track.id) }}"
+                data-confirm="Delete track '{{ track.display_name }}'?" style="margin:0;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-danger" style="font-size:0.72rem;padding:2px 8px;">{{ t('music_delete_track') }}</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="text-muted text-sm" style="text-align:center;padding:1.5rem 0;">{{ t('music_no_tracks') }}</p>
+    {% endif %}
+  </div>
+
+  {# Bulk actions #}
+  <div class="card mb-2">
+    <div class="card-title lg">Bulk Actions</div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <form method="POST" action="{{ url_for('admin_music_opt_in_all') }}" style="margin:0;"
+            data-confirm="Opt in ALL non-admin users into the Music Program?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-primary btn-sm">{{ t('music_admin_opt_in_all') }}</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_music_opt_out_all') }}" style="margin:0;"
+            data-confirm="Opt out ALL users from the Music Program?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm">{{ t('music_admin_opt_out_all') }}</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_music_hide') }}" style="margin:0;"
+            data-confirm="Hide the program from users? Current opt-ins will remain active.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm">{{ t('music_admin_hide_program') }}</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_music_remove') }}" style="margin:0;"
+            data-confirm="Remove the Music Program entirely? This will opt out ALL users and reset all settings.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-danger btn-sm">{{ t('music_admin_remove_program') }}</button>
+      </form>
+    </div>
+  </div>
+
+  {# Per-user management #}
+  <div class="card">
+    <div class="card-title lg">Per-User Controls</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Role</th>
+            <th>Music Status</th>
+            <th>Forced</th>
+            <th style="width:180px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td><strong>{{ u.username }}</strong></td>
+            <td>
+              {% if u.role == 'admin' %}
+                <span class="badge badge-admin">admin</span>
+              {% else %}
+                <span class="badge badge-user">user</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if u.music_opted_in %}
+                <span style="color:#86efac;">Opted in</span>
+              {% else %}
+                <span class="text-muted">Not opted in</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if u.music_forced %}
+                <span style="color:#fbbf24;">Yes</span>
+              {% else %}
+                <span class="text-muted">No</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if not u.music_opted_in %}
+              <form method="POST" action="{{ url_for('admin_music_force_opt_in', user_id=u.id) }}" style="display:inline;margin:0;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm" style="font-size:0.75rem;">{{ t('music_admin_force_opt_in') }}</button>
+              </form>
+              {% else %}
+              <form method="POST" action="{{ url_for('admin_music_force_opt_out', user_id=u.id) }}" style="display:inline;margin:0;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm" style="font-size:0.75rem;">{{ t('music_admin_force_opt_out') }}</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+(function() {
+  var trackList = document.getElementById("track-list");
+  if (trackList) {
+    initSortable(trackList, {
+      onReorder: function(ids) {
+        saveReorder("{{ url_for('admin_api_music_reorder_tracks') }}", ids);
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Edit Category | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-narrow">
+  <div class="page-header">
+    <h1>Edit Category</h1>
+    <a href="{{ url_for('admin_categories') }}" class="btn btn-sm">Back to Categories</a>
+  </div>
+
+  <div class="card">
+    <form method="POST" action="{{ url_for('admin_category_edit', cat_id=cat.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="form-group">
+        <label class="form-label" for="name">Name</label>
+        <input type="text" id="name" name="name" autofocus required
+               value="{{ cat.name }}" maxlength="100" placeholder="Category name">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="description">Description <span class="text-muted">(optional)</span></label>
+        <textarea id="description" name="description" rows="2" maxlength="500"
+                  placeholder="Short description">{{ cat.description or '' }}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="scope">Scope</label>
+        <select id="scope" name="scope">
+          <option value="both"  {% if cat.scope == 'both'  %}selected{% endif %}>Both (chat & API)</option>
+          <option value="chat"  {% if cat.scope == 'chat'  %}selected{% endif %}>Chat only</option>
+          <option value="api"   {% if cat.scope == 'api'   %}selected{% endif %}>API only</option>
+        </select>
+        <span class="form-hint">Controls where this category tag appears.</span>
+      </div>
+
+      <div style="display:flex;gap:0.5rem;margin-top:1.25rem;">
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+        <a href="{{ url_for('admin_categories') }}" class="btn">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

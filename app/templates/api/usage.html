@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Usage History | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-header">
+    <div>
+      <h1>Usage History</h1>
+      <div class="subtitle">API &amp; Playground usage: last 200 entries</div>
+    </div>
+    <a href="{{ url_for('api_index') }}" class="btn btn-sm">Back to API</a>
+  </div>
+
+  {# Credit summary #}
+  <div class="card mb-2">
+    {% if current_user.role == 'admin' %}
+      <p class="text-sm" style="color:#86efac;margin:0;">Unlimited: admin accounts have no daily credit limit.</p>
+    {% else %}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;">
+      <div>
+        <div class="progress-label">
+          <span>Regular today</span>
+          <span>{{ reg_used }} / {{ quota.daily_credits }}</span>
+        </div>
+        {% set pct = ((reg_used / quota.daily_credits) * 100) | int if quota.daily_credits > 0 else 0 %}
+        <div class="progress-wrap">
+          <div class="progress-bar {% if pct >= 90 %}danger{% elif pct >= 70 %}warning{% endif %}"
+               style="width:{{ [pct,100]|min }}%"></div>
+        </div>
+      </div>
+      <div>
+        <div class="progress-label">
+          <span>Slow today</span>
+          <span>{{ slow_used }} / {{ quota.daily_slow_credits }}</span>
+        </div>
+        {% set pct2 = ((slow_used / quota.daily_slow_credits) * 100) | int if quota.daily_slow_credits > 0 else 0 %}
+        <div class="progress-wrap">
+          <div class="progress-bar {% if pct2 >= 90 %}danger{% elif pct2 >= 70 %}warning{% endif %}"
+               style="width:{{ [pct2,100]|min }}%"></div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if history %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Model</th>
+            <th>Type</th>
+            <th>Tokens In</th>
+            <th>Tokens Out</th>
+            <th>Credits</th>
+            <th>Mode</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in history %}
+            <tr>
+              <td class="text-sm text-muted">{{ format_datetime(entry.created_at) if entry.created_at else '-' }}</td>
+              <td class="text-sm">{{ entry.model_name or '-' }}</td>
+              <td class="text-sm text-muted">{{ entry.request_type or '-' }}</td>
+              <td class="text-sm mono">{{ entry.tokens_in or 0 }}</td>
+              <td class="text-sm mono">{{ entry.tokens_out or 0 }}</td>
+              <td class="text-sm mono text-accent">{{ entry.credits_used or 0 }}</td>
+              <td>
+                {% if entry.is_slow %}
+                  <span class="badge badge-restricted">slow</span>
+                {% else %}
+                  <span class="badge badge-rolled-out">regular</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="card empty-state">
+      No usage recorded yet.
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

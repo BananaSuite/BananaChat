@@ -1,0 +1,7 @@
+{% if history.older or history.newer or history.latest %}
+<nav class="history-navigation" aria-label="{{ t('chat_history') }}" style="display:flex;flex-wrap:wrap;gap:0.75rem;padding:0.75rem;">
+  {% if history.older %}<a class="history-older btn btn-sm" href="{{ history.older }}">{{ t('earlier_messages') }}</a>{% endif %}
+  {% if history.newer %}<a class="history-newer btn btn-sm" href="{{ history.newer }}">{{ t('newer_messages') }}</a>{% endif %}
+  {% if history.latest %}<a class="history-latest btn btn-sm" href="{{ history.latest }}">{{ t('latest_messages') }}</a>{% endif %}
+</nav>
+{% endif %}

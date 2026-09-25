@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ t('free_quota') }} | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-narrow">
+  <div class="page-header">
+    <h1>{{ t('free_quota') }}</h1>
+  </div>
+
+  {# Program description #}
+  <div class="card mb-2">
+    <div class="card-title lg">{{ t('music_program') }}</div>
+    <p class="text-sm" style="margin-bottom:1rem;">{{ t('music_program_desc') }}</p>
+
+    {% if opted_in %}
+      {# Currently opted in #}
+      <div class="flash flash-success mb-2" style="margin-top:0;">
+        <span class="flash-msg">
+          {{ t('music_opted_in') }}
+          {% if forced %}
+            <br><span class="text-xs" style="color:#fbbf24;">{{ t('music_forced') }}</span>
+          {% endif %}
+        </span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 1rem;font-size:0.88rem;margin-bottom:1.25rem;">
+        <span class="text-muted">{{ t('music_bonus_active') }}</span>
+        <span><strong style="color:#86efac;">{{ multiplier }}x</strong></span>
+        <span class="text-muted">Regular credits / day</span>
+        <span>{{ quota.daily_credits }} &times; {{ multiplier }} = <strong>{{ (quota.daily_credits * multiplier) | int }}</strong></span>
+        <span class="text-muted">Slow credits / day</span>
+        <span>{{ quota.daily_slow_credits }} &times; {{ multiplier }} = <strong>{{ (quota.daily_slow_credits * multiplier) | int }}</strong></span>
+      </div>
+
+      {% if music.music_opt_out_allowed and not forced %}
+      <form method="POST" action="{{ url_for('music_opt_out') }}"
+            data-confirm="Are you sure you want to opt out? Your bonus credits will be removed and the music will stop.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn">{{ t('music_opt_out') }}</button>
+      </form>
+      {% elif forced %}
+        <p class="text-xs text-muted">{{ t('music_forced') }}</p>
+      {% else %}
+        <p class="text-xs text-muted">{{ t('music_opt_out_disabled') }}</p>
+      {% endif %}
+
+    {% else %}
+      {# Not opted in #}
+      <div class="flash flash-info mb-2" style="margin-top:0;">
+        <span class="flash-msg">{{ t('music_opted_out') }}</span>
+      </div>
+
+      <div style="font-size:0.88rem;margin-bottom:1.25rem;">
+        <p class="text-sm text-muted">
+          If you opt in, your daily credits will be multiplied by <strong style="color:#86efac;">{{ music.music_credit_multiplier }}x</strong>.
+          A retro music player will appear and Hava Nagila will play on every page. You cannot pause, rewind, or skip. It just plays.
+        </p>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 1rem;">
+          <span class="text-muted">Regular credits / day</span>
+          <span>{{ quota.daily_credits }} &rarr; <strong style="color:#86efac;">{{ (quota.daily_credits * music.music_credit_multiplier) | int }}</strong></span>
+          <span class="text-muted">Slow credits / day</span>
+          <span>{{ quota.daily_slow_credits }} &rarr; <strong style="color:#86efac;">{{ (quota.daily_slow_credits * music.music_credit_multiplier) | int }}</strong></span>
+        </div>
+      </div>
+
+      {% if music.music_opt_in_allowed %}
+      <form method="POST" action="{{ url_for('music_opt_in') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-primary">{{ t('music_opt_in') }}</button>
+      </form>
+      {% else %}
+        <p class="text-xs text-muted">{{ t('music_opt_in_disabled') }}</p>
+      {% endif %}
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

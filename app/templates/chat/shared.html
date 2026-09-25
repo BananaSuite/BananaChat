@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="{{ current_language }}" data-theme="{{ effective_theme_mode }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ sess.title or 'Shared Chat' }} | {{ site_name }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% include "_theme_style.html" %}
+</head>
+<body>
+
+<div class="shared-page">
+  <div class="shared-header">
+    <h1>{{ sess.title or 'Shared Chat' }}</h1>
+    <p class="text-muted">Shared conversation &nbsp;·&nbsp; Read-only</p>
+    <a href="{{ url_for('chat_shared_download', token=share_token) }}"
+       class="btn btn-sm" style="margin-top:0.75rem;">↓ Download</a>
+  </div>
+
+  {% include "chat/_history_navigation.html" %}
+  <div style="display:flex;flex-direction:column;gap:1rem;">
+    {% for msg in messages %}
+      <div class="message {{ msg.role }}">
+        <div class="message-bubble">{{ msg.content }}</div>
+              {% if msg.role == "assistant" and msg.generation_state in ("stopped", "failed", "interrupted") %}
+              <p class="chat-outcome text-muted" role="status">{{ t("generation_" ~ msg.generation_state) }}</p>
+              {% endif %}
+        <div class="message-meta">
+          {% if msg.role == 'assistant' %}
+            {{ msg.model_name or 'assistant' }}
+          {% else %}
+            User
+          {% endif %}
+          &nbsp;·&nbsp; {{ time_ago(msg.created_at) }}
+        </div>
+      </div>
+    {% else %}
+      <div class="card empty-state">No messages in this conversation.</div>
+    {% endfor %}
+  </div>
+
+  <div class="shared-footer">
+    {% include "_source_link.html" %}
+  </div>
+</div>
+
+</body>
+</html>

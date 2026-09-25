@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="{{ current_language }}" data-theme="{{ effective_theme_mode }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>{{ t('sign_up') }} | {{ site_name }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% include "_theme_style.html" %}
+</head>
+<body>
+
+<div class="auth-page">
+  {% if settings and settings.maintenance_mode %}
+  <div style="position:fixed;top:0;left:0;right:0;background:rgba(240,173,78,.12);color:#f0ad4e;text-align:center;padding:.5rem 1rem;font-size:.82rem;border-bottom:1px solid rgba(240,173,78,.25);z-index:100">
+    {{ settings.maintenance_message or 'The system is currently under maintenance. Signups are temporarily disabled.' }}
+  </div>
+  {% endif %}
+  <div class="auth-card">
+    <div class="auth-language language-switcher"><a href="{{ url_for('set_language', language='it', next=request.full_path) }}" class="{% if current_language == 'it' %}active{% endif %}">IT</a><a href="{{ url_for('set_language', language='en', next=request.full_path) }}" class="{% if current_language == 'en' %}active{% endif %}">EN</a></div>
+    <div class="auth-logo">
+      <h1>{{ site_name }}</h1>
+      <p>{{ t('create_account') }}</p>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }} mb-2">
+            <span class="flash-msg">{{ message }}</span>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST" action="{{ url_for('signup') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="_form_time" value="{{ bot_form_token }}">
+      {# Honeypot #}
+      <div style="display:none" aria-hidden="true">
+        <input type="text" name="website" tabindex="-1" autocomplete="off" value="">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="username">{{ t('username') }}</label>
+        <input type="text" id="username" name="username" autocomplete="username"
+               autofocus required maxlength="32" placeholder="nome_utente">
+        <span class="form-hint">{{ t('username_hint') }}</span>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="password">{{ t('password') }}</label>
+        <input type="password" id="password" name="password" autocomplete="new-password"
+               required placeholder="{{ t('password_hint') }}">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="confirm_password">{{ t('confirm_password') }}</label>
+        <input type="password" id="confirm_password" name="confirm_password"
+               autocomplete="new-password" required placeholder="{{ t('repeat_password') }}">
+      </div>
+
+      {% if signup_mode == 'invite' %}
+        <div class="form-group">
+          <label class="form-label" for="invite_code">{{ t('invite_code') }}</label>
+          <input type="text" id="invite_code" name="invite_code"
+                 required placeholder="{{ t('enter_invite') }}" autocomplete="off">
+          <span class="form-hint">{{ t('invite_required') }}</span>
+        </div>
+      {% endif %}
+
+      <button type="submit" class="btn btn-primary btn-full mt-2">{{ t('create_account_button') }}</button>
+    </form>
+
+    <div class="auth-footer">
+      {{ t('have_account') }}
+      <a href="{{ url_for('login') }}">{{ t('sign_in') }}</a>
+    </div>
+  </div>
+</div>
+
+<script nonce="{{ csp_nonce }}">window.BC_LANG = {{ current_language | tojson }}; window.BC_I18N = {{ browser_i18n | tojson }};</script><script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/main.js') }}"></script>
+{% include "_source_link.html" %}
+</body>
+</html>

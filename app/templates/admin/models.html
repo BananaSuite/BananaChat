@@ -1,0 +1,422 @@
+{% extends "base.html" %}
+{% block title %}Model Catalog | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-wide">
+  <div class="page-header">
+    <div>
+      <h1>Model Catalog</h1>
+      <div class="subtitle">{{ plural(models | length, 'model') }} in catalog</div>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <form method="POST" action="{{ url_for('admin_models_sync') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm">Sync from Ollama</button>
+      </form>
+      {% if image_backend_enabled %}
+      <form method="POST" action="{{ url_for('admin_models_sync_comfyui') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm">Sync from ComfyUI</button>
+      </form>
+      {% endif %}
+      <a href="{{ url_for('admin_categories') }}" class="btn btn-sm">Manage Categories</a>
+      <button type="button" class="btn btn-sm btn-danger" id="unload-all-btn"
+              onclick="unloadAllModels()">Unload All Models</button>
+    </div>
+  </div>
+
+  {% include "admin/_model_recovery.html" %}
+
+  <div id="running-models-bar" style="margin-bottom:1rem;display:none;">
+    <div class="card" style="padding:0.75rem 1rem;">
+      <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+        <strong style="font-size:0.9rem;">Loaded in Ollama:</strong>
+        <span id="running-models-list"></span>
+      </div>
+    </div>
+  </div>
+
+  {# Ollama Pull Card #}
+  <div class="card" style="margin-bottom:1.25rem;padding:1rem 1.25rem;">
+    <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+      <strong style="font-size:0.95rem;">Pull Ollama Model</strong>
+      <span id="disk-status" style="font-size:0.8rem;color:#888;"></span>
+    </div>
+    <form method="POST" action="{{ url_for('admin_models_pull') }}"
+          style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="text" name="model_name" placeholder="e.g. llama3.2:3b or hf.co/user/repo"
+             style="flex:1;min-width:200px;max-width:400px;font-family:monospace;font-size:0.9rem;"
+             autocomplete="off" spellcheck="false" required>
+      <button type="submit" class="btn btn-sm btn-primary">Pull Model</button>
+    </form>
+    <div style="font-size:0.78rem;color:#666;margin-top:0.5rem;">
+      <strong>Sources:</strong>
+      Ollama registry (<code>llama3.2:3b</code>),
+      HuggingFace GGUF (<code>hf.co/user/repo</code>: recommended for custom models),
+      or paste a full <code>https://huggingface.co/...</code> URL.
+      Download runs in the background.
+    </div>
+  </div>
+
+  {% if image_backend_enabled and checkpoint_agent_configured %}
+  {# ComfyUI Checkpoint Pull Card #}
+  <div class="card" style="margin-bottom:1.25rem;padding:1rem 1.25rem;border-color:#34506f;">
+    <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+      <strong style="font-size:0.95rem;">Pull ComfyUI Checkpoint</strong>
+      <span class="badge badge-user">Hugging Face safetensors</span>
+    </div>
+    <form method="POST" action="{{ url_for('admin_models_pull_checkpoint') }}"
+          style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0.75rem;align-items:end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group" style="margin:0;">
+        <label class="form-label" for="repo_id">Repository</label>
+        <input id="repo_id" type="text" name="repo_id" placeholder="owner/repo"
+               maxlength="192" autocomplete="off" spellcheck="false" required>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label" for="source_filename">Source filename/path</label>
+        <input id="source_filename" type="text" name="source_filename"
+               placeholder="models/model.safetensors" maxlength="512"
+               autocomplete="off" spellcheck="false" required>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label" for="revision">Revision</label>
+        <input id="revision" type="text" name="revision" placeholder="commit SHA or immutable tag"
+               maxlength="128" autocomplete="off" spellcheck="false" required>
+        <span class="form-hint">A commit SHA is recommended; valid immutable tags are accepted.</span>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label" for="target_name">ComfyUI target path</label>
+        <input id="target_name" type="text" name="target_name"
+               placeholder="team/model.safetensors" maxlength="512"
+               autocomplete="off" spellcheck="false" required>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label" for="expected_sha256">Expected SHA-256</label>
+        <input id="expected_sha256" type="text" name="expected_sha256" minlength="64"
+               maxlength="64" pattern="[0-9A-Fa-f]{64}" autocomplete="off" spellcheck="false" required>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label class="form-label" for="expected_size">Expected size in bytes <span class="text-muted">(optional)</span></label>
+        <input id="expected_size" type="number" name="expected_size" min="1" step="1"
+               inputmode="numeric" autocomplete="off">
+      </div>
+      <div>
+        <button type="submit" class="btn btn-sm btn-primary">Queue Checkpoint Pull</button>
+      </div>
+    </form>
+    <div style="font-size:0.78rem;color:#666;margin-top:0.75rem;">
+      The web server sends only repository metadata and the expected digest to the configured compute agent.
+      Signed download URLs and credentials are not accepted.
+    </div>
+  </div>
+  {% endif %}
+
+  {# Pull Queue #}
+  <div id="pull-queue-section" style="margin-bottom:1.5rem;display:none;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.6rem;">
+      <h2 style="font-size:1rem;margin:0;">Pull Queue</h2>
+      <button type="button" id="clear-pull-history-btn" class="btn btn-sm btn-outline" style="display:none;font-size:.78rem;" onclick="clearPullHistory()">Clear history</button>
+    </div>
+    <div id="pull-queue-list" class="card" style="padding:0;overflow:hidden;"></div>
+  </div>
+
+  {% if models %}
+    <div id="model-sort-list" style="display:flex;flex-direction:column;gap:4px;">
+      {% for model in models %}
+        <div class="sort-item" data-sort-id="{{ model.id }}"
+             style="display:flex;align-items:center;gap:0.75rem;padding:0.65rem 0.9rem;background:var(--surf);border:1px solid var(--border);border-radius:6px;">
+          <span class="sort-handle" style="cursor:grab;color:var(--text-3);font-size:1.1rem;" title="{{ t('drag_to_reorder') }}">&#9776;</span>
+          <div style="flex:1;min-width:0;">
+            <strong>{{ model.display_name or model.ollama_name }}</strong>
+            <span class="mono text-xs text-muted" style="margin-left:0.5rem;">{{ model.backend_model_name or model.ollama_name }}</span>
+            {% if model.description %}
+              <div class="text-xs text-muted" style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ model.description }}</div>
+            {% endif %}
+          </div>
+          <div style="display:flex;align-items:center;gap:0.4rem;flex-shrink:0;flex-wrap:wrap;">
+            <span class="badge badge-user">{{ model.backend | default('ollama') }}</span>
+            {% if model.backend_available %}
+              <span class="badge badge-rolled-out">available</span>
+            {% else %}
+              <span class="badge badge-restricted">unavailable</span>
+            {% endif %}
+            {% if model.is_rolled_out %}
+              <span class="badge badge-rolled-out">rolled out</span>
+            {% else %}
+              <span class="badge badge-restricted">restricted</span>
+            {% endif %}
+            {% if model.is_uncensored %}<span class="badge badge-pending">uncensored</span>{% endif %}
+            {% if model.is_image_generation %}<span class="badge badge-user">image generation</span>{% endif %}
+            {% if model.categories %}
+              {% for cat in model.categories %}
+                <span class="badge badge-user">{{ cat.name }}</span>
+              {% endfor %}
+            {% endif %}
+          </div>
+          <div class="td-actions" style="flex-shrink:0;">
+            <form method="POST" action="{{ url_for('admin_model_rollout', model_id=model.id) }}" style="display:inline;margin:0;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              {% if model.is_rolled_out %}
+                <input type="hidden" name="rolled_out" value="0">
+                <button type="submit" class="btn btn-sm">Restrict</button>
+              {% else %}
+                <input type="hidden" name="rolled_out" value="1">
+                <button type="submit" class="btn btn-sm btn-success">Roll Out</button>
+              {% endif %}
+            </form>
+            <a href="{{ url_for('admin_model_edit', model_id=model.id) }}" class="btn btn-sm">Edit</a>
+            <form method="POST" action="{{ url_for('admin_model_delete', model_id=model.id) }}" style="display:inline;margin:0;"
+                  data-confirm="Remove '{{ model.display_name or model.ollama_name }}' from catalog? Backend weights will not be deleted.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+            </form>
+            {% if model.backend == 'ollama' %}
+            <form method="POST" action="{{ url_for('admin_model_delete_ollama', model_id=model.id) }}" style="display:inline;margin:0;"
+                  data-confirm="Delete '{{ model.ollama_name }}' from Ollama AND catalog? This frees disk space but the model must be re-pulled to use it again.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-sm btn-danger">Delete from Ollama</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+    <p class="text-xs text-muted" style="margin-top:0.5rem;">{{ t('drag_to_reorder') }}</p>
+  {% else %}
+    <div class="card empty-state">
+      No models in catalog.
+      <br><br>
+      <form method="POST" action="{{ url_for('admin_models_sync') }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-primary">Sync from Ollama</button>
+      </form>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+var CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
+
+// =========================================================================
+//  Running models bar
+// =========================================================================
+function fetchRunningModels() {
+  fetch('{{ url_for("admin_api_running_models") }}')
+    .then(function(r) { return r.json(); })
+    .then(function(models) {
+      var bar = document.getElementById('running-models-bar');
+      var list = document.getElementById('running-models-list');
+      if (!models || models.length === 0) { bar.style.display = 'none'; return; }
+      bar.style.display = '';
+      list.innerHTML = models.map(function(m) {
+        var label = escapeHtml(m.name);
+        if (m.size_vram_gb) label += ' (' + String(+m.size_vram_gb) + ' GB VRAM)';
+        else if (m.size_gb) label += ' (' + String(+m.size_gb) + ' GB)';
+        return '<span class="badge badge-user" style="cursor:pointer;margin:2px 4px 2px 0;" ' +
+               'title="Click to unload" onclick="confirmUnloadModel(' + escapeHtml(JSON.stringify(m.name)) + ')">' +
+               label + ' ✕</span>';
+      }).join('');
+    })
+    .catch(function() {});
+}
+
+function confirmUnloadModel(name) {
+  showConfirm('Unload ‘' + name + '’ from Ollama memory?', function() {
+    unloadModel(name);
+  });
+}
+
+function unloadModel(name) {
+  fetch('{{ url_for("admin_api_unload_model") }}', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify({model: name})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) fetchRunningModels();
+  }).catch(function() {});
+}
+
+function unloadAllModels() {
+  showConfirm('Unload ALL models from Ollama memory?', function() {
+    fetch('{{ url_for("admin_api_unload_all_models") }}', {
+      method: 'POST',
+      headers: {'X-CSRF-Token': CSRF_TOKEN}
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      if (d.ok) fetchRunningModels();
+    }).catch(function() {});
+  });
+}
+
+fetchRunningModels();
+setInterval(fetchRunningModels, 10000);
+
+// =========================================================================
+//  Pull Queue
+// =========================================================================
+var _seenDoneIds = new Set();
+var _queueInitialized = false;
+
+function renderPullQueue(data) {
+  var section = document.getElementById('pull-queue-section');
+  var list = document.getElementById('pull-queue-list');
+  var diskEl = document.getElementById('disk-status');
+
+  if (data.disk_msg) {
+    diskEl.textContent = data.disk_ok
+      ? ('💾 ' + data.disk_msg)
+      : ('⚠ ' + data.disk_msg);
+    diskEl.style.color = data.disk_ok ? '#888' : '#e07b54';
+  }
+
+  var jobs = data.jobs || [];
+  if (jobs.length === 0) {
+    section.style.display = 'none';
+    _queueInitialized = true;
+    return;
+  }
+  section.style.display = '';
+
+  var html = '';
+  var hasFinished = false;
+  for (var i = 0; i < jobs.length; i++) {
+    html += renderJobRow(jobs[i]);
+    if (jobs[i].status === 'done' || jobs[i].status === 'failed' || jobs[i].status === 'cancelled') {
+      hasFinished = true;
+    }
+  }
+  list.innerHTML = html;
+
+  var clearBtn = document.getElementById('clear-pull-history-btn');
+  if (clearBtn) clearBtn.style.display = hasFinished ? '' : 'none';
+
+  // Reload when a job newly transitions to done so the reconciled catalog is shown.
+  var newDone = false;
+  jobs.forEach(function(j) {
+    if (j.status === 'done' && _queueInitialized && !_seenDoneIds.has(j.id)) {
+      newDone = true;
+    }
+    if (j.status === 'done') _seenDoneIds.add(j.id);
+  });
+  _queueInitialized = true;
+  if (newDone) {
+    setTimeout(function() { window.location.reload(); }, 800);
+  }
+}
+
+function renderJobRow(j) {
+  var backend = j.backend || 'ollama';
+  var artifact = backend === 'comfyui' ? (j.target_name || j.ollama_name) : j.ollama_name;
+  var backendBadge = '<span class="badge badge-user" style="margin-right:0.4rem;">' +
+    escapeHtml(backend) + '</span>';
+  var statusBadge = {
+    queued:    '<span class="badge badge-user">queued</span>',
+    pulling:   '<span class="badge badge-rolled-out">pulling</span>',
+    done:      '<span class="badge badge-rolled-out">done</span>',
+    failed:    '<span class="badge badge-restricted">failed</span>',
+    cancelled: '<span class="badge badge-user">cancelled</span>',
+  }[j.status] || escapeHtml(j.status);
+
+  var progressBar = '';
+  if (j.status === 'pulling') {
+    var pct = j.progress_pct || 0;
+    progressBar =
+      '<div class="pull-progress-track"><div class="pull-progress-bar" style="width:' + pct + '%"></div></div>' +
+      '<div class="pull-progress-detail">' + escapeHtml(j.progress_detail || '…') + '</div>';
+  }
+  if (j.status === 'queued') {
+    progressBar = '<div class="pull-progress-detail" style="margin-top:.3rem;">Waiting in queue…</div>';
+  }
+
+  var actionBtn = '';
+  if (j.status === 'queued' || j.status === 'pulling') {
+    actionBtn =
+      '<button class="btn btn-sm btn-danger" style="flex-shrink:0;" ' +
+      'onclick="cancelPull(' + j.id + ', ' + escapeHtml(JSON.stringify(artifact)) + ')">Cancel</button>';
+  } else {
+    actionBtn =
+      '<button class="btn btn-sm btn-outline" style="flex-shrink:0;font-size:.75rem;opacity:.6;" ' +
+      'onclick="deletePullJob(' + j.id + ')">Delete</button>';
+  }
+  var cancelBtn = actionBtn;
+
+  var byLine = j.requested_by_name
+    ? '<span style="color:#666;font-size:0.75rem;"> by ' + escapeHtml(j.requested_by_name) + '</span>'
+    : '';
+
+  var errorLine = '';
+  if (j.status === 'failed' && j.error_message) {
+    errorLine = '<div style="font-size:0.75rem;color:#e07b54;margin-top:0.3rem;">' +
+      escapeHtml(j.error_message) + '</div>';
+  }
+
+  return '<div style="padding:0.75rem 1rem;border-bottom:1px solid #1e1e2c;display:flex;align-items:flex-start;gap:0.75rem;flex-wrap:wrap;">' +
+    '<div style="flex:1;min-width:0;">' +
+    backendBadge + '<span class="mono" style="font-size:0.9rem;">' + escapeHtml(artifact) + '</span>' + byLine +
+    '<span style="margin-left:0.5rem;">' + statusBadge + '</span>' +
+    progressBar + errorLine +
+    '</div>' +
+    cancelBtn +
+    '</div>';
+}
+
+function cancelPull(jobId, modelName) {
+  showConfirm('Cancel pull for \'' + modelName + '\'?', function() {
+    fetch('{{ url_for("admin_api_pull_cancel", job_id=0) }}'.replace('/0/', '/' + jobId + '/'), {
+      method: 'POST',
+      headers: {'X-CSRF-Token': CSRF_TOKEN}
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) { if (d.ok) fetchPullQueue(); })
+    .catch(function() {});
+  });
+}
+
+function deletePullJob(jobId) {
+  fetch('/admin/api/pull/' + jobId + '/delete', {
+    method: 'POST',
+    headers: {'X-CSRF-Token': CSRF_TOKEN}
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) { if (d.ok) fetchPullQueue(); })
+  .catch(function() {});
+}
+
+function clearPullHistory() {
+  showConfirm('Clear all finished pull jobs?', function() {
+    fetch('/admin/api/pull/clear', {
+      method: 'POST',
+      headers: {'X-CSRF-Token': CSRF_TOKEN}
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) { if (d.ok) fetchPullQueue(); })
+    .catch(function() {});
+  });
+}
+
+function fetchPullQueue() {
+  fetch('{{ url_for("admin_api_pull_queue") }}')
+    .then(function(r) { return r.json(); })
+    .then(function(data) { renderPullQueue(data); })
+    .catch(function() {});
+}
+
+fetchPullQueue();
+setInterval(fetchPullQueue, 3000);
+
+// Model drag-and-drop reordering
+(function() {
+  var modelList = document.getElementById("model-sort-list");
+  if (modelList) {
+    initSortable(modelList, {
+      onReorder: function(ids) {
+        saveReorder('{{ url_for("admin_api_reorder_models") }}', ids);
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

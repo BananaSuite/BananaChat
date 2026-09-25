@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="{{ current_language }}" data-theme="{{ effective_theme_mode }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="color-scheme" content="{{ effective_theme_mode }}">
+  <title>{% block title %}{{ site_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style id="theme-style" nonce="{{ csp_nonce }}">
+    :root {
+      color-scheme: {{ effective_theme_mode }};
+      --bg: {{ user_accessibility.custom_bg if user_accessibility and user_accessibility.custom_bg else theme_palette.bg }};
+      --text: {{ user_accessibility.custom_text if user_accessibility and user_accessibility.custom_text else theme_palette.text }};
+      --accent: {{ user_accessibility.custom_primary if user_accessibility and user_accessibility.custom_primary else theme_palette.primary }};
+      --raised: {{ user_accessibility.custom_secondary if user_accessibility and user_accessibility.custom_secondary else theme_palette.secondary }};
+      --accent-d: {{ user_accessibility.custom_accent if user_accessibility and user_accessibility.custom_accent else theme_palette.accent }};
+      --surf: {{ user_accessibility.custom_sidebar if user_accessibility and user_accessibility.custom_sidebar else theme_palette.sidebar }};
+      --overlay: color-mix(in srgb, var(--raised) 88%, var(--text));
+      --border: color-mix(in srgb, var(--text) 16%, var(--bg));
+      --bdr-hi: color-mix(in srgb, var(--text) 28%, var(--bg));
+      --text-2: color-mix(in srgb, var(--text) 72%, var(--bg));
+      --text-3: color-mix(in srgb, var(--text) 52%, var(--bg));
+      --text-4: color-mix(in srgb, var(--text) 34%, var(--bg));
+      --a11y-font-scale: {{ user_accessibility.font_scale if user_accessibility else 1 }};
+      --a11y-line-height-mul: {{ ['1', '1.18', '1.36'][user_accessibility.line_height|int] if user_accessibility and user_accessibility.line_height|int in [0, 1, 2] else '1' }};
+      --a11y-letter-spacing: {{ ['normal', '0.04em', '0.08em'][user_accessibility.letter_spacing|int] if user_accessibility and user_accessibility.letter_spacing|int in [0, 1, 2] else 'normal' }};
+      --bg-image: {% if user_accessibility and user_accessibility.background_image %}url("{{ url_for('customization_background', filename=user_accessibility.background_image) }}"){% else %}none{% endif %};
+      --chat-sidebar-width: {{ user_accessibility.sidebar_width if user_accessibility else 260 }}px;
+    }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="{% if user_accessibility and user_accessibility.contrast %}a11y-contrast-{{ user_accessibility.contrast }} {% endif %}{% if user_accessibility and user_accessibility.reduce_motion %}a11y-reduce-motion {% endif %}{% if user_accessibility and user_accessibility.background_image %}a11y-has-bg {% endif %}{% if user_accessibility %}{% for key in ['bold','italic','code','link','heading'] %}{% set level = user_accessibility['semantic_' ~ key]|int %}{% if level in [1,2] %}a11y-sem-{{ key }}-{{ level }} {% endif %}{% endfor %}{% endif %}">
+
+<nav class="nav" aria-label="{{ t('navigation') }}">
+  <a class="nav-brand" href="{{ url_for('index') }}"><span class="brand-dot" aria-hidden="true"></span>{{ site_name }}</a>
+  <ul class="nav-links">
+    {% with nav_mobile=false %}{% include "_navigation_links.html" %}{% endwith %}
+  </ul>
+  <div class="language-switcher" role="group" aria-label="{{ t('language') }}">
+    <a href="{{ url_for('set_language', language='it', next=request.full_path) }}" class="{% if current_language == 'it' %}active{% endif %}" lang="it" aria-label="Italiano">IT</a>
+    <a href="{{ url_for('set_language', language='en', next=request.full_path) }}" class="{% if current_language == 'en' %}active{% endif %}" lang="en" aria-label="English">EN</a>
+  </div>
+  <button id="nav-hamburger" class="nav-hamburger" aria-label="{{ t('open_menu') }}" aria-expanded="false">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+  </button>
+</nav>
+
+{% if settings.warning_banner_enabled %}
+<div id="warning-banner" class="warning-banner" data-dismissible="{% if settings.warning_banner_dismissible %}1{% else %}0{% endif %}">
+  <span class="warning-banner-msg">{{ settings.warning_banner_message or 'We are currently experiencing constrained capacity. Chat and API responses may be slower than usual. Sorry for the outage.' }}</span>
+  {% if settings.warning_banner_dismissible %}
+  <button type="button" class="warning-banner-dismiss" aria-label="Dismiss">&times;</button>
+  {% endif %}
+</div>
+{% endif %}
+
+{# Mobile nav dropdown (hidden on desktop, toggled by hamburger) #}
+<div id="nav-mobile-menu" class="nav-mobile-menu">
+  <ul>
+    {% with nav_mobile=true %}{% include "_navigation_links.html" %}{% endwith %}
+  </ul>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <ul class="flash-list">
+      {% for category, message in messages %}
+        <li class="flash flash-{{ category }}">
+          <span class="flash-msg">{{ message }}</span>
+          <button type="button" class="flash-dismiss" aria-label="Dismiss">&times;</button>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endwith %}
+
+{% block content %}{% endblock %}
+
+{% if current_user %}
+<aside class="a11y-panel" id="a11y-panel" role="dialog" aria-modal="true" aria-label="UI customization">
+  <header class="a11y-panel-header">
+    <div><strong>Customization</strong><small>Synced to your account</small></div>
+    <button type="button" class="a11y-close" id="a11y-close-btn" aria-label="Close customization panel">&times;</button>
+  </header>
+  <div class="a11y-panel-body">
+    <section class="a11y-section">
+      <label class="a11y-label">Theme Mode</label>
+      <p class="a11y-hint">Site Default follows the theme selected by an administrator.</p>
+      <div class="a11y-choice-row" role="group" aria-label="Theme mode">
+        <button type="button" data-theme-mode="default">Site Default</button>
+        <button type="button" data-theme-mode="dark">Dark</button>
+        <button type="button" data-theme-mode="light">Light</button>
+      </div>
+    </section>
+
+    <section class="a11y-section">
+      <label class="a11y-label">Text Size</label>
+      <div class="a11y-choice-row" role="group" aria-label="Text size">
+        {% for scale, label in [(0.85,'XS'),(0.9,'S'),(1.0,'M'),(1.1,'L'),(1.2,'XL'),(1.35,'XXL')] %}
+        <button type="button" data-scale="{{ scale }}">{{ label }}</button>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="a11y-section">
+      <label class="a11y-label">Contrast</label>
+      <div class="a11y-choice-row" role="group" aria-label="Contrast">
+        {% for level, label in [(0,'Off'),(1,'Slight'),(2,'Low'),(3,'Med'),(4,'High'),(5,'Max')] %}
+        <button type="button" data-contrast="{{ level }}">{{ label }}</button>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="a11y-section a11y-two-column">
+      <div>
+        <label class="a11y-label">Line Spacing</label>
+        <div class="a11y-choice-row"><button type="button" data-line-height="0">Default</button><button type="button" data-line-height="1">Wide</button><button type="button" data-line-height="2">Extra</button></div>
+      </div>
+      <div>
+        <label class="a11y-label">Letter Spacing</label>
+        <div class="a11y-choice-row"><button type="button" data-letter-spacing="0">Normal</button><button type="button" data-letter-spacing="1">Wide</button><button type="button" data-letter-spacing="2">Extra</button></div>
+      </div>
+    </section>
+
+    <section class="a11y-section a11y-toggle-row">
+      <div><label class="a11y-label" for="a11y-motion-toggle">Reduce Motion</label><p class="a11y-hint">Disable interface animation and transitions.</p></div>
+      <label class="a11y-switch"><input type="checkbox" id="a11y-motion-toggle"><span></span></label>
+    </section>
+
+    <section class="a11y-section">
+      <label class="a11y-label">Semantic Highlighting</label>
+      <p class="a11y-hint">Make formatted AI response content easier to distinguish.</p>
+      {% for key, label in [('bold','Bold'),('italic','Italic'),('code','Code'),('link','Links'),('heading','Headings')] %}
+      <div class="a11y-semantic-row"><span>{{ label }}</span><div class="a11y-choice-row"><button type="button" data-semantic="{{ key }}" data-level="0">Off</button><button type="button" data-semantic="{{ key }}" data-level="1">Subtle</button><button type="button" data-semantic="{{ key }}" data-level="2">Strong</button></div></div>
+      {% endfor %}
+    </section>
+
+    <section class="a11y-section">
+      <label class="a11y-label" for="a11y-language-select">Interface Language</label>
+      <select id="a11y-language-select"><option value="default">Current session default</option><option value="it">Italiano</option><option value="en">English</option></select>
+    </section>
+
+    <section class="a11y-section">
+      <label class="a11y-label">Color Presets</label>
+      <div class="a11y-preset-grid" id="a11y-preset-grid">
+        {% for name, colors in [('ocean',['#0b1a2e','#5b9bd5','#a3c4f3']),('forest',['#0f1e12','#4caf50','#8fbf9f']),('sunset',['#1f1017','#e76f51','#f4a261']),('lavender',['#1a1428','#9b7fd4','#c4b5e0']),('midnight',['#0a0a12','#00d4ff','#7ee8ff']),('copper',['#1c1410','#b87333','#d4a574']),('rose',['#1a0e14','#e91e8c','#f48fb1']),('slate',['#0e1220','#7c8fc4','#a8b8e0']),('ember',['#1a0e08','#ff6b2b','#ffad7a'])] %}
+        <button type="button" class="a11y-preset" data-preset="{{ name }}"><span>{% for color in colors %}<i style="background:{{ color }}"></i>{% endfor %}</span><b>{{ name|capitalize }}</b></button>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="a11y-section">
+      <label class="a11y-label">Custom Colors</label>
+      {% for key, label in [('bg','Background'),('text','Text'),('primary','Primary'),('secondary','Cards / Surface'),('accent','Accent'),('sidebar','Navigation / Sidebar')] %}
+      <div class="a11y-color-row"><label for="a11y-color-{{ key }}">{{ label }}</label><input type="color" id="a11y-color-{{ key }}"><button type="button" data-clear-color="{{ key }}" aria-label="Clear {{ label }} color">&times;</button></div>
+      {% endfor %}
+    </section>
+
+    <section class="a11y-section">
+      <label class="a11y-label" for="a11y-sidebar-width">Chat Sidebar Width</label>
+      <input type="range" id="a11y-sidebar-width" min="200" max="420" step="10"><output id="a11y-sidebar-width-output"></output>
+    </section>
+
+    <section class="a11y-section">
+      <label class="a11y-label">Background Image</label>
+      <div class="a11y-background-preview is-empty" id="a11y-background-preview"></div>
+      <input type="file" id="a11y-background-input" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+      <div class="a11y-background-actions"><button type="button" class="btn btn-sm" id="a11y-background-upload">Upload Image</button><button type="button" class="btn btn-sm" id="a11y-background-clear">Remove</button></div>
+      <p class="a11y-hint">PNG, JPG, GIF, or WebP, up to 4 MB.</p>
+    </section>
+
+    <section class="a11y-section a11y-reset-section"><button type="button" class="btn btn-full" id="a11y-reset-btn">Reset All to Default</button></section>
+  </div>
+</aside>
+<div class="a11y-overlay" id="a11y-overlay"></div>
+{% endif %}
+
+{% if music_active and music_tracks %}
+{# Retro music player (bottom-left, early-2000s style) #}
+<div id="bc-music-player" class="music-player">
+  <div class="music-player-marquee">
+    <span class="music-player-note">&#9835;</span>
+    <span id="bc-music-title" class="music-player-text">{{ t('music_now_playing') }}</span>
+    <span class="music-player-note">&#9835;</span>
+  </div>
+  <div class="music-player-bars">
+    <span class="music-bar"></span><span class="music-bar"></span><span class="music-bar"></span>
+    <span class="music-bar"></span><span class="music-bar"></span><span class="music-bar"></span>
+    <span class="music-bar"></span><span class="music-bar"></span><span class="music-bar"></span>
+  </div>
+</div>
+<audio id="bc-music-audio" preload="auto"></audio>
+{% endif %}
+
+<script nonce="{{ csp_nonce }}">
+window.BC_LANG = {{ current_language | tojson }};
+window.BC_I18N = {{ browser_i18n | tojson }};
+window.BC_MUSIC_ACTIVE = {{ (music_active and music_tracks | length > 0) | tojson }};
+window.BC_ACCESSIBILITY = {{ (user_accessibility or {}) | tojson }};
+window.BC_THEME_CONFIG = {
+  default_mode: {{ (settings.default_theme_mode or 'dark') | tojson }},
+  palettes: {
+    dark: {primary:{{ settings.primary_color|tojson }},secondary:{{ settings.secondary_color|tojson }},accent:{{ settings.accent_color|tojson }},text:{{ settings.text_color|tojson }},sidebar:{{ settings.sidebar_color|tojson }},bg:{{ settings.bg_color|tojson }}},
+    light: {primary:{{ settings.light_primary_color|tojson }},secondary:{{ settings.light_secondary_color|tojson }},accent:{{ settings.light_accent_color|tojson }},text:{{ settings.light_text_color|tojson }},sidebar:{{ settings.light_sidebar_color|tojson }},bg:{{ settings.light_bg_color|tojson }}}
+  }
+};
+{% if music_active and music_tracks %}
+window.BC_MUSIC_TRACKS = [{% for t in music_tracks %}{"url":"{{ url_for('music_audio', filename=t.filename) }}","name":{{ t.display_name | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
+window.BC_MUSIC_MODE = {{ music_playback_mode | tojson }};
+{% endif %}
+</script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/main.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/markdown.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/chat.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/models.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/admin.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/chat-controls.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/customization.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/init.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/extras.js') }}"></script>
+{% block scripts %}{% endblock %}
+{% include "_source_link.html" %}
+</body>
+</html>

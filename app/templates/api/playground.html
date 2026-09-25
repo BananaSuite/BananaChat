@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}API Playground | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-wide">
+  <div class="page-header">
+    <div>
+      <h1>API Playground</h1>
+      <div class="subtitle">Compose messages and stream responses: charged like API calls.</div>
+    </div>
+    <a href="{{ url_for('api_index') }}" class="btn btn-sm">Back to API</a>
+  </div>
+
+  {# Credit bar #}
+  <div class="card mb-2" style="padding:0.9rem 1.25rem;">
+    {% if current_user.role == 'admin' %}
+      <p class="text-sm" style="color:#86efac;margin:0;">Unlimited: admin accounts have no daily credit limit.</p>
+    {% else %}
+    <div style="display:flex;gap:2rem;flex-wrap:wrap;align-items:center;">
+      <div style="flex:1;min-width:160px;">
+        <div class="progress-label"><span>Regular credits</span><span>{{ reg_used }} / {{ quota.daily_credits }}</span></div>
+        {% set pct = ((reg_used / quota.daily_credits) * 100) | int if quota.daily_credits > 0 else 0 %}
+        <div class="progress-wrap">
+          <div class="progress-bar {% if pct >= 90 %}danger{% endif %}" style="width:{{ [pct,100]|min }}%"></div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:160px;">
+        <div class="progress-label"><span>Slow credits</span><span>{{ slow_used }} / {{ quota.daily_slow_credits }}</span></div>
+        {% set pct2 = ((slow_used / quota.daily_slow_credits) * 100) | int if quota.daily_slow_credits > 0 else 0 %}
+        <div class="progress-wrap">
+          <div class="progress-bar {% if pct2 >= 90 %}danger{% endif %}" style="width:{{ [pct2,100]|min }}%"></div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="playground-layout">
+    {# Left: message editor #}
+    <div>
+      <div class="card" style="margin-bottom:1rem;">
+        <div class="card-title" style="margin-bottom:0.75rem;">Settings</div>
+        <div class="form-group">
+          <label class="form-label">Model</label>
+          <select id="pg-model-select">
+            <option value="auto">Auto (best available)</option>
+            {% for model in models %}
+              <option value="{{ model.ollama_name }}">{{ model.display_name or model.ollama_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">System Prompt <span class="text-muted">(optional)</span></label>
+          <textarea id="pg-system" rows="3" placeholder="You are a helpful assistant."></textarea>
+          <span class="form-hint">Overrides the model's default system prompt.</span>
+        </div>
+        <div style="border-top:1px solid #2d2d4a;margin:0.75rem -1.5rem;padding:0.75rem 1.5rem 0;">
+          <div class="form-label" style="margin-bottom:0.5rem;">Parameters <span class="text-muted">(optional: blank = model default)</span></div>
+          <div class="form-row" style="margin-bottom:0.5rem;">
+            <div class="form-group mb-0">
+              <label class="form-label" for="pg-temperature">Temperature <span class="text-muted">(0–2)</span></label>
+              <input type="number" id="pg-temperature" min="0" max="2" step="0.05" placeholder="default">
+            </div>
+            <div class="form-group mb-0">
+              <label class="form-label" for="pg-top-p">Top-P <span class="text-muted">(0–1)</span></label>
+              <input type="number" id="pg-top-p" min="0" max="1" step="0.05" placeholder="default">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group mb-0">
+              <label class="form-label" for="pg-top-k">Top-K <span class="text-muted">(0–200)</span></label>
+              <input type="number" id="pg-top-k" min="0" max="200" step="1" placeholder="default">
+            </div>
+            <div class="form-group mb-0">
+              <label class="form-label" for="pg-num-ctx">Context Window</label>
+              <input type="number" id="pg-num-ctx" min="512" max="131072" step="512" placeholder="default">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
+          <div class="card-title mb-0">Messages</div>
+          <div style="display:flex;gap:0.4rem;">
+            <button type="button" id="pg-add-user" class="btn btn-sm">+ User</button>
+            <button type="button" id="pg-add-asst" class="btn btn-sm">+ Assistant</button>
+          </div>
+        </div>
+
+        <div id="pg-messages" class="playground-messages-list">
+          {# Default starter message #}
+          <div class="playground-msg" data-role="user">
+            <span class="playground-msg-role user">user</span>
+            <textarea rows="2" placeholder="User message"></textarea>
+            <button type="button" class="playground-msg-remove" title="Remove">&times;</button>
+          </div>
+        </div>
+
+        <div style="margin-top:0.75rem;display:flex;flex-direction:column;gap:0.4rem;">
+          <button id="pg-send-btn" class="btn btn-primary btn-full">Send</button>
+          <button id="pg-stop-btn" class="btn btn-full" style="display:none">Stop</button>
+        </div>
+      </div>
+    </div>
+
+    {# Right: response #}
+    <div>
+      <div class="card" style="position:sticky;top:70px;">
+        <div class="card-title">Response</div>
+        <div id="pg-response" class="playground-response empty">Response will appear here…</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

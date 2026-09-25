@@ -1,0 +1,14 @@
+.empty-description { max-width: 28rem; margin: .75rem auto 0; color: var(--text-2); line-height: 1.6; }
+.input-toolbar { flex-wrap: wrap; gap: .375rem; }
+.personality-control { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; }
+.personality-control:empty { display: none; }
+.personality-control .personality-picker-label { display: inline; color: var(--text-2); font-size: .8rem; }
+.personality-control .personality-picker { flex: 1; min-width: 0; }
+.input-toolbar .input-toolbar-btn { min-height: 32px; flex-shrink: 0; }
+@media (max-width: 600px) {
+  .input-toolbar .privacy-label { display: none; }
+  .input-toolbar .privacy-control { justify-content: center; width: 34px; padding: 0; }
+  .input-toolbar .model-btn-wrap { flex: 1; min-width: 0; }
+  .input-toolbar .input-model-btn { max-width: 100%; }
+  .personality-control { flex-wrap: wrap; }
+}

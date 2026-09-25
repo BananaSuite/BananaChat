@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Private Audit | Admin | {{ site_name }}{% endblock %}
+
+{% block head %}
+<style>
+.audit-session {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 1.25rem;
+  overflow: hidden;
+}
+.audit-session-hd {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.65rem 1rem;
+  background: rgba(139,92,246,0.06);
+  border-bottom: 1px solid rgba(139,92,246,0.15);
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.audit-session-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.audit-session-id {
+  font-family: monospace;
+  font-size: 0.7rem;
+  color: var(--text-2);
+  background: rgba(255,255,255,0.04);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.audit-session-user { font-size: 0.85rem; font-weight: 700; color: var(--text); }
+.audit-session-msgs { padding: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.audit-msg {
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.audit-msg.user   { border-color: rgba(126,154,218,0.2); }
+.audit-msg.assistant { border-color: rgba(134,239,172,0.15); }
+.audit-msg-hd {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  flex-wrap: wrap;
+}
+.audit-msg.user   .audit-msg-hd { background: rgba(126,154,218,0.07); }
+.audit-msg.assistant .audit-msg-hd { background: rgba(134,239,172,0.05); }
+.audit-msg-role {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 3px;
+}
+.audit-msg-role.user      { background: rgba(126,154,218,0.18); color: #7e9ada; }
+.audit-msg-role.assistant { background: rgba(134,239,172,0.12); color: #86efac; }
+.audit-msg-del { margin-left: auto; }
+.audit-msg-content {
+  padding: 0.55rem 0.75rem;
+  font-size: 0.84rem;
+  color: #c8ccd8;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.audit-empty {
+  text-align: center;
+  color: var(--text-2);
+  padding: 3rem;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-wide">
+  <div class="page-header">
+    <div>
+      <h1>Private Chat Audit</h1>
+      <div class="subtitle">Ephemeral chat messages retained for audit. {{ total_entries }} entries total: showing {{ total }} on this page across {{ sessions | length }} session{% if sessions | length != 1 %}s{% endif %}.</div>
+    </div>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Dashboard</a>
+  </div>
+
+  {% if sessions %}
+    {% for sess in sessions %}
+      {% set last = sess.entries[-1] %}
+      <div class="audit-session">
+        <div class="audit-session-hd">
+          <div class="audit-session-meta">
+            <span class="audit-session-id">{{ sess.session_id[:12] }}…</span>
+            <span class="audit-session-user">{{ sess.username }}</span>
+            <span class="badge badge-incognito">{{ sess.entries | length }} msg</span>
+            <span class="text-xs text-muted">{{ time_ago(last.created_at) }}</span>
+          </div>
+          <form method="POST"
+                action="{{ url_for('admin_incognito_session_delete', session_id=sess.session_id) }}"
+                data-confirm="Delete all audit entries for session {{ sess.session_id[:8] }}…? This cannot be undone.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-danger">Delete Session</button>
+          </form>
+        </div>
+
+        <div class="audit-session-msgs">
+          {% for entry in sess.entries %}
+            <div class="audit-msg {{ entry.role or 'user' }}">
+              <div class="audit-msg-hd">
+                <span class="audit-msg-role {{ entry.role or 'user' }}">{{ entry.role or 'user' }}</span>
+                {% if entry.model_name %}<span class="text-xs text-muted">{{ entry.model_name }}</span>{% endif %}
+                <span class="text-xs text-muted">{{ time_ago(entry.created_at) }}</span>
+                {% if entry.tokens_out or entry.tokens_in %}
+                  <span class="text-xs text-muted">{{ entry.tokens_in }}↑ {{ entry.tokens_out }}↓</span>
+                {% endif %}
+                <form method="POST" action="{{ url_for('admin_incognito_delete', entry_id=entry.id) }}"
+                      data-confirm="Delete this audit entry?"
+                      class="audit-msg-del">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-sm btn-danger"
+                          style="padding:0.1rem 0.45rem;font-size:0.72rem;line-height:1.4;"
+                          title="Delete entry">×</button>
+                </form>
+              </div>
+              <div class="audit-msg-content">{{ entry.content }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <div class="card audit-empty">
+      No private chat audit entries.
+    </div>
+  {% endif %}
+
+  {% if total_pages > 1 %}
+  <div style="display:flex;align-items:center;gap:0.75rem;margin-top:1rem;flex-wrap:wrap;">
+    {% if page > 1 %}
+      <a href="{{ url_for('admin_incognito', page=page-1) }}" class="btn btn-sm">← Prev</a>
+    {% else %}
+      <span class="btn btn-sm" style="opacity:0.35;cursor:default;">← Prev</span>
+    {% endif %}
+    <span class="text-sm text-muted">Page {{ page }} of {{ total_pages }} ({{ total_entries }} entries)</span>
+    {% if page < total_pages %}
+      <a href="{{ url_for('admin_incognito', page=page+1) }}" class="btn btn-sm">Next →</a>
+    {% else %}
+      <span class="btn btn-sm" style="opacity:0.35;cursor:default;">Next →</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}{{ t('quotas_title') }} | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-narrow">
+  <div class="page-header">
+    <h1>{{ t('quotas_title') }}</h1>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Dashboard</a>
+  </div>
+
+  <p class="text-sm text-muted" style="margin-bottom:1.5rem;">{{ t('quotas_desc') }}</p>
+
+  <div class="card">
+    <form method="POST" action="{{ url_for('admin_quotas') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      {# API Quota Defaults #}
+      <div class="card-title lg" style="margin-bottom:0.5rem;">API Credit Defaults</div>
+      <span class="form-hint" style="display:block;margin-bottom:0.75rem;">
+        Applied when a new user's quota row is created. Change individual users on the
+        <a href="{{ url_for('admin_users') }}">Users</a> page.
+        1 credit = 1,000 tokens (input + output). Admins always have unlimited credits.
+      </span>
+      <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;margin-bottom:0.5rem;">
+        <div>
+          <label class="form-label" for="default_daily_credits" style="font-size:0.82rem;font-weight:normal;">Regular credits / day</label>
+          <input type="number" id="default_daily_credits" name="default_daily_credits"
+                 value="{{ settings.default_daily_credits if settings.default_daily_credits is not none else fallback_credits }}"
+                 min="0" max="100000" style="width:90px;">
+        </div>
+        <div>
+          <label class="form-label" for="default_slow_credits" style="font-size:0.82rem;font-weight:normal;">Slow credits / day</label>
+          <input type="number" id="default_slow_credits" name="default_slow_credits"
+                 value="{{ settings.default_slow_credits if settings.default_slow_credits is not none else fallback_slow }}"
+                 min="0" max="100000" style="width:90px;">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="slow_credits_enabled" value="1"
+                 {% if settings.slow_credits_enabled is not defined or settings.slow_credits_enabled %}checked{% endif %}>
+          <span><strong>Enable slow credits tier</strong></span>
+        </label>
+        <span class="form-hint">
+          When disabled, users only get regular credits. The slow credit pool is removed globally.
+          Requests beyond regular credits are rejected outright instead of being processed at low priority.
+        </span>
+      </div>
+
+      <hr>
+
+      {# Quota Request Auto Approval #}
+      <div class="card-title lg" style="margin-bottom:0.5rem;">Quota Request Auto Approval</div>
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="quota_auto_approve_enabled" value="1"
+                 {% if settings.quota_auto_approve_enabled %}checked{% endif %}>
+          <span><strong>Automatically approve eligible permanent increases</strong></span>
+        </label>
+        <span class="form-hint">
+          Disabled by default. Eligible requests must preserve both current allocations, increase at least one,
+          and stay at or below both limits. One-day requests always await administrator review.
+        </span>
+      </div>
+      <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;margin-bottom:0.5rem;">
+        <div>
+          <label class="form-label" for="quota_auto_approve_max_credits" style="font-size:0.82rem;font-weight:normal;">Maximum regular credits / day</label>
+          <input type="number" id="quota_auto_approve_max_credits" name="quota_auto_approve_max_credits"
+                 value="{{ settings.quota_auto_approve_max_credits or 0 }}"
+                 min="0" max="10000" style="width:100px;">
+        </div>
+        <div>
+          <label class="form-label" for="quota_auto_approve_max_slow_credits" style="font-size:0.82rem;font-weight:normal;">Maximum slow credits / day</label>
+          <input type="number" id="quota_auto_approve_max_slow_credits" name="quota_auto_approve_max_slow_credits"
+                 value="{{ settings.quota_auto_approve_max_slow_credits or 0 }}"
+                 min="0" max="10000" style="width:100px;">
+        </div>
+      </div>
+
+      <hr>
+
+      {# API Rate Limit #}
+      <div class="card-title lg" style="margin-bottom:0.5rem;">API Rate Limit (RPM)</div>
+      <div class="form-group">
+        <label class="form-label" for="api_rpm" style="font-size:0.82rem;font-weight:normal;">Requests per minute per client</label>
+        <input type="number" id="api_rpm" name="api_rpm"
+               value="{{ settings.api_rpm if settings.api_rpm is not none else 60 }}"
+               min="0" max="10000" style="width:100px;">
+        <span class="form-hint">Per-client IP sliding window. Set to 0 to disable RPM limiting for the API. Default: 60.</span>
+      </div>
+
+      <hr>
+
+      {# Chat Rate Limit #}
+      <div class="card-title lg" style="margin-bottom:0.5rem;">Chat Rate Limit (RPM)</div>
+      <div class="form-group">
+        <label class="form-label" for="chat_rpm" style="font-size:0.82rem;font-weight:normal;">Messages per minute per user</label>
+        <input type="number" id="chat_rpm" name="chat_rpm"
+               value="{{ settings.chat_rpm if settings.chat_rpm is not none else '' }}"
+               min="0" max="10000" style="width:100px;" placeholder="unlimited">
+        <span class="form-hint">Per-user sliding window. Leave blank or 0 for unlimited. Admins bypass this limit.</span>
+      </div>
+
+      <hr>
+
+      {# Chat Daily Limits #}
+      <div class="card-title lg" style="margin-bottom:0.5rem;">Chat Daily Credit Limits</div>
+      <div class="form-group">
+        <label class="form-check" style="cursor:pointer;">
+          <input type="checkbox" name="chat_daily_limit_enabled" value="1"
+                 {% if settings.chat_daily_limit_enabled %}checked{% endif %}>
+          <span><strong>Enable hard daily limits for chat</strong></span>
+        </label>
+        <span class="form-hint">
+          When enabled, chat usage is tracked in a separate credit pool. Users who exhaust their
+          chat credits are blocked from sending new messages until midnight UTC.
+          When disabled, chat is unlimited (default).
+        </span>
+      </div>
+      <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;margin-bottom:0.5rem;">
+        <div>
+          <label class="form-label" for="chat_daily_credits" style="font-size:0.82rem;font-weight:normal;">Chat regular credits / day</label>
+          <input type="number" id="chat_daily_credits" name="chat_daily_credits"
+                 value="{{ settings.chat_daily_credits if settings.chat_daily_credits is not none else '' }}"
+                 min="0" max="100000" style="width:90px;" placeholder="unlimited">
+        </div>
+        <div>
+          <label class="form-label" for="chat_daily_slow_credits" style="font-size:0.82rem;font-weight:normal;">Chat slow credits / day</label>
+          <input type="number" id="chat_daily_slow_credits" name="chat_daily_slow_credits"
+                 value="{{ settings.chat_daily_slow_credits if settings.chat_daily_slow_credits is not none else '' }}"
+                 min="0" max="100000" style="width:90px;" placeholder="unlimited">
+        </div>
+      </div>
+      <span class="form-hint">
+        Chat and API credit pools are completely separate: chat usage never counts against API quota and vice versa.
+        The slow credits tier is controlled by the global toggle above.
+      </span>
+
+      <hr>
+
+      {# Music Bonus Mode #}
+      <div class="card-title lg" style="margin-bottom:0.5rem;">Music Program Bonus</div>
+      <span class="form-hint" style="display:block;margin-bottom:0.75rem;">
+        How opted-in users' quotas are boosted. The bonus applies to both API and chat pools (when enabled).
+        The multiplier value is set on the <a href="{{ url_for('admin_music') }}">Music Program</a> page.
+      </span>
+      <div class="form-group">
+        <label class="form-label">Bonus mode</label>
+        <div style="display:flex;flex-direction:column;gap:0.4rem;">
+          <label class="form-check" style="cursor:pointer;">
+            <input type="radio" name="music_bonus_mode" value="multiplier"
+                   {% if not settings.music_bonus_mode or settings.music_bonus_mode == 'multiplier' %}checked{% endif %}>
+            <span><strong>Multiplier</strong>: credits &times; N (uses the multiplier from the Music Program page)</span>
+          </label>
+          <label class="form-check" style="cursor:pointer;">
+            <input type="radio" name="music_bonus_mode" value="fixed"
+                   {% if settings.music_bonus_mode == 'fixed' %}checked{% endif %}>
+            <span><strong>Fixed bonus</strong>: add a fixed number of extra credits per day</span>
+          </label>
+        </div>
+      </div>
+      <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem;">
+        <div>
+          <label class="form-label" for="music_bonus_fixed_credits" style="font-size:0.82rem;font-weight:normal;">Bonus regular credits</label>
+          <input type="number" id="music_bonus_fixed_credits" name="music_bonus_fixed_credits"
+                 value="{{ settings.music_bonus_fixed_credits if settings.music_bonus_fixed_credits is not none else 30 }}"
+                 min="0" max="100000" style="width:90px;">
+        </div>
+        <div>
+          <label class="form-label" for="music_bonus_fixed_slow" style="font-size:0.82rem;font-weight:normal;">Bonus slow credits</label>
+          <input type="number" id="music_bonus_fixed_slow" name="music_bonus_fixed_slow"
+                 value="{{ settings.music_bonus_fixed_slow if settings.music_bonus_fixed_slow is not none else 15 }}"
+                 min="0" max="100000" style="width:90px;">
+        </div>
+      </div>
+      <span class="form-hint">
+        Fixed bonus values are only used when "Fixed bonus" mode is selected. In multiplier mode, these are ignored.
+      </span>
+
+      <div style="margin-top:1.5rem;">
+        <button type="submit" class="btn btn-primary">Save Quota Settings</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

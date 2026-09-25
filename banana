@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Managed server lifecycle entry point."""
+
+from banana_ops.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

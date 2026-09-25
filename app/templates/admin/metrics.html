@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}Metrics | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-wide">
+  <div class="page-header">
+    <div>
+      <h1>Compute Metrics</h1>
+      <div class="subtitle">System resource usage and request statistics</div>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+      {# Hours selector #}
+      <form method="GET" action="{{ url_for('admin_metrics') }}" style="display:flex;gap:0.4rem;align-items:center;">
+        <label class="text-sm text-muted">Show:</label>
+        <select name="hours" onchange="this.form.submit()" style="width:auto;">
+          {% for h in [1, 6, 12, 24, 48, 168] %}
+            <option value="{{ h }}" {% if h == hours %}selected{% endif %}>{{ h }}h</option>
+          {% endfor %}
+        </select>
+      </form>
+      <a href="{{ url_for('admin_metrics_export', hours=hours) }}" class="btn btn-sm">Export CSV</a>
+    </div>
+  </div>
+
+  {# Latest snapshot #}
+  {% if latest_snapshot %}
+    <div class="card mb-2">
+      <div class="card-title">Current Snapshot</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:0.75rem 1.5rem;font-size:0.875rem;">
+        <div>
+          <div class="text-muted text-xs">GPU</div>
+          <div>{{ latest_snapshot.gpu_name or 'N/A' }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">VRAM Used</div>
+          <div>{{ latest_snapshot.gpu_memory_used_display }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">VRAM Total</div>
+          <div>{{ latest_snapshot.gpu_memory_total_display }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">GPU Utilization</div>
+          <div>{{ ('%.1f%%'|format(latest_snapshot.gpu_utilization_percent)) if latest_snapshot.gpu_utilization_percent is not none else '-' }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">CPU</div>
+          <div>{{ ('%.1f%%'|format(latest_snapshot.cpu_percent)) if latest_snapshot.cpu_percent is not none else '-' }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">System RAM</div>
+          <div>{{ latest_snapshot.system_memory_used_display }} / {{ latest_snapshot.system_memory_total_display }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">Queue Depth</div>
+          <div>{{ latest_snapshot.queue_depth or 0 }}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">Recorded</div>
+          <div class="text-sm">{{ time_ago(latest_snapshot.recorded_at) }}{% if latest_snapshot.stale %} <span class="badge badge-pending">stale</span>{% endif %}</div>
+        </div>
+        <div>
+          <div class="text-muted text-xs">Source</div>
+          <div class="text-sm">{{ latest_snapshot.source_label }}</div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {# GPU usage chart #}
+  {% if history %}
+    <div class="card mb-2">
+      <div class="card-title">GPU Memory: Last {{ hours }}h</div>
+      <div class="metric-chart" id="gpu-chart" aria-label="GPU memory history">
+        {% for row in history[-60:] %}
+          {% set height = row.gpu_percent if row.gpu_percent is not none else row.gpu_relative_percent %}
+          <span style="height:{{ height }}%" title="{{ format_datetime(row.recorded_at) }} · {{ row.gpu_memory_used_display }}"></span>
+        {% endfor %}
+      </div>
+      <div class="chart-caption">Oldest → newest · {{ history|length }} samples. {% if latest_snapshot and latest_snapshot.gpu_memory_total_mb %}Bars show percent of total VRAM.{% else %}Total VRAM unavailable; bars show relative Ollama allocation.{% endif %}</div>
+    </div>
+  {% endif %}
+
+  <div class="card mb-2 db-health-card {% if not db_health.healthy %}has-warning{% endif %}">
+    <div class="card-title">Database Safety</div>
+    <div class="health-grid">
+      <div><span>Overall</span><strong class="{% if db_health.healthy %}text-success{% else %}text-danger{% endif %}">{{ 'Healthy' if db_health.healthy else 'Needs attention' }}</strong></div>
+      <div><span>Quick check</span><strong>{{ db_health.quick_check }}</strong></div>
+      <div><span>Foreign-key violations</span><strong>{{ db_health.foreign_key_violations if db_health.foreign_key_violations is not none else '-' }}</strong></div>
+      <div><span>Journal</span><strong>{{ db_health.journal_mode | upper if db_health.journal_mode else '-' }}</strong></div>
+      <div><span>Sync mode</span><strong>{{ db_health.synchronous or '-' }}</strong></div>
+      <div><span>WAL size</span><strong>{{ '%.1f MB'|format((db_health.wal_size_bytes or 0) / 1048576) }}</strong></div>
+      <div><span>File permissions</span><strong>{{ db_health.database_file_mode or 'platform default' }}</strong></div>
+    </div>
+    <p class="health-note">WAL and integrity checks reduce corruption risk, but they do not replace encrypted off-server backups.</p>
+  </div>
+
+  {# Request stats #}
+  <div class="card mb-2">
+    <div class="card-title">Request Statistics: Last {{ hours }}h</div>
+    {% if req_stats %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Type</th>
+              <th>Requests</th>
+              <th>Tokens In</th>
+              <th>Tokens Out</th>
+              <th>Avg Duration</th>
+              <th>Avg Queue</th>
+              <th>Errors</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in req_stats %}
+              <tr>
+                <td class="text-sm">{{ row.model_name or '-' }}</td>
+                <td class="text-sm text-muted">{{ row.request_type or '-' }}</td>
+                <td class="mono text-sm">{{ row.request_count or 0 }}</td>
+                <td class="mono text-sm">{{ row.total_tokens_in or 0 }}</td>
+                <td class="mono text-sm">{{ row.total_tokens_out or 0 }}</td>
+                <td class="text-sm text-muted">{{ '%.0f'|format(row.avg_duration_ms) if row.avg_duration_ms else '-' }} ms</td>
+                <td class="text-sm text-muted">{{ '%.0f'|format(row.avg_queue_wait_ms) if row.avg_queue_wait_ms else '0' }} ms</td>
+                <td class="mono text-sm {% if row.error_count %}text-danger{% endif %}">
+                  {{ row.error_count or 0 }}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="text-muted text-sm">No requests in this time window.</p>
+    {% endif %}
+  </div>
+
+  {# History table #}
+  {% if history %}
+    <div class="card">
+      <div class="card-title">Compute History (last {{ history | length }} snapshots)</div>
+      <div class="table-wrap" style="max-height:400px;overflow-y:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>GPU</th>
+              <th>VRAM Used</th>
+              <th>CPU %</th>
+              <th>Queue</th>
+              <th>Active Models</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in history | reverse %}
+              <tr>
+                <td class="text-sm text-muted">{{ format_datetime(row.recorded_at) if row.recorded_at else '-' }}</td>
+                <td class="text-sm">{{ row.gpu_name or '-' }}</td>
+                <td class="mono text-sm">{{ row.gpu_memory_used_display }}</td>
+                <td class="mono text-sm">{{ ('%.1f%%'|format(row.cpu_percent)) if row.cpu_percent is not none else '-' }}</td>
+                <td class="mono text-sm">{{ row.queue_depth or 0 }}</td>
+                <td class="text-sm text-muted">
+                  {% set am = row.active_models %}
+                  {% if am %}
+                    {% if am is string %}{{ am }}{% else %}{{ am | join(', ') }}{% endif %}
+                  {% else %}-{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

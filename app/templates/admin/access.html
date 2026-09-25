@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block title %}Access Policies - Admin - {{ site_name }}{% endblock %}
+
+{% macro policy_card(policy) %}
+  <div class="card" style="padding:1rem;border-color:{% if selected.scope == policy.scope and selected.resource_id == policy.resource_id %}#5c8ee6{% else %}var(--border){% endif %};">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+      <div>
+        <strong>{{ policy.label }}</strong>
+        <div class="text-xs text-muted">{{ policy.scope_label }} policy</div>
+      </div>
+      <a class="btn btn-sm" href="{{ url_for('admin_access_policies', scope=policy.scope, resource_id=policy.resource_id) }}">Manage lists</a>
+    </div>
+    <form method="POST" action="{{ url_for('admin_access_policies') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="set_policy">
+      <input type="hidden" name="scope" value="{{ policy.scope }}">
+      <input type="hidden" name="resource_id" value="{{ policy.resource_id }}">
+      <div class="form-group" style="margin-bottom:0.75rem;">
+        <label class="form-label" for="mode-{{ policy.scope }}-{{ policy.resource_id }}">Who has access?</label>
+        <select id="mode-{{ policy.scope }}-{{ policy.resource_id }}" name="mode">
+          {% for value, label in mode_labels.items() %}
+            <option value="{{ value }}" {% if policy.mode == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <label class="form-check" style="margin-bottom:0.75rem;">
+        <input type="checkbox" name="requests_enabled" value="1" {% if policy.requests_enabled %}checked{% endif %}>
+        <span>Users may request access</span>
+      </label>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;">
+        <span class="text-xs text-muted">{{ policy.allowlist_count }} allowed / {{ policy.denylist_count }} denied{% if policy.pending_request_count %} / {{ policy.pending_request_count }} pending{% endif %}</span>
+        <button type="submit" class="btn btn-sm btn-primary">Save policy</button>
+      </div>
+    </form>
+  </div>
+{% endmacro %}
+
+{% macro membership_list(title, list_type, entries) %}
+  <div style="flex:1;min-width:min(100%,300px);">
+    <div class="card-title">{{ title }} <span class="text-muted text-xs">({{ entries | length }})</span></div>
+    <form method="POST" action="{{ url_for('admin_access_policies') }}" style="margin-bottom:1rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add_membership">
+      <input type="hidden" name="scope" value="{{ selected.scope }}">
+      <input type="hidden" name="resource_id" value="{{ selected.resource_id }}">
+      <input type="hidden" name="list_type" value="{{ list_type }}">
+      <div class="form-group" style="margin-bottom:0.5rem;">
+        <label class="form-label" for="username-{{ list_type }}">Username</label>
+        <input type="text" id="username-{{ list_type }}" name="username" required maxlength="100" autocomplete="off">
+      </div>
+      <div class="form-group" style="margin-bottom:0.5rem;">
+        <label class="form-label" for="expires-{{ list_type }}">Expires <span class="text-muted">(optional, UTC)</span></label>
+        <input type="datetime-local" id="expires-{{ list_type }}" name="expires_at">
+      </div>
+      <div class="form-group" style="margin-bottom:0.5rem;">
+        <label class="form-label" for="reason-{{ list_type }}">Reason <span class="text-muted">(optional)</span></label>
+        <input type="text" id="reason-{{ list_type }}" name="reason" maxlength="1000" placeholder="Why this entry was added">
+      </div>
+      <button type="submit" class="btn btn-sm">Add to {{ title | lower }}</button>
+    </form>
+    {% if entries %}
+      <div style="display:flex;flex-direction:column;gap:0.5rem;">
+        {% for entry in entries %}
+          <div style="border:1px solid var(--border);border-radius:6px;padding:0.65rem;display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem;">
+            <div style="min-width:0;">
+              <strong class="text-sm">{{ entry.username }}</strong>
+              {% if entry.target_role == 'admin' %}<span class="badge badge-admin">admin</span>{% endif %}
+               {% if entry.reason %}<div class="text-xs text-muted" style="overflow-wrap:anywhere;">{{ entry.reason }}</div>{% endif %}
+              {% if entry.expires_at %}<div class="text-xs text-muted">Expires {{ format_datetime(entry.expires_at) }}</div>{% endif %}
+              <div class="text-xs text-muted">Added by {{ entry.added_by_username or 'system' }} on {{ format_datetime(entry.created_at) }}</div>
+            </div>
+            <form method="POST" action="{{ url_for('admin_access_policies') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="remove_membership">
+              <input type="hidden" name="scope" value="{{ selected.scope }}">
+              <input type="hidden" name="resource_id" value="{{ selected.resource_id }}">
+              <input type="hidden" name="list_type" value="{{ list_type }}">
+              <input type="hidden" name="user_id" value="{{ entry.user_id }}">
+              <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+            </form>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="text-sm text-muted">No entries.</p>
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-wide">
+  <div class="page-header">
+    <div>
+      <h1>Access Policies</h1>
+      <div class="subtitle">Control capabilities, categories, and individual models.</div>
+    </div>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Dashboard</a>
+  </div>
+
+  <div class="flash flash-info mb-2">
+    <span class="flash-msg">
+      Admin accounts always bypass these policies, including admins added to either list.
+      Allowlist and denylist entries are independent and persist when the policy mode changes.
+    </span>
+  </div>
+
+  <section class="mb-2">
+    <div class="card-title lg">Global Capabilities</div>
+    <p class="text-sm text-muted mb-1">These gates apply to every model marked with the corresponding capability.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:0.75rem;">
+      {% for policy in capability_policies %}{{ policy_card(policy) }}{% endfor %}
+    </div>
+  </section>
+
+  <section class="mb-2">
+    <div class="card-title lg">Category Policies</div>
+    {% if category_policies %}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:0.75rem;">
+        {% for policy in category_policies %}{{ policy_card(policy) }}{% endfor %}
+      </div>
+    {% else %}
+      <div class="card"><p class="text-sm text-muted">No model categories are configured.</p></div>
+    {% endif %}
+  </section>
+
+  <section class="mb-2">
+    <div class="card-title lg">Individual Model Policies</div>
+    {% if model_policies %}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:0.75rem;">
+        {% for policy in model_policies %}{{ policy_card(policy) }}{% endfor %}
+      </div>
+    {% else %}
+      <div class="card"><p class="text-sm text-muted">No models are in the catalog.</p></div>
+    {% endif %}
+  </section>
+
+  <section class="card mb-2" id="memberships">
+    <div class="card-title lg">Memberships: {{ selected.label }}</div>
+    <p class="text-sm text-muted mb-2">
+      Keep both lists current. The active policy mode determines which list is evaluated.
+      Admin users may be added for record keeping, but always retain access through the admin bypass.
+    </p>
+    <div style="display:flex;gap:1.5rem;align-items:flex-start;flex-wrap:wrap;">
+      {{ membership_list('Allowlist', 'allowlist', allowlist) }}
+      {{ membership_list('Denylist', 'denylist', denylist) }}
+    </div>
+  </section>
+
+  <section class="card mb-2">
+    <div class="card-title lg">Pending Access Requests</div>
+    {% if pending_requests %}
+      <div style="display:flex;flex-direction:column;gap:1rem;">
+        {% for req in pending_requests %}
+          <article style="background:#111;border:1px solid #2d2d2d;border-radius:8px;padding:1rem 1.25rem;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;">
+              <div style="flex:1;min-width:min(100%,320px);">
+                <div><strong>{{ req.username }}</strong> requests <strong>{{ req.gate_label }}</strong> <span class="badge badge-user">{{ req.scope_label }}</span></div>
+                <div class="text-xs text-muted">Submitted {{ format_datetime(req.created_at) }} ({{ time_ago(req.created_at) }})</div>
+                <div class="text-sm mt-1" style="white-space:pre-wrap;overflow-wrap:anywhere;">{{ req.use_case }}</div>
+                <div class="text-xs text-muted mt-1">
+                  Safety confirmation: <strong>{{ 'Yes' if req.confirmed_safe else 'No' }}</strong> |
+                  Logging/review confirmation: <strong>{{ 'Yes' if req.confirmed_logging else 'No' }}</strong>
+                </div>
+              </div>
+              <form method="POST" action="{{ url_for('admin_access_policies') }}" style="min-width:min(100%,280px);">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="action" value="resolve_request">
+                <input type="hidden" name="request_id" value="{{ req.id }}">
+                <input type="hidden" name="scope" value="{{ req.scope }}">
+                <input type="hidden" name="resource_id" value="{{ req.resource_id }}">
+                <textarea name="admin_message" rows="2" maxlength="1000" placeholder="Optional message to user"></textarea>
+                <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+                  <button type="submit" name="decision" value="approve" class="btn btn-sm btn-success" style="flex:1;">Approve</button>
+                  <button type="submit" name="decision" value="deny" class="btn btn-sm btn-danger" style="flex:1;">Deny</button>
+                </div>
+              </form>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="text-sm text-muted">No pending access requests.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <div class="card-title lg">Recent Resolved Requests</div>
+    {% if resolved_requests %}
+      <div style="display:flex;flex-direction:column;gap:0.75rem;">
+        {% for req in resolved_requests %}
+          <article style="border:1px solid var(--border);border-radius:7px;padding:0.85rem 1rem;">
+            <div style="display:flex;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;">
+              <div>
+                <strong>{{ req.username }}</strong> - {{ req.gate_label }}
+                <span class="badge badge-user">{{ req.scope_label }}</span>
+                {% if req.status == 'approved' %}<span class="badge badge-approved">approved</span>{% else %}<span class="badge badge-denied">denied</span>{% endif %}
+              </div>
+              <span class="text-xs text-muted">Submitted {{ format_datetime(req.created_at) }} | Resolved {{ format_datetime(req.resolved_at) }}</span>
+            </div>
+            <div class="text-sm mt-1" style="white-space:pre-wrap;overflow-wrap:anywhere;">{{ req.use_case }}</div>
+            <div class="text-xs text-muted mt-1">
+              Safety confirmation: <strong>{{ 'Yes' if req.confirmed_safe else 'No' }}</strong> |
+              Logging/review confirmation: <strong>{{ 'Yes' if req.confirmed_logging else 'No' }}</strong> |
+              Resolved by {{ req.resolved_by_username or 'unknown' }}
+            </div>
+            {% if req.admin_message %}<div class="text-sm mt-1"><strong>Admin message:</strong> {{ req.admin_message }}</div>{% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="text-sm text-muted">No resolved access requests.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

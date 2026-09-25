@@ -1,0 +1,23 @@
+    {% if current_user %}
+      <li><a href="{{ url_for('chat_index') }}"{% if request.endpoint and request.endpoint.startswith('chat') %} class="active" aria-current="page"{% endif %}>{{ t('chat') }}</a></li>
+      {% if image_backend_enabled %}<li><a href="{{ url_for('images_index') }}"{% if request.endpoint and request.endpoint.startswith('images') %} class="active" aria-current="page"{% endif %}>{{ t('images') }}</a></li>{% endif %}
+      <li><a href="{{ url_for('personalities') }}"{% if request.endpoint and request.endpoint.startswith('personalit') %} class="active" aria-current="page"{% endif %}>{{ t('personalities') }}</a></li>
+      <li><a href="{{ url_for('api_index') }}"{% if request.endpoint and request.endpoint.startswith('api') %} class="active" aria-current="page"{% endif %}>{{ t('api') }}</a></li>
+      <li><a href="{{ url_for('account') }}"{% if request.endpoint == 'account' %} class="active" aria-current="page"{% endif %}>{{ t('account') }}</a></li>
+      <li><a href="{{ source_code_url }}">{{ t('source_code') }}</a></li>
+      {% if music_show_nav %}
+        <li><a href="{{ url_for('music_free_quota') }}"{% if request.endpoint and request.endpoint.startswith('music') %} class="active" aria-current="page"{% endif %} style="color:#86efac;">{{ t('free_quota') }}</a></li>
+      {% endif %}
+      {% if current_user.role == 'admin' %}
+        <li><a href="{{ url_for('admin_index') }}"{% if request.endpoint and request.endpoint.startswith('admin') %} class="active" aria-current="page"{% endif %}>{{ t('admin') }}</a></li>
+      {% endif %}
+      <li><button type="button" class="btn-nav-customize" id="{{ 'mobile-a11y-toggle-btn' if nav_mobile else 'a11y-toggle-btn' }}">{{ t('customize') }}</button></li>
+      <li{% if nav_mobile %} class="mobile-logout-wrap"{% endif %}>
+        <form method="POST" action="{{ url_for('logout') }}" style="margin:0">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn-nav-logout">{{ t('logout') }}</button>
+        </form>
+      </li>
+    {% else %}
+      <li><a href="{{ url_for('login') }}">{{ t('login') }}</a></li>
+    {% endif %}

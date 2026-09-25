@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/BananaSuite/BananaChat/security/advisories/new
+    about: Report security issues privately instead of opening a public issue.
+  - name: BananaChat documentation
+    url: https://github.com/BananaSuite/BananaChat/tree/main/docs
+    about: Browse the user and operator documentation before filing an issue.

@@ -1,0 +1,27 @@
+# Lint configuration shared by local runs and continuous integration, so both
+# agree on what counts as a problem.
+target-version = "py312"
+line-length = 120
+exclude = [".venv", "venv", "build", "dist", "__pycache__", "node_modules"]
+
+[lint]
+# Correctness rules only. Formatting and style are left to the author.
+#   F   pyflakes: undefined names, unused imports and variables, shadowing
+#   E9  syntax and IO errors that stop the file being parsed
+#   B   bugbear: mutable defaults, loop-variable capture, silent exception loss
+select = ["F", "E9", "B"]
+
+[lint.per-file-ignores]
+# Package roots re-export their public API, so those imports are used by
+# definition even though nothing in the file itself references them.
+"__init__.py" = ["F401"]
+"db/__init__.py" = ["F401"]
+"helpers/__init__.py" = ["F401"]
+
+# Test suites follow pytest conventions that the general rules misread.
+# A fixture is imported and then named again as a parameter, which looks like
+# an unused import and a redefinition but is how pytest injects it. Tamper and
+# corruption tests assert that *something* fails, and narrowing the expected
+# exception there would make them brittle rather than stricter.
+"tests/**" = ["F401", "F811", "B017"]
+"conftest.py" = ["F401"]

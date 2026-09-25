@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Quota Requests | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-wide">
+  <div class="page-header">
+    <div>
+      <h1>Quota Requests</h1>
+      <div class="subtitle">
+        {% if pending %}
+          <span class="badge badge-pending">{{ pending | length }} pending</span>
+        {% else %}
+          No pending requests
+        {% endif %}
+      </div>
+    </div>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Dashboard</a>
+  </div>
+
+  {# Pending requests #}
+  <div class="card mb-2">
+    <div class="card-title lg">Pending Requests</div>
+    {% if pending %}
+      <div style="display:flex;flex-direction:column;gap:1rem;">
+        {% for req in pending %}
+          <div style="background:#111;border:1px solid #2d2d2d;border-radius:8px;padding:1rem 1.25rem;">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+              <div>
+                <strong>{{ req.username or req.user_id }}</strong>
+                <span class="text-muted text-sm" style="margin-left:0.5rem;">{{ time_ago(req.created_at) }}</span>
+                <div class="text-sm mt-1">
+                  Requesting <strong>{{ req.new_credits }}</strong> regular /
+                  <strong>{{ req.new_slow_credits }}</strong> slow credits per day
+                  <span class="text-muted">({{ req.duration_type or 'permanent' }})</span>
+                  {% if req.duration_type == 'one_day' %}
+                    <div class="text-xs text-muted mt-1">Legacy one-day request. Temporary expiry is not supported, so this request can only be denied.</div>
+                  {% endif %}
+                </div>
+                {% if req.reason %}
+                  <div class="text-sm text-muted mt-1" style="max-width:500px;">
+                    <em>{{ req.reason }}</em>
+                  </div>
+                {% endif %}
+              </div>
+
+              <form method="POST" action="{{ url_for('admin_quota_resolve', req_id=req.id) }}"
+                    style="display:flex;flex-direction:column;gap:0.5rem;min-width:240px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <textarea name="admin_message" rows="2" placeholder="Optional message to user…"
+                          maxlength="1000" style="font-size:0.82rem;"></textarea>
+                <div style="display:flex;gap:0.5rem;">
+                  {% if req.duration_type != 'one_day' %}
+                    <button type="submit" name="action" value="approve"
+                            class="btn btn-sm btn-success" style="flex:1;">Approve</button>
+                  {% endif %}
+                  <button type="submit" name="action" value="deny"
+                          class="btn btn-sm btn-danger" style="flex:1;">Deny</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="text-muted text-sm">No pending requests.</p>
+    {% endif %}
+  </div>
+
+  {# All requests #}
+  <div class="card">
+    <div class="card-title lg">All Requests (last 200)</div>
+    {% if all_requests %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Requested</th>
+              <th>Duration</th>
+              <th>Status</th>
+              <th>Resolved By</th>
+              <th>Submitted</th>
+              <th>Admin Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for req in all_requests %}
+              <tr>
+                <td class="text-sm"><strong>{{ req.username or req.user_id }}</strong></td>
+                <td class="text-sm mono">{{ req.new_credits }} / {{ req.new_slow_credits }}</td>
+                <td class="text-sm">{{ req.duration_type or 'permanent' }}</td>
+                <td>
+                  {% if req.status == 'pending' %}
+                    <span class="badge badge-pending">pending</span>
+                  {% elif req.status == 'approved' %}
+                    <span class="badge badge-approved">approved</span>
+                  {% else %}
+                    <span class="badge badge-denied">denied</span>
+                  {% endif %}
+                </td>
+                <td class="text-sm text-muted">
+                  {% if req.resolution_source == 'automatic' %}Automatic policy{% else %}{{ req.resolved_by_username or '-' }}{% endif %}
+                </td>
+                <td class="text-sm text-muted">{{ time_ago(req.created_at) }}</td>
+                <td class="text-sm text-muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                  {{ req.admin_message or '-' }}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="text-muted text-sm">No requests yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

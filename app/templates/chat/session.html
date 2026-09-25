@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}{{ sess.title or 'Chat' }} | {{ site_name }}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">
+<style>
+  /* Chat page: fixed layout so flash messages can't push it off-screen */
+  body { overflow: hidden; }
+  .flash-list {
+    position: fixed;
+    top: 56px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(560px, 92vw);
+    z-index: 500;
+    padding: 8px 0 0;
+    pointer-events: none;
+  }
+  .flash-list li { pointer-events: auto; }
+  .chat-layout {
+    position: fixed !important;
+    top: 56px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: auto !important;
+  }
+  {% if settings.warning_banner_enabled %}
+  .chat-layout { top: calc(56px + 2.5rem) !important; }
+  .chat-sidebar { top: calc(56px + 2.5rem) !important; }
+  .sidebar-backdrop { top: calc(56px + 2.5rem) !important; }
+  .flash-list { top: calc(56px + 2.5rem) !important; }
+  {% endif %}
+</style>
+{% endblock %}
+
+{% block content %}
+<input type="hidden" id="chat-session-id" value="{{ sess.id }}">
+
+<div class="chat-layout">
+
+  <!-- Sidebar -->
+  {% include "chat/_sidebar.html" %}
+
+  <!-- Main -->
+  <main class="chat-main{% if sess.is_incognito %} is-incognito{% endif %}">
+
+    <!-- Topbar -->
+    <div class="chat-topbar">
+      <button id="sidebar-toggle-btn" class="topbar-btn tb-sidebar-toggle" aria-label="{{ t('toggle_sidebar') }}" aria-expanded="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
+      {% if sess.is_incognito %}
+        <span class="topbar-incognito-badge">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          {{ t('private_active') }}
+        </span>
+      {% endif %}
+
+      <button type="button" id="chat-title" class="chat-title-btn">{{ sess.title or 'New Chat' }}</button>
+      <div class="topbar-spacer"></div>
+
+      {% if not sess.is_incognito %}
+        <button id="chat-share-btn" class="topbar-action-btn"
+                data-action="{{ 'revoke' if sess.shared_token else 'create' }}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+          {{ t('revoke') if sess.shared_token else t('share') }}
+        </button>
+        <span id="chat-share-status" class="topbar-share-link">
+          {% if sess.shared_token %}<a href="{{ url_for('chat_shared', token=sess.shared_token) }}" target="_blank">↗ {{ t('view') }}</a>{% endif %}
+        </span>
+      {% else %}
+        <span id="chat-share-status"></span>
+      {% endif %}
+
+      <button id="chat-download-btn" class="topbar-icon-btn" title="{{ t('download') }}" aria-label="{{ t('download') }}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </button>
+
+      <button id="chat-delete-btn" hidden></button>
+    </div>
+
+    {% if sess.is_incognito %}
+    <div class="incognito-bar">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+      {{ t('private_explainer') }}
+    </div>
+    {% endif %}
+
+    <!-- Messages -->
+    <div class="chat-messages" id="chat-messages">
+      {% include "chat/_history_navigation.html" %}
+      <div class="msgs">
+        {% if messages %}
+          {% for msg in messages %}
+            <div class="message {{ msg.role }}" data-message-id="{{ msg.id }}">
+              <div class="message-bubble">{{ msg.content }}</div>
+              {% if msg.role == "assistant" and msg.generation_state in ("stopped", "failed", "interrupted") %}
+              <p class="chat-outcome text-muted" role="status">{{ t("generation_" ~ msg.generation_state) }}</p>
+              {% endif %}
+              {% if attachments_by_message.get(msg.id) %}
+              <div class="message-attachments">
+                {% for attachment in attachments_by_message.get(msg.id) %}
+                  {% if attachment.kind == 'image' %}
+                    <a href="{{ url_for('chat_attachment', session_id=sess.id, attachment_id=attachment.id) }}" target="_blank" class="attachment-preview"><img src="{{ url_for('chat_attachment', session_id=sess.id, attachment_id=attachment.id) }}" alt="{{ attachment.filename }}"><span>{{ attachment.filename }}</span></a>
+                  {% else %}
+                    <span class="attachment-chip">{{ attachment.filename }}</span>
+                  {% endif %}
+                {% endfor %}
+              </div>
+              {% endif %}
+              <div class="message-meta">
+                {% if msg.role == 'assistant' %}
+                  {{ msg.model_name or t('assistant') }}{% if msg.tokens_out %} &middot; {{ msg.tokens_out }} token{{ 's' if msg.tokens_out != 1 else '' }}{% endif %} &middot; {{ time_ago(msg.created_at) }}
+                {% else %}
+                  {{ t('you') }} &middot; {{ time_ago(msg.created_at) }}
+                {% endif %}
+              </div>
+              {% if msg.role == 'assistant' %}<div class="message-actions"><a class="message-action-btn" data-pdf-action="1" href="{{ url_for('chat_message_pdf', session_id=sess.id, message_id=msg.id) }}">PDF</a></div>{% endif %}
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="chat-empty" id="chat-empty-state">
+            <h1 class="empty-heading">{{ t('new_chat') }}</h1>
+            <p class="empty-description">{{ t('start_chat_hint') }}</p>
+            <span id="empty-model-label" hidden>{{ t('auto') }}</span>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Input zone -->
+    {% if history.latest %}
+    <div class="chat-input-zone"><a class="btn" href="{{ history.latest }}">{{ t('continue_chat') }}</a></div>
+    {% else %}
+  {% include "chat/_composer.html" %}
+    {% endif %}
+  </main>
+
+  <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+window.BC_IS_INCOGNITO = {{ 'true' if sess.is_incognito else 'false' }};
+window.BC_CHAT_MAX_FILES = {{ chat_max_files }};
+window.BC_MODELS = [
+  {"value": "auto", "label": {{ t('auto') | tojson }}, "desc": {{ t('best_model') | tojson }}, "cats": [], "is_reasoning": false},
+  {% for m in models %}{"value": {{ m.ollama_name | tojson }}, "label": {{ (m.display_name or m.ollama_name) | tojson }}, "desc": {{ (m.description or '') | tojson }}, "cats": {{ m.categories | map(attribute='name') | list | tojson }}, "is_reasoning": {{ 'true' if m.get('is_reasoning') else 'false' }}}{% if not loop.last %},{% endif %}
+{% endfor %}
+];
+</script>
+{% endblock %}

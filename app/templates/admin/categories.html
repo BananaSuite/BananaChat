@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Categories | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-header">
+    <h1>Model Categories</h1>
+    <a href="{{ url_for('admin_models') }}" class="btn btn-sm">Back to Models</a>
+  </div>
+
+  {# Create form #}
+  <div class="card mb-2">
+    <div class="card-title">Create Category</div>
+    <form method="POST" action="{{ url_for('admin_category_create') }}" style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="form-group mb-0" style="flex:1;min-width:160px;">
+        <label class="form-label">Name</label>
+        <input type="text" name="name" required maxlength="100" placeholder="e.g. Code, Vision" autocomplete="off">
+      </div>
+
+      <div class="form-group mb-0" style="flex:2;min-width:200px;">
+        <label class="form-label">Description <span class="text-muted">(optional)</span></label>
+        <input type="text" name="description" maxlength="500" placeholder="Short description">
+      </div>
+
+      <div class="form-group mb-0" style="min-width:110px;">
+        <label class="form-label">Scope</label>
+        <select name="scope">
+          <option value="both">Both</option>
+          <option value="chat">Chat only</option>
+          <option value="api">API only</option>
+        </select>
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="align-self:flex-end;">Create</button>
+    </form>
+  </div>
+
+  {# Category list #}
+  {% if categories %}
+    <div id="category-sort-list" style="display:flex;flex-direction:column;gap:4px;">
+      {% for cat in categories %}
+        <div class="sort-item" data-sort-id="{{ cat.id }}"
+             style="display:flex;align-items:center;gap:0.75rem;padding:0.65rem 0.9rem;background:var(--surf);border:1px solid var(--border);border-radius:6px;">
+          <span class="sort-handle" style="cursor:grab;color:var(--text-3);font-size:1.1rem;" title="{{ t('drag_to_reorder') }}">&#9776;</span>
+          <div style="flex:1;min-width:0;">
+            <strong>{{ cat.name }}</strong>
+            {% if cat.description %}
+              <span class="text-sm text-muted" style="margin-left:0.5rem;">{{ cat.description }}</span>
+            {% endif %}
+          </div>
+          <span class="badge badge-user">{{ cat.scope or 'both' }}</span>
+          <div class="td-actions" style="flex-shrink:0;">
+            <a href="{{ url_for('admin_category_edit', cat_id=cat.id) }}" class="btn btn-sm">Edit</a>
+            <form method="POST" action="{{ url_for('admin_category_delete', cat_id=cat.id) }}" style="display:inline;margin:0;"
+                  data-confirm="Delete category '{{ cat.name }}'? Models will lose this tag.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+            </form>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+    <p class="text-xs text-muted" style="margin-top:0.5rem;">{{ t('drag_to_reorder') }}</p>
+  {% else %}
+    <div class="card empty-state">No categories defined yet.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+(function() {
+  var catList = document.getElementById("category-sort-list");
+  if (catList) {
+    initSortable(catList, {
+      onReorder: function(ids) {
+        saveReorder('{{ url_for("admin_api_reorder_categories") }}', ids);
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

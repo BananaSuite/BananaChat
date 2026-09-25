@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "files": {
+    "banana": "93a9672636b424051e87a395644ea7a5b586281fa530c90dd1630005b97ba61c",
+    "banana_ops/__init__.py": "37053c1fc195c79a39f584397f598c682ec5bcd0af54b02347f50d684ef9fbfe",
+    "banana_ops/cli.py": "0602cbf972910ea95fc7aa39524ad688bf8f841b3fb26f613d2a636bdfc93940",
+    "banana_ops/files.py": "9c8c7e8394fb2b6d0f65f73858c7ef3fda5e56c4bdec5b255ba88a4695cd5088",
+    "banana_ops/gate.py": "8cf791393f0b9aa65dd64ca9c8523789c3f2c51a600fddde760b668a58ce544f",
+    "banana_ops/legacy_ai.py": "5f69753d455d5a9503ae8679362b3352f114436009dec8c0b2386e629266f5b7",
+    "banana_ops/manager.py": "d4010024383bdfc50ba0322b3c546ca2d4a65c3d097e938a21f7d768f5c8216a",
+    "banana_ops/models.py": "70056a21f75d0a7a332764121cbdfe87243832c3fc2f8b033abd1e0cfff27b1d",
+    "banana_ops/profile.py": "e629e6fc438f6c5f1aa1352ae69cb4a8f14ce70c7601f684208e78b09ec7ed5d",
+    "banana_ops/source.py": "f98b8a771efff2800b5c4084b6095a16146b4a251b63e07308c7058dc4bfb450",
+    "banana_ops/system.py": "53417c4576e29dc0db7a0c384e8d2c8719cbe90e450b00be1d384d14b10bb0d9",
+    "http_transport.py": "865f32ba2ba97895598180c484a7e12f91c1207172caea39e23f54cda1e08b0d",
+    "ops_observability.py": "cafd29751b29302d5ebb533980bdcfbd0e090f2c4569e4e08028b8d04a1aa106",
+    "private_logs.py": "24dd5cb3f757547afaf994a2976bc0e00b87ab34b2762e58f6c12b4195a975dc",
+    "scripts/sync_lifecycle.py": "62fa9b3fc2222e779e9dab7b44d1afa58d211f689e7b4881d4fc23e6d3d357af",
+    "sqlite_migrations.py": "fcc238eae11ffd4f537c84203c2b9edcdd4ce090ad09d958b7d67beb74e66e10",
+    "sqlite_runtime.py": "9684aa4dce5c6f610828733806f86591d28363ab479fe68d6f55a91406ab6781",
+    "sqlite_snapshot.py": "44605fbbb8d87b4ee905305305d092fe44eb02940f582c0ec81540884e55352e",
+    "tests/test_http_transport.py": "99b9e2a1112994330c94ab157f1ccbe427b0f2be28d0ef5ff2cf3f589fa2905b",
+    "tests/test_managed_lifecycle.py": "46534d35d946ce01e12ede176b663e5f4029376738658c8b49afd4c0c912cc1f",
+    "tests/test_private_logs.py": "4766f19afddeca5b2a9223f2162b71b2122a750e431e0e521e230ef1e475202d",
+    "tests/test_private_update_source.py": "57d4314d5b584a9b6ee784b808df16d002db837c5e02ff440dd24f0d00e67a66",
+    "tests/test_release_permissions.py": "2d2df994664e2223373688c26fefa09050f578d90a8ecd4288c035c2ab339851",
+    "tests/test_shared_lifecycle.py": "529e1ba84d584b846792bf53d31a01f1b63ab8fd63a9ead52cdebabf0ca621da",
+    "tests/test_sqlite_migrations.py": "74a6d36d454141914c7ffe542ba693d372ba605b673087be49a8a5746feb3602",
+    "tests/test_sqlite_runtime.py": "1efb2d0aa0b3924d79e03ee1ec534db6f6d92e4d7a28b3d416ea0fc4319cf81e",
+    "tests/test_sqlite_snapshot.py": "bc3f5de2c4618f1e1d4731dc0d99d3972cdf6db85113cd902853d12f20a288f7"
+  }
+}

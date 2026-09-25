@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a reproducible bug in BananaChat.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+        For **security vulnerabilities**, please follow [SECURITY.md](https://github.com/BananaSuite/BananaChat/blob/main/SECURITY.md) instead.
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment type
+      description: Where are you running BananaChat?
+      options:
+        - Self-hosted (single instance)
+        - Local development (`make dev`)
+        - Other (please describe)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Source revision
+      description: |
+        Run `git rev-parse --short HEAD` in your source checkout, or
+        `sudo bananachat status` for a managed installation.
+        For a downloaded package, give its archive or release name.
+      placeholder: "Commit hash or package name"
+    validations:
+      required: true
+
+  - type: input
+    id: python_version
+    attributes:
+      label: Python version
+      placeholder: "3.12.7"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Relevant excerpts from `logs/`, the browser console, or
+        `journalctl -u bananachat.service`. **Redact any secrets, tokens, or
+        personal data before pasting.**
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Browser, OS, reverse proxy, anything else.
+    validations:
+      required: false

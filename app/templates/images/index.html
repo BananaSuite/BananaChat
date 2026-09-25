@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Images - {{ site_name }}{% endblock %}
+{% block head %}
+<style nonce="{{ csp_nonce }}">
+@media (max-width: 760px) {
+  .image-lab-grid { grid-template-columns: 1fr !important; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-header">
+    <div>
+      <h1>Image Lab</h1>
+      <div class="subtitle">Image generation through your configured ComfyUI server.</div>
+    </div>
+  </div>
+
+  {% if image_backend_enabled %}
+  <div class="card mb-2" style="border-color:rgba(232,184,75,0.25);">
+    <p class="text-sm text-muted" style="margin:0;">
+      This testing interface keeps generated images only in your browser. Reloading the page clears them.
+       {{ display_name }} builds a fixed standard SD/SDXL workflow; custom workflows are not accepted.
+    </p>
+  </div>
+  {% endif %}
+
+  {% if not image_backend_enabled %}
+  <div class="card" style="text-align:center;padding:3rem 1.5rem;">
+    <h2 style="font-size:1.1rem;margin-bottom:0.5rem;">Image generation is disabled</h2>
+    <p class="text-sm text-muted">This server has no image backend configured.</p>
+  </div>
+  {% elif models %}
+  <div style="display:grid;grid-template-columns:minmax(260px,360px) minmax(0,1fr);gap:1rem;align-items:start;" class="image-lab-grid">
+    <div class="card">
+      <div class="form-group">
+        <label class="form-label" for="image-model">Model</label>
+        <select id="image-model">
+          <option value="auto">Auto-select image model</option>
+          {% for model in models %}
+          <option value="{{ model.ollama_name }}">{{ model.display_name or model.ollama_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="image-prompt">Prompt</label>
+        <textarea id="image-prompt" rows="8" maxlength="10000" placeholder="Describe the image you want to generate..." required></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="image-size">Size</label>
+        <select id="image-size">
+          <option value="512x512">512 x 512</option>
+          <option value="1024x1024" selected>1024 x 1024</option>
+          <option value="1024x1536">1024 x 1536</option>
+          <option value="1536x1024">1536 x 1024</option>
+        </select>
+      </div>
+      <button type="button" id="image-generate" class="btn btn-primary" style="width:100%;">Generate image</button>
+      <div id="image-status" class="text-sm text-muted mt-1" role="status" aria-live="polite"></div>
+    </div>
+    <div id="image-results" class="card" style="min-height:360px;display:grid;place-items:center;padding:1rem;">
+      <p class="text-muted" style="text-align:center;">Generated images will appear here.</p>
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="text-align:center;padding:3rem 1.5rem;">
+    <h2 style="font-size:1.1rem;margin-bottom:0.5rem;">No image models available</h2>
+    <p class="text-sm text-muted">An administrator must sync and roll out a ComfyUI checkpoint and grant any required access.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if image_backend_enabled and models %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var button = document.getElementById('image-generate');
+  var prompt = document.getElementById('image-prompt');
+  var model = document.getElementById('image-model');
+  var size = document.getElementById('image-size');
+  var status = document.getElementById('image-status');
+  var results = document.getElementById('image-results');
+  var csrf = document.querySelector('meta[name="csrf-token"]').content;
+
+  button.addEventListener('click', function () {
+    var text = prompt.value.trim();
+    if (!text) { status.textContent = 'Enter a prompt first.'; return; }
+    button.disabled = true;
+    status.textContent = 'Generating. This can take several minutes...';
+    fetch('{{ url_for("images_generate") }}', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf},
+      body: JSON.stringify({model: model.value, prompt: text, size: size.value})
+    }).then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error(data.error || 'Generation failed');
+        return data;
+      });
+    }).then(function (data) {
+      results.innerHTML = '';
+      data.data.forEach(function (image, index) {
+        var wrap = document.createElement('div');
+        wrap.style.width = '100%';
+        wrap.style.textAlign = 'center';
+        var img = document.createElement('img');
+        img.src = 'data:' + image.mime_type + ';base64,' + image.b64_json;
+        img.alt = 'Generated image ' + String(index + 1);
+        img.style.maxWidth = '100%';
+        img.style.maxHeight = '72vh';
+        img.style.borderRadius = '8px';
+        var link = document.createElement('a');
+        link.href = img.src;
+        link.download = 'bananachat-image-' + String(index + 1) + '.png';
+        link.className = 'btn btn-sm';
+        link.style.marginTop = '0.75rem';
+        link.textContent = 'Download';
+        wrap.appendChild(img);
+        wrap.appendChild(document.createElement('br'));
+        wrap.appendChild(link);
+        results.appendChild(wrap);
+      });
+      status.textContent = 'Generated with ' + data.model + '.';
+    }).catch(function (error) {
+      status.textContent = error.message;
+    }).finally(function () {
+      button.disabled = false;
+    });
+  });
+}());
+</script>
+{% endif %}
+{% endblock %}

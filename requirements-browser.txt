@@ -1,0 +1,2 @@
+# Optional development dependency for scripts/check_browser.py.
+playwright==1.62.0

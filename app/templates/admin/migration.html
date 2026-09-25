@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Migration | Admin | {{ site_name }}{% endblock %}
+
+{% block content %}
+<div class="page-narrow">
+  <div class="page-header">
+    <div>
+      <h1>Migration</h1>
+      <div class="subtitle">Export this instance or restore from a backup.</div>
+    </div>
+    <a href="{{ url_for('admin_index') }}" class="btn btn-sm">Dashboard</a>
+  </div>
+
+  {# Export #}
+  <div class="card mb-2">
+    <div class="card-title lg">Export</div>
+    <p class="text-sm text-muted mb-1">
+      Downloads a <code>.tar.gz</code> archive containing a consistent snapshot of the entire
+      database: all users, chats, API tokens, settings, model catalog, usage history, and
+      audit logs.
+    </p>
+    <div class="flash flash-info mb-2" style="font-size:0.82rem;">
+      <span class="flash-msg">
+        <strong>Ollama model weights are not included.</strong>
+        After importing, Admin → Models offers to download the saved models or leave them for later.
+        User passwords and API tokens are stored as hashes and cannot be reversed.
+      </span>
+    </div>
+    <a href="{{ url_for('admin_migration_export') }}" class="btn btn-primary">
+      Download Export
+    </a>
+  </div>
+
+  <div class="card">
+    <div class="card-title lg">Restore</div>
+    <p class="text-sm text-muted mb-1">
+      Restore from the server during a maintenance window. The command stops every
+      application process, creates a rollback package, and checks the restored service
+      before reopening it. A failed import restores the previous installation.
+    </p>
+    <p class="text-sm">For an installation package created with <code>bananachat backup</code> or <code>migrate</code>:</p>
+    <pre><code>sudo bananachat restore /root/ai-backup.tar.gz</code></pre>
+    <p class="text-sm">For the database export above or an older raw database:</p>
+    <pre><code>sudo bananachat restore --legacy-database /root/bananachat_export.tar.gz</code></pre>
+    <p class="text-sm text-muted">
+      Database exports contain users, chats and model settings. Preserve session keys,
+      uploaded audio, configuration and any external files separately. A complete installation
+      package includes managed data and configuration; use <code>--exclude-model-weights</code>
+      when creating a package if models should be downloaded again after recovery.
+      Review model downloads in Admin → Models after restoring; you can select Not now.
+    </p>
+    <p class="text-sm text-muted">If maintenance is interrupted, run <code>sudo bananachat recover</code> before retrying.</p>
+  </div>
+</div>
+{% endblock %}

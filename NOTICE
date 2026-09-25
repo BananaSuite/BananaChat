@@ -1,0 +1,22 @@
+BananaChat
+Copyright (c) 2026 Luca Zani and all contributors.
+
+Originally started by Luca Zani (OverloadedTech) on 9 July 2026,
+at Officina Tecnologica. Contributors retain copyright in their respective
+contributions.
+
+First recorded project commit: 3b79b7595c6ed1c1f2a2e2f065635adfe47a5a86
+Author and committer timestamp: 2026-07-09T17:01:12+02:00
+
+BananaChat began as BananaAI and was rebuilt from BananaWiki. Its inherited
+repository history starts with 1a7c1e99847a5145429b4033293a497a118d85fc at
+2026-02-20T01:16:43+01:00. The date above records the first
+BananaChat-specific application commit.
+
+These dates come from the private development history, which is not
+published because it contains credentials, access tokens and details of the
+servers BananaChat ran on. The public repository starts from a single commit,
+a clean export of the source.
+
+Licensed under the GNU Affero General Public License, version 3.
+See LICENSE. Third-party components retain their respective licenses and notices.

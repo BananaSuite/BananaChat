@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Python dependencies are declared as ranges, so a compromised release inside
+  # a range would install silently. These pull requests make each change visible.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: pip
+    directory: /worker
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  # Workflow actions are pinned to commit SHAs, which never float. Without this
+  # they would simply go stale.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

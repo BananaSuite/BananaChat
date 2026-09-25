@@ -1,0 +1,21 @@
+# BananaChat Worker: Python dependencies
+#
+# Core dependencies (required)
+# None: the daemon uses only the Python standard library for core functionality.
+#
+# Optional dependencies (install for better monitoring and GPU control)
+
+# GPU utilisation monitoring (recommended for NVIDIA GPUs)
+# Replaces nvidia-smi subprocess calls with a faster native library.
+nvidia-ml-py3>=7.352.0
+
+# System resource monitoring (idle time, CPU/RAM, process priority)
+# Used by activity.py and resources.py
+psutil>=5.9.0
+
+# Windows Service support (Windows only)
+# Required for: python bananachat_worker.py install  (on Windows)
+# pywin32>=306
+
+# Linux D-Bus idle detection (optional, installed separately by distro)
+# xprintidle, install via: apt install xprintidle  /  dnf install xprintidle

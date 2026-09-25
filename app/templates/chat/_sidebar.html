@@ -1,0 +1,38 @@
+  <aside id="chat-sidebar" class="chat-sidebar">
+    <div class="sidebar-top">
+      <form method="POST" action="{{ url_for('chat_new') }}" id="new-chat-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="incognito" id="incognito-input" value="0">
+        <select name="model_hint" id="sidebar-model-select" hidden aria-hidden="true" tabindex="-1">
+          <option value="auto">Auto</option>
+          {% for model in models %}
+            <option value="{{ model.ollama_name }}">{{ model.display_name or model.ollama_name }}</option>
+          {% endfor %}
+        </select>
+        <div class="sidebar-new-row">
+          <button type="submit" class="btn-new-chat">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            {{ t('new_chat') }}
+          </button>
+        </div>
+      </form>
+      <input id="sidebar-search" class="sidebar-search" type="search" placeholder="{{ t('search_chats') }}" autocomplete="off" aria-label="{{ t('search_chats') }}">
+    </div>
+
+    <div class="sidebar-body" id="sidebar-chat-list">
+      {% for s in sessions %}
+        <a href="{{ url_for('chat_session', session_id=s.id) }}"
+           class="session-item{% if s.id == sess.id %} active{% endif %}"
+           data-session-id="{{ s.id }}"
+           data-title="{{ s.title or t('new_chat') }}"
+           data-shared-token="{{ s.shared_token or '' }}"
+           {% if s.is_incognito %}data-incognito="1"{% endif %}>
+          <span class="session-title">{{ s.title or t('new_chat') }}</span>
+          {% if s.is_incognito %}<span class="session-incognito" title="{{ t('private_active') }}">&#9679;</span>{% endif %}
+          <span class="session-menu-btn" role="button" tabindex="0" title="{{ t('options') }}" aria-label="{{ t('options') }}">&#8943;</span>
+        </a>
+      {% else %}
+        <p class="sidebar-empty">{{ t('no_chats') }}</p>
+      {% endfor %}
+    </div>
+  </aside>
