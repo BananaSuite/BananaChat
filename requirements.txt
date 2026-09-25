@@ -6,6 +6,6 @@ gunicorn>=26.2.0,<27; sys_platform != "win32"
 waitress>=3.0.0,<4.0; sys_platform == "win32"
 filelock>=3.0.0,<4.0
 # Optional: psutil for CPU/RAM metrics collection in compute snapshots
-psutil>=6.0.0
+psutil>=7.2.2
 Pillow>=12.3.0,<13.0
 pypdf>=6.0.0,<7.0
