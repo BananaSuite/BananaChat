@@ -8,4 +8,4 @@ filelock>=3.13,<4
 Pillow>=12.3.0,<13
 pypdf>=6.0.0,<7
 # Optional but recommended: memory and CPU figures for admission control and metrics.
-psutil>=6.0.0
+psutil>=7.2.2
