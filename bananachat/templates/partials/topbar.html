@@ -18,17 +18,24 @@
     {% if agents_nav_visible is defined and agents_nav_visible %}
     <a href="{{ url_for('agents.index') }}"{% if path.startswith('/agents') %} aria-current="page"{% endif %}>{{ t("agents.nav") }}</a>
     {% endif %}
-    {% if has_endpoint("developer.index") %}
-    <a href="{{ url_for('developer.index') }}"{% if path.startswith('/developer') %} aria-current="page"{% endif %}>{{ t("nav.developer") }}</a>
-    {% endif %}
-    {% if music_nav_visible is defined and music_nav_visible %}
-    <a href="{{ url_for('music.free_quota') }}"{% if path.startswith('/free-quota') %} aria-current="page"{% endif %}>{{ t("nav.free_quota") }}</a>
-    {% endif %}
-    {% if community_nav_visible is defined and community_nav_visible %}
-    <a href="{{ url_for('community.index') }}"{% if path.startswith('/community') %} aria-current="page"{% endif %}>{{ t("nav.community") }}</a>
-    {% endif %}
-    {% if is_admin %}
-    <a href="{{ url_for('admin.dashboard') }}"{% if path.startswith('/admin') %} aria-current="page"{% endif %}>{{ t("nav.admin") }}</a>
+    {% if has_endpoint("developer.index") or music_nav_visible or community_nav_visible or is_admin %}
+    <details class="menu nav-more" data-menu>
+      <summary{% if path.startswith(('/developer', '/free-quota', '/community', '/admin')) %} class="is-current"{% endif %}>{{ t("nav.more") }}{{ icon("chevron-down") }}</summary>
+      <div class="menu-panel left">
+        {% if has_endpoint("developer.index") %}
+        <a href="{{ url_for('developer.index') }}"{% if path.startswith('/developer') %} aria-current="page"{% endif %}>{{ icon("code") }}{{ t("nav.developer") }}</a>
+        {% endif %}
+        {% if music_nav_visible is defined and music_nav_visible %}
+        <a href="{{ url_for('music.free_quota') }}"{% if path.startswith('/free-quota') %} aria-current="page"{% endif %}>{{ icon("music") }}{{ t("nav.free_quota") }}</a>
+        {% endif %}
+        {% if community_nav_visible is defined and community_nav_visible %}
+        <a href="{{ url_for('community.index') }}"{% if path.startswith('/community') %} aria-current="page"{% endif %}>{{ icon("users") }}{{ t("nav.community") }}</a>
+        {% endif %}
+        {% if is_admin %}
+        <a href="{{ url_for('admin.dashboard') }}"{% if path.startswith('/admin') %} aria-current="page"{% endif %}>{{ icon("settings") }}{{ t("nav.admin") }}</a>
+        {% endif %}
+      </div>
+    </details>
     {% endif %}
   </nav>
   {% endif %}

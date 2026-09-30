@@ -257,7 +257,11 @@ function initMenus() {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    for (const menu of menus()) { menu.open = false; menu.querySelector("summary")?.focus(); }
+    for (const menu of menus()) {
+      const restoreFocus = menu.contains(document.activeElement);
+      menu.open = false;
+      if (restoreFocus) menu.querySelector("summary")?.focus();
+    }
   });
 }
 
@@ -268,6 +272,11 @@ function initNavigation() {
   toggle.addEventListener("click", () => {
     const open = nav.classList.toggle("open");
     toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  document.addEventListener("click", (event) => {
+    if (!nav.classList.contains("open") || nav.contains(event.target) || toggle.contains(event.target)) return;
+    nav.classList.remove("open");
+    toggle.setAttribute("aria-expanded", "false");
   });
   // Escape closes the phone menu like the account menu, returning focus to its button.
   document.addEventListener("keydown", (event) => {

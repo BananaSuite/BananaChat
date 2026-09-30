@@ -107,5 +107,35 @@ function initQuotaForm() {
   if (kind.value === "effort" && window.location.hash === "#quota") document.getElementById("quota_reason")?.focus();
 }
 
+// Keep the section navigator useful while reading a long account page.
+function initSectionNavigation() {
+  const links = [...document.querySelectorAll('.account-toc a[href^="#"]')];
+  const sections = links.map((link) => document.getElementById(link.hash.slice(1)));
+  if (!links.length) return;
+  let scheduled = false;
+  const update = () => {
+    scheduled = false;
+    const edge = (document.querySelector('.topbar')?.getBoundingClientRect().bottom || 0) + 32;
+    let current = 0;
+    sections.forEach((section, index) => {
+      if (section && section.getBoundingClientRect().top <= edge) current = index;
+    });
+    // Short final sections cannot always reach the top edge of the viewport.
+    if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) current = links.length - 1;
+    links.forEach((link, index) => {
+      if (index === current) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    });
+  };
+  const schedule = () => {
+    if (!scheduled) { scheduled = true; requestAnimationFrame(update); }
+  };
+  window.addEventListener('scroll', schedule, { passive: true });
+  window.addEventListener('resize', schedule);
+  window.addEventListener('hashchange', schedule);
+  update();
+}
+
+initSectionNavigation();
 initCounters();
 initQuotaForm();

@@ -109,12 +109,15 @@
       <div class="stack">
         {% for title_key, snippet in snippets %}
         {% set title = t(title_key) if title_key.startswith("developer.") else title_key %}
+        <details class="dev-example"{% if loop.first %} open{% endif %}>
+          <summary>{{ title }}{{ icon("chevron-down") }}</summary>
         <figure class="code-block dev-snippet">
           <header><figcaption>{{ title }}</figcaption>
             <button type="button" class="btn btn-sm btn-ghost" data-copy="{{ snippet }}">{{ icon("copy") }}{{ t("common.copy") }}<span class="visually-hidden"> {{ title }}</span></button>
           </header>
           <pre tabindex="0"><code>{{ snippet }}</code></pre>
         </figure>
+        </details>
         {% endfor %}
       </div>
       <p class="hint mb-0">{{ t("developer.quickstart_hint") }}</p>

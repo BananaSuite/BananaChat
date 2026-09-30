@@ -19,6 +19,13 @@
 .dev-snippet { margin: 0; }
 .dev-snippet pre { white-space: pre; }
 .dev-snippet figcaption { font-family: var(--font); }
+.dev-example { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.dev-example > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .7rem .85rem; cursor: pointer; list-style: none; font-weight: 500; font-size: .875rem; }
+.dev-example > summary::-webkit-details-marker { display: none; }
+.dev-example > summary:hover { background: var(--hover); }
+.dev-example > summary svg { width: 15px; height: 15px; color: var(--text-muted); }
+.dev-example[open] > summary svg { transform: rotate(180deg); }
+.dev-example .code-block { border: 0; border-top: 1px solid var(--border); border-radius: 0; }
 
 /* playground layout */
 .dev-playground { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 1rem; align-items: start; }

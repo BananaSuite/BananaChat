@@ -1,7 +1,7 @@
 /* Agents: task list, new-task form and the task page (timeline, lanes, workspace). */
 
 /* ----- list and new task -------------------------------------------------- */
-.agents-grid { display: grid; gap: 1.5rem; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); align-items: start; }
+.agents-grid { display: grid; gap: 2rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
 .agents-grid > :only-child { grid-column: 1 / -1; }
 .agents-new h2, .agents-list h2 { font-size: 1.1rem; }
 .agents-file-button { justify-content: flex-start; width: 100%; min-height: 40px; }
@@ -18,12 +18,12 @@
 .agents-repo-fields input { font-family: var(--mono); }
 .agents-tasks { list-style: none; margin: 0; padding: 0; }
 .agents-task-link {
-  display: flex; align-items: center; gap: .75rem; padding: .85rem 1.1rem; color: var(--text); text-decoration: none;
+  display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem; color: var(--text); text-decoration: none;
   transition: background var(--speed);
 }
 .agents-task-link:hover { background: var(--hover); color: var(--text); }
 .agents-task-link > svg { color: var(--text-faint); }
-.agents-task-title { display: block; font-weight: 600; }
+.agents-task-title { display: block; font-weight: 550; }
 .agents-task-meta { display: flex; flex-wrap: wrap; gap: .3rem; color: var(--text-muted); font-size: .84rem; }
 @media (max-width: 900px) { .agents-grid { grid-template-columns: minmax(0, 1fr); } }
 

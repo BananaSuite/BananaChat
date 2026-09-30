@@ -1,11 +1,16 @@
 /* Account and personalities pages. */
-.account-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 1.75rem; align-items: start; }
+.account-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 2.5rem; align-items: start; }
 .account-toc { position: sticky; top: calc(var(--topbar-height) + 1rem); display: flex; flex-direction: column; gap: 2px; }
 .account-toc a { display: flex; align-items: center; gap: .5rem; padding: .4rem .65rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .92rem; }
 .account-toc a:hover { background: var(--hover); color: var(--text); }
+.account-toc a[aria-current="location"] { color: var(--text); background: var(--hover); box-shadow: inset 2px 0 0 var(--primary); }
 .account-toc hr { margin: .5rem 0; }
 .account-toc svg { width: 16px; height: 16px; flex: none; }
 .account-sections > section { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
+/* Settings are sections of one page, rather than a stack of separate cards. */
+.account-sections > .card { border: 0; border-radius: 0; background: transparent; padding: 0 0 1.75rem; }
+.account-sections > .card + .card { border-top: 1px solid var(--border); padding-top: 1.75rem; }
+.account-sections > .card-danger h2 { color: var(--danger); }
 .plain-list { list-style: none; margin: 0; padding: 0; }
 .usage-pool h3 { margin-bottom: .25rem; }
 .usage-meter { display: flex; flex-direction: column; gap: .3rem; }

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Interface refresh
+
+- A more compact visual system across chat, personalities, images, agents,
+  account, customization, API, music and administration: quieter surfaces,
+  smaller radii, lighter cards, consistent typography and subtle borders.
+- Primary tools stay visible in the header; API, free quota, community and
+  administration live in a native More menu (Altro in Italian). The mobile
+  menu closes on outside clicks and Escape returns focus to the relevant control.
+- Account and customization settings use separated sections instead of stacked
+  boxes. The account navigator tracks the section being read.
+- API quickstart examples expand individually, with the first example open.
+- Site palettes, light and dark themes, text scaling, contrast controls,
+  reduced motion, security policies and existing form actions are preserved.
+
 ## 1.6.0
 
 This release is a complete rewrite of the application for its open-source
