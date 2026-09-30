@@ -1300,7 +1300,7 @@ sidebar.search.addEventListener("keydown", (event) => {
   });
 }
 
-// ----- history paging and suggestions ----------------------------------------------------------
+// ----- history paging ----------------------------------------------------------------------
 
 ui.loadEarlier.addEventListener("click", async () => {
   ui.loadEarlier.disabled = true;
@@ -1320,14 +1320,6 @@ ui.loadEarlier.addEventListener("click", async () => {
     ui.loadEarlier.disabled = false;
   }
 });
-
-for (const button of document.querySelectorAll("[data-suggestion]")) {
-  button.addEventListener("click", () => {
-    ui.input.value = button.dataset.suggestion;
-    autoGrow();
-    ui.input.focus();
-  });
-}
 
 // ----- start-up ------------------------------------------------------------------------------
 

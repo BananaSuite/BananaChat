@@ -172,12 +172,13 @@ label:has(+ input.visually-hidden:focus-visible) { outline: 2px solid var(--focu
 .topbar-end { margin-left: auto; display: flex; align-items: center; gap: .5rem; }
 .topbar .nav-toggle { display: none; }
 @media (max-width: 760px) {
-  .topbar .nav-toggle { display: inline-grid; }
+  .topbar .nav-toggle { display: inline-grid; order: 3; margin-left: -.5rem; }
   .nav { display: none; position: absolute; top: var(--topbar-height); left: 0; right: 0; flex-direction: column; align-items: stretch;
          padding: .5rem; margin: 0; background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); }
   .nav.open { display: flex; }
   .nav a { padding: .7rem .9rem; }
-  .brand span { display: none; }
+  .brand { min-width: 0; }
+  .brand span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 /* ----- menus (details/summary) -------------------------------------------- */
@@ -289,6 +290,8 @@ legend { padding: 0 .35rem; font-weight: 600; }
 .card-footer { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .card.flush { padding: 0; overflow: hidden; }
 .card.flush > .card-header { padding: 1rem 1.25rem 0; }
+.card.flush .table :is(th, td):first-child { padding-left: 1.25rem; }
+.card.flush .table :is(th, td):last-child { padding-right: 1.25rem; }
 .card-danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--bg)); }
 .stat { display: flex; flex-direction: column; gap: .15rem; }
 .stat-value { font-size: 1.6rem; font-weight: 700; letter-spacing: -.02em; }
@@ -304,7 +307,7 @@ progress.meter.full::-webkit-progress-value { background: var(--danger); }
 progress.meter.full::-moz-progress-bar { background: var(--danger); }
 .empty { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); }
 .empty svg { width: 42px; height: 42px; opacity: .6; margin-bottom: .5rem; }
-.empty h2, .empty h3 { color: var(--text); }
+.empty h1, .empty h2, .empty h3 { color: var(--text); }
 .divider-list > * + * { border-top: 1px solid var(--border); }
 .list-item { display: flex; align-items: center; gap: .75rem; padding: .8rem 0; }
 
@@ -459,6 +462,9 @@ body.sem-heading-2 .prose :is(h1, h2, h3, h4) { color: var(--primary); border-bo
   .page { padding: 1.25rem .9rem 3rem; }
   h1 { font-size: 1.35rem; }
   .card { padding: 1rem; border-radius: var(--radius); }
+  .card.flush > .card-header { padding: 1rem 1rem 0; }
+  .card.flush .table :is(th, td):first-child { padding-left: 1rem; }
+  .card.flush .table :is(th, td):last-child { padding-right: 1rem; }
   .table th, .table td { padding: .55rem .6rem; }
   dl.details { grid-template-columns: 1fr; }
   dl.details dd { margin-bottom: .5rem; }

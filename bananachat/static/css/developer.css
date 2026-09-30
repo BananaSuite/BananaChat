@@ -5,7 +5,8 @@
 .dev-meter { display: flex; flex-direction: column; gap: .3rem; }
 
 /* tokens */
-.dev-tokens th[scope="row"] { font-weight: 550; overflow-wrap: anywhere; }
+.dev-tokens th[scope="row"] { font-weight: 550; overflow-wrap: break-word; min-width: 7rem; }
+.dev-tokens td code { white-space: nowrap; }
 .dev-create { display: flex; align-items: flex-end; gap: .75rem; flex-wrap: wrap; }
 .dev-create .field { min-width: min(100%, 240px); }
 /* The rename fallback form (no JavaScript) opens inside the row instead of floating over the table. */

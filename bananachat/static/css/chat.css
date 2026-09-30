@@ -18,7 +18,12 @@ body.chat-page > main:focus { outline: none; }
   background: var(--surface); border-right: 1px solid var(--border);
 }
 .sidebar-head { display: flex; flex-direction: column; gap: .4rem; padding: .75rem; border-bottom: 1px solid var(--border); }
-.sidebar-hint { margin: 0 .25rem .25rem; font-size: .78rem; }
+.sidebar-new { display: flex; gap: .4rem; }
+.sidebar-new form { margin: 0; }
+.sidebar-new .btn { font-weight: 600; }
+.sidebar-new .btn svg { color: var(--primary); }
+.sidebar-new .btn-icon { padding: 0; width: 40px; }
+.sidebar-new .btn-icon svg { color: var(--text-muted); }
 .sidebar-search { position: relative; margin-top: .25rem; }
 .sidebar-search svg { position: absolute; left: .65rem; top: 50%; width: 16px; height: 16px; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
 .sidebar-search input { padding-left: 2.1rem; min-height: 36px; font-size: .9rem; }
@@ -120,8 +125,7 @@ body.chat-page > main:focus { outline: none; }
 .code-block .code-actions .btn { min-height: 26px; padding: .1rem .5rem; font-size: .78rem; font-family: var(--font); }
 
 /* ----- empty state ---------------------------------------------------------- */
-.chat-empty { text-align: center; padding: 10vh 0 1rem; }
-.chat-empty img { width: 48px; height: 48px; margin-bottom: .75rem; }
+.chat-empty { text-align: center; padding: 22vh 0 1rem; }
 .chat-empty h2 { font-size: 1.4rem; }
 .suggestions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: .6rem; margin-top: 1.5rem; text-align: left; }
 .suggestion {

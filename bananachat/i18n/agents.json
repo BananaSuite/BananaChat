@@ -2,7 +2,7 @@
  "en": {
   "agents.nav": "Agents",
   "agents.title": "Agents",
-  "agents.subtitle": "Give an AI agent a coding task: it works in a private, isolated cloud sandbox, runs commands and edits files, and reports back.",
+  "agents.subtitle": "Coding tasks that run in an isolated sandbox: the agent runs commands, edits files and reports back.",
   "agents.disabled_title": "Agents are not available",
   "agents.disabled_text": "An administrator has not enabled agents on this site.",
   "agents.existing_tasks": "You can still read and delete your earlier tasks.",
@@ -220,7 +220,7 @@
  "it": {
   "agents.nav": "Agenti",
   "agents.title": "Agenti",
-  "agents.subtitle": "Affida un compito di programmazione a un agente IA: lavora in una sandbox cloud privata e isolata, esegue comandi, modifica file e ti riferisce il risultato.",
+  "agents.subtitle": "Compiti di programmazione eseguiti in una sandbox isolata: l'agente esegue comandi, modifica file e ti riferisce il risultato.",
   "agents.disabled_title": "Gli agenti non sono disponibili",
   "agents.disabled_text": "Un amministratore non ha attivato gli agenti su questo sito.",
   "agents.existing_tasks": "Puoi comunque leggere ed eliminare i tuoi compiti precedenti.",

@@ -38,19 +38,11 @@
         <div class="chat-messages" id="chat-messages" aria-label="{{ t('chat.conversation') }}"></div>
         <div class="chat-empty" id="chat-empty" hidden>
           <div class="chat-welcome" id="chat-welcome">
-            <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="" width="48" height="48">
             <h2>{{ t("chat.empty_title_no_history") if session.is_incognito else t("chat.empty_title") }}</h2>
             <p class="muted">{{ t("chat.empty_hint") }}</p>
           </div>
           <div class="persona-intro" id="persona-intro" hidden></div>
           <div class="suggestions" id="persona-starters" hidden></div>
-          <div class="suggestions" id="default-suggestions">
-            {% for key in ["suggestion_explain", "suggestion_write", "suggestion_code", "suggestion_plan"] %}
-            <button type="button" class="suggestion" data-suggestion="{{ t('chat.' ~ key ~ '_prompt') }}">
-              <strong>{{ t("chat." ~ key) }}</strong><span>{{ t("chat." ~ key ~ "_prompt") }}</span>
-            </button>
-            {% endfor %}
-          </div>
         </div>
       </div>
     </div>

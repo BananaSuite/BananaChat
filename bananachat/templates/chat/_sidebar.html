@@ -1,16 +1,18 @@
 {#- Conversation list. Items are rendered here and, for paging and search, by chat.js with the same structure. -#}
 <aside class="chat-sidebar" id="chat-sidebar" aria-label="{{ t('chat.sidebar_label') }}">
   <div class="sidebar-head">
-    <form method="post" action="{{ url_for('chat.new') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn btn-primary btn-block">{{ icon("plus") }}{{ t("chat.new_chat") }}</button>
-    </form>
-    <form method="post" action="{{ url_for('chat.new') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="incognito" value="1">
-      <button type="submit" class="btn btn-ghost btn-block" aria-describedby="no-history-hint">{{ icon("eye-off") }}{{ t("chat.new_no_history") }}</button>
-    </form>
-    <p class="hint sidebar-hint" id="no-history-hint">{{ t("chat.no_history_short", hours=no_history_hours) }}</p>
+    <div class="sidebar-new">
+      <form method="post" action="{{ url_for('chat.new') }}" class="grow">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-block">{{ icon("plus") }}{{ t("chat.new_chat") }}</button>
+      </form>
+      <form method="post" action="{{ url_for('chat.new') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="incognito" value="1">
+        <button type="submit" class="btn btn-icon" aria-label="{{ t('chat.new_no_history') }}" aria-describedby="no-history-hint" title="{{ t('chat.new_no_history') }}: {{ t('chat.no_history_short', hours=no_history_hours) }}">{{ icon("eye-off") }}</button>
+      </form>
+    </div>
+    <p class="visually-hidden" id="no-history-hint">{{ t("chat.no_history_short", hours=no_history_hours) }}</p>
     <div class="sidebar-search">
       <label class="visually-hidden" for="chat-search">{{ t("chat.search_label") }}</label>
       {{ icon("search") }}

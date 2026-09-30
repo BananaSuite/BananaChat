@@ -3,7 +3,7 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Administration{% endblock %}
 {% block admin_content %}
-{{ header("Overview", "The state of " ~ site_name ~ " at a glance.") }}
+{{ header("Overview") }}
 
 {% if recovery and recovery.open %}
 {% set where = "in Ollama on this machine" if ollama_is_local else "on the compute server" %}

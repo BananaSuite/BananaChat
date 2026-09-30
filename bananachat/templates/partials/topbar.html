@@ -9,6 +9,9 @@
   <button type="button" class="icon-btn nav-toggle" data-nav-toggle aria-controls="main-nav" aria-expanded="false" aria-label="{{ t('nav.menu') }}">{{ icon("menu") }}</button>
   <nav class="nav" id="main-nav" aria-label="{{ t('nav.main') }}">
     <a href="{{ url_for('chat.index') }}"{% if path.startswith('/chat') %} aria-current="page"{% endif %}>{{ t("nav.chat") }}</a>
+    {% if has_endpoint("personalities.index") %}
+    <a href="{{ url_for('personalities.index') }}"{% if path.startswith('/personalities') %} aria-current="page"{% endif %}>{{ t("nav.personalities") }}</a>
+    {% endif %}
     {% if images_enabled and has_endpoint("images.index") %}
     <a href="{{ url_for('images.index') }}"{% if path.startswith('/images') %} aria-current="page"{% endif %}>{{ t("nav.images") }}</a>
     {% endif %}
@@ -34,7 +37,6 @@
       <div class="menu-panel">
         <div class="menu-label">{{ current_user.username }}</div>
         <a href="{{ url_for('account.index') }}">{{ icon("user") }}{{ t("nav.account") }}</a>
-        {% if has_endpoint("personalities.index") %}<a href="{{ url_for('personalities.index') }}">{{ icon("sparkles") }}{{ t("nav.personalities") }}</a>{% endif %}
         {% if has_endpoint("customization.index") %}<a href="{{ url_for('customization.index') }}">{{ icon("palette") }}{{ t("nav.customize") }}</a>{% endif %}
         <hr>
         <div class="menu-label">{{ t("nav.language") }}</div>

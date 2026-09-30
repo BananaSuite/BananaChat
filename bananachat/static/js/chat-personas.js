@@ -31,7 +31,6 @@ export function initPersonas({ personalities, session, chatUrl, models, isEmpty,
   const picker = $("persona-picker");
   const intro = $("persona-intro");
   const welcome = $("chat-welcome");
-  const defaultSuggestions = $("default-suggestions");
   const starters = $("persona-starters");
   const chip = $("persona-chip");
 
@@ -78,7 +77,6 @@ export function initPersonas({ personalities, session, chatUrl, models, isEmpty,
     intro.hidden = !persona;
     if (welcome) welcome.hidden = Boolean(persona);
     const starterList = persona ? persona.starters || [] : [];
-    if (defaultSuggestions) defaultSuggestions.hidden = starterList.length > 0;
     if (starters) {
       starters.hidden = starterList.length === 0;
       starters.replaceChildren(...starterList.map((text) => el("button", {
