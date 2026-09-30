@@ -1,0 +1,10 @@
+{# Data for the scripts; JSON in a non-executable script element (CSP-safe). #}
+{%- set boot = {
+  "csrf": csrf_token(),
+  "lang": lang,
+  "strings": js_strings,
+  "user": ({"id": current_user.id, "username": current_user.username, "role": current_user.role} if current_user else None),
+  "urls": {"login": url_for("auth.login"), "static": url_for("static", filename=""), "status": url_for("core.status_report")},
+  "status": {"can_send": not (status_notices | selectattr("blocks_inference") | list), "kinds": status_notices | map(attribute="kind") | list},
+} -%}
+<script type="application/json" id="bc-boot">{{ boot | tojson }}</script>

@@ -1,17 +1,23 @@
-"""Worker activity sensing and configuration loading.
+"""Worker daemon units: activity sensing, settings, HTTPS enforcement, transport and the job loop.
 
-The idle readings are parsed from captured tool output rather than from a
-live desktop session, so these cover the parsing and the fallbacks, not the
-platform APIs themselves.
+Idle and GPU readings are parsed from captured tool output rather than a live
+desktop session, so these cover parsing, classification and fallbacks, not
+the platform APIs themselves.
 """
+
+import json
+import logging
 import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
-from worker import activity
+import pytest
 
+from worker import activity, config, daemon, transport
+from worker.client import ServerError
 
-# Captured from ioreg -c IOHIDSystem -d 4 -r on macOS.
 IOREG_SAMPLE = """
   +-o IOHIDSystem  <class IOHIDSystem, id 0x100000282, registered, matched>
       {
@@ -21,177 +27,349 @@ IOREG_SAMPLE = """
 """
 
 
-def _must_not_run():
-    raise AssertionError('Linux idle probes must not run on macOS')
+def settings(**changes):
+    values = {"BC_SERVER_URL": "https://chat.example.org", "BC_WORKER_TOKEN": "bcw_token"}
+    values.update(changes)
+    return config.from_environ(values)
 
 
-def _fixed_run(stdout='', returncode=0):
-    def run(command, **kwargs):
-        return subprocess.CompletedProcess(command, returncode, stdout=stdout)
-    return run
+# ----- readings ---------------------------------------------------------------------------------
+
+def test_macos_idle_time_is_read_in_nanoseconds():
+    assert activity.parse_ioreg_idle(IOREG_SAMPLE) == 4.5
+    assert activity.parse_ioreg_idle("nothing useful here") is None
+    assert activity.parse_ioreg_idle(None) is None
 
 
-def test_macos_idle_time_is_read_in_nanoseconds(monkeypatch):
-    monkeypatch.setattr(activity.subprocess, 'run', _fixed_run(IOREG_SAMPLE))
-    assert activity._idle_seconds_macos() == 4.5
+def test_dbus_idle_replies_are_parsed():
+    reply = "method return time=1.2 sender=:1.5 -> destination=:1.9 serial=5 reply_serial=2\n   uint64 12345\n"
+    assert activity.parse_dbus_integer(reply) == 12345
+    assert activity.parse_dbus_integer("uint32 7") == 7
+    assert activity.parse_dbus_integer("Error org.freedesktop.DBus") is None
 
 
-def test_macos_idle_time_degrades_instead_of_raising(monkeypatch):
-    monkeypatch.setattr(activity.subprocess, 'run', _fixed_run('', returncode=1))
-    assert activity._idle_seconds_macos() is None
+def test_nvidia_smi_utilisation_is_weighted_by_memory():
+    assert activity.parse_smi_utilisation("8192, 100\n24576, 0\n") == 25.0
+    assert activity.parse_smi_utilisation("garbage") is None
+    assert activity.parse_smi_utilisation("") is None
 
-    monkeypatch.setattr(activity.subprocess, 'run', _fixed_run('nothing useful here'))
-    assert activity._idle_seconds_macos() is None
 
+def test_readings_degrade_instead_of_raising(monkeypatch):
     def missing(command, **kwargs):
-        raise FileNotFoundError('ioreg')
+        raise FileNotFoundError(command[0])
 
-    monkeypatch.setattr(activity.subprocess, 'run', missing)
-    assert activity._idle_seconds_macos() is None
+    monkeypatch.setattr(activity.subprocess, "run", missing)
+    monkeypatch.setattr(activity, "_nvml", {"ready": False})
+    monkeypatch.setattr(activity, "_OS", "Linux")
+    assert activity.get_user_idle_seconds() is None
+    assert activity.get_gpu_utilisation() is None
+    assert activity.get_gpu_name() is None
 
 
-def test_macos_uses_the_mac_idle_source(monkeypatch):
-    """Darwin must not fall through to the Linux probes: xprintidle and
-    dbus-send do not exist there, so the worker would read every Mac as idle
-    and never step aside for the person using it."""
-    monkeypatch.setattr(activity, '_OS', 'Darwin')
-    monkeypatch.setattr(activity, '_last_idle_check', 0.0)
-    monkeypatch.setattr(activity, '_idle_seconds_linux', _must_not_run)
-    monkeypatch.setattr(activity, '_idle_seconds_macos', lambda: 12.0)
+def test_macos_uses_the_mac_idle_source_and_has_no_gpu_reading(monkeypatch):
+    monkeypatch.setattr(activity, "_OS", "Darwin")
+    monkeypatch.setattr(activity, "_idle_seconds_linux", lambda: pytest.fail("Linux probes on macOS"))
+    monkeypatch.setattr(activity, "_idle_seconds_macos", lambda: 12.0)
     assert activity.get_user_idle_seconds() == 12.0
-
-
-def test_a_mac_with_a_person_at_the_keyboard_is_not_reported_idle(monkeypatch):
-    """No NVIDIA telemetry exists on a Mac, so the idle reading alone has to
-    keep the worker from claiming work while someone is typing."""
-    # activity.py does a plain `import config`, which resolves to the worker's
-    # own config only because the entrypoint puts worker/ first on sys.path.
-    # Imported as a package here it picks up the application's config instead,
-    # so pin the thresholds this test depends on.
-    thresholds = SimpleNamespace(
-        IDLE_THRESHOLD_SECONDS=300,
-        LIGHT_THRESHOLD_SECONDS=30,
-        GPU_GAMING_THRESHOLD=70,
-        GPU_ACTIVE_THRESHOLD=50,
-    )
-    monkeypatch.setattr(activity, 'config', thresholds)
-    monkeypatch.setattr(activity, '_OS', 'Darwin')
-    monkeypatch.setattr(activity, 'get_gpu_utilisation', lambda: None)
-    monkeypatch.setattr(activity, 'get_user_idle_seconds', lambda: 2.0)
-    assert activity.get_activity_state() == 'active'
-
-    monkeypatch.setattr(activity, 'get_user_idle_seconds', lambda: 10_000.0)
-    assert activity.get_activity_state() == 'idle'
+    assert activity.get_gpu_utilisation() is None
 
 
 def test_apple_silicon_reports_its_chip_name(monkeypatch):
-    monkeypatch.setattr(activity, '_OS', 'Darwin')
-    monkeypatch.setattr(activity.platform, 'machine', lambda: 'arm64')
-    monkeypatch.setattr(activity._gpu_name_macos, '_cached', activity._UNSET, raising=False)
-    monkeypatch.setattr(activity.subprocess, 'run', _fixed_run('Apple M2 Pro\n'))
-    assert activity.get_gpu_name() == 'Apple M2 Pro'
+    monkeypatch.setattr(activity, "_OS", "Darwin")
+    monkeypatch.setattr(activity.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(activity._gpu_name_macos, "_cached", activity._UNSET, raising=False)
+    monkeypatch.setattr(activity.subprocess, "run",
+                        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout="Apple M2 Pro\n"))
+    assert activity.get_gpu_name() == "Apple M2 Pro"
 
 
-def test_intel_mac_reports_its_discrete_gpu(monkeypatch):
-    listing = """Graphics/Displays:
+# ----- classification -----------------------------------------------------------------------------
 
-    Radeon Pro 5500M:
+@pytest.mark.parametrize("gpu, idle, expected", [
+    (85.0, 10_000.0, "gaming"),       # the GPU gate wins
+    (70.0, None, "gaming"),           # the threshold itself counts
+    (None, 400.0, "idle"),
+    (10.0, 400.0, "idle"),
+    (40.0, 400.0, "light"),           # away, but the GPU is not calm
+    (None, 60.0, "light"),
+    (None, 2.0, "active"),            # someone at the keyboard (e.g. a Mac)
+    (None, None, "idle"),             # nothing measurable
+    (20.0, None, "idle"),
+    (60.0, None, "active"),
+])
+def test_activity_states_use_the_documented_thresholds(gpu, idle, expected):
+    assert activity.classify(gpu, idle, settings()) == expected
 
-      Chipset Model: Radeon Pro 5500M
-      Type: GPU
-"""
-    monkeypatch.setattr(activity, '_OS', 'Darwin')
-    monkeypatch.setattr(activity.platform, 'machine', lambda: 'x86_64')
-    monkeypatch.setattr(activity._gpu_name_macos, '_cached', activity._UNSET, raising=False)
-    monkeypatch.setattr(activity.subprocess, 'run', _fixed_run(listing))
-    assert activity.get_gpu_name() == 'Radeon Pro 5500M'
+
+def test_own_inference_is_not_mistaken_for_gaming():
+    current = settings()
+    assert activity.classify(95.0, 600.0, current, own_job=True) == "idle"
+    assert activity.classify(95.0, 2.0, current, own_job=True) == "gaming"
+    assert activity.classify(95.0, None, current, own_job=True) == "idle"
 
 
-def test_environment_file_fills_gaps_without_overriding_exports(tmp_path, monkeypatch):
-    """launchd has no EnvironmentFile, so the worker reads one itself. A unit
-    or a shell that already exported a value must still win."""
-    from worker import config
+def test_thresholds_are_configurable():
+    custom = settings(BC_GPU_GAMING_THRESHOLD="90", BC_IDLE_THRESHOLD="60", BC_LIGHT_THRESHOLD="10")
+    assert activity.classify(85.0, None, custom) == "active"
+    assert activity.classify(None, 61.0, custom) == "idle"
+    assert activity.classify(None, 11.0, custom) == "light"
 
-    env_file = tmp_path / 'worker.env'
-    env_file.write_text(
-        '# a comment\n'
-        '\n'
-        'BC_SERVER_URL=https://from-file.example.com\n'
-        'BC_WORKER_TOKEN="quoted-token"\n'
-        "BC_WORKER_NAME='single-quoted'\n"
-        'this line is malformed\n'
-    )
-    monkeypatch.delenv('BC_WORKER_TOKEN', raising=False)
-    monkeypatch.delenv('BC_WORKER_NAME', raising=False)
-    monkeypatch.setenv('BC_SERVER_URL', 'https://exported.example.com')
 
-    assert config.load_env_file(str(env_file)) == str(env_file)
-    import os
-    assert os.environ['BC_SERVER_URL'] == 'https://exported.example.com'
-    assert os.environ['BC_WORKER_TOKEN'] == 'quoted-token'
-    assert os.environ['BC_WORKER_NAME'] == 'single-quoted'
+def test_monitor_reports_changes():
+    readings = {"gpu": 5.0, "idle": 1000.0}
+    monitor = activity.Monitor(settings(), gpu_reader=lambda: readings["gpu"], idle_reader=lambda: readings["idle"])
+    assert monitor.sample() == "idle"
+    readings.update(gpu=90.0, idle=1.0)
+    assert monitor.sample() == "gaming" and monitor.gpu == 90.0
+
+
+# ----- settings -------------------------------------------------------------------------------------
+
+def test_environment_file_fills_gaps_without_overriding_exports(tmp_path):
+    env_file = tmp_path / "worker.env"
+    env_file.write_text("# a comment\n\nBC_SERVER_URL=https://from-file.example.com\n"
+                        'BC_WORKER_TOKEN="quoted-token"\n'
+                        "export BC_WORKER_NAME='single-quoted'\nthis line is malformed\n")
+    environ = {"BC_SERVER_URL": "https://exported.example.com", "BC_WORKER_ENV_FILE": str(env_file)}
+    loaded = config.load(environ)
+    assert loaded.env_file == str(env_file)
+    assert loaded.server_url == "https://exported.example.com"
+    assert loaded.token == "quoted-token" and loaded.name == "single-quoted"
 
 
 def test_a_missing_environment_file_is_not_an_error(tmp_path):
-    from worker import config
-    assert config.load_env_file(str(tmp_path / 'absent.env')) is None
+    assert config.load_env_file(str(tmp_path / "absent.env"), {}) is None
 
 
-def test_a_log_file_is_rotated_and_a_bad_path_does_not_stop_the_worker(tmp_path):
-    """Windows tasks have nowhere to send stdout, so the worker writes its own
-    file. An unattended worker must neither fill the disk nor refuse to run.
+def test_invalid_numbers_fall_back_with_warnings():
+    loaded = settings(BC_OLLAMA_IDLE_TIMEOUT="ten", BC_HEARTBEAT_INTERVAL="500", BC_WORKER_LOG_LEVEL="loud")
+    assert loaded.ollama_idle_timeout == 600
+    assert loaded.heartbeat_interval == 30.0
+    assert loaded.log_level == "INFO"
+    assert len(loaded.warnings) == 3
+    assert loaded.first_token_timeout == 180
 
-    The entrypoint is loaded under its own name with a stand-in config, rather
-    than by putting worker/ on sys.path, because 'config' is also the name of
-    the application's own module and swapping it out globally would leak into
-    every other test.
-    """
+
+@pytest.mark.parametrize("url, allow, ok", [
+    ("https://chat.example.org", "", True),
+    ("https://chat.example.org/base", "", True),
+    ("http://chat.example.org", "", False),
+    ("http://chat.example.org", "1", True),
+    ("http://127.0.0.1:8000", "", True),
+    ("http://localhost:8000", "", True),
+    ("http://[::1]:8000", "", True),
+    ("https://user:secret@chat.example.org", "", False),
+    ("https://chat.example.org/?x=1", "", False),
+    ("ftp://chat.example.org", "", False),
+])
+def test_server_address_must_be_https_unless_loopback_or_allowed(url, allow, ok):
+    problems = settings(BC_SERVER_URL=url, BC_WORKER_ALLOW_HTTP=allow).problems()
+    assert (not problems) is ok, problems
+
+
+def test_token_is_required():
+    assert any("BC_WORKER_TOKEN" in problem for problem in settings(BC_WORKER_TOKEN="").problems())
+
+
+def test_managed_ollama_listens_on_the_configured_port():
+    """The old worker ignored non-default ports when it started ``ollama serve``."""
+    assert settings(BC_OLLAMA_HOST="http://127.0.0.1:11500").ollama_listen_address == "127.0.0.1:11500"
+    assert settings().ollama_listen_address == "127.0.0.1:11434"
+    assert settings(BC_OLLAMA_HOST="http://[::1]:9000").ollama_listen_address == "[::1]:9000"
+    assert settings().ollama_is_local and not settings(BC_OLLAMA_HOST="http://10.0.0.5:11434").ollama_is_local
+
+
+def test_log_file_is_rotated_and_a_bad_path_falls_back_to_the_console(tmp_path):
     import importlib.util
-    import logging
-    import sys
-    from types import SimpleNamespace
 
-    worker_dir = Path(__file__).resolve().parents[1] / 'worker'
-    spec = importlib.util.spec_from_file_location(
-        'bananachat_worker_entrypoint', worker_dir / 'bananachat_worker.py')
+    script = Path(__file__).resolve().parents[1] / "worker" / "bananachat_worker.py"
+    spec = importlib.util.spec_from_file_location("worker_entry_for_test", script)
     entry = importlib.util.module_from_spec(spec)
-
-    settings = SimpleNamespace(
-        LOG_LEVEL='INFO', LOG_FILE=str(tmp_path / 'logs' / 'worker.log'),
-        LOG_MAX_BYTES=65536, LOG_BACKUPS=2,
-    )
-    saved_config = sys.modules.get('config')
-    saved_path = sys.path[:]
+    spec.loader.exec_module(entry)
     root = logging.getLogger()
-    saved_handlers = root.handlers[:]
+    saved = root.handlers[:]
     try:
-        sys.modules['config'] = settings
-        spec.loader.exec_module(entry)
-        entry.config = settings
-
-        root.handlers = []
-        entry._setup_logging()
+        entry.setup_logging(SimpleNamespace(log_level="INFO", log_file=str(tmp_path / "logs" / "worker.log"),
+                                            log_max_bytes=65536, log_backups=2))
         handler = root.handlers[0]
         assert handler.maxBytes == 65536 and handler.backupCount == 2
-        logging.getLogger('bananachat.worker').info('recorded')
+        logging.getLogger("worker-log-test").info("recorded")
         handler.flush()
-        assert 'recorded' in Path(settings.LOG_FILE).read_text()
-
-        # An unwritable destination must fall back to the console, not raise.
-        for open_handler in root.handlers:
-            open_handler.close()
-        root.handlers = []
-        blocker = tmp_path / 'blocked'
-        blocker.write_text('not a directory')
-        settings.LOG_FILE = str(blocker / 'nested.log')
-        entry._setup_logging()
+        assert "recorded" in (tmp_path / "logs" / "worker.log").read_text()
+        blocker = tmp_path / "blocked"
+        blocker.write_text("not a directory")
+        entry.setup_logging(SimpleNamespace(log_level="INFO", log_file=str(blocker / "nested.log"),
+                                            log_max_bytes=65536, log_backups=2))
     finally:
-        for open_handler in root.handlers:
-            open_handler.close()
-        root.handlers = saved_handlers
-        sys.path[:] = saved_path
-        if saved_config is None:
-            sys.modules.pop('config', None)
-        else:
-            sys.modules['config'] = saved_config
-        sys.modules.pop('bananachat_worker_entrypoint', None)
+        for handler in root.handlers:
+            handler.close()
+        root.handlers = saved
+
+
+# ----- transport -------------------------------------------------------------------------------------
+
+@pytest.fixture
+def http_server():
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.server.seen.append((self.path, self.headers.get("Authorization")))
+            if self.path.startswith("/redirect"):
+                self.send_response(302)
+                self.send_header("Location", "http://127.0.0.1:1/elsewhere")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = json.dumps({"data": "x" * 5000}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.seen = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+def test_redirects_are_not_followed_and_responses_are_bounded(http_server, monkeypatch):
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    url = f"http://127.0.0.1:{http_server.server_port}"
+    with pytest.raises(transport.TransportError) as redirect:
+        transport.request_json("GET", url, "/redirect", headers={"Authorization": "Bearer secret"})
+    assert redirect.value.status == 302
+    assert http_server.seen == [("/redirect", "Bearer secret")]  # no second request anywhere
+    with pytest.raises(transport.TransportError, match="larger than allowed"):
+        transport.request_json("GET", url, "/big", max_bytes=1000)
+    assert transport.request_json("GET", url, "/big")[0] == 200  # and no environment proxy was used
+
+
+# ----- job loop ----------------------------------------------------------------------------------------
+
+class FakeClient:
+    def __init__(self, stop_after=None):
+        self.chunks, self.completed, self.failed, self.heartbeats = [], [], [], []
+        self.stop_after = stop_after
+
+    def chunk(self, job_id, seq, content, done):
+        self.chunks.append((seq, content, done))
+        return self.stop_after is None or len(self.chunks) <= self.stop_after
+
+    def complete(self, job_id, tokens_in, tokens_out, finish_reason):
+        self.completed.append((tokens_in, tokens_out, finish_reason))
+        return True
+
+    def fail(self, job_id, error, requeue=False):
+        self.failed.append((error, requeue))
+
+    def heartbeat(self, payload):
+        self.heartbeats.append(payload)
+        return {"ok": True, "job_stop": False}
+
+
+class FakeOllama:
+    managed_pid = None
+
+    def __init__(self, pieces, *, before_first=None):
+        self.pieces = pieces
+        self.before_first = before_first
+        self.calls = []
+
+    def ensure_running(self):
+        return True
+
+    def chat(self, model, messages, options, *, first_token_timeout, read_timeout, total_timeout, cancel, on_open):
+        self.calls.append({"model": model, "first_token_timeout": first_token_timeout, "options": options})
+        if self.before_first:
+            self.before_first()
+        for index, piece in enumerate(self.pieces):
+            if cancel.is_set():
+                from worker.local_ollama import Cancelled
+                raise Cancelled()
+            done = index == len(self.pieces) - 1
+            yield piece, done, ({"prompt_tokens": 5, "completion_tokens": 3, "finish_reason": "stop"} if done else {})
+
+
+def make_worker(client, ollama, state="idle"):
+    monitor = SimpleNamespace(state=state, gpu=None, own_job=False)
+    priority = SimpleNamespace(apply=lambda *args: None)
+    return daemon.Worker(settings(), client=client, ollama=ollama, monitor=monitor, priority=priority)
+
+
+JOB = {"job_id": "f" * 32, "model": "llama3", "messages": [{"role": "user", "content": "hi"}], "options": None,
+       "priority": 2, "first_token_timeout": 240}
+
+
+def test_a_job_is_streamed_in_order_and_completed():
+    client = FakeClient()
+    ollama = FakeOllama(["Hel", "lo", ""])
+    worker = make_worker(client, ollama)
+    assert worker.run_job(dict(JOB)) == "completed"
+    text = "".join(content for _seq, content, _done in client.chunks)
+    assert text == "Hello"
+    assert [seq for seq, _c, _d in client.chunks] == list(range(len(client.chunks)))
+    assert client.chunks[-1] == (len(client.chunks) - 1, "", True)
+    assert client.completed == [(5, 3, "stop")] and not client.failed
+    assert ollama.calls[0]["first_token_timeout"] == 240  # the server's cold-load allowance
+
+
+def test_gaming_before_the_first_token_hands_the_job_back():
+    client = FakeClient()
+    worker = make_worker(client, None)
+    worker.ollama = FakeOllama(["never sent"], before_first=lambda: worker._activity_changed("gaming"))
+    assert worker.run_job(dict(JOB)) == "deferred"
+    assert client.failed == [("", True)] and client.chunks == []
+
+
+def test_server_stop_ends_the_job_without_a_report():
+    client = FakeClient(stop_after=1)
+    worker = make_worker(client, FakeOllama(["a" * 5000, "b" * 5000, "c", ""]))
+    assert worker.run_job(dict(JOB)) == "stopped"
+    assert not client.failed and not client.completed
+
+
+def test_shutdown_before_any_text_requeues():
+    client = FakeClient()
+    worker = make_worker(client, None)
+    worker.ollama = FakeOllama(["x"], before_first=worker.request_stop)
+    assert worker.run_job(dict(JOB)) == "deferred"
+    assert client.failed == [("", True)]
+
+
+def test_ollama_failure_is_reported():
+    class Broken(FakeOllama):
+        def chat(self, *args, **kwargs):
+            from worker.local_ollama import OllamaError
+            raise OllamaError("model 'llama3' not found")
+            yield  # pragma: no cover
+
+    client = FakeClient()
+    assert make_worker(client, Broken([])).run_job(dict(JOB)) == "failed"
+    assert client.failed == [("model 'llama3' not found", False)]
+
+
+def test_heartbeat_payload_matches_the_protocol():
+    client = FakeClient()
+    worker = make_worker(client, FakeOllama([]), state="gaming")
+    worker.models = ["llama3:latest"]
+    worker.send_heartbeat()
+    payload = client.heartbeats[-1]
+    assert payload["status"] == "busy" and payload["activity_state"] == "gaming"
+    assert payload["capabilities"] == {"models": ["llama3:latest"]}
+    assert set(payload) >= {"gpu_name", "gpu_util", "ollama_version"}
+
+
+def test_the_client_uses_the_worker_api(http_server):
+    from worker.client import Client
+
+    client = Client(settings(BC_SERVER_URL=f"http://127.0.0.1:{http_server.server_port}"))
+    with pytest.raises(ServerError):
+        client.poll(["m"])  # the stub answers a non-job object
+    path, auth = http_server.seen[-1]
+    assert path == "/worker/v1/jobs/poll?models=m" and auth == "Bearer bcw_token"

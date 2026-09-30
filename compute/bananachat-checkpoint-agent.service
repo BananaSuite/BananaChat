@@ -1,5 +1,6 @@
 [Unit]
-Description=BananaChat ComfyUI Checkpoint Download Agent
+Description=BananaChat ComfyUI checkpoint download agent
+Documentation=file:/opt/bananachat-checkpoint-agent/compute/README.md
 After=network-online.target
 Wants=network-online.target
 
@@ -13,6 +14,7 @@ ExecStart=/opt/bananachat-checkpoint-agent/.venv/bin/python -m compute.checkpoin
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
+KillSignal=SIGTERM
 UMask=0077
 
 NoNewPrivileges=yes

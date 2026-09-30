@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
 import subprocess
 
@@ -38,21 +39,44 @@ def source_values(args):
             "signers_file": args.require_signatures, "clear_signatures": args.clear_signatures}
 
 
+CHAT = profile.PRODUCT == "BananaChat"
+CHAT_LAYOUT = (" The default layout uses two servers: install --mode compute on the GPU server, then --mode web --pair "
+               "on the web server (VPS) with the pairing code it prints; --mode single runs everything on one machine.")
+
+
 def parser():
-    result = argparse.ArgumentParser(description=profile.PRODUCT + " server lifecycle. Automatic source updates are disabled until explicitly enabled.")
+    result = argparse.ArgumentParser(description=profile.PRODUCT + " server lifecycle. Automatic source updates are disabled until explicitly enabled."
+                                     + (CHAT_LAYOUT if CHAT else ""))
     result.add_argument("--root", default="/opt/" + profile.PRODUCT.lower(), help="Managed installation directory")
     commands = result.add_subparsers(dest="command", required=True)
-    install = commands.add_parser("install", help="Install a remembered deployment mode, optionally restoring a package")
-    install.add_argument("--mode", choices=profile.modes())
+    install = commands.add_parser("install", help="Install a remembered deployment mode, optionally restoring a package",
+                                  description=CHAT_LAYOUT.strip() if CHAT else None)
+    install.add_argument("--mode", choices=profile.modes(),
+                         help=("compute: the GPU server; web: the chat server connected to it (implied by --pair); "
+                               "single: both on one machine") if CHAT else None)
     install.add_argument("--name", help="Service and installed command name")
     install.add_argument("--domain", help="Public HTTPS hostname; omit for a loopback-only installation")
     install.add_argument("--portal-domain", default="")
     install.add_argument("--port", type=int)
-    install.add_argument("--backend-url", default="", help="BananaChat web mode: HTTPS compute URL or loopback SSH tunnel")
-    install.add_argument("--backend-token-file", type=Path)
-    install.add_argument("--ollama-binary", default="")
+    install.add_argument("--backend-url", default="", help="BananaChat web mode: HTTPS compute URL or loopback SSH tunnel"
+                         + (" (overrides the address in --pair)" if CHAT else ""))
+    install.add_argument("--backend-token-file", type=Path, help="BananaChat web mode: private file with the compute token")
+    install.add_argument("--ollama-binary", default="", help="BananaChat single/compute: the Ollama program for the managed Ollama service")
     install.add_argument("--restore", type=Path, metavar="PACKAGE")
     install.add_argument("--reuse-data", action="store_true", help="Reuse saved configuration/data after uninstall or an interrupted installation")
+    if CHAT:
+        install.add_argument("--pair", nargs="?", const="-", metavar="CODE",
+                             help="web: connect to the compute server with the pairing code printed there "
+                                  "(asked for, hidden, when CODE is left out)")
+        install.add_argument("--pair-file", type=Path, metavar="FILE", help="web: read the pairing code from a private file")
+        install.add_argument("--ollama-url", default="", metavar="URL",
+                             help="single/compute: use the Ollama already running on this machine (for example "
+                                  "http://127.0.0.1:11434) instead of starting a managed one; it is never started, "
+                                  "stopped or reconfigured")
+        install.add_argument("--skip-connection-check", action="store_true",
+                             help="Do not test the compute server or the existing Ollama before installing")
+        install.add_argument("--yes", action="store_true",
+                             help="web: use the gateway address in the pairing code without asking (needed without a terminal)")
     source_options(install)
     update = commands.add_parser("update", help="Back up, deploy, check readiness, and roll back on failure")
     update.add_argument("--automatic", action="store_true", help=argparse.SUPPRESS)
@@ -87,11 +111,108 @@ def parser():
     uninstall.add_argument("--confirm", default="", metavar="SERVICE_NAME")
     from banana_backup.cli import add_commands
     add_commands(commands)
-    if profile.PRODUCT == "BananaChat":
-        models = commands.add_parser("models", help="Review or download the model inventory after a compute-server restore")
+    if CHAT:
+        models = commands.add_parser("models", help="Compute server without a web server: review or download the models "
+                                                    "missing after a restore")
         models.add_argument("action", choices=("status", "restore", "skip"))
         models.add_argument("--yes", action="store_true", help="Explicitly approve model downloads from the reviewed inventory")
+        compute = commands.add_parser("compute", help="Compute server: print the pairing code for the web server, or "
+                                                      "replace the gateway token")
+        compute.add_argument("action", choices=("pairing-code", "rotate-token"))
+        compute.add_argument("--url", help="Address the web server uses to reach this gateway (default: https://DOMAIN, "
+                                           "or http://127.0.0.1:PORT through an SSH tunnel)")
+        backend = commands.add_parser("backend", help="Web server: show, test or change the connection to the compute server")
+        backend.add_argument("action", choices=("status", "test", "connect"))
+        backend.add_argument("code", nargs="?", help="connect: the pairing code (asked for, hidden, when left out)")
+        backend.add_argument("--pair-file", type=Path, metavar="FILE", help="connect: read the pairing code from a private file")
+        backend.add_argument("--url", help="connect: compute address, overriding the one in the pairing code")
+        backend.add_argument("--token-file", type=Path, help="connect: private file with the compute token (instead of a pairing code)")
+        backend.add_argument("--skip-check", action="store_true", help="connect: store the connection without testing it")
+        backend.add_argument("--yes", action="store_true", help="connect: use the gateway address in the pairing code "
+                                                                 "without asking (needed without a terminal)")
     return result
+
+
+def install_connection(args, read_secret):
+    """BananaChat: the checked compute connection of a web install and the existing Ollama of single/compute.
+
+    Returns ``(mode, backend_url, backend_token)`` and fails before anything is installed.
+    """
+    from . import backend
+    pairing = args.pair is not None or args.pair_file is not None
+    mode = args.mode or ("web" if pairing or args.backend_url else None)
+    if not mode:
+        return None, args.backend_url, None
+    if mode != "web":
+        if pairing or args.backend_url or args.backend_token_file:
+            raise ValueError("--pair, --backend-url and --backend-token-file are for the web server; "
+                             f"a {mode} server uses its own Ollama.")
+        if args.ollama_url:
+            if args.ollama_binary:
+                raise ValueError("Choose either --ollama-url (an existing Ollama) or --ollama-binary (a managed one).")
+            url = backend.ollama_url(args.ollama_url)
+            if not args.skip_connection_check:
+                version = backend.check_ollama(url)
+                print(f"Using the existing Ollama {version} at {url}; {profile.PRODUCT} will not manage it.", file=sys.stderr)
+        return mode, "", None
+    if args.ollama_binary or args.ollama_url:
+        raise ValueError("A web server never runs Ollama: --ollama-binary and --ollama-url are for single and compute "
+                         "servers. Connect the web server to its compute server with --pair.")
+    if pairing:
+        if args.backend_token_file:
+            raise ValueError("The pairing code already contains the token; leave out --backend-token-file.")
+        url, token = backend.read_pairing(None if args.pair_file else args.pair, args.pair_file)
+        if args.backend_url:
+            url = backend.backend_url(args.backend_url)
+        else:
+            backend.confirm_address(url, args.yes)
+    elif args.backend_url:
+        url = backend.backend_url(args.backend_url)
+        token = backend.check_token(read_secret(args.backend_token_file)) if args.backend_token_file else None
+    else:
+        raise ValueError("A web server needs its compute server. On the compute server run 'bananachat compute "
+                         "pairing-code', then install this one with --pair (the code is asked for).")
+    if not args.skip_connection_check:
+        version = backend.check_backend(url, token)
+        print(f"Connected to the compute server at {url} (Ollama {version}).", file=sys.stderr)
+    return mode, url, token
+
+
+def next_steps(manager):
+    """BananaChat: what an administrator does after installing, one line each."""
+    settings = manager.settings()
+    name, lines = settings["service"], []
+    if settings.get("domain"):
+        lines.append(f"HTTPS: point DNS for {settings['domain']} here, then run '{name} proxy --install' "
+                     f"(or merge the output of '{name} proxy' into your Caddy configuration).")
+    if settings["mode"] == "compute":
+        from . import backend
+        pairing = backend.pairing_code(manager)
+        lines.append("Pairing code for the web server (a secret: it contains the gateway token):")
+        lines.append("  " + pairing["pairing_code"])
+        lines.append(f"On the web server run: sudo ./banana install --mode web --domain CHAT.EXAMPLE.ORG --pair "
+                     f"(it asks for the code). Show it again with '{name} compute pairing-code'.")
+        if not settings.get("domain"):
+            lines.append(f"Without --domain the code points at {pairing['url']}: forward that port from the web server "
+                         "with a supervised SSH tunnel, or print a code for another address with 'compute pairing-code --url'.")
+    else:
+        lines.append(f"First administrator: open the site and enter the setup token, shown by "
+                     f"'sudo grep BC_SETUP_TOKEN {manager.config_dir / 'app.env'}'.")
+        if settings["mode"] == "single":
+            lines.append("Then download a model in Admin → Models and publish it.")
+    lines.append(f"Automatic updates stay off until you run '{name} updates enable'.")
+    return lines
+
+
+def recovery_message(manager):
+    """The one sentence printed after a restore that left model downloads to decide."""
+    name, mode = manager.settings()["service"], manager.settings()["mode"]
+    if mode == "compute":
+        return ("Model weights were not in this backup: the web server connected to this compute server will offer "
+                f"the missing models for download in Admin → Overview (used without a web server: run '{name} models "
+                "restore --yes' here).")
+    return ("Model weights were not in this backup: BananaChat checks which saved models are missing on its model "
+            "server and, only if some are, Admin → Overview offers to download them.")
 
 
 def configure_proxy(manager, args):
@@ -136,18 +257,37 @@ def main(argv=None):
     if sys.version_info < (3, 12):
         print("Python 3.12 or newer is required.", file=sys.stderr)
         return 1
-    manager = Manager(args.root)
+    manager = None
     try:
+        manager = Manager(args.root)
         if args.command == "install":
             if args.restore:
-                result = manager.restore(args.restore, new=True, name=args.name, domain=args.domain, port=args.port)
+                ignored = [name for name, value in (("--pair", getattr(args, "pair", None) is not None),
+                                                    ("--pair-file", getattr(args, "pair_file", None) is not None),
+                                                    ("--backend-url", bool(args.backend_url)),
+                                                    ("--backend-token-file", args.backend_token_file is not None),
+                                                    ("--mode", args.mode is not None),
+                                                    ("--skip-connection-check", getattr(args, "skip_connection_check", False)))
+                           if value]
+                if CHAT and ignored:
+                    raise ValueError(", ".join(ignored) + " cannot be combined with --restore: the package keeps its saved "
+                                     "mode and compute connection. After the restore, change the connection on the web "
+                                     "server with 'bananachat backend connect'.")
+                ollama_url = getattr(args, "ollama_url", "")
+                result = manager.restore(args.restore, new=True, name=args.name, domain=args.domain, port=args.port,
+                                         **({"ollama_url": ollama_url} if ollama_url else {}))
             else:
-                if not args.mode:
-                    raise ValueError("Choose --mode, or use --restore PACKAGE to recover the saved deployment mode.")
-                result = manager.install(Path(__file__).resolve().parents[1], mode=args.mode, name=args.name, domain=args.domain or "",
-                                         portal_domain=args.portal_domain, port=args.port, backend_url=args.backend_url,
-                                         backend_token_file=args.backend_token_file, ollama_binary=args.ollama_binary,
-                                         source_options=source_values(args), reuse_data=args.reuse_data)
+                mode, backend_url, backend_token = (install_connection(args, manager.read_secret) if CHAT
+                                                    else (args.mode, args.backend_url, None))
+                if not mode:
+                    raise ValueError("Choose --mode, or use --restore PACKAGE to recover the saved deployment mode."
+                                     + (CHAT_LAYOUT if CHAT else ""))
+                extra = {"backend_token": backend_token, "ollama_url": args.ollama_url} if CHAT else {}
+                result = manager.install(Path(__file__).resolve().parents[1], mode=mode, name=args.name, domain=args.domain or "",
+                                         portal_domain=args.portal_domain, port=args.port, backend_url=backend_url,
+                                         backend_token_file=None if backend_token else args.backend_token_file,
+                                         ollama_binary=args.ollama_binary, source_options=source_values(args),
+                                         reuse_data=args.reuse_data, **extra)
         elif args.command == "update":
             result = manager.update(automatic=args.automatic, allow_divergent=args.allow_divergent, retry_failed=args.retry_failed)
         elif args.command in {"backup", "migrate"}:
@@ -167,14 +307,48 @@ def main(argv=None):
                             schedule=schedule)
         elif args.command == "models":
             from .models import compute_recovery
-            if manager.settings()["mode"] != "compute":
-                raise ValueError("Use Admin → Models in BananaChat to review Ollama and Hugging Face downloads.")
-            result = compute_recovery(manager.root / "data", args.action, assume_yes=args.yes)
+            settings = manager.settings()
+            if settings["mode"] != "compute":
+                raise ValueError("This server offers missing models in its web interface: Admin → Overview after a "
+                                 "restore, and Admin → Models for every download.")
+            result = compute_recovery(manager.root / "data", args.action, assume_yes=args.yes,
+                                      upstream=profile.ollama_upstream(settings))
+        elif args.command == "compute":
+            from . import backend
+            if args.action == "rotate-token":
+                result = backend.rotate_token(manager, args.url)
+                print("The old token no longer works. Connect the web server again: on it run "
+                      "'bananachat backend connect' and paste the new pairing code.", file=sys.stderr)
+            else:
+                result = backend.pairing_code(manager, args.url)
+                print("Keep this code secret: it contains the gateway token. On the web server run "
+                      "'bananachat backend connect' (or install --mode web --pair) and paste it.", file=sys.stderr)
+        elif args.command == "backend":
+            from . import backend
+            if args.action == "connect":
+                if args.token_file:
+                    if args.code is not None or args.pair_file is not None or not args.url:
+                        raise ValueError("Use either a pairing code, or --url with --token-file.")
+                    url, token = args.url, manager.read_secret(args.token_file)
+                else:
+                    url, token = backend.read_pairing(args.code, args.pair_file)
+                    if not args.url:
+                        backend.confirm_address(url, args.yes)
+                    url = args.url or url
+                result = backend.connect(manager, url, token, check=not args.skip_check)
+            elif args.action == "test":
+                result = backend.test(manager)
+            else:
+                settings = manager.settings()
+                if settings["mode"] != "web":
+                    raise ValueError("Only a web server has a compute backend; on a compute server use 'compute pairing-code'.")
+                result = {"mode": "web", **backend.summary(manager, settings),
+                          "test": f"Run '{settings['service']} backend test' to check the connection now."}
         elif args.command == "restore":
             if getattr(args, "legacy_database", False):
                 if args.domain is not None or args.port is not None:
                     raise ValueError("Legacy database import keeps the installed deployment configuration")
-                from .legacy_ai import restore_database
+                from .legacy_import import restore_database
                 result = restore_database(manager, args.package)
             else:
                 result = manager.restore(args.package, domain=args.domain, port=args.port)
@@ -186,6 +360,9 @@ def main(argv=None):
             result = manager.restore(archive)
         elif args.command == "status":
             result = manager.status()
+            if CHAT:
+                from . import backend
+                result["inference"] = backend.summary(manager, manager.settings())
         elif args.command == "updates":
             if args.action == "status":
                 result = {"source": manager.source(), "updates": manager.policy()}
@@ -234,16 +411,36 @@ def main(argv=None):
             raise ValueError("Unsupported command.")
         if result is not None:
             print(json.dumps(result, indent=2))
-        if args.command == "install":
+        if args.command == "update" and not args.automatic and isinstance(result, dict) and result.get("outcome") == "paused":
+            print(result.get("reason", "The update is paused."), file=sys.stderr)
+        if args.command == "install" and CHAT:
+            print("Next:")
+            for line in next_steps(manager):
+                print(line if line.startswith("  ") else "- " + line)
+        elif args.command == "install":
             name = manager.settings()["service"]
             print(f"Next: review {manager.config_dir / 'app.env'}. Use '{name} proxy' for the HTTPS configuration, and '{name} updates enable' only if you want automatic updates.")
-            if manager.settings()["mode"] == "compute":
-                print(f"The compute API token is in {manager.root / 'data/.compute-api-token'}. Configure it on the web server using --backend-token-file.")
-        if args.command in {"install", "restore", "backups"} and manager.product == "BananaChat" and (manager.root / "data/.model-recovery.json").exists():
-            print("Model weights were excluded. Review the saved inventory in Admin → Models (compute mode: models status). Downloads wait for administrator approval; you can defer them.")
+        restoring = args.command in {"install", "restore"} or (args.command == "backups" and args.backup_action == "restore")
+        if restoring and manager.product == "BananaChat" and model_recovery_pending(manager):
+            print(recovery_message(manager))
         return 0 if not isinstance(result, dict) or result.get("outcome") not in {"failed", "paused", "rolled_back"} else 2
-    except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
-        print(f"{profile.PRODUCT}: {error}", file=sys.stderr)
-        if manager.config_dir.exists():
-            manager.event(args.command, "failed", reason=str(error))
+    except (ValueError, RuntimeError, OSError, KeyError, sqlite3.Error, subprocess.SubprocessError) as error:
+        message = f"Missing or invalid setting {error}." if isinstance(error, KeyError) else str(error)
+        print(f"{profile.PRODUCT}: {message}", file=sys.stderr)
+        # Recording the failure is best effort: it must never replace the
+        # original message, for example on a full disk or a damaged config.
+        try:
+            if manager is not None and manager.config_dir.exists():
+                manager.event(args.command, "failed", reason=message)
+        except Exception as secondary:
+            print(f"{profile.PRODUCT}: the failure could not be recorded in the history: {secondary}", file=sys.stderr)
         return 1
+
+
+def model_recovery_pending(manager):
+    """Only a weight-free restore leaves an inventory waiting for approval."""
+    try:
+        record = read_json(manager.root / "data/.model-recovery.json")
+    except (OSError, ValueError):
+        return False
+    return isinstance(record, dict) and record.get("state") == "pending"

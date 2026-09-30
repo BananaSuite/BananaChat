@@ -1,0 +1,59 @@
+{% extends "admin/_layout.html" %}
+{% from "partials/icons.html" import icon %}
+{% set section = "chats" %}
+{% block title %}No-history audit{% endblock %}
+{% block admin_content %}
+<header class="page-header">
+  <div>
+    <h1>No-history audit</h1>
+    <p>Copies of the messages of no-history chats. Users are told that administrators can review these chats. The chats themselves are erased after {{ config.no_history_ttl_hours }} hours of inactivity; these copies stay until you delete them.</p>
+  </div>
+</header>
+<nav class="tabs" aria-label="Chat audit sections">
+  <a href="{{ url_for('admin.chats') }}">Chats</a>
+  <a href="{{ url_for('admin.incognito') }}" aria-current="page">No-history audit</a>
+</nav>
+<form class="row mb-2" method="get" action="{{ url_for('admin.incognito') }}">
+  <label class="visually-hidden" for="filter-user">Username</label>
+  <input type="search" id="filter-user" name="user" value="{{ username }}" placeholder="Filter by username" class="grow">
+  <button type="submit" class="btn">{{ icon("search") }}Filter</button>
+  {% if username %}<a class="btn btn-ghost" href="{{ url_for('admin.incognito') }}">Reset</a>{% endif %}
+</form>
+{% if unknown %}
+<div class="alert alert-warning" role="status">{{ icon("alert") }}<p>No user is called “{{ username }}”.</p></div>
+{% elif not rows %}
+<div class="empty">{{ icon("eye-off") }}<h2>No entries</h2><p>No no-history messages have been recorded.</p></div>
+{% else %}
+<p class="muted">{{ total | number }} chat{{ "" if total == 1 else "s" }}</p>
+<div class="table-wrap">
+  <table class="table">
+    <thead><tr><th scope="col">Chat</th><th scope="col">User</th><th scope="col">Messages</th><th scope="col">First</th><th scope="col">Last</th><th scope="col">Chat</th><th scope="col" class="actions">Actions</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td><a class="mono" href="{{ url_for('admin.incognito_session', session_id=row.session_id) }}">{{ row.session_id[:10] }}…</a></td>
+        <td>{{ row.username }}</td>
+        <td>{{ row.entries | number }}</td>
+        <td>{{ row.first_at | datetime }}</td>
+        <td><time datetime="{{ row.last_at }}" title="{{ row.last_at | datetime }}">{{ row.last_at | timeago }}</time></td>
+        <td>{% if row.live %}<span class="badge badge-success">Active</span>{% else %}<span class="badge">Erased</span>{% endif %}</td>
+        <td class="actions">
+          <form method="post" action="{{ url_for('admin.incognito_delete_session', session_id=row.session_id) }}" data-confirm="Delete every audit entry of this chat (and the chat, if still active)?" data-confirm-label="Delete" data-confirm-danger>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-danger btn-sm">{{ icon("trash") }}Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if pages > 1 %}
+<nav class="pagination" aria-label="Pages">
+  {% if page > 1 %}<a class="btn btn-sm" href="{{ url_for('admin.incognito', page=page - 1, user=username or None) }}">Previous</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn btn-sm" href="{{ url_for('admin.incognito', page=page + 1, user=username or None) }}">Next</a>{% endif %}
+</nav>
+{% endif %}
+{% endif %}
+{% endblock %}

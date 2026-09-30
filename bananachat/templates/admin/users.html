@@ -1,0 +1,81 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, empty, pagination %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Users{% endblock %}
+{% block admin_content %}
+{{ header("Users", "Search accounts, create new ones and open an account to manage it.") }}
+
+<div class="toolbar mb-2">
+  <form method="get" action="{{ url_for('admin.users') }}" class="search-form" role="search">
+    <label class="visually-hidden" for="user-search">Search by username</label>
+    <input type="search" id="user-search" name="q" value="{{ search }}" placeholder="Search by username" maxlength="64">
+    <button type="submit" class="btn">{{ icon("search") }}Search</button>
+    {% if search %}<a class="btn btn-ghost" href="{{ url_for('admin.users') }}">Clear</a>{% endif %}
+  </form>
+  <details class="disclosure">
+    <summary class="btn btn-primary">{{ icon("plus") }}New user</summary>
+    <form method="post" action="{{ url_for('admin.user_create') }}" class="card stack mt-1" data-busy>
+      {{ csrf() }}
+      <div class="form-grid">
+        <div class="field">
+          <label for="new-username" class="required">Username</label>
+          <input type="text" id="new-username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]{3,32}" autocomplete="off" aria-describedby="new-username-hint">
+          <span class="hint" id="new-username-hint">3-32 letters, digits, dots, hyphens or underscores.</span>
+        </div>
+        <div class="field">
+          <label for="new-role">Role</label>
+          <select id="new-role" name="role"><option value="user">User</option><option value="admin">Administrator</option></select>
+        </div>
+        <div class="field">
+          <label for="new-password" class="required">Password</label>
+          <input type="password" id="new-password" name="password" required minlength="{{ min_password }}" maxlength="1024" autocomplete="new-password" aria-describedby="new-password-hint">
+          <span class="hint" id="new-password-hint">At least {{ min_password }} characters.</span>
+        </div>
+        <div class="field">
+          <label for="new-password2" class="required">Repeat password</label>
+          <input type="password" id="new-password2" name="confirm_password" required minlength="{{ min_password }}" maxlength="1024" autocomplete="new-password">
+        </div>
+      </div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Create account</button></div>
+    </form>
+  </details>
+</div>
+
+{% if rows %}
+<div class="table-wrap">
+  <table class="table">
+    <caption class="visually-hidden">Accounts{% if search %} matching “{{ search }}”{% endif %}</caption>
+    <thead><tr>
+      <th scope="col">Username</th><th scope="col">Role</th><th scope="col">Status</th>
+      <th scope="col">API tokens per 5 hours</th><th scope="col">Last sign-in</th><th scope="col">Created</th>
+      <th scope="col"><span class="visually-hidden">Actions</span></th>
+    </tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td><a href="{{ url_for('admin.user_detail', user_id=row.id) }}"><strong>{{ row.username }}</strong></a>{% if row.id == current_user.id %} <span class="badge">you</span>{% endif %}</td>
+        <td>{% if row.role == "admin" %}<span class="badge badge-primary">Admin</span>{% else %}User{% endif %}</td>
+        <td>
+          {% if row.suspended and (not row.suspended_until or row.suspended_until > now) %}
+          <span class="badge badge-danger">Suspended{% if row.suspended_until %} until {{ row.suspended_until | datetime }}{% endif %}</span>
+          {% else %}<span class="badge badge-success">Active</span>{% endif %}
+        </td>
+        <td class="nowrap">
+          {% if row.role == "admin" %}<span class="muted">Unlimited</span>
+          {% elif row.quota_tokens is none and row.quota_slow_tokens is none %}<span class="muted">Default ({{ defaults[0] | compact }} + {{ defaults[1] | compact }} slow)</span>
+          {% else %}{{ (defaults[0] if row.quota_tokens is none else row.quota_tokens) | compact }} + {{ (defaults[1] if row.quota_slow_tokens is none else row.quota_slow_tokens) | compact }} slow <span class="badge">custom</span>{% endif %}
+          {% if row.limit_speed == "slow" %} <span class="badge badge-warning">slowed down</span>{% elif row.limit_speed == "fast" %} <span class="badge badge-info">sped up</span>{% endif %}
+        </td>
+        <td class="nowrap">{{ when(row.last_login_at) }}</td>
+        <td class="nowrap">{{ row.created_at | datetime(true) }}</td>
+        <td class="actions"><a class="btn btn-sm" href="{{ url_for('admin.user_detail', user_id=row.id) }}">Manage</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{{ pagination(page, "admin.users", "User pages", q=search or None) }}
+{% else %}
+{{ empty("users", "No users found", "Try another search." if search else "Create the first account above.") }}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,223 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, utc_input %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Edit {{ model.display_name }}{% endblock %}
+{% block admin_content %}
+{% set v = form if form else model %}
+{% set text_model = model.backend == "ollama" %}
+{% macro checked(name) -%}{% if v.get(name) in (1, "1", "on", true) %} checked{% endif %}{%- endmacro %}
+{% macro value(name) -%}{{ "" if v.get(name) is none else v.get(name) }}{%- endmacro %}
+<p class="breadcrumb"><a href="{{ url_for('admin.models') }}">{{ icon("chevron-left") }}All models</a></p>
+{{ header("Edit " ~ model.display_name, model.ollama_name) }}
+
+<form method="post" action="{{ url_for('admin.model_edit', model_id=model.id) }}" class="stack-lg" novalidate>
+  {{ csrf() }}
+  <section class="card stack" aria-labelledby="general-title">
+    <h2 id="general-title">What users see</h2>
+    <div class="field">
+      <label for="display-name" class="required">Display name</label>
+      <input type="text" id="display-name" name="display_name" required maxlength="100" value="{{ value('display_name') }}">
+    </div>
+    <div class="field">
+      <label for="description">Description</label>
+      <textarea id="description" name="description" maxlength="1000" rows="3" aria-describedby="description-hint">{{ value('description') }}</textarea>
+      <span class="hint" id="description-hint">Shown in the model picker. Up to 1,000 characters.</span>
+    </div>
+    <fieldset>
+      <legend>Categories</legend>
+      {% if all_categories %}
+      <div class="check-list">
+        {% for category in all_categories %}
+        <label class="check"><input type="checkbox" name="categories" value="{{ category.id }}"{% if category.id in selected %} checked{% endif %}><span>{{ category.name }}<small>{{ {"chat": "Chat only", "api": "API only", "both": "Chat and API"}[category.scope] }}{% if category.description %} · {{ category.description }}{% endif %}</small></span></label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted small">No categories yet. <a href="{{ url_for('admin.categories') }}">Create categories</a> to group models and control access to them.</p>
+      {% endif %}
+    </fieldset>
+    <fieldset>
+      <legend>Capabilities</legend>
+      {% if text_model %}
+      <label class="check"><input type="checkbox" name="supports_vision" value="1"{{ checked('supports_vision') }}><span>Understands images<small>Users can attach pictures when chatting with this model.</small></span></label>
+      <label class="check"><input type="checkbox" name="is_reasoning" value="1"{{ checked('is_reasoning') }}><span>Reasoning model<small>Shows its thinking separately and gets a reasoning toggle.</small></span></label>
+      {% endif %}
+      <label class="check"><input type="checkbox" name="is_uncensored" value="1"{{ checked('is_uncensored') }}><span>Uncensored<small>Only users allowed by the “Uncensored models” access rule can use it.</small></span></label>
+    </fieldset>
+  </section>
+
+  {% if text_model %}
+  <section class="card stack" aria-labelledby="behaviour-title">
+    <h2 id="behaviour-title">Behaviour</h2>
+    <div class="field">
+      <label for="system-prompt">System prompt</label>
+      <textarea id="system-prompt" name="system_prompt" maxlength="{{ system_prompt_max }}" rows="6" data-counter="system-prompt-count" aria-describedby="system-prompt-hint system-prompt-count">{{ value('system_prompt') }}</textarea>
+      <span class="hint" id="system-prompt-hint">Instructions sent before every conversation with this model. Up to {{ system_prompt_max | number }} characters.</span>
+      <span class="hint" id="system-prompt-count" aria-live="polite"></span>
+    </div>
+    <p class="muted small">Leave a parameter empty to use the model's own default.</p>
+    <div class="form-grid">
+      <div class="field">
+        <label for="temperature">Temperature</label>
+        <input type="number" id="temperature" name="temperature" step="0.05" min="{{ limits.temperature[0] }}" max="{{ limits.temperature[1] }}" value="{{ value('temperature') }}" aria-describedby="temperature-hint">
+        <span class="hint" id="temperature-hint">{{ limits.temperature[0] }}–{{ limits.temperature[1] }}. Higher is more creative.</span>
+      </div>
+      <div class="field">
+        <label for="top-p">Top P</label>
+        <input type="number" id="top-p" name="top_p" step="0.01" min="{{ limits.top_p[0] }}" max="{{ limits.top_p[1] }}" value="{{ value('top_p') }}" aria-describedby="top-p-hint">
+        <span class="hint" id="top-p-hint">{{ limits.top_p[0] }}–{{ limits.top_p[1] }}.</span>
+      </div>
+      <div class="field">
+        <label for="top-k">Top K</label>
+        <input type="number" id="top-k" name="top_k" step="1" min="{{ limits.top_k[0] }}" max="{{ limits.top_k[1] }}" value="{{ value('top_k') }}" aria-describedby="top-k-hint">
+        <span class="hint" id="top-k-hint">{{ limits.top_k[0] }}–{{ limits.top_k[1] }} (whole number).</span>
+      </div>
+      <div class="field">
+        <label for="num-ctx">Context length</label>
+        <input type="number" id="num-ctx" name="num_ctx" step="1" min="{{ limits.num_ctx[0] }}" max="{{ limits.num_ctx[1] }}" value="{{ value('num_ctx') }}" aria-describedby="num-ctx-hint">
+        <span class="hint" id="num-ctx-hint">{{ limits.num_ctx[0] | number }}–{{ limits.num_ctx[1] | number }} tokens. Larger contexts use more GPU memory.</span>
+      </div>
+      <div class="field">
+        <label for="repeat-penalty">Repeat penalty</label>
+        <input type="number" id="repeat-penalty" name="repeat_penalty" step="0.05" min="{{ limits.repeat_penalty[0] }}" max="{{ limits.repeat_penalty[1] }}" value="{{ value('repeat_penalty') }}" aria-describedby="repeat-penalty-hint">
+        <span class="hint" id="repeat-penalty-hint">{{ limits.repeat_penalty[0] }}–{{ limits.repeat_penalty[1] }}.</span>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <div class="form-actions">
+    <a class="btn btn-ghost" href="{{ url_for('admin.models') }}">Cancel</a>
+    <button type="submit" class="btn btn-primary">Save model</button>
+  </div>
+</form>
+
+<section class="card stack mt-3" id="lifecycle" aria-labelledby="lifecycle-title">
+  <div class="card-header">
+    <h2 id="lifecycle-title">Lifecycle</h2>
+    <div class="badge-row">{% for badge in badges %}<span class="badge{% if badge.tone %} badge-{{ badge.tone }}{% endif %}"{% if badge.title %} title="{{ badge.title }}"{% endif %}>{{ badge.label }}</span>{% else %}<span class="badge badge-success">Active</span>{% endfor %}</div>
+  </div>
+  {% if model.state_reason %}<p class="small muted mb-0">{{ model.state_reason }}{% if model.state_changed_at %} <span class="faint">({{ when(model.state_changed_at) }})</span>{% endif %}</p>{% endif %}
+
+  {% if text_model %}
+  <dl class="command-list">
+    <dt>Detected</dt>
+    <dd>{% for capability in caps %}<span class="badge">{{ capability }}</span> {% else %}<span class="muted">Not read yet</span>{% endfor %}
+      <span class="small muted">{{ model.parameter_size or "" }}{% if model.quantization %} · {{ model.quantization }}{% endif %}{% if model.context_length %} · {{ model.context_length | number }} tokens of context{% endif %}{% if model.details_at %} · checked {{ when(model.details_at) }}{% endif %}</span>
+      {% if model.details_error %}<br><span class="danger-text small">{{ model.details_error }}</span>{% endif %}
+      {% if model.backend_digest %}<br><span class="mono small faint break-anywhere">{{ model.backend_digest }}</span>{% endif %}</dd>
+    {% if model.recent_failures %}<dt>Recent failures</dt><dd>{{ model.recent_failures }} since {{ when(model.first_failure_at) }}{% if model.last_failure %} <span class="small muted">— {{ model.last_failure }}</span>{% endif %}</dd>{% endif %}
+  </dl>
+
+  <div class="grid grid-2">
+    <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" class="stack sub-card">
+      {{ csrf() }}
+      <h3>Limits</h3>
+      <div class="field">
+        <label for="limit-preset">Limit preset</label>
+        <select id="limit-preset" name="limit_preset" aria-describedby="limit-preset-hint">
+          {% for key, label in presets.items() %}<option value="{{ key }}"{% if key == (model.limit_preset or suggested_preset) %} selected{% endif %}>{{ label }}{% if key == suggested_preset %} (suggested for its size){% endif %}</option>{% endfor %}
+        </select>
+        <span class="hint" id="limit-preset-hint">{% if model.limit_preset %}Current: {{ presets.get(model.limit_preset, model.limit_preset) }}.{% else %}No preset applied yet.{% endif %} {% if limits_url %}<a href="{{ limits_url }}">Fine-tune this model's limits</a>.{% endif %}</span>
+      </div>
+      <div class="form-actions form-actions-start"><button type="submit" name="action" value="preset" class="btn btn-sm">Apply preset</button></div>
+    </form>
+    <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" class="stack sub-card">
+      {{ csrf() }}
+      <h3>Reasoning levels</h3>
+      <div class="field">
+        <label for="reasoning-levels">Levels the model accepts</label>
+        <select id="reasoning-levels" name="reasoning_levels" aria-describedby="reasoning-levels-hint">
+          {% for key, label in level_choices.items() %}<option value="{{ key }}"{% if key == level_choice %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+        <span class="hint" id="reasoning-levels-hint">Now: {{ levels | join(" / ") if levels else "none" }}. Reasoning effort choices are built from this list.</span>
+      </div>
+      <div class="form-actions form-actions-start"><button type="submit" name="action" value="reasoning" class="btn btn-sm">Save levels</button></div>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if model.failing_at %}
+  <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" class="sub-card stack">
+    {{ csrf() }}
+    <h3>Failing</h3>
+    <p class="small mb-0">Hidden from selection and fallback since {{ when(model.failing_at) }}. {% if model.recheck_at %}Next test prompt {{ when(model.recheck_at) }}.{% endif %}</p>
+    <div class="form-actions form-actions-start">
+      <button type="submit" name="action" value="retry_check" class="btn btn-sm">{{ icon("refresh") }}Check again now</button>
+      <button type="submit" name="action" value="force_enable" class="btn btn-sm btn-ghost">Enable anyway</button>
+    </div>
+  </form>
+  {% endif %}
+
+  <div class="sub-card stack">
+  <h3>Deprecation</h3>
+  <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" class="stack">
+    {{ csrf() }}
+    {% if model.retired_at %}
+    <p class="small mb-0">Retired {{ when(model.retired_at) }}{% if replacement %}; chats move to <strong>{{ replacement.display_name }}</strong>{% endif %}. The API refuses it.</p>
+    <div class="form-actions form-actions-start"><button type="submit" name="action" value="undeprecate" class="btn btn-sm">Restore</button></div>
+    {% else %}
+    <p class="small muted mb-0">A deprecated model is hidden from the chat picker; chats that select it move to the replacement with a notice. The API keeps serving it until it is retired.</p>
+    <div class="form-grid">
+      <div class="field">
+        <label for="replacement">Replacement</label>
+        <select id="replacement" name="replacement_id">
+          <option value="">No replacement (best available model)</option>
+          {% for other in replacements %}<option value="{{ other.id }}"{% if other.id == model.replacement_id %} selected{% endif %}>{{ other.display_name }} ({{ other.ollama_name }})</option>{% endfor %}
+        </select>
+      </div>
+      {{ utc_input("retire_at", "retire-at", "Retire on", "After this moment it is retired automatically. Leave empty to retire it by hand.", (model.retire_at | replace(" ", "T"))[:16] if model.retire_at else "", utc_min) }}
+      <div class="field">
+        <label for="deprecation-note">Note</label>
+        <input type="text" id="deprecation-note" name="note" maxlength="500" value="{{ model.deprecation_note or '' }}">
+      </div>
+    </div>
+    <div class="form-actions form-actions-start">
+      <button type="submit" name="action" value="deprecate" class="btn btn-sm">{{ "Save deprecation" if model.deprecated_at else "Deprecate" }}</button>
+      {% if model.deprecated_at %}<button type="submit" name="action" value="undeprecate" class="btn btn-sm btn-ghost" formnovalidate>No longer deprecated</button>{% endif %}
+    </div>
+    {% endif %}
+  </form>
+  {% if not model.retired_at %}
+  <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" data-confirm="Retire {{ model.display_name }} now? It is hidden, chats move to its replacement and the API refuses it." data-confirm-danger>
+    {{ csrf() }}<button type="submit" name="action" value="retire" class="btn btn-sm btn-danger">Retire now</button>
+  </form>
+  {% endif %}
+  </div>
+
+  {% if text_model %}
+  <div class="sub-card stack">
+    <h3>Delete from the model server</h3>
+    {% if model.delete_requested_at %}
+    <p class="small mb-0">{% if in_use %}Hidden and waiting for {{ in_use }} running request{{ "s" if in_use != 1 }} to finish before it is deleted.{% else %}Hidden; no request uses it, so it is deleted within a minute (see the reason above if an attempt failed).{% endif %}</p>
+    <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}">
+      {{ csrf() }}<button type="submit" name="action" value="cancel_delete" class="btn btn-sm">Keep it</button>
+    </form>
+    {% else %}
+    <p class="small muted mb-0">{% if in_use %}{{ in_use }} request{{ "s are" if in_use != 1 else " is" }} using it right now. {% endif %}Personalities that prefer it switch to its replacement or the default model.</p>
+    <div class="row">
+      <form method="post" action="{{ url_for('admin.model_delete_server', model_id=model.id) }}" data-confirm="Delete {{ model.ollama_name }} from the Ollama server? Its files are removed and must be downloaded again to use it." data-confirm-danger>
+        {{ csrf() }}<button type="submit" class="btn btn-sm btn-danger">{{ icon("trash") }}Delete now</button>
+      </form>
+      <form method="post" action="{{ url_for('admin.model_delete_server', model_id=model.id) }}" data-confirm="Hide {{ model.ollama_name }} now and delete it from the Ollama server when its running requests finish?" data-confirm-danger>
+        {{ csrf() }}<input type="hidden" name="when_idle" value="1"><button type="submit" class="btn btn-sm">Delete after current requests</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div>
+    <h3>History</h3>
+    {% if events %}
+    <ul class="plain-list event-list divider-list">
+      {% for event in events %}
+      <li><span class="event-name">{{ event.event | replace("_", " ") | capitalize }}</span> <span class="small muted">— {{ event.reason }}</span> <span class="small faint">{{ when(event.created_at) }}{% if event.actor_name %} · {{ event.actor_name }}{% endif %}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted small mb-0">No changes recorded yet.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>{% endblock %}

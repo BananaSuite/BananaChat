@@ -1,0 +1,52 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, empty, status_badge %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Requests · Limits{% endblock %}
+{% block admin_content %}
+{{ header("Limits", "Requests for more 5-hour or weekly tokens, a higher request rate, a temporary increase or a higher reasoning effort.") }}
+{% include "admin/_limits_tabs.html" %}
+
+<section id="requests" aria-labelledby="requests-title">
+  <div class="row-between">
+    <h2 id="requests-title" class="mb-0">Quota requests {% if pending_count %}<span class="badge badge-warning">{{ pending_count }} pending</span>{% endif %}</h2>
+    <nav class="tabs tabs-compact" aria-label="Request status">
+      {% for key, label in [("pending", "Pending"), ("approved", "Approved"), ("denied", "Denied"), ("all", "All")] %}
+      <a href="{{ url_for('admin.quota_requests', status=key) }}"{% if status == key %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+  <p class="muted small">Approving applies the change at once: a custom limit for the account (never lower than what it has), a grant for a temporary increase that ends by itself, or the requested reasoning effort level (and every level below it).</p>
+  {% if requests %}
+  <div class="grid grid-2 mt-1">
+    {% for item in requests %}
+    {% set req = item.row %}
+    <article class="request-card" aria-labelledby="quota-req-{{ req.id }}">
+      <div class="row-between">
+        <h3 id="quota-req-{{ req.id }}" class="mb-0"><a href="{{ url_for('admin.user_limits', user_id=req.user_id) }}">{{ req.username }}</a></h3>
+        <span class="small muted">{{ when(req.created_at) }}</span>
+      </div>
+      <p class="mb-1"><span class="badge">{{ {"window": "5 hours", "weekly": "Weekly", "rate": "Rate", "temporary": "Temporary", "effort": "Reasoning effort"}.get(item.kind, item.kind) }}</span> <strong>{{ item.summary }}</strong>
+        {% if item.current %}<span class="muted">({{ item.current }})</span>{% endif %}
+        {% if req.duration_type != "permanent" %}<span class="badge">One day (legacy)</span>{% endif %}</p>
+      <blockquote class="quote">{{ req.reason }}</blockquote>
+      {% if req.status == "pending" %}
+      <form method="post" action="{{ url_for('admin.quota_request_resolve', request_id=req.id) }}" class="stack-sm">
+        {{ csrf() }}
+        <label for="quota-msg-{{ req.id }}" class="label">Message to {{ req.username }} (optional)</label>
+        <textarea id="quota-msg-{{ req.id }}" name="message" maxlength="1000" rows="2"></textarea>
+        <div class="form-actions form-actions-start">
+          {% if req.duration_type == "permanent" %}<button type="submit" name="decision" value="approve" class="btn btn-primary">Approve</button>{% endif %}
+          <button type="submit" name="decision" value="deny" class="btn btn-danger">Deny</button>
+        </div>
+      </form>
+      {% else %}
+      <p class="small">{{ status_badge(req.status) }} {% if req.resolution_source == "automatic" %}automatically{% else %}by {{ req.resolved_by_name or "an administrator" }}{% endif %} {{ when(req.resolved_at) }}{% if req.admin_message %} · “{{ req.admin_message }}”{% endif %}{% if req.grant_id %} · <a href="{{ url_for('admin.limit_grants') }}#grant-{{ req.grant_id }}">grant #{{ req.grant_id }}</a>{% endif %}</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  {{ empty("sliders", "No " ~ ("" if status == "all" else status ~ " ") ~ "requests") }}
+  {% endif %}
+</section>
+{% endblock %}

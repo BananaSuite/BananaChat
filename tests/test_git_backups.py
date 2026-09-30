@@ -256,3 +256,26 @@ def test_backup_auth_ignores_global_git_and_environment_credentials(store, tmp_p
         assert "GIT_SSH_COMMAND" not in git.environment
         assert "fixture-backup-token" not in str(git.environment)
         assert "fixture-backup-token" not in str(git.options)
+
+
+def test_backup_git_errors_are_diagnosable_without_repeating_credentials(tmp_path, monkeypatch):
+    token = tmp_path / "private" / "token"
+    atomic_write(token, "fixture-backup-token")
+    missing = tmp_path / "missing-remote.git"
+    git = transport.Git(tmp_path / "work", {"url": str(missing), "max_mib": 1}, token, allow_local=True)
+    with pytest.raises(RuntimeError, match="Git reported: .*missing-remote"):
+        git.heads("refs/heads/banana-backups/")
+    calls = []
+
+    def echoed(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 128, b"", b"fatal: https://bot:fixture-backup-token@forge.example denied\n")
+
+    monkeypatch.setattr(transport.subprocess, "run", echoed)
+    with pytest.raises(RuntimeError) as error:
+        git.push("a" * 40, "refs/heads/banana-backups/x")
+    assert "denied" in str(error.value) and "fixture-backup-token" not in str(error.value)
+    # A URL or ref is never where git expects an option.
+    assert calls[-1][calls[-1].index("--"):] == ["--", str(missing), "a" * 40 + ":refs/heads/banana-backups/x"]
+    with pytest.raises(ValueError):
+        transport.Git(tmp_path / "other", {"url": "--upload-pack=touch", "max_mib": 1}, token, allow_local=True)

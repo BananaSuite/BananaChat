@@ -4,65 +4,100 @@ BananaChat uses one `banana` command for installation, updates, backup, migratio
 
 **Automatic repository updates are optional and off by default.** Enabling them authorizes deployment of future changes from the selected branch, including changes that may remove features. Keep manual updates or choose a controlled fork/branch when you need a fixed feature set.
 
-## Choose a role
+## Choose a layout
+
+BananaChat normally runs on **two servers**: a reliable web server (for example a VPS) keeps accounts, chats and files, and a compute server with the GPU runs the models. `single` puts both on one machine, for a small installation or testing.
 
 | Mode | Runs here | Typical machine |
 | --- | --- | --- |
-| `single` | Chat application and local Ollama | One machine with sufficient model memory. |
-| `web` | Accounts, chats, files, and the web/API service | A reliable VPS connected to a separate inference backend. |
-| `compute` | Local Ollama and an authenticated streaming inference API | A GPU server behind HTTPS or an SSH tunnel. |
+| `compute` | Ollama (managed, or the one already running there) and an authenticated streaming gateway | The GPU server or cluster node. |
+| `web` | Accounts, chats, files, and the web/API service; never Ollama | A reliable VPS paired with the compute server. |
+| `single` | Chat application and Ollama | One machine with enough memory for the models. |
 
-The split setup keeps chat data on the web server and model files/inference on the compute server. Either server can be maintained independently. Existing optional personal workers and ComfyUI remain supported as additional components, separate from the main server installer.
+The web server keeps the chat data and the compute server the model files. Either can be updated, replaced or restarted independently. Optional personal workers and ComfyUI remain separate components.
 
 ## Requirements
 
-Use Linux with systemd, Python 3.12+, Python venv support, Git, and local storage. Debian 13 and Ubuntu 24.04 are suitable starting points. Install Caddy through its official distribution for HTTPS. Install Ollama and GPU drivers through their official channels on `single` or `compute` hosts. The installer manages the Ollama process and model directory once the binary is available; use `--ollama-binary /absolute/path` if needed.
-
-If another Ollama service already listens on port 11434, stop/disable it before selecting a role that manages Ollama, or use `web` mode with that existing backend. The installer reports occupied ports instead of replacing an unrelated service. Moving an existing model cache into the managed `data/models` directory is an operator decision; preserve it before changing an old setup.
+Use Linux with systemd, Python 3.12+, Python venv support, Git, and local storage. Debian 13 and Ubuntu 24.04 are suitable starting points. Install Caddy through its official distribution for HTTPS. On `compute` and `single` hosts install Ollama and the GPU drivers through their official channels. The web server needs neither.
 
 Obtain a clean, reviewed Git checkout. Installation uses its exact local commit; automatic updates remain off. The default future source is `https://github.com/BananaSuite/BananaChat.git`, branch `main`.
+
+## Two servers (default)
+
+### 1. The compute server
+
+```sh
+git clone https://github.com/BananaSuite/BananaChat.git
+cd BananaChat
+sudo ./banana install --mode compute --domain compute.example.org
+sudo bananachat proxy --install
+```
+
+This runs a managed Ollama on `127.0.0.1:11434` (its models under `/opt/bananachat/data/models`) and the authenticated gateway on `127.0.0.1:11435`, which the HTTPS proxy publishes. Ollama has no authentication of its own, so it is never exposed: the gateway checks a generated token (stored in `/opt/bananachat/data/.compute-api-token`), forwards only the Ollama/OpenAI API calls BananaChat and API clients use, and streams the answers.
+
+At the end the installer prints a **pairing code**, one line starting with `bcpair1.`. It contains the gateway's address and token, so treat it like a password. Show it again at any time with `sudo bananachat compute pairing-code`.
+
+**An Ollama is already running on this machine** (a shared cluster node, for example): keep it and let BananaChat use it as it is:
+
+```sh
+sudo ./banana install --mode compute --domain compute.example.org --ollama-url http://127.0.0.1:11434
+```
+
+With `--ollama-url` (a loopback address only) BananaChat installs no Ollama service, needs no `ollama` program, never starts, stops, updates or reconfigures that Ollama, and uses it for readiness checks and model downloads. Its models stay wherever that Ollama keeps them, outside BananaChat's backups. Without the option, an occupied port 11434 stops the installation with this suggestion instead of replacing the running service. `--ollama-binary /absolute/path` selects the program for the managed Ollama when it is not on `PATH`.
+
+The managed Ollama gets `OLLAMA_HOST` and `OLLAMA_MODELS` in `/opt/bananachat/config/app.env` at installation. Later changes you make there are kept by updates and restores; if you move Ollama to another port, change `BC_COMPUTE_UPSTREAM` with it (readiness checks follow that address).
+
+### 2. The web server
+
+```sh
+git clone https://github.com/BananaSuite/BananaChat.git
+cd BananaChat
+sudo ./banana install --domain chat.example.org --pair
+sudo bananachat proxy --install
+```
+
+`--pair` asks for the pairing code (the input is hidden) and implies `--mode web`; `--pair-file FILE` reads it from a private file instead, and `--pair CODE` takes it directly (visible in the shell history and process list). It then shows the gateway address in the code and asks you to confirm it before the token is sent anywhere; `--yes` confirms without asking and is needed without a terminal. Before anything is installed, the web server connects to the compute server exactly as it will later (`GET /api/version` through the gateway, with the token) and stops with an explanation if the address cannot be reached, the certificate is not accepted, the token is rejected or Ollama is not ready. `--skip-connection-check` installs anyway, for a compute server that is not reachable yet.
+
+The address and token are stored in the web server's private `config/app.env` as `BC_OLLAMA_URL` and `BC_OLLAMA_API_KEY`. A web installation without a compute server is refused: a web server never uses an Ollama on its own machine, and `--ollama-binary`/`--ollama-url` are rejected in web mode. The older form, `--mode web --backend-url https://compute.example.org --backend-token-file /root/banana-compute.token`, keeps working and is tested the same way.
+
+The installer ends with what to do next: point DNS at the server, install the HTTPS proxy, and read the first-administrator setup token privately with `sudo grep BC_SETUP_TOKEN /opt/bananachat/config/app.env`. The token only works until the first administrator exists; you may remove it afterwards (updates do not add it back). Then download and enable a model in Admin → Models (downloads run on the compute server; new models wait for your review unless you switch Admin → Models → Settings to automatic enrollment) and review sign-up, model access and quotas before inviting users.
+
+### Models on the compute server
+
+The web server manages the compute server's models through the gateway: it lists them (`/api/tags`), reads their details (`/api/show`), downloads (`/api/pull`) and deletes them (`/api/delete`); it never runs Ollama itself. Downloads queue in Admin → Models → Downloads (one at a time by default, several at once from a list), survive restarts of either server and are retried after network errors. The web server cannot see the compute server's disk: keep enough free space under `/opt/bananachat/data/models`; a download that runs out of space fails with Ollama's "no space left on device" message and can be retried after you free space. Models that disappear from the compute server are marked missing after a few syncs and hidden (their chats stay); a compute server that is unreachable changes nothing in the catalog.
+
+### Check or change the connection later
+
+```sh
+sudo bananachat backend status          # address and token fingerprint, no secrets
+sudo bananachat backend test            # connect now, as the chat service does
+sudo bananachat backend connect         # paste a new pairing code (hidden)
+```
+
+`backend connect` also accepts `CODE` (visible in the shell history and process list, like `--pair CODE`), `--pair-file FILE`, or `--url URL --token-file FILE`; `--url` next to a pairing code overrides its address (for an SSH tunnel on another port). It asks to confirm the address in a code like `install --pair` (`--yes` skips the question), tests the connection before changing anything, writes `app.env` and restarts the web service if it runs; if that restart fails its readiness checks, the previous connection is put back. `sudo bananachat status` shows the same summary, and the compute server's `status` shows its token fingerprint so the two can be compared.
+
+**Rotating the token.** On the compute server run `sudo bananachat compute rotate-token`: it writes a new token, restarts the gateway (the old token stops working at once) and prints a new pairing code. On the web server run `sudo bananachat backend connect` and paste it. Doing it by hand works too: write a new random value (`openssl rand -hex 32`) into the compute token file with mode 0600, restart the compute service, then on the web server run `backend connect --url https://compute.example.org --token-file FILE` (or edit `BC_OLLAMA_API_KEY` in its `app.env` and restart). The web server keeps its copy of the token in `app.env`, not in a token file.
+
+### Without a public name: SSH tunnel
+
+Install the compute server without `--domain`; its pairing code then points at `http://127.0.0.1:11435`. Run a supervised SSH connection on the web server that forwards that loopback port to the compute server's gateway (for example `ssh -N -L 11435:127.0.0.1:11435 compute`), then pair as above. If the tunnel uses another local port, add `--url http://127.0.0.1:PORT` (to `install` as `--backend-url`, or to `backend connect`), or print a code for it on the compute server with `compute pairing-code --url`. Direct unencrypted remote HTTP is rejected.
+
+The web server treats a tunnel like any remote compute server: it never checks its own memory, disk or GPU for inference, and it probes the compute server so an outage shows a banner instead of failing requests (see `BC_INFERENCE_LOCAL` in [configuration](configuration.md) for unusual setups).
+
+The two update timers are independent. For internal automatic rollout, keep web/compute API changes backward compatible and merge only reviewed, tested changes. An incompatible upgrade needs a documented order and manual updates during the transition. The updater does not provide a distributed transaction across two machines.
 
 ## One server
 
 ```sh
 git clone https://github.com/BananaSuite/BananaChat.git
 cd BananaChat
-sudo ./banana install --mode single --domain ai.example.org
-sudo bananachat proxy
+sudo ./banana install --mode single --domain chat.example.org
 sudo bananachat proxy --install
 ```
 
 Point DNS at this server and allow HTTPS ports 80/443. `proxy` prints a matching Caddyfile. `proxy --install` validates it before loading it, and preserves an unrelated existing proxy unless you explicitly select `--replace`. On a server with other sites, merge the printed block into the existing proxy configuration.
 
-The chat service and Ollama bind to loopback. Model files are stored under `/opt/bananachat/data/models`; pull a model through the local Ollama API/CLI, for example `ollama pull qwen3:4b`, and enable it in the administrator interface. Choose a model that fits your hardware.
-
-Read the generated `BC_SETUP_TOKEN` privately from `/opt/bananachat/config/app.env`, open the HTTPS address, and create the first administrator. Remove the setup token after setup if desired, then run `sudo bananachat restart`. Review account registration, model access, and quotas before inviting users.
-
-## Two servers
-
-On the compute machine:
-
-```sh
-sudo ./banana install --mode compute --domain compute.example.org
-sudo bananachat proxy
-sudo bananachat proxy --install
-```
-
-This runs Ollama on `127.0.0.1:11434` and the authenticated gateway on `127.0.0.1:11435`. The gateway checks a generated token stored in `/opt/bananachat/data/.compute-api-token`. It forwards allowed Ollama/chat API requests and streams responses. Health and source-offer endpoints are public; model requests require a Bearer token. Ordinary Ollama does not enforce authentication through an API-key environment variable, which is why this role includes an actual validating gateway.
-
-Securely copy that token into a private file on the web server, for example `/root/banana-compute.token` with mode `0600`. Do not put its value in a command line or repository. On the web machine:
-
-```sh
-sudo ./banana install --mode web --domain ai.example.org --backend-url https://compute.example.org --backend-token-file /root/banana-compute.token
-sudo bananachat proxy
-sudo bananachat proxy --install
-```
-
-The installer stores the backend URL and key in the web server's private `config/app.env`. Finish first-admin setup there. Keep inference access restricted to the web server where your network allows it. The compute server can be replaced or temporarily unavailable without moving the web server's chat database.
-
-For an SSH tunnel, omit the compute domain and forward its authenticated loopback gateway to a loopback port on the web host. Set `--backend-url http://127.0.0.1:11435` and provide the same token. A tunnel needs its own supervised SSH connection. Direct unencrypted remote HTTP is rejected by the managed setup.
-
-The two update timers are independent. For internal automatic rollout, keep web/compute API changes backward compatible and merge only reviewed, tested changes. An incompatible upgrade needs a documented order and manual updates during the transition. The updater does not provide a distributed transaction across two machines.
+The chat service and Ollama bind to loopback. Model files are stored under `/opt/bananachat/data/models`; download models in Admin → Models (or with the Ollama CLI) and enable them there. Add `--ollama-url http://127.0.0.1:11434` to use an Ollama that already runs on the machine instead, exactly as for a compute server. Create the first administrator with the setup token as described above.
 
 ## Update policy and private repositories
 
@@ -102,7 +137,22 @@ sudo bananachat source check
 
 Obtain and verify the forge's SSH host key through a trusted channel first. Strict host checking is enforced. Repository credentials are stored as root-private files under `config/`, kept out of URLs and Git configuration, and passed only to the updater's Git process. They are separate from compute API credentials and BananaVibe bot credentials. Repeat `source set` with a new credential file to rotate access; `source set --clear-credentials` removes it. Changing hosts without a replacement credential disables authentication.
 
-Each update prepares the new release, stops the remembered services, creates a complete backup, switches source, and checks readiness before allowing traffic. Failed readiness restores the old code and data together. A failed revision is not retried automatically; correct the problem and use `update --retry-failed`, or deploy a newer corrected commit. The newest three automatic packages are retained by default; set `--keep-backups` on `updates enable` to change that policy. Manual packages are preserved. Prepared releases use the same retention count, always preserving the active and previous releases.
+Each update prepares the new release, stops the remembered services, creates a complete backup, switches source, and checks readiness before allowing traffic. Failed readiness restores the old code and data together. A failed revision is not retried, automatically or manually, until you correct the problem and run `update --retry-failed` (or publish a newer corrected commit). For each kind of package the tool creates by itself (`auto`, `before-update`, `before-restore`, `before-legacy-import`, `remote`), the newest three are retained by default; set `--keep-backups` on `updates enable` to change that policy. Packages you create with `backup`/`migrate` are never removed, and neither is the package needed for `rollback`. Prepared releases use the same retention count, always preserving the active and previous releases.
+
+## Updating from the previous release
+
+The rewrite is delivered through the normal update path:
+
+```sh
+sudo bananachat source check
+sudo bananachat update
+```
+
+The previous release's updater prepares the new code, backs everything up, starts it and checks `/health` before letting users back in; if anything fails it restores the old code together with the old database. On first start the database is upgraded in place (schema version 12): nothing is removed, sign-ins stay valid, API tokens keep working, and a site still named "BananaAI" from the project's earlier name is renamed to BananaChat (custom names are kept). No configuration change is needed; new optional settings are listed in [configuration](configuration.md) and in the [changelog](../CHANGELOG.md).
+
+Update the compute server as well if you use a split deployment; either order works.
+
+Two behaviours changed for split deployments. A web server that reaches its compute server through an SSH tunnel (`BC_OLLAMA_URL=http://127.0.0.1:…` with `BC_OLLAMA_API_KEY`) is now treated as remote: it no longer waits for its own free memory, and it probes the compute server so an outage shows a banner. And `BC_INFERENCE_OUTAGE_MODE=fallback` needs an explicit `BC_INFERENCE_FALLBACK_URL`; it no longer defaults to the web server's own port 11434, and without one the server logs a warning and pauses new answers during an outage instead.
 
 ## What a bad commit can and cannot do
 
@@ -160,7 +210,7 @@ code only: a compromised token still lets someone read a private repository.
 
 ## Backup, move, and restore
 
-[Repository backups](backups.md) add optional encrypted storage and restore through private GitHub or Forgejo repositories. Install age and configure `bananachat backups` separately on each server, using a unique series name per role. Scheduling stays off until `backups enable`. Git backups exclude weights and save model download recipes; after restoring, Admin → Models offers downloads or deferral. A compute-only host uses `bananachat models status`, then `models restore --yes` or `models skip`.
+[Repository backups](backups.md) add optional encrypted storage and restore through private GitHub or Forgejo repositories. Install age and configure `bananachat backups` separately on each server, using a unique series name per role. Scheduling stays off until `backups enable`. Git backups exclude weights and save model download recipes. After a restore the web server checks by itself which of those models its model server lacks: if none, nothing is asked; otherwise Admin → Overview shows one card to download them, choose some, or dismiss the list (see [model recovery](backups.md#model-recovery-and-existing-chats)). A compute server that is restored or rebuilt needs nothing on its own side: the paired web server notices the published models it no longer has and offers them the same way. Only a compute server used without a web server downloads its saved list with `bananachat models status` and `models restore --yes`.
 
 ```sh
 sudo bananachat migrate --output /root/bananachat-migration.tar.gz
@@ -178,11 +228,11 @@ sudo bananachat status
 sudo bananachat proxy
 ```
 
-This restores the saved mode and exact bundled source without fetching the update repository. Installing Python dependencies still needs package-registry access. `single` and `compute` also need Ollama installed locally. Add `--domain new.example.org` when changing the public hostname, then configure the proxy and review integration URLs.
+This restores the saved mode, compute connection and exact bundled source without fetching the update repository (`--mode`, `--pair`, `--backend-url` and `--skip-connection-check` are refused here; change the connection afterwards with `backend connect`). Installing Python dependencies still needs package-registry access. `single` and `compute` also need Ollama installed locally; add `--ollama-url http://127.0.0.1:11434` to restore onto an Ollama that already runs on the new machine instead of a managed one. Add `--domain new.example.org` when changing the public hostname, then configure the proxy and review integration URLs.
 
-To restore after installing an empty matching mode, run `sudo bananachat restore PACKAGE`. It saves a `before-restore` package before replacement. Restore cannot convert `web`, `single`, and `compute` modes; use a separate root and a deliberate data/backend migration for a role change. Restore packages only from trusted operators: they include executable source and secrets.
+To restore after installing an empty matching mode, run `sudo bananachat restore PACKAGE`. It saves a `before-restore` package before replacement and keeps this server's Ollama choice: a managed Ollama stays managed and an existing one (`--ollama-url`) stays in use, whichever the package came from. Restore cannot convert `web`, `single`, and `compute` modes; use a separate root and a deliberate data/backend migration for a role change. Restore packages only from trusted operators: they include executable source and secrets.
 
-**Automatic updates are disabled after every restore.** Verify login, chat history, attachments, models, and a streaming reply before enabling them again. For a split deployment, create a separate package for each server and verify their URL/token pairing after moving either one.
+**Automatic updates are disabled after every restore.** Verify login, chat history, attachments, models, and a streaming reply before enabling them again. For a split deployment, create a separate package for each server; after moving either one, run `sudo bananachat backend test` on the web server, and `backend connect` with a fresh pairing code if the compute address or token changed.
 
 `sudo bananachat rollback` restores the code/data package saved before the last successful update. `rollback --package PATH` selects another package. `sudo bananachat recover` recovers an interrupted transaction from its durable journal. Restoring old code alone is insufficient after a database migration.
 
@@ -190,27 +240,19 @@ To restore after installing an empty matching mode, run `sudo bananachat restore
 
 The old production shell entrypoints have been retired. Keep the old checkout and services available while exporting data and testing the new managed installation. Export the old chat database from Admin → Migration, then import it into the installed single/web service with `sudo bananachat restore --legacy-database /root/bananachat_export.tar.gz`. The command stops all managed processes, makes a rollback package and checks startup before reopening service. Browser imports have been retired because a live request cannot quiesce its peer processes. Also copy persistent session keys, uploaded files/audio, operator configuration, and other data omitted by that export separately into the managed data directory while services are stopped. For older audio stored in `app/static/audio`, move it into the managed `data/audio` directory. Preserve ownership and private permissions, restart, and verify before switching users. Old application exports are not the same format as `banana` installation packages.
 
-The existing [personal worker](../worker/README.md) can be used independently through its single Python entrypoint. Dedicated inference servers use `--mode compute`. [ComfyUI](comfyui.md) and the optional [checkpoint downloader](../compute/README.md) keep their own data and credentials; configure and back them up separately.
+Volunteer [worker PCs](workers.md) are configured separately. Dedicated inference servers use `--mode compute` (see [compute node](compute.md)). [ComfyUI](comfyui.md) and the optional checkpoint downloader keep their own data and credentials; configure and back them up separately.
 
 ## Status and removal
 
-Use `sudo bananachat status` and `sudo journalctl -u bananachat` for the current revision and service logs. `start`, `stop`, and `restart` manage the remembered service set, including managed Ollama. Configuration is under `/opt/bananachat/config`, runtime data under `data`, prepared code under `releases`, and `current` selects the active source. Keep mutable data there instead of editing installed source. Operation results are saved privately in `config/history.jsonl`.
+Use `sudo bananachat status` and `sudo journalctl -u bananachat` for the current revision and service logs. `status` also summarises inference: the compute address and token fingerprint on a web server, the gateway address, token fingerprint and Ollama (managed or existing) on a compute server, and any model list waiting after a restore. `start`, `stop`, and `restart` manage the remembered service set, including a managed Ollama; an existing Ollama chosen with `--ollama-url` is never touched, and neither does `uninstall` remove it. Configuration is under `/opt/bananachat/config`, runtime data under `data`, prepared code under `releases`, and `current` selects the active source. Keep mutable data there instead of editing installed source. Operation results are saved privately in `config/history.jsonl`.
 
-`sudo bananachat uninstall` disables updates and backup scheduling and removes managed services and the command while retaining files. An unchanged Caddyfile installed by this command is reverted to its prior configuration; a later operator edit is retained for manual adjustment. Shared packages, system accounts, and other services are retained. Reinstall preserved data from a clean checkout with the same root/mode/name and `install --reuse-data`.
+`sudo bananachat uninstall` disables updates and backup scheduling and removes managed services and the command while retaining files. An unchanged Caddyfile installed by this command is reverted to its prior configuration; a later operator edit is retained for manual adjustment. Shared packages, system accounts, and other services are retained. Reinstall preserved data from a clean checkout with the same root/mode/name and `install --reuse-data`; this is also how a compute server switches between a managed Ollama and an existing one (`--ollama-url`).
 
 Permanent deletion requires `sudo bananachat uninstall --purge --confirm bananachat`. This also removes local backups under the installation root; copy the migration package elsewhere first. For multiple installations use separate `--root`, `--name`, and `--port` values and merge proxy configuration deliberately.
 
 ## Optional desktop worker
 
-The worker can contribute an existing machine's Ollama capacity to the web server. Configure `BC_SERVER_URL` and the separately issued `BC_WORKER_TOKEN`, then run `python worker/bananachat_worker.py run`. Its `install`, `start`, `stop`, `status`, and `uninstall` commands manage background execution.
-
-Linux uses a user service by default; run `install --system` from the intended non-root worker account to create a system service under that account. The installer uses sudo only for system configuration. Windows uses a Task Scheduler job for the current account at login, with an interactive token and least privilege, preferring `pythonw.exe` so the worker runs without a console window. Its settings file goes under `%APPDATA%\BananaChat` and the installer points the worker at a rotating log file beside it, since a scheduled task has nowhere to send stdout. Run installation from that account. An old `BananaChatWorker` Windows system service must first be stopped and removed using `sc.exe stop BananaChatWorker` and `sc.exe delete BananaChatWorker` in an administrator terminal. The new installer refuses to leave that old service running alongside the user task.
-
-macOS uses a LaunchAgent in `~/Library/LaunchAgents` that starts at login, on both Intel and Apple Silicon. `install --system` writes a LaunchDaemon to `/Library/LaunchDaemons` that starts at boot; run it from the worker's own account, since the daemon is pinned to that account rather than left as root. Control uses `launchctl kickstart`, `bootout` and `print`, falling back to `load -w` on older systems that predate `bootstrap`. launchd has no `EnvironmentFile`, so the worker reads `~/.config/bananachat-worker.env`, which the installer creates with mode 0600; the plist carries only the path to it, never the token.
-
-The managed server deployment trials cover Linux. The Windows task and the macOS agent are covered by tests against the artefacts they generate and the commands they issue, but neither has been exercised on that hardware here, and the chosen desktop GPU still needs a trial on the machine before relying on unattended work.
-
-On macOS the worker has no GPU utilisation reading, so the "gaming" gate that pauses inference on a busy NVIDIA card never fires. The worker still yields, using the IOKit idle reading to drop to below-normal priority whenever someone is at the keyboard.
+Volunteer PCs can contribute their Ollama capacity to the web server. Read [workers](workers.md) for what that means for privacy, how to enable it (`BC_WORKERS_ENABLED`), how to register a worker in Admin → Workers and how to install the daemon on Linux, Windows and macOS.
 
 ## Source availability
 

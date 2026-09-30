@@ -1,0 +1,80 @@
+{#- The message composer. Behaviour lives in static/js/chat.js. -#}
+<form class="composer" id="composer" method="post" action="{{ url_for('chat.send', session_id=session.id) }}" enctype="multipart/form-data" novalidate>
+  <div class="params-panel" id="params-panel" hidden>
+    <fieldset>
+      <legend>{{ t("chat.params_title") }}</legend>
+      <p class="hint">{{ t("chat.params_hint") }}</p>
+      <div class="params-grid">
+        <div class="field">
+          <label for="param-temperature">{{ t("chat.param_temperature") }}</label>
+          <input type="number" id="param-temperature" name="temperature" min="0" max="2" step="0.05" inputmode="decimal" placeholder="{{ t('chat.param_default') }}" data-param>
+        </div>
+        <div class="field">
+          <label for="param-top_p">{{ t("chat.param_top_p") }}</label>
+          <input type="number" id="param-top_p" name="top_p" min="0" max="1" step="0.05" inputmode="decimal" placeholder="{{ t('chat.param_default') }}" data-param>
+        </div>
+        <div class="field">
+          <label for="param-top_k">{{ t("chat.param_top_k") }}</label>
+          <input type="number" id="param-top_k" name="top_k" min="1" max="200" step="1" inputmode="numeric" placeholder="{{ t('chat.param_default') }}" data-param>
+        </div>
+        <div class="field">
+          <label for="param-num_ctx">{{ t("chat.param_num_ctx") }}</label>
+          <input type="number" id="param-num_ctx" name="num_ctx" min="512" max="{{ config.max_num_ctx }}" step="512" inputmode="numeric" placeholder="{{ t('chat.param_default') }}" data-param>
+        </div>
+      </div>
+      <div class="row-end mt-2">
+        <button type="button" class="btn btn-ghost btn-sm" id="params-reset">{{ t("chat.params_reset") }}</button>
+      </div>
+    </fieldset>
+  </div>
+  <div class="composer-box" id="composer-box">
+    <ul class="file-chips" id="file-chips" aria-label="{{ t('chat.attached_files') }}" hidden></ul>
+    <label class="visually-hidden" for="chat-input">{{ t("chat.message_label") }}</label>
+    <textarea id="chat-input" name="content" rows="1" placeholder="{{ t('chat.placeholder_no_history') if session.is_incognito else t('chat.placeholder') }}" aria-describedby="composer-hint" enterkeyhint="send"></textarea>
+    <div class="composer-toolbar">
+      <div class="composer-tools">
+        {% if not session.is_incognito %}
+        <button type="button" class="icon-btn" id="attach-button"{% if paused %} disabled{% endif %} aria-label="{{ t('chat.attach') }}" title="{{ t('chat.attach') }}">{{ icon("paperclip") }}</button>
+        <input type="file" id="file-input" name="files" multiple hidden{% if paused %} disabled{% endif %} accept="{{ data.limits.accept }}">
+        {% endif %}
+        <div class="model-picker" id="model-picker">
+          <button type="button" class="btn btn-ghost btn-sm model-button" id="model-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="model-popover">
+            <span class="visually-hidden">{{ t("chat.model") }}:</span><span class="truncate" id="model-button-label">{{ t("chat.model_auto") }}</span>{{ icon("chevron-down") }}
+          </button>
+          <div class="model-popover" id="model-popover" hidden>
+            <label class="visually-hidden" for="model-search">{{ t("chat.model_search") }}</label>
+            <input type="search" id="model-search" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="model-list" placeholder="{{ t('chat.model_search') }}" autocomplete="off">
+            <ul class="model-list" id="model-list" role="listbox" aria-label="{{ t('chat.model') }}"></ul>
+          </div>
+        </div>
+        <div class="model-picker effort-picker" id="effort-picker" hidden>
+          <button type="button" class="btn btn-ghost btn-sm model-button effort-button" id="effort-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="effort-popover" title="{{ t('chat.effort') }}">
+            {{ icon("brain") }}<span class="visually-hidden">{{ t("chat.effort") }}:</span><span class="truncate" id="effort-button-label"></span>{{ icon("chevron-down") }}
+          </button>
+          <div class="model-popover effort-popover" id="effort-popover" hidden>
+            <p class="effort-popover-title" id="effort-popover-title">{{ t("chat.effort") }}</p>
+            <ul class="model-list" id="effort-list" role="listbox" tabindex="-1" aria-labelledby="effort-popover-title"></ul>
+            <p class="effort-popover-hint hint" id="effort-hint">{{ t("chat.effort_hint") }}</p>
+          </div>
+        </div>
+        {% if personality_allowed %}
+        <div class="model-picker persona-picker" id="persona-picker">
+          <button type="button" class="btn btn-ghost btn-sm model-button persona-button" id="persona-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="persona-popover" aria-label="{{ t('personality.chat_picker') }}">
+            {{ icon("sparkles") }}<span class="truncate persona-button-label">{{ t("personality.chat_none") }}</span>{{ icon("chevron-down") }}
+          </button>
+          <div class="model-popover persona-popover" id="persona-popover" hidden>
+            <ul class="model-list" id="persona-list" role="listbox" tabindex="-1" aria-label="{{ t('personality.chat_picker') }}"></ul>
+            {% if has_endpoint("personalities.index") %}<div class="persona-popover-footer"><a id="persona-manage" href="{{ url_for('personalities.index') }}">{{ t("personality.manage") }}</a></div>{% endif %}
+          </div>
+        </div>
+        {% endif %}
+        <button type="button" class="icon-btn" id="params-toggle" aria-expanded="false" aria-controls="params-panel" aria-label="{{ t('chat.params_toggle') }}" title="{{ t('chat.params_toggle') }}">{{ icon("sliders") }}</button>
+        <button type="button" class="icon-btn" id="voice-button"{% if paused %} disabled{% endif %} aria-pressed="false" aria-label="{{ t('chat.voice_start') }}" title="{{ t('chat.voice_start') }}" hidden>{{ icon("mic") }}</button>
+      </div>
+      <button type="submit" class="btn btn-primary send-button" id="send-button"{% if paused %} disabled{% endif %} aria-label="{{ t('chat.send') }}" title="{{ t('chat.send') }}">{{ icon("arrow-up") }}</button>
+      <button type="button" class="btn stop-button" id="stop-button" hidden>{{ icon("stop") }}<span>{{ t("chat.stop") }}</span></button>
+    </div>
+  </div>
+  <p class="composer-paused" id="composer-paused" role="status" aria-live="polite">{% if paused %}{{ t("js.status_paused") }}{% endif %}</p>
+  <p class="composer-hint" id="composer-hint">{{ t("chat.composer_hint") }}</p>
+</form>

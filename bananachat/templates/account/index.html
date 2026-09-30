@@ -1,0 +1,509 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ t("account.title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/account.css') }}">{% endblock %}
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
+{% macro status_badge(status) -%}
+<span class="badge {{ {'approved': 'badge-success', 'denied': 'badge-danger'}.get(status, 'badge-warning') }}">{{ t("account.status_" ~ status) }}</span>
+{%- endmacro %}
+{% macro meter(label, data, id, left_text) -%}
+<div class="usage-meter">
+  <div class="row-between">
+    <span id="{{ id }}-label">{{ label }}</span>
+    <span class="muted small">{{ t("account.usage_of", used=(data.used | tokens), limit=(data.limit | tokens)) }}</span>
+  </div>
+  <progress class="meter {{ data.state }}" value="{{ data.value }}" max="{{ data.max }}" aria-labelledby="{{ id }}-label" aria-valuetext="{{ t('account.usage_percent', percent=data.percent) }}">{{ data.percent }}%</progress>
+  <span class="hint">{{ left_text }}</span>
+</div>
+{%- endmacro %}
+{#- A 5-hour or weekly limit: meter, slow tokens, and when it resets (or that the next request starts it). -#}
+{% macro window_block(window, period, id, model=false) -%}
+{% if period == "window" %}
+{{ meter(t("account.window_tokens"), window.meter, id, t("account.window_left", left=(window.meter.left | tokens))) }}
+{% if window.slow %}{{ meter(t("account.slow_tokens"), window.slow, id ~ "-slow", t("account.window_left", left=(window.slow.left | tokens))) }}{% endif %}
+{% else %}
+{{ meter(t("account.weekly_tokens"), window.meter, id, t("account.week_left", left=(window.meter.left | tokens))) }}
+{% endif %}
+<p class="hint mb-0">{% if window.open %}{{ t("account." ~ period ~ ("_blocked" if window.blocked else "_resets"), time=(window.resets_at | time_text), left=(window.resets_at | time_left)) }}{% else %}{{ t("account." ~ period ~ "_not_started") }}{% endif %}</p>
+{%- endmacro %}
+{% block content %}
+<div class="page account-page">
+  <header class="page-header">
+    <div>
+      <h1>{{ t("account.title") }}</h1>
+      <p>{{ t("account.subtitle") }}</p>
+    </div>
+  </header>
+
+  <div class="account-layout">
+    <nav class="account-toc" aria-label="{{ t('account.sections') }}">
+      <a href="#profile">{{ t("account.profile") }}</a>
+      <a href="#usage">{{ t("account.usage") }}</a>
+      <a href="#password">{{ t("account.password") }}</a>
+      <a href="#sessions">{{ t("account.sessions") }}</a>
+      {% if user.role != "admin" %}<a href="#quota">{{ t("account.quota") }}</a>{% endif %}
+      <a href="#access">{{ t("account.access") }}</a>
+      <a href="#data">{{ t("account.data") }}</a>
+      <a href="#delete">{{ t("account.delete") }}</a>
+      <hr>
+      {% if has_endpoint("customization.index") %}<a href="{{ url_for('customization.index') }}">{{ icon("palette") }}{{ t("nav.customize") }}</a>{% endif %}
+      {% if has_endpoint("personalities.index") %}<a href="{{ url_for('personalities.index') }}">{{ icon("sparkles") }}{{ t("nav.personalities") }}</a>{% endif %}
+      {% if has_endpoint("developer.index") %}<a href="{{ url_for('developer.index') }}">{{ icon("key") }}{{ t("account.api_tokens") }}</a>{% endif %}
+    </nav>
+
+    <div class="stack-lg account-sections">
+      {# ----- profile ----- #}
+      <section class="card" id="profile" aria-labelledby="profile-title">
+        <h2 id="profile-title">{{ t("account.profile") }}</h2>
+        <dl class="details">
+          <dt>{{ t("auth.username") }}</dt><dd><strong>{{ user.username }}</strong></dd>
+          <dt>{{ t("account.role") }}</dt><dd>{{ t("account.role_" ~ user.role) }}</dd>
+          <dt>{{ t("account.member_since") }}</dt><dd>{{ user.created_at | datetime }}</dd>
+          <dt>{{ t("account.last_sign_in") }}</dt><dd>{% if user.last_login_at %}{{ user.last_login_at | timeago }} <span class="faint">({{ user.last_login_at | datetime }})</span>{% else %}{{ t("time.never") }}{% endif %}</dd>
+        </dl>
+      </section>
+
+      {# ----- limits ----- #}
+      <section class="card" id="usage" aria-labelledby="usage-title">
+        <h2 id="usage-title">{{ t("account.usage") }}</h2>
+        <p class="muted">{{ t("account.limits_intro") }}</p>
+        <div class="grid grid-2">
+          {% for pool in usage %}
+          <div class="usage-pool stack-sm">
+            <h3>{{ t("account.pool_" ~ pool.pool) }}</h3>
+            {% if pool.admin %}
+            <p class="mb-0"><span class="badge badge-success">{{ t("common.unlimited") }}</span></p>
+            <p class="hint mb-0">{{ t("account.admin_unlimited") }}</p>
+            {% else %}
+            <p class="small mb-0">{{ t("account.rate_label") }}: {{ pool.rate if pool.rate else t("account.rate_none") }}</p>
+            {% if pool.window %}{{ window_block(pool.window, "window", "meter-" ~ pool.pool ~ "-window") }}
+            {% else %}<p class="mb-0"><span class="badge badge-success">{{ t("account.window_none") }}</span></p>{% endif %}
+            {% if pool.weekly %}{{ window_block(pool.weekly, "weekly", "meter-" ~ pool.pool ~ "-weekly") }}{% endif %}
+            {% if pool.reasons %}
+            <ul class="plain-list limit-reasons small" aria-label="{{ t('account.reasons_title') }}">
+              {% for reason in pool.reasons %}<li>{{ reason }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% if dynamic %}
+        <div class="alert alert-info mt-2">
+          {{ icon("chart") }}
+          <p>{% if dynamic.multiplier > 1 %}{{ t("account.dynamic_up", percent=dynamic.percent) }}{% elif dynamic.multiplier < 1 %}{{ t("account.dynamic_down", percent=dynamic.percent) }}{% else %}{{ t("account.dynamic_even") }}{% endif %}
+          {% if dynamic.reasons %}<span class="hint">({{ dynamic.reasons | join(" · ") }})</span>{% endif %}</p>
+        </div>
+        {% endif %}
+        {% if models %}
+        <h3 class="mt-3" id="models-title">{{ t("account.models_title") }}</h3>
+        <p class="hint">{{ t("account.models_intro") }}</p>
+        <ul class="plain-list divider-list model-limits" aria-labelledby="models-title">
+          {% for model in models %}
+          <li class="model-limit" id="model-{{ loop.index }}">
+            <div class="row-between">
+              <strong>{{ model.name }}</strong>
+              <span class="badge-row">
+                {% if model.locked %}<span class="badge badge-danger">{{ icon("lock") }}{{ t("account.model_locked") }}</span>{% endif %}
+                {% if not model.counted %}<span class="badge badge-success">{{ t("account.model_not_counted") }}</span>
+                {% elif model.weight != 1 %}<span class="badge{% if model.weight > 1 %} badge-warning{% else %} badge-success{% endif %}">{{ t("account.model_weight", factor=model.weight_text) }}</span>{% endif %}
+              </span>
+            </div>
+            {% if model.counted and model.weight > 1 %}<p class="hint mb-0">{{ t("account.model_weight_hint", factor=model.weight_text) }}</p>{% endif %}
+            {% if model.rate %}<p class="small mb-0">{{ t("account.rate_label") }}: {{ model.rate }}</p>{% endif %}
+            {% if model.window %}{{ window_block(model.window, "window", "meter-model-" ~ loop.index ~ "-window", model=true) }}{% endif %}
+            {% if model.weekly %}{{ window_block(model.weekly, "weekly", "meter-model-" ~ loop.index ~ "-weekly", model=true) }}{% endif %}
+            {% if model.effort %}
+            <p class="small mb-0">{{ icon("brain") }} {{ t("account.effort_line", levels=(model.effort_allowed | join(", ")) if model.effort_allowed else t("account.effort_off")) }}
+              {% if model.effort_locked and quota_form and "effort" in quota_form.kinds and not pending_quota %}
+              <a href="{{ url_for('account.index', request='effort', model=model.id, level=model.effort_locked[0].value) }}#quota">{{ t("account.effort_request", level=model.effort_locked[0].label) }}</a>
+              {% endif %}</p>
+            {% if model.effort_locked %}<p class="hint mb-0">{{ icon("lock") }} {{ t("account.effort_locked_levels", levels=(model.effort_locked | map(attribute="label") | join(", "))) }}</p>{% endif %}
+            {% endif %}
+            {% if model.reasons %}
+            <ul class="plain-list limit-reasons small" aria-label="{{ t('account.reasons_title') }}">
+              {% for reason in model.reasons %}<li>{{ reason }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        {% if grants %}
+        <h3 class="mt-3" id="grants-title">{{ t("account.grants_title") }}</h3>
+        <ul class="plain-list divider-list" aria-labelledby="grants-title">
+          {% for grant in grants %}
+          <li class="list-item">
+            <div class="grow">
+              <strong>{{ grant.text }}</strong>{% if grant.everyone %} <span class="badge">{{ t("account.grant_everyone") }}</span>{% endif %}
+              <div class="hint">{% if grant.starts_at %}{{ t("account.grant_from", date=(grant.starts_at | datetime)) }} · {% endif %}{{ t("account.grant_until", date=(grant.ends_at | datetime)) if grant.ends_at else t("account.grant_forever") }}{% if grant.reason %} · {{ grant.reason }}{% endif %}</div>
+            </div>
+            {% if grant.starts_at %}<span class="badge badge-info">{{ t("account.grant_upcoming") }}</span>{% else %}<span class="badge badge-success">{{ t("account.grant_active") }}</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        {% if tier %}
+        <h3 class="mt-3" id="tier-title">{{ t("account.tier_title") }}</h3>
+        <p class="mb-1"><strong>{{ tier.tier.name }}</strong> <span class="badge">{{ t("account.tier_position", index=tier.index + 1, count=tier.count) }}</span>{% if tier.tier.multiplier != 1 %} <span class="muted">{{ t("account.tier_factor", factor=("%g" | format(tier.tier.multiplier))) }}</span>{% endif %}{% if tier.locked %} <span class="hint">{{ t("account.tier_locked") }}</span>{% endif %}</p>
+        {% if tier.next and not tier.locked %}
+        <p class="mb-1">{{ t("account.tier_next", name=tier.next.name) }}</p>
+        <ul class="plain-list tier-requirements small" aria-labelledby="tier-title">
+          {% for item in tier.requirements %}{% if item.need or item.key == "clean_days" %}
+          <li class="{{ 'is-met' if item.met else 'is-open' }}">{{ icon("check" if item.met else "chevron-right") }} {{ t("account.tier_req_" ~ item.key, need=((item.need | tokens) if item.key == "tokens" else item.need), have=((item.have | tokens) if item.key == "tokens" else item.have)) }}</li>
+          {% endif %}{% endfor %}
+        </ul>
+        <p class="hint mb-0">{{ t("account.tier_auto_hint") }}</p>
+        {% elif not tier.next %}
+        <p class="hint mb-0">{{ t("account.tier_top") }}</p>
+        {% endif %}
+        {% endif %}
+        {% if bonus_mode != "none" and user.role != "admin" %}
+        <div class="alert alert-success mt-2">
+          {{ icon("music") }}
+          <p>{% if bonus_mode == "multiplier" %}{{ t("account.bonus_multiplier", factor=(bonus_regular | credits)) }}{% else %}{{ t("account.bonus_fixed", tokens=(bonus_regular | tokens), slow=(bonus_slow | tokens)) }}{% endif %}
+          {% if music_nav_visible %}<a href="{{ url_for('music.free_quota') }}">{{ t("account.bonus_details") }}</a>{% endif %}</p>
+        </div>
+        {% endif %}
+        <p class="hint mt-2 mb-0">{{ t("account.usage_reset") }}</p>
+      </section>
+
+      {# ----- password ----- #}
+      <section class="card" id="password" aria-labelledby="password-title">
+        <h2 id="password-title">{{ t("account.password") }}</h2>
+        <p class="muted">{{ t("account.password_intro") }}</p>
+        <form method="post" action="{{ url_for('account.change_password') }}" class="stack" data-busy>
+          {{ csrf() }}
+          <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
+          <div class="field">
+            <label for="current_password">{{ t("account.current_password") }}</label>
+            <input type="password" id="current_password" name="current_password" autocomplete="current-password" required maxlength="1024">
+          </div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="new_password">{{ t("account.new_password") }}</label>
+              <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="8" maxlength="1024" aria-describedby="new_password_hint">
+              <span class="hint" id="new_password_hint">{{ t("auth.password_length") }}</span>
+            </div>
+            <div class="field">
+              <label for="confirm_password">{{ t("auth.confirm_password") }}</label>
+              <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" required minlength="8" maxlength="1024">
+            </div>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("account.change_password") }}</button></div>
+        </form>
+      </section>
+
+      {# ----- sessions ----- #}
+      <section class="card" id="sessions" aria-labelledby="sessions-title">
+        <div class="card-header">
+          <h2 id="sessions-title">{{ t("account.sessions") }}</h2>
+          {% if sessions | length > 1 %}
+          <form method="post" action="{{ url_for('account.revoke_other_sessions') }}" data-confirm="{{ t('account.sessions_revoke_others_confirm') }}" data-confirm-danger>
+            {{ csrf() }}
+            <button type="submit" class="btn btn-danger btn-sm">{{ t("account.sessions_revoke_others") }}</button>
+          </form>
+          {% endif %}
+        </div>
+        <p class="muted">{{ t("account.sessions_intro") }}</p>
+        <ul class="plain-list divider-list">
+          {% for item in sessions %}
+          <li class="list-item session-item">
+            <div class="grow">
+              <div><strong>{{ item.device }}</strong>{% if item.current %} <span class="badge badge-primary">{{ t("account.this_device") }}</span>{% endif %}</div>
+              <div class="hint">{{ t("account.session_details", ip=(item.ip or "—"), seen=(item.last_seen_at | timeago), started=(item.created_at | datetime)) }}</div>
+            </div>
+            {% if not item.current %}
+            <form method="post" action="{{ url_for('account.revoke_session', id_hash=item.id) }}">
+              {{ csrf() }}
+              <button type="submit" class="btn btn-sm" aria-label="{{ t('account.session_revoke_label', device=item.device) }}">{{ t("account.session_revoke") }}</button>
+            </form>
+            {% endif %}
+          </li>
+          {% else %}
+          <li class="list-item muted">{{ t("account.sessions_none") }}</li>
+          {% endfor %}
+        </ul>
+      </section>
+
+      {# ----- quota requests ----- #}
+      {% if user.role != "admin" %}
+      {% set f = quota_form %}
+      {% set is_draft = draft.form == "quota" %}
+      {% set kind = draft.kind if is_draft and draft.kind in f.kinds else f.kinds[0] %}
+      {% set pool = draft.pool if is_draft and draft.pool in f.pools else (f.pools_for[kind][0] if f.pools_for[kind] else "api") %}
+      {% set now = f.current[pool] %}
+      <section class="card" id="quota" aria-labelledby="quota-title">
+        <h2 id="quota-title">{{ t("account.quota") }}</h2>
+        <p class="muted">{{ t("account.quota_intro") }}</p>
+        {% if pending_quota %}
+        <div class="alert alert-info mb-2">{{ icon("info") }}<p>{{ t("account.quota_pending", summary=pending_summary, date=(pending_quota.created_at | datetime)) }}</p></div>
+        {% else %}
+        {% if auto_approve and (auto_max_tokens or auto_max_weekly) %}
+        <p class="hint">{% if auto_max_tokens %}{{ t("account.quota_auto_hint", tokens=(auto_max_tokens | tokens), slow=(auto_max_slow | tokens)) if slow_enabled and auto_max_slow else t("account.quota_auto_hint_no_slow", tokens=(auto_max_tokens | tokens)) }}{% endif %}{% if auto_max_weekly and "weekly" in f.kinds %} {{ t("account.quota_auto_hint_weekly", tokens=(auto_max_weekly | tokens)) }}{% endif %}</p>
+        {% endif %}
+        <script type="application/json" id="quota-data">{{ {"current": f.current, "pools_for": f.pools_for, "extra_pools": f.extra_pools, "efforts": f.efforts} | tojson }}</script>
+        <form method="post" action="{{ url_for('account.quota_request') }}" class="stack quota-form" data-busy>
+          {{ csrf() }}
+          <div class="form-grid">
+            <div class="field">
+              <label for="quota_kind">{{ t("account.quota_kind") }}</label>
+              <select id="quota_kind" name="kind">
+                {% for option in f.kinds %}<option value="{{ option }}"{% if option == kind %} selected{% endif %}>{{ t("account.quota_kind_" ~ option) }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field" data-pool-field{% if kind == "effort" %} hidden{% endif %}>
+              <label for="quota_pool">{{ t("account.quota_pool") }}</label>
+              <select id="quota_pool" name="pool">
+                {% for option in f.pools %}<option value="{{ option }}"{% if option == pool %} selected{% endif %}>{{ t("account.pool_" ~ option) }}</option>{% endfor %}
+              </select>
+            </div>
+          </div>
+          <p class="hint mb-0">{{ t("account.quota_amount_hint") }}</p>
+          {% if "window" in f.kinds %}
+          <fieldset class="form-grid" data-kind="window">
+            <legend class="visually-hidden">{{ t("account.quota_kind_window") }}</legend>
+            <div class="field">
+              <label for="quota_tokens">{{ t("account.quota_new_tokens") }}</label>
+              <input type="text" inputmode="decimal" autocomplete="off" maxlength="20" id="quota_tokens" name="tokens" value="{{ draft.tokens if is_draft and draft.tokens else ([(now.tokens * 2), quota_max] | min) | token_input }}" data-current="tokens">
+            </div>
+            {% if slow_enabled %}
+            <div class="field">
+              <label for="quota_slow">{{ t("account.quota_new_slow") }}</label>
+              <input type="text" inputmode="decimal" autocomplete="off" maxlength="20" id="quota_slow" name="slow_tokens" value="{{ draft.slow_tokens if is_draft and draft.slow_tokens else now.slow | token_input }}" data-current="slow">
+            </div>
+            {% endif %}
+          </fieldset>
+          {% endif %}
+          {% if "weekly" in f.kinds %}
+          <fieldset class="form-grid" data-kind="weekly">
+            <legend class="visually-hidden">{{ t("account.quota_kind_weekly") }}</legend>
+            <div class="field">
+              <label for="quota_weekly">{{ t("account.quota_new_weekly") }}</label>
+              <input type="text" inputmode="decimal" autocomplete="off" maxlength="20" id="quota_weekly" name="weekly_tokens" value="{{ draft.weekly_tokens if is_draft and draft.weekly_tokens else ([(now.weekly * 2), f.weekly_max] | min) | token_input }}" data-current="weekly">
+            </div>
+          </fieldset>
+          {% endif %}
+          {% if "rate" in f.kinds %}
+          <fieldset class="stack" data-kind="rate">
+            <legend class="visually-hidden">{{ t("account.quota_kind_rate") }}</legend>
+            <div class="form-grid">
+              <div class="field">
+                <label for="quota_rate_per">{{ t("account.quota_rate_which") }}</label>
+                <select id="quota_rate_per" name="rate_per" data-rules>
+                  {% for rule in now.rules %}<option value="{{ rule.per }}"{% if is_draft and draft.rate_per == rule.per %} selected{% endif %}>{{ rule.label }}</option>{% endfor %}
+                </select>
+              </div>
+              <div class="field">
+                <label for="quota_rate">{{ t("account.quota_new_requests") }}</label>
+                <input type="number" id="quota_rate" name="rate_requests" min="1" max="1000000" step="1" value="{{ draft.rate_requests if is_draft and draft.rate_requests else ((now.rules[0].requests * 2) | int if now.rules else 2) }}" data-current="requests">
+              </div>
+            </div>
+            <p class="hint mb-0">{{ t("account.quota_rate_hint") }}</p>
+          </fieldset>
+          {% endif %}
+          <fieldset class="stack" data-kind="temporary">
+            <legend class="visually-hidden">{{ t("account.quota_kind_temporary") }}</legend>
+            <div class="form-grid">
+              <div class="field">
+                <label for="quota_hours">{{ t("account.quota_hours") }}</label>
+                <input type="number" id="quota_hours" name="hours" min="1" max="{{ f.hours_max }}" step="1" value="{{ draft.hours if is_draft and draft.hours else 24 }}">
+              </div>
+              <div class="field">
+                <label for="quota_extra">{{ t("account.quota_extra_tokens") }}</label>
+                <input type="text" inputmode="decimal" autocomplete="off" maxlength="20" id="quota_extra" name="extra_tokens" value="{{ draft.extra_tokens if is_draft and draft.extra_tokens else '20k' }}">
+              </div>
+            </div>
+            <label class="check"><input type="checkbox" id="quota_unlimited" name="unlimited" value="1"{% if is_draft and draft.unlimited == "1" %} checked{% endif %}><span>{{ t("account.quota_unlimited") }}</span></label>
+            <p class="hint mb-0" id="quota_no_window"{% if pool in f.extra_pools %} hidden{% endif %}>{{ t("account.quota_temporary_no_window") }}</p>
+            <p class="hint mb-0">{{ t("account.quota_temporary_hint") }}</p>
+          </fieldset>
+          {% if "effort" in f.kinds %}
+          {% set chosen_model = draft.effort_model if is_draft and draft.effort_model else f.efforts[0].value %}
+          {% set target = (f.efforts | selectattr("value", "equalto", chosen_model) | first) or f.efforts[0] %}
+          <fieldset class="stack" data-kind="effort">
+            <legend class="visually-hidden">{{ t("account.quota_kind_effort") }}</legend>
+            <div class="form-grid">
+              <div class="field">
+                <label for="quota_effort_model">{{ t("account.quota_effort_model_label") }}</label>
+                <select id="quota_effort_model" name="effort_model">
+                  {% for option in f.efforts %}<option value="{{ option.value }}"{% if option.value == target.value %} selected{% endif %}>{{ option.label }}</option>{% endfor %}
+                </select>
+              </div>
+              <div class="field">
+                <label for="quota_effort_level">{{ t("account.quota_effort_level_label") }}</label>
+                <select id="quota_effort_level" name="effort_level">
+                  {% for level in target.levels %}<option value="{{ level.value }}"{% if is_draft and draft.effort_level == level.value %} selected{% endif %}>{{ level.label }}</option>{% endfor %}
+                </select>
+              </div>
+            </div>
+            <p class="hint mb-0">{{ t("account.quota_effort_hint") }}</p>
+          </fieldset>
+          {% endif %}
+          <div class="field">
+            <label for="quota_reason">{{ t("account.quota_reason") }}</label>
+            <textarea id="quota_reason" name="reason" required minlength="5" maxlength="1000" data-counter aria-describedby="quota_reason_hint">{{ draft.reason if is_draft and draft.reason }}</textarea>
+            <span class="hint" id="quota_reason_hint">{{ t("account.quota_reason_hint") }}</span>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("account.quota_submit") }}</button></div>
+        </form>
+        {% endif %}
+        {% if quota_history %}
+        <h3 class="mt-3">{{ t("account.history") }}</h3>
+        <div class="table-wrap">
+          <table class="table">
+            <caption class="visually-hidden">{{ t("account.quota_history") }}</caption>
+            <thead><tr><th scope="col">{{ t("common.created") }}</th><th scope="col">{{ t("account.requested") }}</th><th scope="col">{{ t("common.status") }}</th><th scope="col">{{ t("account.reply") }}</th></tr></thead>
+            <tbody>
+              {% for item in quota_history %}
+              <tr>
+                <td class="nowrap">{{ item.row.created_at | datetime }}</td>
+                <td>{{ item.summary }}</td>
+                <td>{{ status_badge(item.row.status) }}{% if item.row.resolution_source == "automatic" %} <span class="hint">{{ t("account.automatic") }}</span>{% endif %}</td>
+                <td>{{ item.row.admin_message or "—" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      </section>
+      {% endif %}
+
+      {# ----- access ----- #}
+      <section class="card" id="access" aria-labelledby="access-title">
+        <h2 id="access-title">{{ t("account.access") }}</h2>
+        {% if access.admin %}
+        <p class="muted mb-0">{{ t("account.access_admin") }}</p>
+        {% else %}
+        <p class="muted">{{ t("account.access_intro") }}</p>
+        <ul class="plain-list divider-list">
+          {% for gate in access.capabilities %}
+          <li class="list-item">
+            <div class="grow">
+              <strong>{{ gate.label }}</strong>
+              <div class="hint">{{ t("account.capability_hint_" ~ gate.scope) }}</div>
+            </div>
+            {% if gate.allowed %}<span class="badge badge-success">{{ t("account.access_allowed") }}</span>
+            {% elif gate.pending_request %}<span class="badge badge-warning">{{ t("account.access_pending") }}</span>
+            {% elif gate.requestable %}<span class="badge badge-info">{{ t("account.access_requestable") }}</span>
+            {% else %}<span class="badge">{{ t("account.access_closed") }}</span>{% endif %}
+          </li>
+          {% endfor %}
+          {% for item in access.resources %}
+          <li class="list-item">
+            <div class="grow">
+              <strong>{{ item.gate.label }}</strong> <span class="faint small">{{ t("account.scope_kind_" ~ item.gate.scope) }}</span>
+              <div class="hint">{{ t("account.access_models", models=(item.models | join(", "))) }}</div>
+            </div>
+            {% if item.gate.pending_request %}<span class="badge badge-warning">{{ t("account.access_pending") }}</span>
+            {% else %}<span class="badge badge-info">{{ t("account.access_requestable") }}</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+
+        {% if requestable %}
+        <h3 class="mt-3" id="access-form-title">{{ t("account.access_request_title") }}</h3>
+        <form method="post" action="{{ url_for('account.access_request') }}" class="stack" aria-labelledby="access-form-title" data-busy>
+          {{ csrf() }}
+          <div class="field">
+            <label for="access_resource">{{ t("account.access_resource") }}</label>
+            <select id="access_resource" name="resource" required>
+              {% for option in requestable %}<option value="{{ option.value }}"{% if draft.form == "access" and draft.resource == option.value %} selected{% endif %}>{{ option.label }} ({{ option.kind }})</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="access_use_case">{{ t("account.access_use_case") }}</label>
+            <textarea id="access_use_case" name="use_case" required minlength="{{ use_case_min }}" maxlength="{{ use_case_max }}" data-counter aria-describedby="access_use_case_hint">{{ draft.use_case if draft.form == "access" }}</textarea>
+            <span class="hint" id="access_use_case_hint">{{ t("account.access_use_case_hint", min=use_case_min, max=use_case_max) }}</span>
+          </div>
+          <label class="check"><input type="checkbox" name="confirmed_safe" value="1" required><span>{{ t("account.access_confirm_safe") }}</span></label>
+          <label class="check"><input type="checkbox" name="confirmed_logging" value="1" required><span>{{ t("account.access_confirm_logging") }}</span></label>
+          <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("account.access_submit") }}</button></div>
+        </form>
+        {% elif access.capabilities or access.resources %}
+        <p class="hint mt-2 mb-0">{{ t("account.access_nothing_to_request") }}</p>
+        {% endif %}
+
+        {% if access_history %}
+        <h3 class="mt-3">{{ t("account.history") }}</h3>
+        <div class="table-wrap">
+          <table class="table">
+            <caption class="visually-hidden">{{ t("account.access_history") }}</caption>
+            <thead><tr><th scope="col">{{ t("common.created") }}</th><th scope="col">{{ t("account.access_resource") }}</th><th scope="col">{{ t("common.status") }}</th><th scope="col">{{ t("account.reply") }}</th></tr></thead>
+            <tbody>
+              {% for item in access_history %}
+              <tr>
+                <td class="nowrap">{{ item.row.created_at | datetime }}</td>
+                <td>{{ item.label }} <span class="faint small">{{ item.kind }}</span></td>
+                <td>{{ status_badge(item.row.status) }}</td>
+                <td>{{ item.row.admin_message or "—" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+        {% endif %}
+      </section>
+
+      {# ----- data ----- #}
+      <section class="card" id="data" aria-labelledby="data-title">
+        <h2 id="data-title">{{ t("account.data") }}</h2>
+        <p class="muted">{{ t("account.data_intro") }}</p>
+        <div class="row">
+          <form method="post" action="{{ url_for('account.export_data') }}">
+            {{ csrf() }}
+            <button type="submit" class="btn">{{ icon("download") }}{{ t("account.export_data") }}</button>
+          </form>
+          <form method="post" action="{{ url_for('account.export_chats') }}">
+            {{ csrf() }}
+            <button type="submit" class="btn">{{ icon("download") }}{{ t("account.export_chats") }}</button>
+          </form>
+        </div>
+        <p class="hint mt-1">{{ t("account.export_hint") }}</p>
+        {% if has_endpoint("developer.index") %}
+        <p class="mb-0">{{ t("account.tokens_moved") }} <a href="{{ url_for('developer.index') }}">{{ t("account.api_tokens") }}</a></p>
+        {% endif %}
+
+        <hr>
+        <h3 id="delete-chats-title">{{ t("account.delete_chats") }}</h3>
+        <p class="muted">{{ t("account.delete_chats_intro", count=retention_days) if retention_days else t("account.delete_chats_intro_now") }}</p>
+        <form method="post" action="{{ url_for('account.delete_chats') }}" class="row align-end" aria-labelledby="delete-chats-title" data-confirm="{{ t('account.delete_chats_confirm') }}" data-confirm-danger>
+          {{ csrf() }}
+          <div class="field grow">
+            <label for="delete_chats_password">{{ t("account.confirm_with_password") }}</label>
+            <input type="password" id="delete_chats_password" name="password" autocomplete="current-password" required maxlength="1024">
+          </div>
+          <button type="submit" class="btn btn-danger">{{ icon("trash") }}{{ t("account.delete_chats_submit") }}</button>
+        </form>
+      </section>
+
+      {# ----- delete account ----- #}
+      <section class="card card-danger" id="delete" aria-labelledby="delete-title">
+        <h2 id="delete-title">{{ t("account.delete") }}</h2>
+        {% if is_last_admin %}
+        <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("account.delete_last_admin") }}</p></div>
+        {% else %}
+        <p class="muted">{{ t("account.delete_intro") }}</p>
+        <form method="post" action="{{ url_for('account.delete') }}" class="stack" data-confirm="{{ t('account.delete_confirm') }}" data-confirm-danger>
+          {{ csrf() }}
+          <div class="form-grid">
+            <div class="field">
+              <label for="confirm_username">{{ t("account.delete_type_username", username=user.username) }}</label>
+              <input type="text" id="confirm_username" name="confirm_username" required autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="64">
+            </div>
+            <div class="field">
+              <label for="delete_password">{{ t("auth.password") }}</label>
+              <input type="password" id="delete_password" name="password" autocomplete="current-password" required maxlength="1024">
+            </div>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn btn-danger">{{ t("account.delete_submit") }}</button></div>
+        </form>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/account.js') }}"></script>{% endblock %}

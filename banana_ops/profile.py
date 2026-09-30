@@ -6,8 +6,11 @@ import re
 import secrets
 from urllib.parse import urlsplit
 
+from .files import read_environment
 from .product import PRODUCT
 
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 HOSTING_STORAGE_NAMES = ("uploads", "attachments", "chat_attachments", "kanban_attachments", "custom_page_files")
 
 
@@ -50,6 +53,39 @@ def modes(product=PRODUCT):
     return ("wiki", "hosting") if product == "BananaWiki" else ("single", "web", "compute")
 
 
+def managed_ollama(settings):
+    """BananaChat single/compute servers run their own Ollama unless an existing one was chosen."""
+    return (settings["product"] == "BananaChat" and settings["mode"] in {"single", "compute"}
+            and not settings.get("ollama_url"))
+
+
+def ollama_upstream(settings, environment=None):
+    """The loopback Ollama a BananaChat single/compute server uses, as configured now.
+
+    The gateway reads BC_COMPUTE_UPSTREAM and the chat service BC_OLLAMA_URL;
+    operators may edit either. Anything that is not a loopback address falls
+    back to the address chosen at installation.
+    """
+    if environment is None:
+        try:
+            environment = read_environment(Path(settings["root"]) / "config/app.env")
+        except (OSError, ValueError):
+            environment = {}
+    value = (environment.get("BC_COMPUTE_UPSTREAM" if settings["mode"] == "compute" else "BC_OLLAMA_URL") or "").rstrip("/")
+    return value if loopback_http(value) else (settings.get("ollama_url") or DEFAULT_OLLAMA_URL)
+
+
+def loopback_http(url):
+    """A plain-HTTP address on this machine without credentials, path or query."""
+    try:
+        parts = urlsplit(url or "")
+        _ = parts.port  # raises ValueError for an invalid port
+    except ValueError:
+        return False
+    return (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS and not parts.username and not parts.password
+            and parts.path in ("", "/") and not parts.query and not parts.fragment)
+
+
 def validate_domain(domain):
     if not domain:
         return ""
@@ -83,12 +119,17 @@ def environment(settings, previous=None):
     root, mode = Path(settings["root"]), settings["mode"]
     data, product = root / "data", settings["product"]
     values = dict(previous or {})
+    # A setup token is generated only for a first installation. Updates and
+    # restores keep whatever the operator left, including a deleted token.
+    first_install = not settings.get("installed")
     values.update(BANANA_MAINTENANCE_FILE=str(data / ".banana-maintenance"), PYTHONDONTWRITEBYTECODE="1")
     if product == "BananaWiki" and mode == "wiki":
         defaults = {"BW_INSTANCE_DIR": str(data), "BW_DATABASE_PATH": str(data / "bananawiki.db"),
                     "BW_HOST": "127.0.0.1", "BW_PORT": str(settings["port"]), "BW_PROXY_MODE": "1" if settings.get("domain") else "0",
                     "BW_PREFERRED_URL_SCHEME": "https" if settings.get("domain") else "http", "BW_ENV": "production",
-                    "BW_SETUP_TOKEN": secrets.token_hex(32), "BW_SOURCE_URL": source_link(settings["source_url"])}
+                    "BW_SOURCE_URL": source_link(settings["source_url"])}
+        if first_install:
+            defaults["BW_SETUP_TOKEN"] = secrets.token_hex(32)
         defaults.update(wiki_paths(data))
         defaults["BW_SYSTEMD_SERVICE"] = settings["service"] + ".service"
     elif product == "BananaWiki":
@@ -107,19 +148,36 @@ def environment(settings, previous=None):
         values["HOSTING_CONTAINER_IMAGE"] = "bananawiki-tenant:" + settings["revision"]
     elif mode == "compute":
         defaults = {"BC_COMPUTE_HOST": "127.0.0.1", "BC_COMPUTE_PORT": str(settings["port"]),
-                    "BC_COMPUTE_UPSTREAM": "http://127.0.0.1:11434", "BC_COMPUTE_TOKEN_FILE": str(data / ".compute-api-token"),
+                    "BC_COMPUTE_UPSTREAM": settings.get("ollama_url") or DEFAULT_OLLAMA_URL,
+                    "BC_COMPUTE_TOKEN_FILE": str(data / ".compute-api-token"),
                     "BC_SOURCE_URL": source_link(settings["source_url"])}
     else:
         defaults = {"BC_HOST": "127.0.0.1", "BC_PORT": str(settings["port"]), "BC_INSTANCE_DIR": str(data),
                     "BC_DATABASE_PATH": str(data / "bananachat.db"), "BC_LOG_FILE": str(data / "logs" / "bananachat.log"),
-                    "BC_OLLAMA_URL": settings.get("backend_url") or "http://127.0.0.1:11434",
+                    "BC_OLLAMA_URL": settings.get("backend_url") or settings.get("ollama_url") or DEFAULT_OLLAMA_URL,
                     "BC_PROXY_MODE": "1" if settings.get("domain") else "0", "BC_PROXY_HOPS": "1",
                     "BC_SECURE_COOKIES": "1" if settings.get("domain") else "0", "BC_ENV": "production",
-                    "BC_SETUP_TOKEN": secrets.token_hex(32), "BC_SOURCE_URL": source_link(settings["source_url"])}
+                    "BC_SOURCE_URL": source_link(settings["source_url"])}
+        if first_install:
+            defaults["BC_SETUP_TOKEN"] = secrets.token_hex(32)
+    if product == "BananaChat" and mode == "web" and not settings.get("backend_url"):
+        # A web server never talks to an Ollama of its own by default.
+        defaults.pop("BC_OLLAMA_URL")
     for key, value in defaults.items():
         values.setdefault(key, value)
-    if product == "BananaChat" and mode in {"single", "compute"}:
-        values.update(OLLAMA_HOST="127.0.0.1:11434", OLLAMA_MODELS=str(data / "models"))
+    if product == "BananaChat" and first_install:
+        # What the operator chose on the install command line wins over a
+        # reused configuration; later updates and restores keep their edits.
+        chosen = settings.get("backend_url") if mode == "web" else settings.get("ollama_url")
+        if chosen:
+            values["BC_COMPUTE_UPSTREAM" if mode == "compute" else "BC_OLLAMA_URL"] = chosen
+    if product == "BananaChat" and managed_ollama(settings):
+        values.setdefault("OLLAMA_HOST", "127.0.0.1:11434")
+        values.setdefault("OLLAMA_MODELS", str(data / "models"))
+        managed = values["OLLAMA_HOST"] if "://" in values["OLLAMA_HOST"] else "http://" + values["OLLAMA_HOST"]
+        if first_install and mode == "compute" and loopback_http(managed):
+            # The gateway protects the Ollama this installation starts.
+            values["BC_COMPUTE_UPSTREAM"] = managed.rstrip("/")
     return values
 
 
@@ -133,7 +191,7 @@ def service_commands(settings):
                     name + "-maintenance": [str(python), "-m", "hosting.maintenance", "--interval", "300"]}
         return {name: [str(gunicorn), "-c", "gunicorn.conf.py", "wsgi:app"], name + "-tts": [str(python), "scripts/tts_worker.py"]}
     commands = {}
-    if settings["mode"] in {"single", "compute"}:
+    if managed_ollama(settings):
         commands[name + "-ollama"] = [settings["ollama_binary"], "serve"]
     commands[name] = ([str(python), "-m", "compute.inference_proxy"] if settings["mode"] == "compute"
                       else [str(gunicorn), "-c", "gunicorn.conf.py", "wsgi:app"])
@@ -146,7 +204,7 @@ def health_urls(settings):
         url += "z"
     urls = [url]
     if settings["product"] == "BananaChat" and settings["mode"] in {"single", "compute"}:
-        urls.append("http://127.0.0.1:11434/api/version")
+        urls.append(ollama_upstream(settings) + "/api/version")
     return urls
 
 

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block body_class %}auth-page{% endblock %}
+{% block topbar %}{% endblock %}
+{% block status %}{% endblock %}
+{% block footer %}{% endblock %}
+{% block content %}
+<div class="auth-shell">
+  <div class="auth-card">
+    <a class="brand" href="{{ url_for('core.index') }}">
+      <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="" width="40" height="40">
+      <span>{{ site_name }}</span>
+    </a>
+    {% if status_notices %}<div class="auth-status">{% include "partials/status_banner.html" %}</div>{% endif %}
+    <div class="card">
+      {% block card %}{% endblock %}
+    </div>
+    <div class="auth-footer">
+      {% block below %}{% endblock %}
+      <nav class="row" aria-label="{{ t('nav.language') }}">
+        <span class="grow"></span>
+        {% for code, name in language_names.items() %}
+        <a href="{{ language_switch_url(code) }}" lang="{{ code }}"{% if code == lang %} aria-current="true"{% endif %}>{{ name }}</a>
+        {% endfor %}
+        <span class="grow"></span>
+      </nav>
+      <p class="mt-2 faint small"><a href="{{ url_for('core.source') }}">{{ t("common.source_code") }}</a> · {{ product_name }} {{ product_version }}</p>
+    </div>
+  </div>
+</div>
+{% endblock %}

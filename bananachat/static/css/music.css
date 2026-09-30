@@ -1,0 +1,24 @@
+/* Music program: the player (top bar) and the Free quota page. */
+.music-player { display: inline-flex; align-items: center; gap: .25rem; }
+.music-player.is-floating {
+  position: fixed; z-index: 150; left: 1rem; bottom: 1rem; padding: .3rem .4rem;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--overlay); box-shadow: var(--shadow);
+}
+.music-toggle { gap: .35rem; }
+.music-toggle svg { width: 16px; height: 16px; }
+.music-player.is-playing .music-toggle { border-color: var(--primary); }
+.music-menu .menu-panel { width: min(280px, calc(100vw - 2rem)); padding: .75rem; }
+.music-menu .menu-panel a { margin-top: .25rem; }
+.music-title { margin: 0 .7rem .75rem; font-weight: 600; overflow-wrap: anywhere; }
+.music-panel .field { padding: 0 .7rem .5rem; }
+.music-panel .hint { padding: 0 .7rem; margin-bottom: .5rem; }
+.music-panel output { color: var(--text-muted); font-weight: 400; margin-left: .35rem; }
+@media (max-width: 640px) {
+  .music-toggle-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .music-toggle { padding: .25rem .5rem; }
+}
+
+.bonus-figure { font-size: 2.25rem; font-weight: 700; letter-spacing: -.02em; color: var(--primary); line-height: 1.1; }
+.compare-table td, .compare-table th { white-space: nowrap; }
+.terms { margin: 0 0 1rem; padding-left: 1.25rem; }
+.terms li + li { margin-top: .4rem; }

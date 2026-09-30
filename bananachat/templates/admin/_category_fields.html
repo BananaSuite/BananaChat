@@ -1,0 +1,19 @@
+{#- Category form fields. Uses `category` (or None) and `form` (submitted values or None). -#}
+{%- set source = form if form else (category or {}) -%}
+{%- set current_scope = source.get("scope") or "both" -%}
+<div class="form-grid">
+  <div class="field">
+    <label for="category-name" class="required">Name</label>
+    <input type="text" id="category-name" name="name" required maxlength="80" value="{{ source.get('name') or '' }}">
+  </div>
+  <div class="field">
+    <label for="category-description">Description</label>
+    <input type="text" id="category-description" name="description" maxlength="500" value="{{ source.get('description') or '' }}">
+  </div>
+</div>
+<fieldset>
+  <legend>Where the category's access rule applies</legend>
+  <label class="check"><input type="radio" name="scope" value="both"{% if current_scope == "both" %} checked{% endif %}><span>Chat and API</span></label>
+  <label class="check"><input type="radio" name="scope" value="chat"{% if current_scope == "chat" %} checked{% endif %}><span>Chat only<small>The API ignores this category.</small></span></label>
+  <label class="check"><input type="radio" name="scope" value="api"{% if current_scope == "api" %} checked{% endif %}><span>API only<small>The chat ignores this category.</small></span></label>
+</fieldset>

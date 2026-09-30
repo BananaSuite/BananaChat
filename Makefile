@@ -1,40 +1,41 @@
-.PHONY: help dev start test clean
+.PHONY: help dev start test lint clean
+
+PYTHON ?= python3
 
 help:
 	@echo ""
-	@echo "BananaChat: Make Commands"
-	@echo "========================"
+	@echo "BananaChat"
+	@echo "=========="
 	@echo ""
-	@echo "  make dev     Start development server (auto-setup venv + deps)"
-	@echo "  make start   Start production server with Gunicorn"
-	@echo "  make test    Run test suite"
-	@echo "  make clean   Remove venv, __pycache__, and temp files"
+	@echo "  make dev     Development server on http://127.0.0.1:8000 (creates .venv)"
+	@echo "  make start   Production server with Gunicorn"
+	@echo "  make test    Run the test suite"
+	@echo "  make lint    Run ruff"
+	@echo "  make clean   Remove .venv and caches"
 	@echo ""
-	@echo "Managed server: sudo ./banana install --mode single --domain ai.example.org"
-	@echo "Split deployment: choose --mode web or --mode compute (see docs/deployment.md)"
-	@echo "Maintenance: sudo bananachat update / backup / restore / uninstall"
-	@echo "Automatic updates are off until: sudo bananachat updates enable"
+	@echo "Managed server: sudo ./banana install --mode single --domain chat.example.org"
+	@echo "Split deployment: --mode web and --mode compute (see docs/deployment.md)"
+	@echo "Maintenance: sudo bananachat update | backup | restore | status"
+	@echo ""
+
+.venv/bin/python:
+	$(PYTHON) -m venv .venv
+	.venv/bin/python -m pip install -q -r requirements.txt
 
 dev:
 	@./dev.sh
 
-start:
-	@if [ ! -d ".venv" ]; then \
-		python3 -m venv .venv; \
-		.venv/bin/pip install -q -r requirements.txt; \
-	fi
-	@.venv/bin/gunicorn wsgi:app -c gunicorn.conf.py
+start: .venv/bin/python
+	@.venv/bin/gunicorn -c gunicorn.conf.py wsgi:app
 
-test:
-	@if [ ! -d ".venv" ]; then \
-		python3 -m venv .venv; \
-	fi
-	@.venv/bin/pip install -q -r requirements.txt pytest
-	@.venv/bin/python -m pytest tests/ -v
+test: .venv/bin/python
+	@.venv/bin/python -m pip install -q pytest
+	@.venv/bin/python -m pytest -q
+
+lint: .venv/bin/python
+	@.venv/bin/python -m pip install -q ruff
+	@.venv/bin/python -m ruff check .
 
 clean:
-	@echo "Cleaning..."
-	@rm -rf .venv __pycache__ .pytest_cache
-	@find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	@find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	@echo "Done"
+	@rm -rf .venv .pytest_cache .ruff_cache
+	@find . -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true

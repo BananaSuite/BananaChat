@@ -1,0 +1,82 @@
+{% extends "admin/_layout.html" %}
+{% from "partials/icons.html" import icon %}
+{% set section = "chats" %}
+{% block title %}Chat audit{% endblock %}
+{% block admin_content %}
+<header class="page-header">
+  <div>
+    <h1>Chat audit</h1>
+    <p>Conversations of every user. Deleted chats stay here until they are erased after the retention period.</p>
+  </div>
+</header>
+<nav class="tabs" aria-label="Chat audit sections">
+  <a href="{{ url_for('admin.chats') }}" aria-current="page">Chats</a>
+  <a href="{{ url_for('admin.incognito') }}">No-history audit</a>
+</nav>
+<form class="card mb-2" method="get" action="{{ url_for('admin.chats') }}">
+  <div class="form-grid">
+    <div class="field">
+      <label for="filter-user">Username</label>
+      <input type="search" id="filter-user" name="user" value="{{ username }}" placeholder="All users" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="filter-kind">Kind</label>
+      <select id="filter-kind" name="kind">
+        <option value="all"{% if kind == "all" %} selected{% endif %}>All chats</option>
+        <option value="normal"{% if kind == "normal" %} selected{% endif %}>Normal chats</option>
+        <option value="no_history"{% if kind == "no_history" %} selected{% endif %}>No-history chats (live)</option>
+      </select>
+    </div>
+    <label class="check">
+      <input type="checkbox" name="deleted" value="1"{% if include_deleted %} checked{% endif %}>
+      <span>Include deleted chats<small>Soft-deleted chats waiting to be erased.</small></span>
+    </label>
+  </div>
+  <div class="form-actions">
+    <a class="btn btn-ghost" href="{{ url_for('admin.chats') }}">Reset</a>
+    <button type="submit" class="btn btn-primary">{{ icon("search") }}Filter</button>
+  </div>
+</form>
+{% if unknown %}
+<div class="alert alert-warning" role="status">{{ icon("alert") }}<p>No user is called “{{ username }}”.</p></div>
+{% elif not rows %}
+<div class="empty">{{ icon("chat") }}<h2>No chats</h2><p>Nothing matches these filters.</p></div>
+{% else %}
+<p class="muted">{{ total | number }} chat{{ "" if total == 1 else "s" }}</p>
+<div class="table-wrap">
+  <table class="table">
+    <thead><tr><th scope="col">Title</th><th scope="col">User</th><th scope="col">Messages</th><th scope="col">Updated</th><th scope="col">Status</th><th scope="col" class="actions">Actions</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td><a href="{{ url_for('admin.chat_view', session_id=row.id) }}">{{ row.title if row.title and row.title != "New Chat" else "Untitled chat" }}</a></td>
+        <td>{{ row.username }}</td>
+        <td>{{ row.message_count | number }}</td>
+        <td><time datetime="{{ row.updated_at }}" title="{{ row.updated_at | datetime }}">{{ row.updated_at | timeago }}</time></td>
+        <td>
+          {% if row.deleted_at %}<span class="badge badge-danger">Deleted</span>{% endif %}
+          {% if row.is_incognito %}<span class="badge badge-info">No history</span>{% endif %}
+          {% if row.shared %}<span class="badge badge-primary">Shared</span>{% endif %}
+          {% if row.generation_state in ("queued", "running") %}<span class="badge badge-warning">Generating</span>{% endif %}
+        </td>
+        <td class="actions">
+          <form method="post" action="{{ url_for('admin.chat_delete', session_id=row.id) }}" data-confirm="Permanently delete this chat and its messages? This cannot be undone." data-confirm-label="Delete" data-confirm-danger>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-danger btn-sm">{{ icon("trash") }}Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if pages > 1 %}
+<nav class="pagination" aria-label="Pages">
+  {% set query = {"user": username or None, "kind": kind if kind != "all" else None, "deleted": 1 if include_deleted else None} %}
+  {% if page > 1 %}<a class="btn btn-sm" href="{{ url_for('admin.chats', page=page - 1, **query) }}">Previous</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn btn-sm" href="{{ url_for('admin.chats', page=page + 1, **query) }}">Next</a>{% endif %}
+</nav>
+{% endif %}
+{% endif %}
+{% endblock %}

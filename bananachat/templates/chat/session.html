@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ title }}{% endblock %}
+{% block body_class %}chat-page{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='css/personalities.css') }}">{% endblock %}
+{% block footer %}{% endblock %}
+{% block content %}
+<div class="chat-shell" id="chat-shell">
+  {% include "chat/_sidebar.html" %}
+  <div class="chat-backdrop" id="chat-backdrop" hidden></div>
+  <section class="chat-main{% if session.is_incognito %} is-no-history{% endif %}" aria-labelledby="chat-title">
+    <header class="chat-header">
+      <button type="button" class="icon-btn" id="sidebar-toggle" aria-controls="chat-sidebar" aria-expanded="true" aria-label="{{ t('chat.toggle_sidebar') }}" title="{{ t('chat.toggle_sidebar') }}">{{ icon("sidebar") }}</button>
+      <h1 class="chat-title truncate" id="chat-title">{{ title }}</h1>
+      {% if personality_allowed %}<button type="button" class="persona-chip" id="persona-chip" aria-haspopup="listbox" aria-controls="persona-popover" hidden></button>{% endif %}
+      {% if session.is_incognito %}<span class="badge badge-info">{{ icon("eye-off") }}{{ t("chat.no_history_badge") }}</span>{% endif %}
+      <div class="chat-header-actions">
+        {% if session.is_incognito %}
+        <form method="post" action="{{ url_for('chat.delete', session_id=session.id) }}" data-confirm="{{ t('chat.end_confirm') }}" data-confirm-label="{{ t('chat.end_chat') }}" data-confirm-danger>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-sm">{{ icon("close") }}{{ t("chat.end_chat") }}</button>
+        </form>
+        {% else %}
+        <button type="button" class="icon-btn" id="share-button" aria-label="{{ t('chat.share') }}" title="{{ t('chat.share') }}">{{ icon("share") }}</button>
+        {% endif %}
+        <button type="button" class="icon-btn" id="chat-menu-button" aria-haspopup="menu" aria-expanded="false" aria-label="{{ t('chat.chat_options') }}" title="{{ t('chat.chat_options') }}">{{ icon("more") }}</button>
+      </div>
+    </header>
+    {% if session.is_incognito %}
+    <div class="no-history-notice" role="note">
+      {{ icon("eye-off") }}
+      <p>{{ t("chat.no_history_explainer", hours=no_history_hours) }}</p>
+    </div>
+    {% endif %}
+    <div class="chat-scroll" id="chat-scroll">
+      <div class="chat-thread">
+        <button type="button" class="btn btn-ghost btn-sm load-earlier" id="load-earlier" hidden>{{ t("chat.show_earlier") }}</button>
+        <div class="chat-messages" id="chat-messages" aria-label="{{ t('chat.conversation') }}"></div>
+        <div class="chat-empty" id="chat-empty" hidden>
+          <div class="chat-welcome" id="chat-welcome">
+            <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="" width="48" height="48">
+            <h2>{{ t("chat.empty_title_no_history") if session.is_incognito else t("chat.empty_title") }}</h2>
+            <p class="muted">{{ t("chat.empty_hint") }}</p>
+          </div>
+          <div class="persona-intro" id="persona-intro" hidden></div>
+          <div class="suggestions" id="persona-starters" hidden></div>
+          <div class="suggestions" id="default-suggestions">
+            {% for key in ["suggestion_explain", "suggestion_write", "suggestion_code", "suggestion_plan"] %}
+            <button type="button" class="suggestion" data-suggestion="{{ t('chat.' ~ key ~ '_prompt') }}">
+              <strong>{{ t("chat." ~ key) }}</strong><span>{{ t("chat." ~ key ~ "_prompt") }}</span>
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="composer-area">
+      <button type="button" class="btn btn-sm scroll-bottom" id="scroll-bottom" hidden>{{ icon("chevron-down") }}{{ t("chat.scroll_bottom") }}</button>
+      {% include "chat/_composer.html" %}
+    </div>
+    <div class="drop-overlay" id="drop-overlay" hidden><p>{{ icon("paperclip") }}{{ t("chat.drop_files") }}</p></div>
+  </section>
+</div>
+<div class="popup-menu" id="popup-menu" role="menu" hidden></div>
+<p class="visually-hidden" id="chat-announcer" role="status" aria-live="polite"></p>
+{% for name in ["copy", "check", "speaker", "stop", "file", "image", "download", "edit", "share", "trash", "close", "alert", "info", "refresh", "more", "eye-off", "sparkles", "chevron-down", "lock"] %}
+<template id="icon-{{ name }}">{{ icon(name) }}</template>
+{% endfor %}
+<script type="application/json" id="page-data">{{ data | tojson }}</script>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/chat.js') }}"></script>{% endblock %}

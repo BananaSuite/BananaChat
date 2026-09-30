@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ t("developer.playground_title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/developer.css') }}">{% endblock %}
+{% block content %}
+{% set active = "playground" %}
+<div class="page dev-wide">
+  <header class="page-header">
+    <div>
+      <h1>{{ t("developer.title") }}</h1>
+      <p>{{ t("developer.playground_intro") }}</p>
+    </div>
+  </header>
+  {% include "developer/_tabs.html" %}
+
+  {% if not models %}
+  <div class="card empty">{{ icon("layers") }}<h2>{{ t("developer.playground_no_models_title") }}</h2><p>{{ t("developer.models_empty") }}</p></div>
+  {% else %}
+  <noscript><p class="alert alert-warning mb-2">{{ t("developer.pg_needs_js") }}</p></noscript>
+  <div class="dev-playground">
+    <aside class="card dev-settings" aria-labelledby="pg-settings-title">
+      <h2 id="pg-settings-title">{{ t("developer.pg_settings") }}</h2>
+      <form id="pg-settings" class="stack" novalidate>
+        <div class="field">
+          <label for="pg-model">{{ t("developer.pg_model") }}</label>
+          <select id="pg-model" name="model">
+            <option value="auto">{{ t("developer.model_auto") }}</option>
+            {% for model in models %}<option value="{{ model.ollama_name }}">{{ model.display_name }} ({{ model.ollama_name }})</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="pg-system">{{ t("developer.pg_system") }} <span class="faint">({{ t("common.optional") }})</span></label>
+          <textarea id="pg-system" name="system" rows="4" maxlength="20000" placeholder="{{ t('developer.pg_system_placeholder') }}"></textarea>
+          <span class="hint">{{ t("developer.pg_system_hint") }}</span>
+        </div>
+        <fieldset class="stack-sm">
+          <legend>{{ t("developer.pg_parameters") }}</legend>
+          <div class="form-grid dev-params">
+            <div class="field">
+              <label for="pg-temperature">temperature</label>
+              <input type="number" id="pg-temperature" name="temperature" min="0" max="2" step="0.1" inputmode="decimal" placeholder="{{ t('developer.pg_default') }}" aria-describedby="pg-temperature-hint">
+              <span class="hint" id="pg-temperature-hint">0–2</span>
+            </div>
+            <div class="field">
+              <label for="pg-top-p">top_p</label>
+              <input type="number" id="pg-top-p" name="top_p" min="0" max="1" step="0.05" inputmode="decimal" placeholder="{{ t('developer.pg_default') }}" aria-describedby="pg-top-p-hint">
+              <span class="hint" id="pg-top-p-hint">0–1</span>
+            </div>
+            <div class="field">
+              <label for="pg-max-tokens">max_tokens</label>
+              <input type="number" id="pg-max-tokens" name="max_tokens" min="1" step="1" inputmode="numeric" placeholder="{{ t('developer.pg_default') }}">
+            </div>
+            <div class="field">
+              <label for="pg-seed">seed</label>
+              <input type="number" id="pg-seed" name="seed" min="0" step="1" inputmode="numeric" placeholder="{{ t('developer.pg_random') }}">
+            </div>
+          </div>
+          <div class="field">
+            <label for="pg-stop">stop</label>
+            <textarea id="pg-stop" name="stop" rows="2" class="dev-small-textarea" aria-describedby="pg-stop-hint"></textarea>
+            <span class="hint" id="pg-stop-hint">{{ t("developer.pg_stop_hint") }}</span>
+          </div>
+          <div class="field">
+            <label for="pg-reasoning">{{ t("developer.pg_reasoning") }}</label>
+            <select id="pg-reasoning" name="reasoning_effort" aria-describedby="pg-reasoning-hint">
+              <option value="">{{ t("developer.pg_default") }}</option>
+              <option value="medium">{{ t("developer.pg_reasoning_on") }}</option>
+              <option value="none">{{ t("developer.pg_reasoning_off") }}</option>
+            </select>
+            <span class="hint" id="pg-reasoning-hint">{{ t("developer.pg_reasoning_hint") }}</span>
+          </div>
+        </fieldset>
+      </form>
+    </aside>
+
+    <section class="card dev-conversation" aria-labelledby="pg-conversation-title">
+      <div class="card-header">
+        <h2 id="pg-conversation-title">{{ t("developer.pg_conversation") }}</h2>
+        <button type="button" class="btn btn-sm btn-ghost" id="pg-clear">{{ icon("trash") }}{{ t("developer.pg_clear") }}</button>
+      </div>
+      <div id="pg-log" class="dev-log" role="log" aria-live="polite" aria-relevant="additions" tabindex="0" aria-label="{{ t('developer.pg_conversation') }}">
+        <p class="empty dev-log-empty" id="pg-empty">{{ t("developer.pg_empty") }}</p>
+      </div>
+      <p id="pg-status" class="hint dev-status" role="status" aria-live="polite"></p>
+      <p id="pg-paused" class="alert alert-warning status-paused" aria-live="polite">{% if paused %}{{ t("developer.paused") }}{% endif %}</p>
+      <form id="pg-composer" class="dev-composer">
+        <div class="field">
+          <div class="row-between">
+            <label for="pg-input">{{ t("developer.pg_message") }}</label>
+            <label class="visually-hidden" for="pg-role">{{ t("developer.pg_role") }}</label>
+            <select id="pg-role" class="dev-role">
+              <option value="user">{{ t("developer.pg_role_user") }}</option>
+              <option value="assistant">{{ t("developer.pg_role_assistant") }}</option>
+            </select>
+          </div>
+          <textarea id="pg-input" rows="3" maxlength="200000" required aria-describedby="pg-input-hint"></textarea>
+          <span class="hint" id="pg-input-hint">{{ t("developer.pg_input_hint") }}</span>
+        </div>
+        <div class="row-end">
+          <button type="button" class="btn" id="pg-add">{{ t("developer.pg_add_only") }}</button>
+          <button type="button" class="btn btn-danger" id="pg-stop-button" hidden>{{ icon("stop") }}{{ t("developer.pg_stop") }}</button>
+          <button type="submit" class="btn btn-primary" id="pg-send"{% if paused %} disabled{% endif %}>{{ icon("send") }}{{ t("developer.pg_send") }}</button>
+        </div>
+      </form>
+      <details class="dev-request mt-2">
+        <summary>{{ t("developer.pg_as_request") }}</summary>
+        <figure class="code-block mt-1">
+          <header><figcaption>curl</figcaption>
+            <button type="button" class="btn btn-sm btn-ghost" id="pg-copy-request">{{ icon("copy") }}{{ t("common.copy") }}</button></header>
+          <pre tabindex="0"><code id="pg-request"></code></pre>
+        </figure>
+      </details>
+    </section>
+  </div>
+  <div class="mt-3">{% include "developer/_credits.html" %}</div>
+  {% endif %}
+</div>
+<script type="application/json" id="page-data">{{ data | tojson }}</script>
+{% endblock %}
+{% block scripts %}{% if models %}<script type="module" src="{{ url_for('static', filename='js/playground.js') }}"></script>{% endif %}{% endblock %}

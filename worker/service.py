@@ -1,4 +1,4 @@
-"""OS service installer for the BananaChat Worker daemon.
+"""Background-service installers for the worker (systemd, launchd, Windows Task Scheduler).
 
 Usage
 -----
@@ -35,7 +35,10 @@ import subprocess
 import sys
 import tempfile
 
+from . import config as _config
+
 _OS = platform.system()
+SERVICE_NAME = "bananachat-worker"
 
 
 # Linux systemd
@@ -49,11 +52,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart={python} {script} run
+EnvironmentFile=-{env_file}
 Restart=on-failure
 RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=45
 StandardOutput=journal
 StandardError=journal
-EnvironmentFile=-{env_file}
 NoNewPrivileges=true
 {identity}
 
@@ -62,11 +67,14 @@ WantedBy={target}
 """
 
 _ENV_TEMPLATE = """\
+# BananaChat worker settings. Keep this file private (mode 0600).
 BC_SERVER_URL=https://your-bananachat-server.example.com
 BC_WORKER_TOKEN=paste-your-token-here
 BC_WORKER_NAME={hostname}
+# BC_OLLAMA_HOST=http://127.0.0.1:11434
 # BC_OLLAMA_BINARY=ollama
 # BC_OLLAMA_IDLE_TIMEOUT=600
+# BC_FIRST_TOKEN_TIMEOUT=180
 # BC_IDLE_THRESHOLD=300
 # BC_GPU_GAMING_THRESHOLD=70
 # BC_WORKER_LOG_LEVEL=INFO
@@ -82,11 +90,13 @@ def _systemd_unit_path(system: bool) -> str:
 
 
 def _env_file_path() -> str:
-    """Mirror of config.default_env_file(); see the note there."""
+    """The settings file the worker reads (``config.default_env_file`` for this platform)."""
     if _OS == "Windows":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
         return os.path.join(base, "BananaChat", "bananachat-worker.env")
-    return os.path.expanduser("~/.config/bananachat-worker.env")
+    if _OS in ("Linux", "Darwin"):
+        return os.path.expanduser("~/.config/bananachat-worker.env")
+    return _config.default_env_file()
 
 
 def _write_env_template(env_file: str, extra: str = "") -> bool:
@@ -97,7 +107,9 @@ def _write_env_template(env_file: str, extra: str = "") -> bool:
     os.makedirs(os.path.dirname(env_file), mode=0o700, exist_ok=True)
     if os.path.exists(env_file):
         return False
-    with open(env_file, "w") as handle:
+    # Created private from the start: the token is written into it later.
+    descriptor = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(_ENV_TEMPLATE.format(hostname=socket.gethostname()) + extra)
     os.chmod(env_file, 0o600)
     print(f"Created settings file: {env_file}")
@@ -454,3 +466,11 @@ def stop(system: bool = False):
         stop_macos(system=system)
     else:
         _unsupported("stop")
+
+
+def describe_backend() -> str:
+    return {
+        "Linux": "systemd user service bananachat-worker (--system: starts at boot)",
+        "Darwin": f"launchd agent {_LAUNCHD_LABEL} (--system: LaunchDaemon at boot)",
+        "Windows": "Task Scheduler task BananaChatWorker at logon",
+    }.get(_OS, "not supported here; use the run command")

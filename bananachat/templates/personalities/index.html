@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "personalities/_macros.html" import avatar, traits with context %}
+{% block title %}{{ t("personality.title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/personalities.css') }}">{% endblock %}
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
+{% macro try_form(row) -%}
+<form method="post" action="{{ url_for('chat.new') }}">
+  {{ csrf() }}<input type="hidden" name="personality_id" value="{{ row.id }}">
+  <button type="submit" class="btn btn-primary btn-sm" aria-label="{{ t('personality.try_label', name=row.name) }}">{{ icon("chat") }}{{ t("personality.try") }}</button>
+</form>
+{%- endmacro %}
+{% block content %}
+<div class="page persona-page">
+  <header class="page-header">
+    <div>
+      <h1>{{ t("personality.title") }}</h1>
+      <p>{{ t("personality.subtitle") }}</p>
+    </div>
+    {% if allowed %}
+    <div class="row-end">
+      <details class="menu" data-menu id="import">
+        <summary class="btn">{{ icon("download") }}{{ t("personality.import") }}</summary>
+        <div class="menu-panel persona-import-panel">
+          <form method="post" action="{{ url_for('personalities.import_file') }}" enctype="multipart/form-data" class="stack-sm" data-busy>
+            {{ csrf() }}
+            <div class="field">
+              <label for="import-file">{{ t("personality.import_label") }}</label>
+              <input type="file" id="import-file" name="file" accept=".json,application/json" required aria-describedby="import-hint">
+              <span class="hint" id="import-hint">{{ t("personality.import_hint", size=max_import_kb) }}</span>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">{{ t("personality.import_submit") }}</button>
+          </form>
+        </div>
+      </details>
+      {% if count < max_count %}
+      <a class="btn btn-primary" href="{{ url_for('personalities.new') }}">{{ icon("plus") }}{{ t("personality.new") }}</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </header>
+
+  {% if not allowed %}
+  <div class="alert alert-warning mb-3">
+    {{ icon("shield") }}
+    <div>
+      <p><strong>{{ t("personality.no_access_title") }}</strong></p>
+      <p>{{ t("personality.no_access_text") }}{% if items %} {{ t("personality.no_access_existing") }}{% endif %}</p>
+      <p><a href="{{ url_for('account.index', _anchor='access') }}">{{ t("personality.request_access") }}</a></p>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if allowed and default_choices %}
+  <section class="card persona-default mb-3" id="default" aria-labelledby="default-title">
+    <div class="persona-default-text">
+      <h2 id="default-title">{{ t("personality.default_title") }}</h2>
+      <p class="hint mb-0">{{ t("personality.default_hint") }}</p>
+    </div>
+    <form method="post" action="{{ url_for('personalities.set_default') }}" class="persona-default-form">
+      {{ csrf() }}
+      <label class="visually-hidden" for="default-select">{{ t("personality.default_label") }}</label>
+      <select id="default-select" name="personality_id">
+        <option value="">{{ t("personality.none") }}</option>
+        {% set own = default_choices | selectattr("kind", "equalto", "user") | list %}
+        {% set shared_by_admins = default_choices | selectattr("kind", "equalto", "featured") | list %}
+        {% if own %}<optgroup label="{{ t('personality.yours') }}">
+          {% for row in own %}<option value="{{ row.id }}"{% if row.id == default_id %} selected{% endif %}>{{ (row.avatar ~ " ") if row.avatar }}{{ row.name }}</option>{% endfor %}
+        </optgroup>{% endif %}
+        {% if shared_by_admins %}<optgroup label="{{ t('personality.featured') }}">
+          {% for row in shared_by_admins %}<option value="{{ row.id }}"{% if row.id == default_id %} selected{% endif %}>{{ (row.avatar ~ " ") if row.avatar }}{{ row.name }}</option>{% endfor %}
+        </optgroup>{% endif %}
+      </select>
+      <button type="submit" class="btn">{{ t("common.save") }}</button>
+    </form>
+  </section>
+  {% endif %}
+
+  <section class="mb-3" aria-labelledby="list-title">
+    <div class="section-head">
+      <h2 id="list-title">{{ t("personality.yours") }}</h2>
+      <span class="badge">{{ t("personality.count", count=count, max=max_count) }}</span>
+    </div>
+    {% if allowed and count >= max_count %}<p class="hint">{{ t("personality.limit_reached", max=max_count) }}</p>{% endif %}
+    {% if not items %}
+    <div class="empty card">
+      {{ icon("sparkles") }}
+      <h3>{{ t("personality.empty_title") }}</h3>
+      <p class="mb-0">{{ t("personality.empty_text") if allowed else t("personality.empty_text_no_access") }}</p>
+    </div>
+    {% endif %}
+    <div class="persona-grid">
+      {% for item in items %}
+      {% set row = item.row %}
+      <article class="card persona-card accent-{{ row.color or 'default' }}{% if not item.active %} is-off{% endif %}" id="personality-{{ row.id }}" aria-labelledby="personality-{{ row.id }}-title">
+        <div class="persona-head">
+          {{ avatar(row) }}
+          <div class="grow">
+            <h3 id="personality-{{ row.id }}-title">{{ row.name }}</h3>
+            {% if row.description %}<p class="persona-description">{{ row.description }}</p>{% endif %}
+          </div>
+        </div>
+        <div class="persona-badges">
+          {% if item.moderation.blocked %}<span class="badge badge-danger">{{ t("personality.admin_disabled") }}</span>
+          {% elif item.active %}<span class="badge badge-success">{{ t("common.enabled") }}</span>
+          {% else %}<span class="badge">{{ t("personality.switched_off") }}</span>{% endif %}
+          {% if item.is_default %}<span class="badge badge-primary">{{ icon("check") }}{{ t("personality.default_badge") }}</span>{% endif %}
+          {% if item.share_url %}<span class="badge badge-info">{{ icon("share") }}{{ t("personality.shared_badge") }}</span>{% endif %}
+        </div>
+        {% if item.moderation.blocked %}
+        <div class="alert alert-error">
+          {{ icon("alert") }}
+          <p>{% if item.moderation.until %}{{ t("personality.moderated_until", date=(item.moderation.until | datetime)) }}{% else %}{{ t("personality.moderated") }}{% endif %}
+          {% if item.moderation.reason %}<br>{{ t("personality.moderation_reason", reason=item.moderation.reason) }}{% endif %}</p>
+        </div>
+        {% endif %}
+        {{ traits(item) }}
+        <details class="persona-instructions">
+          <summary>{{ t("personality.show_instructions") }}</summary>
+          <pre class="instructions">{{ row.instructions }}</pre>
+        </details>
+        {% if item.share_url %}
+        <div class="share-row">
+          <label class="visually-hidden" for="share-{{ row.id }}">{{ t("personality.share_link_label", name=row.name) }}</label>
+          <input type="text" id="share-{{ row.id }}" value="{{ item.share_url }}" readonly data-select-all>
+          <button type="button" class="btn btn-sm" data-copy="{{ item.share_url }}">{{ icon("copy") }}{{ t("common.copy") }}</button>
+        </div>
+        {% endif %}
+        <div class="persona-footer">
+          <div class="persona-actions">
+            {% if allowed and item.active %}{{ try_form(row) }}{% endif %}
+            {% if allowed %}<a class="btn btn-sm" href="{{ url_for('personalities.edit', personality_id=row.id) }}" aria-label="{{ t('personality.edit_label', name=row.name) }}">{{ icon("edit") }}{{ t("personality.edit") }}</a>{% endif %}
+            <details class="menu" data-menu>
+              <summary class="icon-btn" aria-label="{{ t('personality.more_label', name=row.name) }}" title="{{ t('personality.more') }}">{{ icon("more") }}</summary>
+              <div class="menu-panel">
+                {% if allowed and count < max_count and not item.moderation.blocked %}
+                <form method="post" action="{{ url_for('personalities.duplicate', personality_id=row.id) }}">
+                  {{ csrf() }}<button type="submit">{{ icon("copy") }}{{ t("personality.duplicate") }}</button>
+                </form>
+                {% endif %}
+                {% if item.share_url %}
+                <form method="post" action="{{ url_for('personalities.unshare', personality_id=row.id) }}" data-confirm="{{ t('personality.unshare_confirm', name=row.name) }}">
+                  {{ csrf() }}<button type="submit">{{ icon("close") }}{{ t("personality.unshare") }}</button>
+                </form>
+                {% elif allowed and not item.moderation.blocked %}
+                <form method="post" action="{{ url_for('personalities.share', personality_id=row.id) }}">
+                  {{ csrf() }}<button type="submit">{{ icon("share") }}{{ t("personality.share") }}</button>
+                </form>
+                {% endif %}
+                <a href="{{ url_for('personalities.export', personality_id=row.id) }}" download>{{ icon("download") }}{{ t("personality.export") }}</a>
+                {% if row.is_enabled %}
+                <form method="post" action="{{ url_for('personalities.toggle', personality_id=row.id) }}">
+                  {{ csrf() }}<input type="hidden" name="enabled" value="0">
+                  <button type="submit" aria-label="{{ t('personality.disable_label', name=row.name) }}">{{ icon("eye-off") }}{{ t("personality.disable") }}</button>
+                </form>
+                {% elif allowed %}
+                <form method="post" action="{{ url_for('personalities.toggle', personality_id=row.id) }}">
+                  {{ csrf() }}<input type="hidden" name="enabled" value="1">
+                  <button type="submit" aria-label="{{ t('personality.enable_label', name=row.name) }}">{{ icon("check") }}{{ t("personality.enable") }}</button>
+                </form>
+                {% endif %}
+                <hr>
+                <form method="post" action="{{ url_for('personalities.delete', personality_id=row.id) }}" data-confirm="{{ t('personality.delete_confirm', name=row.name) }}" data-confirm-danger>
+                  {{ csrf() }}
+                  <button type="submit" class="danger" aria-label="{{ t('personality.delete_label', name=row.name) }}">{{ icon("trash") }}{{ t("common.delete") }}</button>
+                </form>
+              </div>
+            </details>
+          </div>
+          <p class="hint mb-0">{{ t("personality.updated_at", date=(row.updated_at | timeago)) }}</p>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  {% if featured %}
+  <section class="mb-3" aria-labelledby="featured-title">
+    <div class="section-head">
+      <h2 id="featured-title">{{ t("personality.featured") }}</h2>
+    </div>
+    <p class="hint">{{ t("personality.featured_hint") }}</p>
+    <div class="persona-grid">
+      {% for item in featured %}
+      {% set row = item.row %}
+      <article class="card persona-card accent-{{ row.color or 'default' }}" id="featured-{{ row.id }}" aria-labelledby="featured-{{ row.id }}-title">
+        <div class="persona-head">
+          {{ avatar(row) }}
+          <div class="grow">
+            <h3 id="featured-{{ row.id }}-title">{{ row.name }}</h3>
+            {% if row.description %}<p class="persona-description">{{ row.description }}</p>{% endif %}
+          </div>
+        </div>
+        <div class="persona-badges">
+          <span class="badge badge-primary">{{ icon("sparkles") }}{{ t("personality.featured_badge") }}</span>
+          {% if item.is_default %}<span class="badge badge-primary">{{ icon("check") }}{{ t("personality.default_badge") }}</span>{% endif %}
+        </div>
+        {{ traits(item) }}
+        <details class="persona-instructions">
+          <summary>{{ t("personality.show_instructions") }}</summary>
+          <pre class="instructions">{{ row.instructions }}</pre>
+        </details>
+        <div class="persona-footer">
+          <div class="persona-actions">
+            {{ try_form(row) }}
+            {% if count < max_count %}
+            <form method="post" action="{{ url_for('personalities.duplicate', personality_id=row.id) }}">
+              {{ csrf() }}<button type="submit" class="btn btn-sm" aria-label="{{ t('personality.duplicate_featured_label', name=row.name) }}">{{ icon("copy") }}{{ t("personality.duplicate_featured") }}</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if templates and count < max_count %}
+  <section aria-labelledby="templates-title">
+    <div class="section-head">
+      <h2 id="templates-title">{{ t("personality.templates_title") }}</h2>
+    </div>
+    <p class="hint">{{ t("personality.templates_hint") }}</p>
+    <div class="template-grid">
+      {% for item in templates %}
+      <a class="template-card accent-{{ item.color }}" href="{{ url_for('personalities.new', template=item.key) }}">
+        {{ avatar(item, "sm") }}
+        <span class="grow"><strong>{{ item.name }}</strong><span>{{ item.description }}</span></span>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/personalities.js') }}"></script>{% endblock %}

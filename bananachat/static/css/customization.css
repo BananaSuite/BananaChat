@@ -1,0 +1,39 @@
+/* Customize page. */
+.customize-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1.5rem; align-items: start; }
+.customize-preview { position: sticky; top: calc(var(--topbar-height) + 1rem); }
+.choice-group { border: 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
+.choice-group legend { padding: 0; margin-bottom: .35rem; font-weight: 550; font-size: .92rem; }
+.choice-group .hint { margin: 0 0 .25rem; }
+.semantic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 1rem; }
+.switch + .hint { margin-top: -.5rem; }
+output { font-weight: 400; color: var(--text-muted); margin-left: .35rem; }
+
+.preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: .5rem; }
+.preset {
+  display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; padding: .55rem .65rem;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); color: var(--text);
+  font: inherit; font-size: .88rem; cursor: pointer; text-align: left;
+}
+.preset:hover { border-color: var(--border-strong); }
+.preset[aria-pressed="true"] { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.preset-swatches { display: flex; gap: 3px; }
+.swatch { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--hover); }
+
+.colour-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 1rem; }
+.colour-field label { display: block; font-weight: 550; font-size: .92rem; margin-bottom: .35rem; }
+.colour-field .row { gap: .5rem; flex-wrap: nowrap; }
+.colour-state { font-family: var(--mono); min-width: 7ch; }
+
+.background-preview { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; max-width: 360px; }
+.background-preview img { display: block; width: 100%; height: 180px; object-fit: cover; }
+
+.save-status { color: var(--text-muted); font-size: .9rem; min-height: 1.4em; }
+.save-status.is-saved { color: var(--success); }
+.save-status.is-error { color: var(--danger); }
+
+.preview-sample { padding: 1rem; border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--bg); }
+
+@media (max-width: 960px) {
+  .customize-layout { grid-template-columns: 1fr; }
+  .customize-preview { position: static; }
+}

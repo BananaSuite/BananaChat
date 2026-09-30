@@ -1,0 +1,23 @@
+{% extends "auth/_layout.html" %}
+{% block title %}{{ t("auth.sign_in") }}{% endblock %}
+{% block card %}
+<h1>{{ t("auth.sign_in") }}</h1>
+<form method="post" action="{{ url_for('auth.login') }}" class="stack">
+  {% include "auth/_bot_fields.html" %}
+  {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+  <div class="field">
+    <label for="username">{{ t("auth.username") }}</label>
+    <input type="text" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus maxlength="64" value="{{ request.form.get('username', '') }}">
+  </div>
+  <div class="field">
+    <label for="password">{{ t("auth.password") }}</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required maxlength="1024">
+  </div>
+  <button type="submit" class="btn btn-primary btn-lg btn-block">{{ t("auth.sign_in") }}</button>
+</form>
+{% endblock %}
+{% block below %}
+{% if settings.signup_mode in ("open", "invite") %}
+<p>{{ t("auth.no_account") }} <a href="{{ url_for('auth.signup') }}">{{ t("auth.create_account") }}</a></p>
+{% endif %}
+{% endblock %}

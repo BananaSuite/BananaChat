@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ t("images.title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/images.css') }}">{% endblock %}
+{% block content %}
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1>{{ t("images.title") }}</h1>
+      <p>{{ t("images.intro") }}</p>
+    </div>
+  </header>
+
+  {% if not models %}
+  <div class="card empty">
+    {{ icon("image") }}
+    <h2>{{ t("images.no_models_title") }}</h2>
+    <p>{{ t("images.no_models_text") }}</p>
+  </div>
+  {% else %}
+  <noscript><p class="alert alert-warning mb-2">{{ t("images.needs_js") }}</p></noscript>
+  <div class="img-layout">
+    <section class="card" aria-labelledby="img-form-title">
+      <h2 id="img-form-title">{{ t("images.form_title") }}</h2>
+      <form id="img-form" class="stack" novalidate>
+        <div class="field">
+          <label for="img-prompt" class="required">{{ t("images.prompt") }}</label>
+          <textarea id="img-prompt" name="prompt" rows="5" maxlength="10000" required aria-describedby="img-prompt-hint"
+                    placeholder="{{ t('images.prompt_placeholder') }}"></textarea>
+          <span class="hint" id="img-prompt-hint">{{ t("images.prompt_hint") }}</span>
+        </div>
+        <div class="field">
+          <label for="img-model">{{ t("images.model") }}</label>
+          <select id="img-model" name="model">
+            {% if models | length > 1 %}<option value="auto">{{ t("images.model_auto") }}</option>{% endif %}
+            {% for model in models %}<option value="{{ model.ollama_name }}">{{ model.display_name }}</option>{% endfor %}
+          </select>
+        </div>
+        <fieldset>
+          <legend>{{ t("images.size") }}</legend>
+          <div class="img-sizes">
+            {% for size in sizes %}
+            {% set width, height = size.split("x") %}
+            <label class="img-size">
+              <input type="radio" name="size" value="{{ size }}"{% if size == default_size %} checked{% endif %}>
+              <span class="img-size-shape img-shape-{{ size }}" aria-hidden="true"></span>
+              <span class="img-size-text">{{ t("images.size_" ~ size) }}<small>{{ width }} × {{ height }}</small></span>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        <p class="hint mb-0" id="img-cost">
+          {% if summary.unlimited %}{{ t("images.cost_unlimited", cost=cost | tokens) }}
+          {% else %}{{ t("images.cost", cost=cost | tokens, left=summary.regular_left | tokens) }}{% endif %}
+          {% if rpm %}{{ t("images.rate", count=rpm) }}{% endif %}
+        </p>
+        <p id="img-paused" class="alert alert-warning status-paused mb-0" aria-live="polite">{% if paused %}{{ t("images.paused") }}{% endif %}</p>
+        <div class="row-end">
+          <button type="button" class="btn btn-lg" id="img-cancel" hidden>{{ icon("stop") }}{{ t("images.cancel") }}</button>
+          <button type="submit" class="btn btn-primary btn-lg" id="img-generate"{% if paused %} disabled{% endif %}>{{ icon("sparkles") }}{{ t("images.generate") }}</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card img-result" aria-labelledby="img-result-title">
+      <h2 id="img-result-title">{{ t("images.result_title") }}</h2>
+      <p id="img-status" class="img-status" role="status" aria-live="polite">{{ t("images.result_empty") }}</p>
+      <p id="img-elapsed" class="hint img-elapsed" aria-hidden="true"></p>
+      <progress id="img-progress" class="meter" hidden aria-labelledby="img-status"></progress>
+      <div id="img-error" class="alert alert-error" role="alert" hidden></div>
+      <figure id="img-figure" class="img-figure" hidden>
+        <img id="img-output" alt="">
+        <figcaption id="img-caption" class="hint"></figcaption>
+      </figure>
+      <div class="row-end" id="img-actions" hidden>
+        <a class="btn" id="img-download" download>{{ icon("download") }}{{ t("common.download") }}</a>
+      </div>
+    </section>
+  </div>
+  {% endif %}
+</div>
+<script type="application/json" id="page-data">{{ data | tojson }}</script>
+{% endblock %}
+{% block scripts %}{% if models %}<script type="module" src="{{ url_for('static', filename='js/images.js') }}"></script>{% endif %}{% endblock %}

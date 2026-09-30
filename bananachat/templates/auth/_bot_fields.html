@@ -1,0 +1,6 @@
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="_form_time" value="{{ form_token() }}">
+<div class="honeypot" aria-hidden="true">
+  <label for="website">Website</label>
+  <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+</div>

@@ -1,0 +1,139 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf %}
+{% from "partials/icons.html" import icon %}
+{% from "personalities/_macros.html" import avatar %}
+{% block title %}{{ ("Edit " ~ row.name) if row else "New featured personality" }}{% endblock %}
+{% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/personalities.css') }}">{% endblock %}
+{% set length_labels = {"concise": "Concise", "balanced": "Balanced", "detailed": "Detailed"} %}
+{% set creativity_labels = {"precise": "Precise", "balanced": "Balanced", "creative": "Creative"} %}
+{% block admin_content %}
+<p class="breadcrumb"><a href="{{ url_for('admin.personalities', kind='featured') }}">{{ icon("chevron-left") }}Featured personalities</a></p>
+{{ header(("Edit " ~ row.name) if row else "New featured personality", "Visible to every user who may use personalities, once published. Users can use it as it is or duplicate it into their own list; copies do not follow later edits.") }}
+
+<div class="persona-editor persona-page">
+  <form method="post" action="{{ url_for('admin.personality_featured_update', personality_id=row.id) if row else url_for('admin.personality_featured_create') }}" class="stack persona-form" id="persona-form" data-busy>
+    {{ csrf() }}
+    <fieldset class="card">
+      <legend>Look</legend>
+      <div class="stack">
+        <div class="identity-row">
+          <div class="field avatar-field">
+            <label for="avatar">Emoji</label>
+            <input type="text" id="avatar" name="avatar" value="{{ values.avatar or '' }}" maxlength="32" autocomplete="off" spellcheck="false" class="emoji-input" placeholder="✨" aria-describedby="avatar-hint">
+          </div>
+          <div class="field grow">
+            <label for="name" class="required">Name</label>
+            <input type="text" id="name" name="name" required maxlength="{{ limits.name }}" value="{{ values.name or '' }}" autocomplete="off" data-counter>
+          </div>
+        </div>
+        <div class="emoji-picks" role="group" aria-label="Suggested emoji" hidden>
+          {% for emoji in avatar_choices %}<button type="button" class="emoji-pick" data-emoji="{{ emoji }}" aria-label="Use {{ emoji }}">{{ emoji }}</button>{% endfor %}
+          <button type="button" class="emoji-pick emoji-clear" data-emoji="" aria-label="No emoji">{{ icon("close") }}</button>
+        </div>
+        <span class="hint" id="avatar-hint">A single emoji. Empty shows the first letter of the name.</span>
+        <div class="field">
+          <span class="label" id="color-label">Accent colour</span>
+          <div class="swatches" role="radiogroup" aria-labelledby="color-label">
+            <label class="swatch-option" title="Site colour"><input type="radio" name="color" value=""{% if not values.color %} checked{% endif %}><span class="swatch accent-default"></span><span class="visually-hidden">Site colour</span></label>
+            {% for key in colors %}
+            <label class="swatch-option" title="{{ key | capitalize }}"><input type="radio" name="color" value="{{ key }}"{% if values.color == key %} checked{% endif %}><span class="swatch accent-{{ key }}"></span><span class="visually-hidden">{{ key | capitalize }}</span></label>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="field">
+          <label for="description">Short description</label>
+          <input type="text" id="description" name="description" maxlength="{{ limits.description }}" value="{{ values.description or '' }}" autocomplete="off" data-counter>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="card">
+      <legend>Instructions</legend>
+      <div class="field">
+        <label for="instructions" class="required">What should the assistant do?</label>
+        <textarea id="instructions" name="instructions" required maxlength="{{ limits.instructions }}" rows="9" data-counter aria-describedby="instructions-hint">{{ values.instructions or '' }}</textarea>
+        <span class="hint" id="instructions-hint">Added below each model's system prompt with the note to apply them only where they do not conflict with it.</span>
+      </div>
+    </fieldset>
+
+    <fieldset class="card">
+      <legend>Chat start</legend>
+      <div class="stack">
+        <div class="field">
+          <label for="greeting">Greeting</label>
+          <textarea id="greeting" name="greeting" maxlength="{{ limits.greeting }}" rows="3" data-counter aria-describedby="greeting-hint">{{ values.greeting or '' }}</textarea>
+          <span class="hint" id="greeting-hint">Optional. Shown in an empty chat; never sent to the model.</span>
+        </div>
+        <div class="field">
+          <span class="label">Conversation starters</span>
+          <span class="hint" id="starters-hint">Up to four suggestions shown in an empty chat.</span>
+          <div class="starter-fields">
+            {% for value in values.starters %}
+            <input type="text" id="starter-{{ loop.index }}" name="starter_{{ loop.index }}" value="{{ value }}" maxlength="{{ limits.starter }}" autocomplete="off" aria-label="Conversation starter {{ loop.index }}" aria-describedby="starters-hint">
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="card">
+      <legend>Response style</legend>
+      <div class="stack">
+        <div class="field">
+          <span class="label" id="length-label">Length</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="length-label">
+            {% for key in lengths %}<label><input type="radio" name="response_length" value="{{ key }}"{% if (values.response_length or "balanced") == key %} checked{% endif %}><span>{{ length_labels[key] }}</span></label>{% endfor %}
+          </div>
+        </div>
+        <div class="field">
+          <span class="label" id="creativity-label">Creativity</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="creativity-label" aria-describedby="creativity-hint">
+            {% for key in creativity_levels %}<label><input type="radio" name="creativity" value="{{ key }}"{% if (values.creativity or "balanced") == key %} checked{% endif %}><span>{{ creativity_labels[key] }}</span></label>{% endfor %}
+          </div>
+          <span class="hint" id="creativity-hint">Precise uses 40% of the model's temperature, creative raises it by 40% (at least 0.3), always within 0–2. Length is added as a one-line instruction.</span>
+        </div>
+        <div class="field">
+          <label for="preferred_model">Preferred model</label>
+          <select id="preferred_model" name="preferred_model" aria-describedby="model-hint">
+            <option value="">No preference</option>
+            {% if missing_model %}<option value="{{ values.preferred_model }}" selected>{{ values.preferred_model }} (not available)</option>{% endif %}
+            {% for model in models %}<option value="{{ model.name }}"{% if values.preferred_model == model.name %} selected{% endif %}>{{ model.label }}</option>{% endfor %}
+          </select>
+          <span class="hint" id="model-hint">Selected when a chat starts with this personality. Users who may not use the model keep their usual one and see a notice.</span>
+        </div>
+      </div>
+    </fieldset>
+
+    <label class="check"><input type="checkbox" name="enabled" value="1"{% if values.enabled %} checked{% endif %}><span>Published<small>Unpublished personalities are drafts that users cannot see.</small></span></label>
+    <div class="form-actions">
+      <a class="btn btn-ghost" href="{{ url_for('admin.personalities', kind='featured') }}">Cancel</a>
+      <button type="submit" class="btn btn-primary">{{ "Save" if row else "Create" }}</button>
+    </div>
+  </form>
+
+  <aside class="persona-preview" aria-labelledby="preview-title">
+    <div class="persona-preview-inner">
+      <h2 class="label" id="preview-title">Preview</h2>
+      <div class="card persona-card accent-{{ values.color or 'default' }}" data-preview-card>
+        <div class="persona-head">
+          <span data-preview-avatar>{{ avatar({"avatar": values.avatar, "color": values.color, "name": values.name or "Personality"}) }}</span>
+          <div class="grow">
+            <h3 data-preview-name data-placeholder="Personality">{{ values.name or "Personality" }}</h3>
+            <p class="persona-description" data-preview-description>{{ values.description or '' }}</p>
+          </div>
+        </div>
+      </div>
+      <div class="persona-preview-chat accent-{{ values.color or 'default' }}" data-preview-chat>
+        <p class="hint text-center mb-1">How a new chat starts</p>
+        <div class="persona-intro">
+          <span data-preview-avatar-large>{{ avatar({"avatar": values.avatar, "color": values.color, "name": values.name or "Personality"}, "xl") }}</span>
+          <p class="persona-intro-name" data-preview-intro-name>{{ values.name or "Personality" }}</p>
+          <p class="persona-greeting" data-preview-greeting>{{ values.greeting or '' }}</p>
+          <ul class="persona-starters" data-preview-starters>{% for value in values.starters if value.strip() %}<li>{{ value }}</li>{% endfor %}</ul>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/personalities.js') }}"></script>{% endblock %}

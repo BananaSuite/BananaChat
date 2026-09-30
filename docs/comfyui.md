@@ -1,12 +1,12 @@
-# ComfyUI Image Deployment
+# ComfyUI Image Generation
 
 BananaChat uses Ollama for text and an optional ComfyUI server for image
 generation. ComfyUI runs on the Linux/NVIDIA compute machine and BananaChat calls
 it over a private Tailscale connection. The compute machine does not need the
 BananaChat web application, database, session keys, or API-token database.
 
-Image generation is disabled by default. A chat-only installation needs none
-of the components in this guide.
+Image generation is disabled by default (`BC_IMAGE_BACKEND=disabled`). A
+chat-only installation needs none of the components in this guide.
 
 ## Architecture
 
@@ -15,7 +15,7 @@ Browser or API client
         |
         v
 BananaChat VPS
-  Flask, SQLite, permissions, credits
+  Flask, SQLite, permissions, token limits, inference queue
         |
         | Tailscale only
         +--------------------+
@@ -38,13 +38,80 @@ The compute-machine operator can inspect prompts and generated images. This
 topology protects the VPS database and web source but does not make an unowned
 compute machine private.
 
+## How BananaChat Uses ComfyUI
+
+BananaChat (`bananachat/services/comfyui.py`) talks to the standard ComfyUI
+HTTP API. It never uses proxy environment variables and never follows
+redirects; every request has a connect, read and total deadline and every
+response a size limit (8 MB for JSON, 30 MB for an image).
+
+**Checkpoint discovery.** `GET /object_info/CheckpointLoaderSimple` lists the
+checkpoint files. A background job reconciles them with the model catalog
+every ten minutes while image generation is enabled, and administrators can
+sync immediately with **Sync models** in Admin -> Models. New checkpoints are
+added as image models named `comfyui:<checkpoint file>`, **not rolled out**;
+checkpoints that disappeared are marked unavailable (their catalog entries,
+policies and edits are kept). If ComfyUI cannot be reached the catalog is left
+as it was. The outcome of the last sync is kept for the administrator status
+view.
+
+**The workflow.** Users never send workflows. For each image BananaChat submits
+one fixed seven-node workflow to `POST /prompt`:
+
+| Node | Class | Settings |
+|---|---|---|
+| 1 | `CheckpointLoaderSimple` | the model's checkpoint |
+| 2 | `CLIPTextEncode` | the prompt |
+| 3 | `CLIPTextEncode` | empty negative prompt |
+| 4 | `EmptyLatentImage` | width, height, batch size 1 |
+| 5 | `KSampler` | random seed; steps, CFG, sampler and scheduler from `BC_COMFYUI_STEPS`, `BC_COMFYUI_CFG`, `BC_COMFYUI_SAMPLER`, `BC_COMFYUI_SCHEDULER`; denoise 1.0 |
+| 6 | `VAEDecode` | |
+| 7 | `PreviewImage` | temporary output |
+
+**Generation.** BananaChat polls `GET /history/<prompt id>` every
+`BC_COMFYUI_POLL_INTERVAL` seconds (and `GET /queue` to report whether the
+prompt is waiting or running), validates the output reference (a plain file
+name of type `temp`/`output`, no path traversal), downloads the image with
+`GET /view`, checks that it really is a PNG, JPEG or WebP file, and finally
+deletes the prompt's history entry (`POST /history {"delete": [id]}`).
+
+**Cancellation.** When an image is not ready within
+`BC_COMFYUI_GENERATION_TIMEOUT`, when ComfyUI reports an error, or when the
+browser leaves the Images page while the image is being made, BananaChat stops
+its prompt: if `GET /queue` shows it as the running prompt it calls
+`POST /interrupt` (with the prompt id, which recent ComfyUI versions use to
+interrupt only that prompt); if it is still waiting it removes it with
+`POST /queue {"delete": [id]}`. Other users' prompts are never interrupted.
+The history entry is deleted in every case.
+
+**Queue and tokens.** Image requests wait in the same inference queue as
+text requests (one running and up to three waiting per account, at most
+`BC_COMFYUI_QUEUE_TIMEOUT` seconds). The fixed charge
+(`BC_IMAGE_TOKENS_PER_GENERATION` tokens × the image model's weight, counted
+against the API pool; image models can also have limits of their own, Admin →
+Limits → Models) is reserved before the request enters the
+queue and refreshed every `BC_IMAGE_CREDIT_RESERVATION_HEARTBEAT` seconds while
+it runs. When the image is delivered the reservation becomes a ledger charge in
+the same transaction as the metrics row - even if the reservation had expired
+meanwhile. On any failure (ComfyUI error, timeout, cancelled or abandoned
+request, unexpected server error) the reservation is released, so nothing is
+charged. Reservations older than `BC_IMAGE_CREDIT_RESERVATION_TTL` are cleaned
+up automatically.
+
+**Access.** Image models follow the same rules as text models on the API
+surface: they must be rolled out and allowed by the *image generation*
+capability policy, their categories (scoped to the API or both) and their own
+policy. The Images page and `POST /v1/images/generations` (see
+[api.md](api.md)) share one implementation, limits
+(`BC_IMAGE_GENERATION_RPM` per account and minute, administrators exempt) and
+price.
+
 ## Supported Models
 
 The built-in workflow supports standard all-in-one SD 1.x and SDXL
 `.safetensors` checkpoints that provide MODEL, CLIP, and VAE through ComfyUI's
 `CheckpointLoaderSimple` node. Flux, SD3, split-component models, custom nodes,
-LoRA workflows, ControlNet, and arbitrary uploaded workflows are not supported
-by this first implementation.
+LoRA workflows, ControlNet, and arbitrary uploaded workflows are not supported.
 
 For a 10 GB RTX 3080, begin with a standard SDXL checkpoint known to fit the
 machine. Test at `512x512` before moving to `1024x1024`. Check the model license
@@ -188,7 +255,7 @@ BC_CHECKPOINT_AGENT_URL=http://100.x.y.z:8765
 BC_CHECKPOINT_AGENT_TOKEN_FILE=/opt/bananachat/instance/checkpoint-agent.token
 BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE=1
 BC_IMAGE_GENERATION_RPM=6
-BC_IMAGE_CREDITS_PER_GENERATION=5
+BC_IMAGE_TOKENS_PER_GENERATION=5000
 ```
 
 Restart BananaChat and verify both private services from the VPS. The ComfyUI API
@@ -214,42 +281,70 @@ text models. The separate ComfyUI checkpoint form requires:
 The compute agent downloads to a temporary file, enforces size and free-space
 limits, verifies SHA-256 and safetensors structure, and installs atomically.
 BananaChat then confirms that ComfyUI can discover the checkpoint before marking
-the pull complete.
+the pull complete. Checkpoints copied into the folder by hand appear after the
+next automatic sync (every ten minutes) or after **Sync models** in Admin -> Models.
 
 New checkpoints are restricted and flagged as image models automatically. Use
 **Edit** for display metadata/categories, **Roll Out** to expose the model, and
 **Admin -> Access Policies** for image, category, and per-model permissions.
+
+## Configuration Reference
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BC_IMAGE_BACKEND` | `disabled` | `comfyui` enables image generation. |
+| `BC_COMFYUI_URL` | `http://127.0.0.1:8188` | ComfyUI base URL (no credentials in the URL). |
+| `BC_COMFYUI_TIMEOUT` | `30` | Seconds allowed for each ComfyUI request (1-60). |
+| `BC_COMFYUI_QUEUE_TIMEOUT` | `300` | Longest wait in BananaChat's inference queue. |
+| `BC_COMFYUI_GENERATION_TIMEOUT` | `600` | Longest time from submission to a finished image. |
+| `BC_COMFYUI_POLL_INTERVAL` | `1` | Seconds between history polls. |
+| `BC_COMFYUI_STEPS`, `BC_COMFYUI_CFG` | `20`, `7` | Sampler steps and CFG scale. |
+| `BC_COMFYUI_SAMPLER`, `BC_COMFYUI_SCHEDULER` | `euler`, `normal` | ComfyUI sampler and scheduler names. |
+| `BC_IMAGE_GENERATION_RPM` | `6` | Images per account and minute (`0`: no limit). |
+| `BC_IMAGE_TOKENS_PER_GENERATION` | `5000` | Tokens charged per image (`BC_IMAGE_CREDITS_PER_GENERATION` × 1,000 when only that setting of the previous release is set). |
+| `BC_IMAGE_CREDIT_RESERVATION_TTL` | `1200` | Lifetime of an unrefreshed reservation (at least the generation timeout + 360 s). |
+| `BC_IMAGE_CREDIT_RESERVATION_HEARTBEAT` | `30` | How often a running request refreshes its reservation. |
 
 ## Optional And Failure Behavior
 
 With `BC_IMAGE_BACKEND=disabled` or unset:
 
 - Chat, Ollama, API tokens, and text workers operate normally.
-- No ComfyUI requests are made.
-- Image navigation is hidden.
-- Direct image API requests return HTTP 503.
+- No ComfyUI requests are made and no checkpoint sync runs.
+- The Images navigation link is hidden and `/images` returns 404.
+- `POST /v1/images/generations` returns 404 with `code: "images_disabled"`.
 - Existing image policies and catalog records remain stored.
 
 With ComfyUI enabled but no installed or rolled-out checkpoint:
 
 - Text chat remains normal.
-- Image Lab shows that no models are available.
-- Image API requests fail before credit reservation.
+- The Images page says that no image model is available.
+- Image API requests fail with 503 (`model_unavailable`) before any token is
+  reserved.
+
+With ComfyUI enabled but unreachable:
+
+- The periodic sync logs the problem and leaves the catalog untouched.
+- Image requests fail with 502 and are not charged.
+- ComfyUI outages do not trigger BananaChat's AI-server outage notice and do
+  not affect text inference.
 
 With ComfyUI enabled but no checkpoint agent:
 
 - Manually installed checkpoints can still be synchronized and used.
 - The admin checkpoint pull form is hidden.
 
-ComfyUI outages do not activate BananaChat's global Ollama outage page and do not
-affect text inference.
+During maintenance mode or an outage of the text inference server, starting
+new images is paused like any other generation (HTTP 503 with
+`code: "maintenance"` or `"outage"`), see [api.md](api.md#service-status).
 
 ## Backup And Removal
 
 BananaChat database backups include catalog metadata, access policies, pull
-history, and credits. They do not include Ollama weights, ComfyUI checkpoints,
-agent tokens, or generated images.
+history, and usage. They do not include Ollama weights, ComfyUI checkpoints,
+agent tokens, or generated images (BananaChat never stores generated images).
 
 Removing a ComfyUI model from the BananaChat catalog does not delete its
-checkpoint. Use the managed agent API with its digest precondition or remove
-the file deliberately on the compute host, then synchronize ComfyUI again.
+checkpoint, and the next sync adds it again (not rolled out) while the file
+exists. Use the managed agent API with its digest precondition or remove the
+file deliberately on the compute host, then synchronize again.

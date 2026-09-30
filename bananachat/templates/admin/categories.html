@@ -1,0 +1,51 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, empty %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Model categories{% endblock %}
+{% block admin_content %}
+{% set scope_labels = {"chat": "Chat only", "api": "API only", "both": "Chat and API"} %}
+<p class="breadcrumb"><a href="{{ url_for('admin.models') }}">{{ icon("chevron-left") }}Models</a></p>
+{{ header("Model categories", "Group models (for example “Coding” or “Staff only”) and control who may use each group on the Access page.") }}
+
+<section class="card mb-3" aria-labelledby="new-category-title">
+  <h2 id="new-category-title">New category</h2>
+  <form method="post" action="{{ url_for('admin.category_create') }}" class="stack">
+    {{ csrf() }}
+    {% include "admin/_category_fields.html" %}
+    <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Create category</button></div>
+  </form>
+</section>
+
+{% if rows %}
+<div class="table-wrap">
+  <table class="table">
+    <thead><tr><th scope="col"><span class="visually-hidden">Order</span></th><th scope="col">Category</th><th scope="col">Applies to</th><th scope="col">Models</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr id="category-{{ row.id }}">
+        <td class="order-cell">
+          <form method="post" action="{{ url_for('admin.category_move', category_id=row.id) }}" class="order-buttons">
+            {{ csrf() }}
+            <button type="submit" name="direction" value="up" class="icon-btn" aria-label="Move {{ row.name }} up"{% if loop.first %} disabled{% endif %}>{{ icon("arrow-up") }}</button>
+            <button type="submit" name="direction" value="down" class="icon-btn icon-flip" aria-label="Move {{ row.name }} down"{% if loop.last %} disabled{% endif %}>{{ icon("arrow-up") }}</button>
+          </form>
+        </td>
+        <td><strong>{{ row.name }}</strong>{% if row.description %}<div class="small muted">{{ row.description }}</div>{% endif %}</td>
+        <td>{{ scope_labels.get(row.scope, row.scope) }}</td>
+        <td>{{ row.model_count }}</td>
+        <td class="actions">
+          <a class="btn btn-sm" href="{{ url_for('admin.access_detail', scope='category', resource_id=row.id) }}">{{ icon("shield") }}Access</a>
+          <a class="btn btn-sm" href="{{ url_for('admin.category_edit', category_id=row.id) }}">{{ icon("edit") }}Edit</a>
+          <form method="post" action="{{ url_for('admin.category_delete', category_id=row.id) }}" data-confirm="Delete the category {{ row.name }}? Models stay in the catalog; access rules for this category are removed." data-confirm-danger>
+            {{ csrf() }}<button type="submit" class="btn btn-sm btn-danger" aria-label="Delete {{ row.name }}">{{ icon("trash") }}</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+{{ empty("layers", "No categories", "Categories are optional. Create one to group models.") }}
+{% endif %}
+{% endblock %}

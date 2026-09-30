@@ -1,0 +1,32 @@
+/* Account and personalities pages. */
+.account-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 1.75rem; align-items: start; }
+.account-toc { position: sticky; top: calc(var(--topbar-height) + 1rem); display: flex; flex-direction: column; gap: 2px; }
+.account-toc a { display: flex; align-items: center; gap: .5rem; padding: .4rem .65rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .92rem; }
+.account-toc a:hover { background: var(--hover); color: var(--text); }
+.account-toc hr { margin: .5rem 0; }
+.account-toc svg { width: 16px; height: 16px; flex: none; }
+.account-sections > section { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
+.plain-list { list-style: none; margin: 0; padding: 0; }
+.usage-pool h3 { margin-bottom: .25rem; }
+.usage-meter { display: flex; flex-direction: column; gap: .3rem; }
+.limit-reasons { display: flex; flex-wrap: wrap; gap: .25rem .75rem; color: var(--text-muted); }
+.limit-reasons li::before { content: "• "; color: var(--text-faint); }
+.tier-requirements { display: flex; flex-direction: column; gap: .25rem; margin-bottom: .5rem; }
+.tier-requirements li { display: flex; align-items: center; gap: .4rem; }
+.tier-requirements svg { width: 15px; height: 15px; flex: none; }
+.tier-requirements .is-met { color: var(--success); }
+.tier-requirements .is-open { color: var(--text-muted); }
+.row.align-end { align-items: flex-end; }
+.session-item form { flex: none; }
+.char-counter { font-size: .8rem; color: var(--text-faint); text-align: right; }
+.char-counter.is-over { color: var(--danger); }
+
+/* Personalities. */
+
+@media (max-width: 860px) {
+  .account-layout { grid-template-columns: minmax(0, 1fr); }
+  .account-toc { position: static; flex-direction: row; flex-wrap: wrap; gap: .25rem; }
+  .account-toc hr { display: none; }
+}
+.model-limits > li { display: flex; flex-direction: column; gap: .45rem; padding: .8rem 0; }
+.model-limits .badge svg, .model-limits p > svg { width: 14px; height: 14px; vertical-align: -2px; }

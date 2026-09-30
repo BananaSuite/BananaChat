@@ -15,8 +15,6 @@ select = ["F", "E9", "B"]
 # Package roots re-export their public API, so those imports are used by
 # definition even though nothing in the file itself references them.
 "__init__.py" = ["F401"]
-"db/__init__.py" = ["F401"]
-"helpers/__init__.py" = ["F401"]
 
 # Test suites follow pytest conventions that the general rules misread.
 # A fixture is imported and then named again as a parameter, which looks like

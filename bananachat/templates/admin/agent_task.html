@@ -1,0 +1,86 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when %}
+{% from "partials/icons.html" import icon %}
+{% set section = "agents" %}
+{% block title %}Agent task · {{ task.title or "Untitled task" }}{% endblock %}
+{% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/agents.css') }}">{% endblock %}
+{% set shown = "interrupted" if stale else task.status %}
+{% set status_badges = {"queued": "badge-info", "running": "badge-primary", "paused": "badge-warning", "finished": "badge-success", "failed": "badge-danger", "stopped": "", "out_of_budget": "badge-warning", "interrupted": "badge-warning"} %}
+{% block admin_content %}
+<p class="breadcrumb"><a href="{{ url_for('admin.agents', _anchor='tasks') }}">{{ icon("chevron-left") }}Agents</a></p>
+{% call header(task.title or "Untitled task", "Full log of an agent task: every model message, tool call and result.") %}
+  {% if active %}
+  <form method="post" action="{{ url_for('admin.agents_task_stop', task_id=task.id) }}" data-confirm="Stop this task now? The owner sees that an administrator stopped it." data-confirm-label="Stop" data-confirm-danger>
+    {{ csrf() }}<button type="submit" class="btn btn-danger">{{ icon("stop") }}<span>Stop task</span></button>
+  </form>
+  {% endif %}
+  <form method="post" action="{{ url_for('admin.agents_task_delete', task_id=task.id) }}" data-confirm="Delete this task, its log and its workspace?" data-confirm-label="Delete" data-confirm-danger>
+    {{ csrf() }}<button type="submit" class="btn btn-ghost">{{ icon("trash") }}<span>Delete</span></button>
+  </form>
+{% endcall %}
+
+<div class="stack-lg">
+  <div class="grid grid-2">
+    <section class="card" aria-labelledby="facts-title">
+      <h2 id="facts-title">Task</h2>
+      <dl class="details">
+        <dt>Status</dt><dd><span class="badge {{ status_badges.get(shown, '') }}">{{ shown | replace("_", " ") }}</span>{% if task.stop_requested and active %} <span class="badge badge-warning">stopping</span>{% endif %}</dd>
+        <dt>Owner</dt><dd>{% if task.username %}<a href="{{ url_for('admin.user_detail', user_id=task.user_id) }}">{{ task.username }}</a>{% else %}<span class="faint">deleted</span>{% endif %}</dd>
+        <dt>Model</dt><dd class="mono">{{ task.model_name }}</dd>
+        <dt>Swarm</dt><dd>{{ "yes" if task.swarm else "no" }}</dd>
+        <dt>Runs</dt><dd>{{ task.runs }}</dd>
+        <dt>Steps</dt><dd>{{ task.steps_used | number }} model calls, {{ task.tool_calls | number }} tool calls, {{ total_steps | number }} log entries</dd>
+        <dt>Tokens</dt><dd>{{ task.tokens_in | number }} in, {{ task.tokens_out | number }} out</dd>
+        <dt>Created</dt><dd>{{ when(task.created_at) }}</dd>
+        <dt>Finished</dt><dd>{{ when(task.finished_at) }}</dd>
+        <dt>Sandbox</dt><dd class="mono small">{{ task.sandbox_id or "—" }}{% if task.sandbox_expires_at %}<br><span class="muted">removed after {{ task.sandbox_expires_at | datetime }}</span>{% endif %}</dd>
+        <dt>Lease</dt><dd>{% if task.owner_token %}{{ "stale (process gone)" if stale else "held" }}{% else %}—{% endif %}</dd>
+        {% if pending %}<dt>Waiting messages</dt><dd>{{ pending }}</dd>{% endif %}
+      </dl>
+      {% if error %}<div class="alert alert-warning mt-2">{{ icon("alert") }}<p>{{ error }}</p></div>{% endif %}
+      {% if notice %}<div class="alert alert-info mt-2">{{ icon("info") }}<p>{{ notice }}</p></div>{% endif %}
+    </section>
+    <section class="card" aria-labelledby="prompt-title">
+      <h2 id="prompt-title">Prompt</h2>
+      <pre class="tool-pre">{{ task.prompt }}</pre>
+      {% if lanes %}
+      <h3 class="mt-2">Sub-agents</h3>
+      <ul class="stack-sm">
+        {% for lane in lanes %}
+        <li><strong>{{ lane.agent }}. {{ lane.title }}</strong> <span class="badge">{{ lane.status | replace("_", " ") }}</span> <span class="muted small">{{ lane.steps_used }} steps</span></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+  </div>
+
+  <section aria-labelledby="log-title">
+    <h2 id="log-title">{{ icon("file") }}Log</h2>
+    {% if not steps %}<p class="muted">No entries.</p>{% endif %}
+    <ol class="timeline admin-agent-log">
+      {% for step in steps %}
+      <li class="card admin-step">
+        <div class="row admin-step-head">
+          <span class="badge {{ {'tool': 'badge-primary', 'error': 'badge-danger', 'summary': 'badge-success', 'user': 'badge-info'}.get(step.kind, '') }}">{{ step.kind }}</span>
+          <span class="muted small">{{ "main agent" if step.agent == 0 else "sub-agent " ~ step.agent }}</span>
+          {% if step.tool_name %}<code>{{ step.tool_name }}</code>{% endif %}
+          {% if step.tool_status and step.tool_status != "ok" %}<span class="badge badge-danger">{{ step.tool_status }}</span>{% endif %}
+          <span class="grow"></span>
+          {% if step.tokens_in or step.tokens_out %}<span class="muted small">{{ step.tokens_in | number }} + {{ step.tokens_out | number }} tokens</span>{% endif %}
+          {% if step.duration_ms %}<span class="muted small">{{ step.duration_ms | number }} ms</span>{% endif %}
+          <span class="muted small">#{{ step.id }} · {{ step.created_at | datetime }}</span>
+        </div>
+        {% if step.content %}<pre class="tool-pre">{{ step.content }}</pre>{% endif %}
+        {% if step.thinking %}<details class="inline-details"><summary>Reasoning</summary><pre class="tool-pre">{{ step.thinking }}</pre></details>{% endif %}
+        {% if step.tool_calls %}<details class="inline-details"><summary>{{ step.tool_calls | length }} tool call(s) requested</summary><pre class="tool-pre">{{ step.tool_calls | tojson(indent=2) }}</pre></details>{% endif %}
+        {% if step.kind == "tool" %}
+        <div class="tool-label">Arguments</div><pre class="tool-pre">{{ step.tool_args | tojson(indent=2) }}</pre>
+        <div class="tool-label">Result</div><pre class="tool-pre">{{ step.tool_result or "" }}</pre>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% if next_after %}<p class="mt-2"><a class="btn" href="{{ url_for('admin.agents_task', task_id=task.id, after=next_after) }}">Next entries{{ icon("chevron-right") }}</a></p>{% endif %}
+  </section>
+</div>
+{% endblock %}

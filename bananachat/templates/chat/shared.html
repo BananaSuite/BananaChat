@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "chat/_message.html" import message with context %}
+{% block title %}{{ title }}{% endblock %}
+{% block body_class %}shared-chat-page{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">{% endblock %}
+{% block content %}
+{%- set state_labels = {"stopped": t("chat.state_stopped"), "failed": t("chat.state_failed"), "interrupted": t("chat.state_interrupted")} -%}
+<div class="page page-narrow">
+  <header class="page-header">
+    <div>
+      <h1>{{ title }}</h1>
+      <p>{{ t("chat.shared_intro", site=site_name) }}</p>
+    </div>
+    <a class="btn" href="{{ url_for('chat.shared_download', token=token) }}">{{ icon("download") }}{{ t("chat.download") }}</a>
+  </header>
+  {% if older_url %}
+  <p class="text-center"><a class="btn btn-ghost btn-sm" href="{{ older_url }}">{{ t("chat.show_earlier") }}</a></p>
+  {% endif %}
+  <div class="chat-messages read-only">
+    {% for m in messages %}{{ message(m, t("chat.you"), t("chat.assistant"), state_labels) }}{% else %}
+    <p class="empty">{{ t("chat.shared_empty") }}</p>
+    {% endfor %}
+  </div>
+  <p class="hint text-center mt-3">{{ t("chat.shared_footer") }}</p>
+</div>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/chat-view.js') }}"></script>{% endblock %}

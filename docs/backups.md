@@ -5,7 +5,7 @@ A managed BananaChat server can back up to a dedicated private GitHub or Forgejo
 | Deployment | Included in a Git backup |
 | --- | --- |
 | `single` or `web` | Accounts, chats, attachments, settings, matching source, credentials, and model download recipes. |
-| `compute` | Managed configuration and API token, matching source, and local Ollama model names. |
+| `compute` | Managed configuration and API token, matching source, and the Ollama model names (read from an existing Ollama's API when one is used with `--ollama-url`; the backup stops with an explanation if that Ollama does not answer). |
 
 Git backups **exclude model weights**. The web and compute servers need separate packages. External ComfyUI installations, checkpoint-agent directories, GPU drivers, and files outside the managed data directory need their own backup. The installed operating-system packages are reinstalled through the deployment prerequisites. [BananaWiki](https://github.com/BananaSuite/BananaWiki) and [BananaVibe](https://github.com/BananaSuite/BananaVibe) store their own backups in the same encrypted format; follow the backup documentation in those repositories.
 
@@ -21,7 +21,7 @@ Create a **separate** backup token with Contents read/write and Metadata read on
 sudo bananachat backups keygen --output /root/banana-recovery.agekey
 sudo bananachat backups configure \
   --forge github --repo https://github.com/YOUR_TEAM/private-backups.git \
-  --name ai-web --username YOUR_BOT \
+  --name chat-web --username YOUR_BOT \
   --token-file /root/banana-backup.token --key-file /root/banana-recovery.agekey \
   --keep 7 --max-mib 512
 sudo bananachat backups run
@@ -57,8 +57,8 @@ Use an exact ID returned by `backups list` in place of `SNAPSHOT_ID`:
 
 ```sh
 sudo bananachat backups verify SNAPSHOT_ID
-sudo bananachat backups download SNAPSHOT_ID --output /root/recovered-ai.tar.gz
-sudo bananachat restore /root/recovered-ai.tar.gz
+sudo bananachat backups download SNAPSHOT_ID --output /root/recovered-chat.tar.gz
+sudo bananachat restore /root/recovered-chat.tar.gz
 ```
 
 Or download, verify, and restore in one operation:
@@ -74,7 +74,7 @@ On a new server, install the prerequisites from the [deployment guide](deploymen
 ```sh
 sudo ./banana --root /opt/bananachat backups configure \
   --forge github --repo https://github.com/YOUR_TEAM/private-backups.git \
-  --name ai-web --username YOUR_BOT \
+  --name chat-web --username YOUR_BOT \
   --token-file /root/banana-backup.token --key-file /root/banana-recovery.agekey
 sudo ./banana --root /opt/bananachat backups list
 sudo ./banana --root /opt/bananachat backups restore SNAPSHOT_ID
@@ -86,11 +86,20 @@ The saved mode is restored automatically. `--name` on `backups restore` selects 
 
 ## Model recovery and existing chats
 
-After a restore without weights, **Admin → Models** shows the saved model list with **Download selected models** and **Not now**. Restoring a backup does not start any registry downloads. Old queued or pulling jobs in the restored database are cancelled before workers can see them. An administrator can approve selected downloads, defer them, retry failures, or install different models. Existing models are checked against the configured inference servers and skipped.
+Restoring a backup never starts a registry download by itself, and it asks only about models that are actually missing. Old queued or pulling jobs in the restored database are cancelled before workers can see them.
 
-Ollama names include the saved tags and supported Hugging Face GGUF names. Hugging Face safetensors recipes retain the repository, revision, filename, target name, expected size, and SHA-256 from successful checkpoint downloads. The existing authenticated checkpoint agent performs those downloads and verifies their digest. Preserve or recreate its credentials and enable the integration before approving them. A manually installed model or cleared pull history may have no retained recipe; the recovery screen lists that model for manual action. Custom weights that cannot be downloaded again need a separate full backup.
+**On the web (or single) server** — the one place to decide in a two-server setup, since it downloads through the compute gateway:
 
-On a compute-only server, which has no admin website:
+1. After the restore, BananaChat compares the saved model list with what its model server (the compute server, or the local Ollama of a single server) and ComfyUI have. It does this in the background every minute and whenever an administrator opens the overview or the models page.
+2. If everything is installed, the list is closed silently and nothing is shown.
+3. Otherwise **Admin → Overview** shows one card, for example "2 models from the backup are missing on the compute server (about 9.5 GB)", with **Download them**, **Choose…** (Admin → Models, where the missing models are listed with checkboxes) and **Dismiss**. The size appears when it is known from the catalog before the backup.
+4. The card closes by itself once the downloads have finished. **Not now** postpones it, and **Dismiss** closes it for good: nothing stays on the dashboard forever, and a dismissed model is not offered again unless it is installed and later lost again.
+
+A compute server that is restored from its own backup, or replaced by an empty one, needs no action on its side: the web server notices the published models its compute server no longer has and shows the same card ("published models not installed"). The restore command says which of these happens next.
+
+Ollama names include the saved tags and supported Hugging Face GGUF names. Hugging Face safetensors recipes retain the repository, revision, filename, target name, expected size, and SHA-256 from successful checkpoint downloads. The existing authenticated checkpoint agent performs those downloads and verifies their digest. Preserve or recreate its credentials and enable the integration before downloading them. A manually installed model or cleared pull history may have no retained recipe; the card lists it as needing manual action until it is installed or dismissed. Custom weights that cannot be downloaded again need a separate full backup.
+
+A compute server used **without** a web server (for API clients only) downloads its saved list from the command line; installed models are skipped and the list closes itself when nothing is missing:
 
 ```sh
 sudo bananachat models status
@@ -99,11 +108,11 @@ sudo bananachat models restore --yes
 sudo bananachat models skip
 ```
 
-The explicit `--yes` approves the displayed Ollama inventory. Hugging Face checkpoint recovery is handled from the web server's admin interface and configured checkpoint agent. Registry changes, gated or private repositories, missing artifacts, disk limits, or incompatible hardware can require manual intervention; the original source and digest are kept for review.
+The explicit `--yes` approves the displayed missing Ollama models; they are downloaded through the configured `BC_COMPUTE_UPSTREAM`. Registry changes, gated or private repositories, missing artifacts, disk limits, or incompatible hardware can require manual intervention; the original source and digest are kept for review.
 
 Existing chat history is preserved. A missing selected text model falls back to an installed model authorized for that user; vision attachments still require a vision model. A model that fails before producing output can trigger a bounded retry with another authorized model, and the chat displays the substitution. The tool never widens model access or substitutes an unapproved tag. It does not combine a partial answer with output from a different model. If no suitable model works, it reports the error and keeps the conversation.
 
-`sudo bananachat backup --exclude-model-weights --output /root/ai-data.tar.gz` creates the same lightweight local package. Plain `backup` and `migrate`, and pre-update rollback packages, still include managed weights for a complete local rollback.
+`sudo bananachat backup --exclude-model-weights --output /root/chat-data.tar.gz` creates the same lightweight local package. Plain `backup` and `migrate`, and pre-update rollback packages, still include managed weights for a complete local rollback.
 
 ## Retention and Git limits
 

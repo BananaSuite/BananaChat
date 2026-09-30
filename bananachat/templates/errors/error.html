@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% set error_key = {400: "bad_request", 401: "unauthorized", 403: "forbidden", 404: "not_found", 405: "not_allowed", 413: "too_large", 415: "bad_request", 429: "rate_limited", 500: "server_error", 503: "unavailable"}.get(code, "server_error") %}
+{% block title %}{{ t("errors." ~ error_key ~ "_title") }}{% endblock %}
+{% block content %}
+<div class="page page-narrow">
+  <div class="empty">
+    <p class="stat-value">{{ code }}</p>
+    <h1>{{ t("errors." ~ error_key ~ "_title") }}</h1>
+    <p>{{ message or t("errors." ~ error_key ~ "_text") }}</p>
+    <div class="row mt-2" >
+      <span class="grow"></span>
+      <a class="btn btn-primary" href="{{ url_for('core.index') }}">{{ t("errors.home") }}</a>
+      <span class="grow"></span>
+    </div>
+  </div>
+</div>
+{% endblock %}

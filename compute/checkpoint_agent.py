@@ -1,16 +1,30 @@
-"""Authenticated, single-worker ComfyUI checkpoint download agent."""
+"""Authenticated, single-worker ComfyUI checkpoint download agent.
+
+Standard library only. Run with ``python -m compute.checkpoint_agent``; see
+``compute/README.md`` for the API and ``docs/compute.md`` for deployment.
+
+* One download runs at a time; at most ``BC_CHECKPOINT_AGENT_QUEUE_SIZE`` more
+  wait. Cancelling a queued job frees its place at once.
+* Jobs and managed files live in ``state.json`` (version 1). Finished jobs are
+  pruned (at most ``MAX_FINISHED_JOBS``, none older than
+  ``FINISHED_JOB_RETENTION_DAYS``) so the file stays far below its size limit;
+  an idempotency key is remembered only while its job is kept.
+* The HTTP server gives every connection a socket timeout and serves at most
+  ``MAX_HTTP_THREADS`` requests at once (others get a JSON 503).
+"""
 
 from __future__ import annotations
 
 import argparse
+import calendar
 import errno
 import hashlib
 import hmac
 import json
 import os
-import queue
 import re
 import signal
+import socket
 import stat
 import struct
 import threading
@@ -29,6 +43,10 @@ STATE_VERSION = 1
 CHUNK_SIZE = 1024 * 1024
 MAX_SAFETENSORS_HEADER = 16 * 1024 * 1024
 TERMINAL_STATES = {"completed", "failed", "canceled"}
+MAX_FINISHED_JOBS = 500
+FINISHED_JOB_RETENTION_DAYS = 30
+MAX_STATE_BYTES = 8 * 1024 * 1024
+MAX_HTTP_THREADS = 16
 ALLOWED_REDIRECT_HOSTS = frozenset(
     {
         "huggingface.co",
@@ -356,6 +374,7 @@ class CheckpointAgent:
         self.root = _prepare_directory(config.checkpoint_root, 0o755)
         self.state_dir = _prepare_directory(config.state_dir, 0o700)
         self.token = _read_secret(config.token_file, "agent token")
+        self._token_bytes = self.token.encode("utf-8")
         self.hf_token = (
             _read_secret(config.hf_token_file, "Hugging Face token")
             if config.hf_token_file
@@ -363,9 +382,12 @@ class CheckpointAgent:
         )
         self.fetcher = fetcher or HuggingFaceFetcher(config.request_timeout)
         self._lock = threading.RLock()
-        # One active download plus queue_size pending jobs can exist. Recovery
-        # must be able to enqueue all of them after a restart.
-        self._work: "queue.Queue[Optional[str]]" = queue.Queue(config.queue_size + 1)
+        # Waiting jobs are picked from ``self.jobs`` in arrival order, so a job
+        # cancelled while queued frees its place immediately.
+        self._wake = threading.Condition(self._lock)
+        self._order: Dict[str, int] = {}
+        self._sequence = 0
+        self._deleting: set = set()
         self._cancel: Dict[str, threading.Event] = {}
         self._stop = threading.Event()
         self._state_fd = self._open_directory(self.state_dir)
@@ -373,7 +395,8 @@ class CheckpointAgent:
         self.jobs: Dict[str, Dict[str, Any]] = {}
         self.managed: Dict[str, Dict[str, Any]] = {}
         try:
-            self._load_state()
+            with self._lock:
+                self._load_state()
         except BaseException:
             os.close(self._root_fd)
             os.close(self._state_fd)
@@ -393,13 +416,11 @@ class CheckpointAgent:
         )
 
     def close(self) -> None:
-        self._stop.set()
-        for event in self._cancel.values():
-            event.set()
-        try:
-            self._work.put_nowait(None)
-        except queue.Full:
-            pass
+        with self._lock:
+            self._stop.set()
+            for event in list(self._cancel.values()):
+                event.set()
+            self._wake.notify_all()
         if self._worker:
             self._worker.join(timeout=5)
         os.close(self._root_fd)
@@ -435,6 +456,7 @@ class CheckpointAgent:
         self.jobs = jobs
         self.managed = managed
         changed = False
+        recovered = []
         for job_id, job in self.jobs.items():
             if (
                 not isinstance(job_id, str)
@@ -474,12 +496,10 @@ class CheckpointAgent:
                 job["updated_at"] = _now()
                 job["error"] = None
                 self._cancel[job_id] = threading.Event()
-                try:
-                    self._work.put_nowait(job_id)
-                except queue.Full:
-                    job["status"] = "failed"
-                    job["error"] = {"code": "recovery_queue_full", "message": "job could not be recovered"}
+                recovered.append((str(job.get("created_at") or ""), job_id))
                 changed = True
+        for _created, job_id in sorted(recovered):
+            self._enqueue_locked(job_id)
         for name, item in self.managed.items():
             try:
                 valid_name = _validate_relative_path(name, "managed checkpoint name")
@@ -496,15 +516,48 @@ class CheckpointAgent:
                 or item["size"] < 1
             ):
                 raise ValueError("managed checkpoint state is invalid")
+        if self._prune_locked():
+            changed = True
         if changed:
             self._persist_locked()
 
-    def _persist_locked(self) -> None:
-        payload = json.dumps(
+    def _enqueue_locked(self, job_id: str) -> None:
+        self._sequence += 1
+        self._order[job_id] = self._sequence
+        self._wake.notify_all()
+
+    def _prune_locked(self, keep: int = MAX_FINISHED_JOBS) -> bool:
+        """Forget old finished jobs (managed-file records are kept)."""
+        cutoff = time.time() - FINISHED_JOB_RETENTION_DAYS * 86400
+        finished = sorted(
+            (job for job in self.jobs.values() if job.get("status") in TERMINAL_STATES),
+            key=lambda job: (str(job.get("updated_at") or ""), job["id"]),
+            reverse=True,
+        )
+        remove = [job["id"] for index, job in enumerate(finished)
+                  if index >= keep or _timestamp(job.get("updated_at")) < cutoff]
+        for job_id in remove:
+            del self.jobs[job_id]
+            self._cancel.pop(job_id, None)
+        return bool(remove)
+
+    def _state_payload(self) -> bytes:
+        return json.dumps(
             {"version": STATE_VERSION, "jobs": self.jobs, "managed": self.managed},
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
+
+    def _persist_locked(self) -> None:
+        self._prune_locked()
+        payload = self._state_payload()
+        keep = MAX_FINISHED_JOBS
+        while len(payload) > MAX_STATE_BYTES // 2 and keep > 0:
+            keep //= 2
+            self._prune_locked(keep)
+            payload = self._state_payload()
+        if len(payload) > MAX_STATE_BYTES:
+            raise AgentError(507, "state_too_large", "agent state is too large")
         temporary = ".state-{}.tmp".format(uuid.uuid4().hex)
         fd = os.open(
             temporary,
@@ -548,10 +601,16 @@ class CheckpointAgent:
         }
 
     def authenticate(self, header: Optional[str]) -> bool:
-        if not header or not header.startswith("Bearer "):
+        scheme, _, candidate = (header or "").strip().partition(" ")
+        if scheme.lower() != "bearer":
             return False
-        candidate = header[7:]
-        return bool(candidate) and hmac.compare_digest(candidate, self.token)
+        try:
+            # Headers arrive decoded as ISO-8859-1; compare bytes in constant
+            # time (a str with non-ASCII characters would raise instead).
+            supplied = candidate.strip().encode("latin-1")
+        except UnicodeEncodeError:
+            return False
+        return bool(supplied) and hmac.compare_digest(supplied, self._token_bytes)
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
@@ -599,14 +658,13 @@ class CheckpointAgent:
             )
             self.jobs[job_id] = job
             self._cancel[job_id] = threading.Event()
-            self._persist_locked()
             try:
-                self._work.put_nowait(job_id)
-            except queue.Full:
+                self._persist_locked()
+            except BaseException:
                 self.jobs.pop(job_id, None)
                 self._cancel.pop(job_id, None)
-                self._persist_locked()
-                raise AgentError(429, "queue_full", "download queue is full") from None
+                raise
+            self._enqueue_locked(job_id)
             return self._public_job(job), True
 
     def get_job(self, job_id: str) -> Dict[str, Any]:
@@ -628,6 +686,7 @@ class CheckpointAgent:
                 job["status"] = "canceled"
                 job["updated_at"] = _now()
                 job["error"] = {"code": "canceled", "message": "download was canceled"}
+                self._order.pop(job_id, None)  # its place in the queue is free again
                 self._persist_locked()
             return self._public_job(job)
 
@@ -655,35 +714,50 @@ class CheckpointAgent:
                 raise AgentError(404, "not_found", "managed checkpoint was not found")
             if not hmac.compare_digest(supplied, str(item.get("digest", ""))):
                 raise AgentError(412, "precondition_failed", "If-Match does not match")
+            if name in self._deleting:
+                raise AgentError(409, "checkpoint_busy", "the checkpoint is already being deleted")
+            self._deleting.add(name)
+        parent_fd = -1
+        fd = -1
+        try:
             parent_fd, leaf = self._open_parent(name, create=False)
-            try:
-                fd = os.open(leaf, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
-                try:
-                    before = os.fstat(fd)
-                    digest = _hash_fd(fd)
-                    current = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
-                finally:
-                    os.close(fd)
-                if not stat.S_ISREG(current.st_mode) or (before.st_dev, before.st_ino) != (
-                    current.st_dev,
-                    current.st_ino,
-                ):
+            fd = os.open(leaf, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode):
+                raise AgentError(409, "checkpoint_changed", "managed checkpoint is not a regular file")
+            # Hashing a large file takes a while: never under the global lock.
+            digest = _hash_fd(fd)
+            after = os.fstat(fd)
+            if not hmac.compare_digest(digest, supplied):
+                raise AgentError(412, "precondition_failed", "checkpoint content does not match")
+            with self._lock:
+                current = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+                unchanged = (
+                    stat.S_ISREG(current.st_mode)
+                    and (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                    == (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
+                    == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                )
+                if not unchanged or self.managed.get(name) is not item:
                     raise AgentError(409, "checkpoint_changed", "checkpoint changed during verification")
-                if not hmac.compare_digest(digest, supplied):
-                    raise AgentError(412, "precondition_failed", "checkpoint content does not match")
                 os.unlink(leaf, dir_fd=parent_fd)
                 os.fsync(parent_fd)
-            except FileNotFoundError as exc:
-                raise AgentError(404, "not_found", "managed checkpoint was not found") from exc
-            except OSError as exc:
-                if exc.errno == errno.ELOOP:
-                    raise AgentError(409, "checkpoint_changed", "managed checkpoint is not a regular file") from exc
-                raise
-            finally:
-                os.close(parent_fd)
-            del self.managed[name]
-            self._persist_locked()
+                del self.managed[name]
+                self._persist_locked()
             return {"deleted": name, "digest": supplied}
+        except FileNotFoundError as exc:
+            raise AgentError(404, "not_found", "managed checkpoint was not found") from exc
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise AgentError(409, "checkpoint_changed", "managed checkpoint is not a regular file") from exc
+            raise
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            if parent_fd >= 0:
+                os.close(parent_fd)
+            with self._lock:
+                self._deleting.discard(name)
 
     def _managed_file_exists(self, name: str, expected_size: Any) -> bool:
         try:
@@ -722,19 +796,26 @@ class CheckpointAgent:
                 raise AgentError(409, "unsafe_target", "target path is not safe") from exc
             raise
 
+    def _next_job_locked(self) -> Optional[str]:
+        """The oldest waiting job (entries of cancelled or finished jobs are dropped)."""
+        for job_id in sorted(self._order, key=self._order.__getitem__):
+            del self._order[job_id]
+            if self.jobs.get(job_id, {}).get("status") == "queued":
+                return job_id
+        return None
+
     def _worker_loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                job_id = self._work.get(timeout=0.25)
-            except queue.Empty:
-                continue
-            if job_id is None:
-                self._work.task_done()
-                return
-            try:
-                self._run_job(job_id)
-            finally:
-                self._work.task_done()
+        while True:
+            with self._lock:
+                job_id = None
+                while not self._stop.is_set():
+                    job_id = self._next_job_locked()
+                    if job_id is not None:
+                        break
+                    self._wake.wait(0.5)
+                if self._stop.is_set():
+                    return
+            self._run_job(job_id)
 
     def _run_job(self, job_id: str) -> None:
         with self._lock:
@@ -851,7 +932,8 @@ class CheckpointAgent:
                     total += len(chunk)
                     if total > self.config.max_download_bytes:
                         raise AgentError(413, "source_too_large", "checkpoint exceeds the configured size limit")
-                    available = os.fstatvfs(parent_fd).f_bavail * os.fstatvfs(parent_fd).f_frsize
+                    filesystem = os.fstatvfs(parent_fd)
+                    available = filesystem.f_bavail * filesystem.f_frsize
                     if available - len(chunk) < self.config.disk_reserve_bytes:
                         raise AgentError(507, "insufficient_storage", "disk reserve would be exceeded")
                     handle.write(chunk)
@@ -930,13 +1012,52 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _timestamp(value: Any) -> float:
+    """Epoch seconds of a ``_now()`` string (0 when unreadable, so it is pruned first)."""
+    try:
+        return float(calendar.timegm(time.strptime(str(value), "%Y-%m-%dT%H:%M:%SZ")))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class AgentHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = 32
 
-    def __init__(self, address, agent: CheckpointAgent):
+    def __init__(self, address, agent: CheckpointAgent, max_threads: int = MAX_HTTP_THREADS):
         self.agent = agent
+        self.slots = threading.BoundedSemaphore(max_threads)
+        if ":" in str(address[0]):
+            self.address_family = socket.AF_INET6
         super().__init__(address, CheckpointRequestHandler)
+
+    def process_request(self, request, client_address):  # type: ignore[no-untyped-def]
+        if not self.slots.acquire(blocking=False):
+            # Answer instead of silently dropping; the reply fits the socket buffer.
+            body = b'{"error":{"code":"busy","message":"the agent is busy"}}'
+            try:
+                request.settimeout(1.0)
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+                    b"Retry-After: 5\r\nConnection: close\r\nContent-Length: "
+                    + str(len(body)).encode() + b"\r\n\r\n" + body
+                )
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):  # type: ignore[no-untyped-def]
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
 
 
 class CheckpointRequestHandler(BaseHTTPRequestHandler):
@@ -950,6 +1071,16 @@ class CheckpointRequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(self.agent.config.request_timeout)
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except (socket.timeout, TimeoutError, ConnectionError):
+            self.close_connection = True
 
     def do_GET(self) -> None:
         self._dispatch("GET")

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "personalities/_macros.html" import avatar, traits with context %}
+{% block title %}{{ t("personality.shared_title", name=card.row.name) }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/personalities.css') }}">{% endblock %}
+{% block content %}
+{% set row = card.row %}
+<div class="page page-narrow persona-page">
+  <header class="page-header">
+    <div>
+      <h1>{{ t("personality.shared_heading") }}</h1>
+      <p>{{ t("personality.shared_intro", owner=row.username) }}</p>
+    </div>
+  </header>
+
+  <article class="card persona-card persona-shared accent-{{ row.color or 'default' }}" aria-labelledby="shared-title">
+    <div class="persona-head">
+      {{ avatar(row, "lg") }}
+      <div class="grow">
+        <h2 id="shared-title">{{ row.name }}</h2>
+        {% if row.description %}<p class="persona-description">{{ row.description }}</p>{% endif %}
+      </div>
+    </div>
+    {{ traits(card) }}
+    <section aria-labelledby="shared-instructions">
+      <h3 class="label" id="shared-instructions">{{ t("personality.instructions") }}</h3>
+      <pre class="instructions is-open">{{ row.instructions }}</pre>
+    </section>
+    {% if row.greeting or card.starters %}
+    <section class="persona-intro-preview" aria-labelledby="shared-start">
+      <h3 class="label" id="shared-start">{{ t("personality.section_start") }}</h3>
+      {% if row.greeting %}<p class="persona-greeting">{{ row.greeting }}</p>{% endif %}
+      {% if card.starters %}<ul class="persona-starters">{% for starter in card.starters %}<li>{{ starter }}</li>{% endfor %}</ul>{% endif %}
+    </section>
+    {% endif %}
+    <div class="persona-footer">
+      {% if own %}
+      <p class="hint mb-0">{{ t("personality.shared_own") }}</p>
+      <div class="persona-actions"><a class="btn btn-sm" href="{{ url_for('personalities.index', _anchor='personality-' ~ row.id) }}">{{ t("personality.back") }}</a></div>
+      {% elif not allowed %}
+      <div class="alert alert-warning">{{ icon("shield") }}<p>{{ t("personality.no_access_text") }} <a href="{{ url_for('account.index', _anchor='access') }}">{{ t("personality.request_access") }}</a></p></div>
+      {% elif full %}
+      <p class="hint mb-0">{{ t("personality.limit_reached", max=max_count) }}</p>
+      {% else %}
+      <p class="hint mb-0">{{ t("personality.shared_copy_hint") }}</p>
+      <form method="post" action="{{ url_for('personalities.save_shared', token=token) }}" class="persona-actions" data-busy>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-primary">{{ icon("copy") }}{{ t("personality.shared_save") }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </article>
+</div>
+{% endblock %}

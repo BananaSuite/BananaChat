@@ -1,0 +1,61 @@
+{#- Shared building blocks for administrator pages. -#}
+{% from "partials/icons.html" import icon %}
+
+{% macro csrf() -%}
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{%- endmacro %}
+
+{% macro header(title, description=None) -%}
+<header class="page-header admin-header">
+  <div>
+    <h1>{{ title }}</h1>
+    {% if description %}<p>{{ description }}</p>{% endif %}
+  </div>
+  {% if caller %}<div class="row-end">{{ caller() }}</div>{% endif %}
+</header>
+{%- endmacro %}
+
+{% macro empty(icon_name, title, text=None) -%}
+<div class="empty">
+  {{ icon(icon_name) }}
+  <h3>{{ title }}</h3>
+  {% if text %}<p>{{ text }}</p>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro pagination(page, endpoint, label="Pages") -%}
+{% if page.pages > 1 %}
+<nav class="pagination" aria-label="{{ label }}">
+  {% if page.has_previous %}
+  <a class="btn btn-sm" href="{{ url_for(endpoint, page=page.number - 1, **kwargs) }}" rel="prev">{{ icon("chevron-left") }}<span>Previous</span></a>
+  {% endif %}
+  <span class="muted small">Page {{ page.number }} of {{ page.pages }} · {{ page.total | number }} total</span>
+  {% if page.has_next %}
+  <a class="btn btn-sm" href="{{ url_for(endpoint, page=page.number + 1, **kwargs) }}" rel="next"><span>Next</span>{{ icon("chevron-right") }}</a>
+  {% endif %}
+</nav>
+{% endif %}
+{%- endmacro %}
+
+{% macro status_badge(status) -%}
+{%- set kinds = {"done": "success", "ok": "success", "approved": "success", "active": "success", "pulling": "info",
+                 "queued": "primary", "pending": "warning", "failed": "danger", "error": "danger", "denied": "danger",
+                 "cancelled": "", "expired": "", "stopped": "warning"} -%}
+<span class="badge{% if kinds.get(status) %} badge-{{ kinds.get(status) }}{% endif %}">{{ status | replace("_", " ") }}</span>
+{%- endmacro %}
+
+{% macro yes_no(value, yes="Yes", no="No") -%}
+{% if value %}<span class="badge badge-success">{{ icon("check") }}{{ yes }}</span>{% else %}<span class="badge">{{ no }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro when(value) -%}
+{% if value %}<time datetime="{{ value | replace(' ', 'T') }}Z" title="{{ value | datetime }}">{{ value | timeago }}</time>{% else %}<span class="faint">—</span>{% endif %}
+{%- endmacro %}
+
+{% macro utc_input(name, id, label, hint=None, value="", min=None) -%}
+<div class="field">
+  <label for="{{ id }}">{{ label }} <span class="badge">UTC</span></label>
+  <input type="datetime-local" id="{{ id }}" name="{{ name }}" value="{{ value }}"{% if min %} min="{{ min }}"{% endif %} aria-describedby="{{ id }}-hint">
+  <span class="hint" id="{{ id }}-hint">{{ hint or "Coordinated Universal Time. Leave empty for no end date." }}</span>
+</div>
+{%- endmacro %}

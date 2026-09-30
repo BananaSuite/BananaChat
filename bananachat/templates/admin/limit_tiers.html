@@ -1,0 +1,85 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Tiers · Limits{% endblock %}
+{% block admin_content %}
+{% macro tier_fields(tier, prefix) -%}
+<div class="form-grid">
+  <div class="field">
+    <label for="{{ prefix }}-name" class="required">Name</label>
+    <input type="text" id="{{ prefix }}-name" name="name" required maxlength="40" value="{{ tier.name if tier else '' }}">
+  </div>
+  <div class="field">
+    <label for="{{ prefix }}-multiplier" class="required">Token multiplier</label>
+    <input type="number" id="{{ prefix }}-multiplier" name="multiplier" required min="0" max="100" step="any" value="{{ ('%g' | format(tier.multiplier)) if tier else 1 }}" aria-describedby="{{ prefix }}-multiplier-hint">
+    <span class="hint" id="{{ prefix }}-multiplier-hint">× the 5-hour and weekly tokens where tiers are on.</span>
+  </div>
+  <div class="field">
+    <label for="{{ prefix }}-age">Account age (days)</label>
+    <input type="number" id="{{ prefix }}-age" name="min_account_days" min="0" max="3650" step="1" value="{{ tier.min_account_days if tier else 0 }}">
+  </div>
+  <div class="field">
+    <label for="{{ prefix }}-active">Active days in the last 30</label>
+    <input type="number" id="{{ prefix }}-active" name="min_active_days" min="0" max="30" step="1" value="{{ tier.min_active_days if tier else 0 }}">
+  </div>
+  <div class="field">
+    <label for="{{ prefix }}-tokens">Tokens used in the last 30 days</label>
+    <input type="text" id="{{ prefix }}-tokens" name="min_tokens_30d" inputmode="decimal" autocomplete="off" maxlength="20" value="{{ (tier.min_tokens_30d | token_input) if tier else 0 }}" aria-describedby="{{ prefix }}-tokens-hint">
+    <span class="hint" id="{{ prefix }}-tokens-hint">Counted tokens (× each model's weight), e.g. 200k.</span>
+  </div>
+  <div class="field">
+    <label for="{{ prefix }}-clean">No suspension in the last (days)</label>
+    <input type="number" id="{{ prefix }}-clean" name="clean_days" min="0" max="3650" step="1" value="{{ tier.clean_days if tier else 0 }}">
+  </div>
+</div>
+{%- endmacro %}
+
+{{ header("Limits", "Tiers raise the token limits of accounts that have been around, use the site regularly and behave.") }}
+{% include "admin/_limits_tabs.html" %}
+
+<div class="alert {{ 'alert-success' if applies else 'alert-info' }} mb-3">{{ icon("info") }}
+  <p>{% if applies %}Tiers raise: {{ applies | join("; ") }}.{% else %}No limit uses tiers yet: turn on “Raise with tier levels” for a 5-hour or weekly limit on the <a href="{{ url_for('admin.quotas') }}">Services</a> tab (or for a model on the <a href="{{ url_for('admin.limit_models') }}">Models</a> tab).{% endif %}
+  Every hour, accounts move up to the highest tier whose requirements they all meet. They never move down by themselves; set or lock a tier on an account's limits page.</p>
+</div>
+
+<div class="stack">
+  {% for tier in tiers %}
+  <form method="post" action="{{ url_for('admin.limit_tier_update', tier_id=tier.id) }}" class="card stack" aria-labelledby="tier-{{ tier.id }}-title">
+    {{ csrf() }}
+    <div class="card-header">
+      <h2 id="tier-{{ tier.id }}-title">{{ loop.index }}. {{ tier.name }} <span class="badge">×{{ "%g" | format(tier.multiplier) }}</span>
+        <span class="badge badge-info">{{ (counts.get(tier.id, 0) + (counts.get(none, 0) if loop.first else 0)) | number }} account(s)</span>
+        {% if loop.first %}<span class="badge">entry tier</span>{% endif %}</h2>
+      <div class="row">
+        <button type="submit" name="action" value="up" class="btn btn-sm" formnovalidate{% if loop.first %} disabled{% endif %} aria-label="Move {{ tier.name }} up">{{ icon("arrow-up") }}</button>
+        <button type="submit" name="action" value="down" class="btn btn-sm" formnovalidate{% if loop.last %} disabled{% endif %} aria-label="Move {{ tier.name }} down">{{ icon("arrow-down") }}</button>
+      </div>
+    </div>
+    {{ tier_fields(tier, "tier-" ~ tier.id) }}
+    {% if loop.first %}<p class="hint mb-0">Accounts start here; its requirements are not checked.</p>{% endif %}
+    <div class="form-actions">
+      {% if tiers | length > 1 %}<button type="submit" form="tier-delete-{{ tier.id }}" class="btn btn-ghost">{{ icon("trash") }}Delete</button>{% endif %}
+      <button type="submit" name="action" value="save" class="btn btn-primary">Save {{ tier.name }}</button>
+    </div>
+  </form>
+  {% if tiers | length > 1 %}
+  <form method="post" action="{{ url_for('admin.limit_tier_update', tier_id=tier.id) }}" id="tier-delete-{{ tier.id }}" hidden data-confirm="Delete tier {{ tier.name }}? Its accounts go back to the first tier." data-confirm-danger>
+    {{ csrf() }}<input type="hidden" name="action" value="delete">
+  </form>
+  {% endif %}
+  {% endfor %}
+
+  <form method="post" action="{{ url_for('admin.limit_tier_create') }}" class="card stack" aria-labelledby="tier-new-title">
+    {{ csrf() }}
+    <h2 id="tier-new-title">Add a tier</h2>
+    <p class="muted small mb-0">New tiers are added at the top of the ladder.</p>
+    {{ tier_fields(none, "tier-new") }}
+    <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Add tier</button></div>
+  </form>
+
+  <form method="post" action="{{ url_for('admin.limit_tiers_promote') }}" class="row">
+    {{ csrf() }}
+    <button type="submit" class="btn">{{ icon("refresh") }}Check promotions now</button>
+  </form>
+</div>
+{% endblock %}

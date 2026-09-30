@@ -1,0 +1,161 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, utc_input %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ user.username }} · Users{% endblock %}
+{% block admin_content %}
+<p class="breadcrumb"><a href="{{ url_for('admin.users') }}">{{ icon("chevron-left") }}All users</a></p>
+{% call header(user.username, ("Administrator" if user.role == "admin" else "User") ~ " · created " ~ (user.created_at | datetime)) %}
+  {% if suspended_now %}<span class="badge badge-danger">Suspended{% if user.suspended_until %} until {{ user.suspended_until | datetime }}{% endif %}</span>{% else %}<span class="badge badge-success">Active</span>{% endif %}
+{% endcall %}
+
+{% if is_self %}
+<div class="alert alert-info mb-3">{{ icon("info") }}<p>This is your own account. Role, suspension, password and deletion are managed from your account page so you cannot lock yourself out.</p></div>
+{% endif %}
+
+<div class="grid grid-2">
+  <section class="card" aria-labelledby="summary-title">
+    <h2 id="summary-title">Summary</h2>
+    <dl class="details">
+      <dt>User id</dt><dd><code>{{ user.id }}</code></dd>
+      <dt>Last sign-in</dt><dd>{{ when(user.last_login_at) }}</dd>
+      <dt>Invitation</dt><dd>{{ user.invite_code or "—" }}</dd>
+      <dt>Chats</dt><dd>{{ chats | number }}</dd>
+      <dt>Active API keys</dt><dd>{{ api_tokens }}</dd>
+      <dt>Tokens today</dt><dd>API {{ usage.api[0] | tokens }}{% if usage.api[1] %} + {{ usage.api[1] | tokens }} slow{% endif %} · chat {{ usage.chat[0] | tokens }}{% if usage.chat[1] %} + {{ usage.chat[1] | tokens }} slow{% endif %} · agents {{ usage.agent[0] | tokens }}
+        <div class="hint">Counted against the services' limits (× each model's weight), since midnight UTC.</div></dd>
+    </dl>
+    <div class="card-footer row">
+      <a class="btn btn-sm" href="{{ url_for('admin.user_export', user_id=user.id, kind='gdpr') }}">{{ icon("download") }}Export personal data</a>
+      <a class="btn btn-sm" href="{{ url_for('admin.user_export', user_id=user.id, kind='chats') }}">{{ icon("download") }}Export chats</a>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="quota-title">
+    <div class="card-header">
+      <h2 id="quota-title">Limits</h2>
+      <a class="btn btn-sm" href="{{ url_for('admin.user_limits', user_id=user.id) }}">{{ icon("sliders") }}Manage limits</a>
+    </div>
+    {% if user.role == "admin" %}
+    <p class="muted mb-0">Administrators are never limited.</p>
+    {% else %}
+    <dl class="details">
+      {% for item in limit_summary %}
+      <dt>{{ item.label }}</dt>
+      <dd>{% if item.window.limited %}{{ item.window.tokens | tokens }}{% if item.window.slow_tokens %} + {{ item.window.slow_tokens | tokens }} slow{% endif %} per 5 hours{% else %}no 5-hour limit{% endif %}{% if item.weekly.limited %}, {{ item.weekly.tokens | tokens }} per week{% endif %}{% if item.custom %} <span class="badge">custom</span>{% endif %}
+        <div class="hint">{{ item.rate }}</div></dd>
+      {% endfor %}
+      <dt>Speed</dt><dd>{{ {"slow": "Slowed down", "fast": "Sped up"}.get(limit_settings.speed, "Normal") }}</dd>
+      <dt>Tier</dt><dd>{{ limit_tier.name if limit_tier else "—" }}{% if limit_settings.tier_locked %} <span class="badge">locked</span>{% endif %}</dd>
+    </dl>
+    {% endif %}
+  </section>
+
+  {% if not is_self %}
+  <section class="card" aria-labelledby="role-title">
+    <h2 id="role-title">Role</h2>
+    <form method="post" action="{{ url_for('admin.user_role', user_id=user.id) }}" class="stack" data-confirm="Change the role of {{ user.username }}?">
+      {{ csrf() }}
+      <fieldset>
+        <legend>Account role</legend>
+        <label class="check"><input type="radio" name="role" value="user"{% if user.role == "user" %} checked{% endif %}><span>User<small>Uses chat and the API within quotas and access rules.</small></span></label>
+        <label class="check"><input type="radio" name="role" value="admin"{% if user.role == "admin" %} checked{% endif %}><span>Administrator<small>Full control of the site, unlimited usage.</small></span></label>
+      </fieldset>
+      <div class="form-actions"><button type="submit" class="btn">Save role</button></div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="suspend-title">
+    <h2 id="suspend-title">Suspension</h2>
+    {% if suspended_now %}
+    <p>{{ user.username }} cannot sign in{% if user.suspended_until %} until {{ user.suspended_until | datetime }}{% endif %}.</p>
+    <form method="post" action="{{ url_for('admin.user_unsuspend', user_id=user.id) }}">
+      {{ csrf() }}
+      <button type="submit" class="btn btn-primary">Lift suspension</button>
+    </form>
+    {% else %}
+    <p class="muted small">A suspended user is signed out immediately and cannot sign in or use API keys.</p>
+    <form method="post" action="{{ url_for('admin.user_suspend', user_id=user.id) }}" class="stack" data-confirm="Suspend {{ user.username }} and sign them out everywhere?" data-confirm-danger>
+      {{ csrf() }}
+      {{ utc_input("until", "suspend-until", "Suspended until (optional)", "Coordinated Universal Time. Leave empty to suspend until you lift it.", min=min_datetime) }}
+      <div class="form-actions"><button type="submit" class="btn btn-danger">Suspend</button></div>
+    </form>
+    {% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="password-title">
+    <h2 id="password-title">Reset password</h2>
+    <p class="muted small">Sets a new password and signs {{ user.username }} out of every device. Tell them the new password through a safe channel.</p>
+    <form method="post" action="{{ url_for('admin.user_password', user_id=user.id) }}" class="stack" data-confirm="Set a new password for {{ user.username }}?">
+      {{ csrf() }}
+      <div class="form-grid">
+        <div class="field">
+          <label for="reset-password" class="required">New password</label>
+          <input type="password" id="reset-password" name="password" required minlength="{{ min_password }}" maxlength="1024" autocomplete="new-password" aria-describedby="reset-password-hint">
+          <span class="hint" id="reset-password-hint">At least {{ min_password }} characters.</span>
+        </div>
+        <div class="field">
+          <label for="reset-password2" class="required">Repeat password</label>
+          <input type="password" id="reset-password2" name="confirm_password" required minlength="{{ min_password }}" maxlength="1024" autocomplete="new-password">
+        </div>
+      </div>
+      <div class="form-actions"><button type="submit" class="btn">Reset password</button></div>
+    </form>
+  </section>
+  {% endif %}
+</div>
+
+<section class="card flush mt-3" aria-labelledby="sessions-title">
+  <div class="card-header">
+    <h2 id="sessions-title">Signed-in sessions</h2>
+    {% if sessions %}
+    <form method="post" action="{{ url_for('admin.user_sessions_revoke_all', user_id=user.id) }}" data-confirm="Sign {{ user.username }} out of {{ 'every other session' if is_self else 'every session' }}?">
+      {{ csrf() }}
+      <button type="submit" class="btn btn-sm btn-danger">Sign out {{ "other sessions" if is_self else "everywhere" }}</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if sessions %}
+  <div class="table-wrap table-plain">
+    <table class="table">
+      <thead><tr><th scope="col">Device</th><th scope="col">Address</th><th scope="col">Last active</th><th scope="col">Started</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+      {% for item in sessions %}
+        <tr>
+          <td class="truncate cell-wide" title="{{ item.user_agent }}">{{ item.user_agent or "Unknown device" }}</td>
+          <td class="mono small">{{ item.ip_address or "—" }}</td>
+          <td class="nowrap">{{ when(item.last_seen_at) }}</td>
+          <td class="nowrap">{{ item.created_at | datetime }}</td>
+          <td class="actions">
+            {% if is_self and item.id_hash == current_session %}<span class="badge badge-primary">This session</span>
+            {% else %}
+            <form method="post" action="{{ url_for('admin.user_session_revoke', user_id=user.id) }}">
+              {{ csrf() }}<input type="hidden" name="session" value="{{ item.id_hash }}">
+              <button type="submit" class="btn btn-sm">Sign out</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted card-body-pad">No active sessions.</p>
+  {% endif %}
+</section>
+
+{% if not is_self %}
+<section class="card card-danger mt-3" aria-labelledby="delete-title">
+  <h2 id="delete-title">Delete account</h2>
+  <p>Deletes {{ user.username }} with all chats, personalities, API keys and usage history. This cannot be undone. Export their data first if it must be kept.</p>
+  <form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" class="stack" data-confirm="Permanently delete {{ user.username }} and all of their data?" data-confirm-danger>
+    {{ csrf() }}
+    <div class="field field-narrow">
+      <label for="confirm-username">Type <strong>{{ user.username }}</strong> to confirm</label>
+      <input type="text" id="confirm-username" name="confirm_username" required autocomplete="off" spellcheck="false">
+    </div>
+    <div class="form-actions form-actions-start"><button type="submit" class="btn btn-danger">{{ icon("trash") }}Delete account</button></div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

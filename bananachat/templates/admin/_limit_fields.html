@@ -1,0 +1,44 @@
+{#- Form fields shared by the Limits pages: switches, token amounts and request-rate rules. -#}
+
+{% macro toggle(name, label, checked, hint=None) -%}
+<label class="switch">
+  <input type="checkbox" name="{{ name }}" value="1"{% if checked %} checked{% endif %}>
+  <span class="track" aria-hidden="true"></span>
+  <span>{{ label }}{% if hint %}<small class="block hint">{{ hint }}</small>{% endif %}</span>
+</label>
+{%- endmacro %}
+
+{#- A token amount: typed as 50000, 50k or 1.5M (a string is shown as typed, for a refused form).
+    `placeholder` shows what an empty field means. -#}
+{% macro token_field(name, label, value, id, hint=None, required=true, placeholder=None) -%}
+<div class="field">
+  <label for="{{ id }}"{% if required %} class="required"{% endif %}>{{ label }}</label>
+  <input type="text" id="{{ id }}" name="{{ name }}" inputmode="decimal" autocomplete="off" spellcheck="false" maxlength="20"{% if required %} required{% endif %} value="{{ value if value is string else (value | token_input) }}"{% if placeholder %} placeholder="{{ placeholder }}"{% endif %} aria-describedby="{{ id }}-hint">
+  <span class="hint" id="{{ id }}-hint">{{ hint or "Tokens, e.g. 50000, 50k or 1.5M." }}</span>
+</div>
+{%- endmacro %}
+
+{#- Rows of request-rate rules ("N requests per unit, bursts of B"). Empty rows are ignored when saved. -#}
+{% macro rules_editor(rules, id, units, rows=4, legend="Rules", hint=None, placeholders=None) -%}
+<fieldset class="rule-list" aria-describedby="{{ id }}-hint">
+  <legend class="label">{{ legend }}</legend>
+  {#- The rules there are, plus one empty row to add another (up to `rows`). -#}
+  {% for index in range([rows, ([rules | length if rules else 0, placeholders | length if placeholders else 0] | max) + 1] | min) %}
+  {% set rule = rules[index] if rules and index < (rules | length) else none %}
+  {% set shown = placeholders[index] if placeholders and index < (placeholders | length) else none %}
+  <div class="rule-row">
+    <label class="visually-hidden" for="{{ id }}-requests-{{ index }}">Rule {{ index + 1 }}: number of requests</label>
+    <input type="number" id="{{ id }}-requests-{{ index }}" name="rule_requests_{{ index }}" min="1" step="1" inputmode="numeric" value="{{ rule.requests if rule else '' }}"{% if shown %} placeholder="{{ shown.requests }}"{% endif %}>
+    <span class="rule-word" aria-hidden="true">requests per</span>
+    <label class="visually-hidden" for="{{ id }}-per-{{ index }}">Rule {{ index + 1 }}: time unit</label>
+    <select id="{{ id }}-per-{{ index }}" name="rule_per_{{ index }}">
+      {% for unit in units %}<option value="{{ unit }}"{% if (rule and rule.per == unit) or (not rule and ((shown and shown.per == unit) or (not shown and unit == "minute"))) %} selected{% endif %}>{{ unit }}</option>{% endfor %}
+    </select>
+    <span class="rule-word" aria-hidden="true">· bursts of</span>
+    <label class="visually-hidden" for="{{ id }}-burst-{{ index }}">Rule {{ index + 1 }}: burst (optional)</label>
+    <input type="number" id="{{ id }}-burst-{{ index }}" name="rule_burst_{{ index }}" min="1" step="1" inputmode="numeric" value="{{ rule.burst if rule else '' }}" placeholder="{{ shown.burst if shown else 'same' }}">
+  </div>
+  {% endfor %}
+  <span class="hint" id="{{ id }}-hint">{{ hint or "Every rule must pass. The burst is how many requests may come in a row (empty: the same as the number of requests). Fill the empty row to add a rule (save to get another); empty a row to drop it." }}</span>
+</fieldset>
+{%- endmacro %}

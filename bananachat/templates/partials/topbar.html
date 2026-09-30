@@ -1,0 +1,62 @@
+{% from "partials/icons.html" import icon %}
+{%- set path = current_path() %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('core.index') }}">
+    <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="" width="28" height="28">
+    <span>{{ site_name }}</span>
+  </a>
+  {% if current_user %}
+  <button type="button" class="icon-btn nav-toggle" data-nav-toggle aria-controls="main-nav" aria-expanded="false" aria-label="{{ t('nav.menu') }}">{{ icon("menu") }}</button>
+  <nav class="nav" id="main-nav" aria-label="{{ t('nav.main') }}">
+    <a href="{{ url_for('chat.index') }}"{% if path.startswith('/chat') %} aria-current="page"{% endif %}>{{ t("nav.chat") }}</a>
+    {% if images_enabled and has_endpoint("images.index") %}
+    <a href="{{ url_for('images.index') }}"{% if path.startswith('/images') %} aria-current="page"{% endif %}>{{ t("nav.images") }}</a>
+    {% endif %}
+    {% if agents_nav_visible is defined and agents_nav_visible %}
+    <a href="{{ url_for('agents.index') }}"{% if path.startswith('/agents') %} aria-current="page"{% endif %}>{{ t("agents.nav") }}</a>
+    {% endif %}
+    {% if has_endpoint("developer.index") %}
+    <a href="{{ url_for('developer.index') }}"{% if path.startswith('/developer') %} aria-current="page"{% endif %}>{{ t("nav.developer") }}</a>
+    {% endif %}
+    {% if music_nav_visible is defined and music_nav_visible %}
+    <a href="{{ url_for('music.free_quota') }}"{% if path.startswith('/free-quota') %} aria-current="page"{% endif %}>{{ t("nav.free_quota") }}</a>
+    {% endif %}
+    {% if is_admin %}
+    <a href="{{ url_for('admin.dashboard') }}"{% if path.startswith('/admin') %} aria-current="page"{% endif %}>{{ t("nav.admin") }}</a>
+    {% endif %}
+  </nav>
+  {% endif %}
+  <div class="topbar-end">
+    {% block topbar_extra %}{% endblock %}
+    {% if current_user %}
+    <details class="menu" data-menu>
+      <summary class="icon-btn" aria-label="{{ t('nav.account_menu') }}"><span class="avatar" aria-hidden="true">{{ current_user.username[:1] }}</span></summary>
+      <div class="menu-panel">
+        <div class="menu-label">{{ current_user.username }}</div>
+        <a href="{{ url_for('account.index') }}">{{ icon("user") }}{{ t("nav.account") }}</a>
+        {% if has_endpoint("personalities.index") %}<a href="{{ url_for('personalities.index') }}">{{ icon("sparkles") }}{{ t("nav.personalities") }}</a>{% endif %}
+        {% if has_endpoint("customization.index") %}<a href="{{ url_for('customization.index') }}">{{ icon("palette") }}{{ t("nav.customize") }}</a>{% endif %}
+        <hr>
+        <div class="menu-label">{{ t("nav.language") }}</div>
+        {% for code, name in language_names.items() %}
+        <form method="post" action="{{ language_switch_url(code) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" lang="{{ code }}"{% if code == lang %} aria-current="true"{% endif %}>{{ icon("globe") }}{{ name }}{% if code == lang %} ✓{% endif %}</button>
+        </form>
+        {% endfor %}
+        <hr>
+        <form method="post" action="{{ url_for('auth.logout') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">{{ icon("logout") }}{{ t("nav.sign_out") }}</button>
+        </form>
+      </div>
+    </details>
+    {% else %}
+    <nav class="row" aria-label="{{ t('nav.language') }}">
+      {% for code, name in language_names.items() %}
+      <a class="btn btn-ghost btn-sm" href="{{ language_switch_url(code) }}" lang="{{ code }}"{% if code == lang %} aria-current="true"{% endif %}>{{ code | upper }}</a>
+      {% endfor %}
+    </nav>
+    {% endif %}
+  </div>
+</header>

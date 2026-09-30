@@ -1,0 +1,87 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Enable {{ model.ollama_name }}{% endblock %}
+{% block admin_content %}
+{% set v = form if form else model %}
+{% set text_model = model.backend == "ollama" %}
+{% macro checked(name) -%}{% if v.get(name) in (1, "1", "on", true) %} checked{% endif %}{%- endmacro %}
+<p class="breadcrumb"><a href="{{ url_for('admin.models') }}">{{ icon("chevron-left") }}All models</a></p>
+{{ header("Enable " ~ model.ollama_name, "Choose what users see, who may use it and its limits. It is published when you save.") }}
+
+<section class="card mb-3" aria-labelledby="detected-title">
+  <h2 id="detected-title">Detected</h2>
+  <dl class="command-list">
+    <dt>Capabilities</dt><dd>{% for capability in caps %}<span class="badge">{{ capability }}</span> {% else %}<span class="muted">Not reported</span>{% endfor %}</dd>
+    <dt>Size</dt><dd>{{ model.parameter_size or "Unknown" }} parameters{% if model.quantization %} · {{ model.quantization }}{% endif %}{% if model.size_bytes %} · {{ model.size_bytes | filesize }}{% endif %}</dd>
+    {% if model.context_length %}<dt>Context</dt><dd>{{ model.context_length | number }} tokens</dd>{% endif %}
+    <dt>Reasoning</dt><dd>{{ levels | join(" / ") if levels else "None" }}</dd>
+  </dl>
+  {% if model.enrollment == "ignored" %}<p class="alert alert-warning mb-0">{{ model.ollama_name }} is on the ignore list. <a href="{{ url_for('admin.model_settings', _anchor='ignored') }}">Restore it in Settings</a> before enabling it.</p>{% endif %}
+  {% if model.embedding_only %}<p class="alert alert-warning mb-0">This model only makes embeddings; it cannot be offered for chat.</p>{% endif %}
+  {% if model.details_error %}<p class="danger-text small mb-0">Details could not be read: {{ model.details_error }}</p>{% endif %}
+</section>
+
+<form method="post" action="{{ url_for('admin.model_enable', model_id=model.id) }}" class="stack-lg" novalidate>
+  {{ csrf() }}
+  <section class="card stack" aria-labelledby="general-title">
+    <h2 id="general-title">What users see</h2>
+    <div class="field">
+      <label for="display-name" class="required">Display name</label>
+      <input type="text" id="display-name" name="display_name" required maxlength="100" value="{{ v.get('display_name') or '' }}">
+    </div>
+    <div class="field">
+      <label for="description">Description</label>
+      <textarea id="description" name="description" maxlength="1000" rows="3">{{ v.get('description') or '' }}</textarea>
+    </div>
+    <fieldset>
+      <legend>Categories</legend>
+      {% if all_categories %}
+      <div class="check-list">
+        {% for category in all_categories %}
+        <label class="check"><input type="checkbox" name="categories" value="{{ category.id }}"{% if category.id in selected %} checked{% endif %}><span>{{ category.name }}{% if category.description %}<small>{{ category.description }}</small>{% endif %}</span></label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted small">No categories yet. <a href="{{ url_for('admin.categories') }}">Create categories</a> to group models and control access to them.</p>
+      {% endif %}
+    </fieldset>
+    <fieldset>
+      <legend>Features</legend>
+      {% if text_model %}
+      <label class="check"><input type="checkbox" name="supports_vision" value="1"{{ checked('supports_vision') }}><span>Understands images{% if "vision" in caps %}<small>Reported by the model server.</small>{% endif %}</span></label>
+      <label class="check"><input type="checkbox" name="is_reasoning" value="1"{{ checked('is_reasoning') }}><span>Reasoning model{% if "thinking" in caps %}<small>Reported by the model server.</small>{% endif %}</span></label>
+      {% endif %}
+      <label class="check"><input type="checkbox" name="is_uncensored" value="1"{{ checked('is_uncensored') }}><span>Uncensored<small>Only users allowed by the “Uncensored models” access rule can use it.</small></span></label>
+    </fieldset>
+  </section>
+
+  <section class="card stack" aria-labelledby="access-title">
+    <h2 id="access-title">Access and limits</h2>
+    <div class="field">
+      <label for="access-mode">Who may use it</label>
+      {% set mode = (form.get("access_mode") if form else policy.mode) %}
+      <select id="access-mode" name="access_mode" aria-describedby="access-mode-hint">
+        {% for key, label in modes.items() %}<option value="{{ key }}"{% if key == mode %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+      <span class="hint" id="access-mode-hint">Manage the allow and deny lists on the <a href="{{ url_for('admin.access_detail', scope='model', resource_id=model.id) }}">model's access page</a>. Category rules apply too.</span>
+    </div>
+    <fieldset>
+      <legend>Limit preset</legend>
+      {% set chosen = (form.get("limit_preset") if form else (model.limit_preset or suggested_preset)) %}
+      <div class="segmented">
+        {% for key, label in presets.items() %}
+        <label><input type="radio" name="limit_preset" value="{{ key }}"{% if key == chosen %} checked{% endif %}><span>{{ label }}{% if key == suggested_preset %} (suggested){% endif %}</span></label>
+        {% endfor %}
+      </div>
+      <p class="hint mt-1">Per-model limits suited to its size (heavier models get stricter limits). {% if limits_url %}<a href="{{ limits_url }}">Fine-tune this model's limits</a>.{% else %}Fine-tune them later in Limits.{% endif %}</p>
+    </fieldset>
+  </section>
+
+  <div class="form-actions">
+    <a class="btn btn-ghost" href="{{ url_for('admin.models') }}">Cancel</a>
+    <button type="submit" class="btn btn-primary"{% if model.enrollment == "ignored" %} disabled{% endif %}>{{ icon("check") }}Enable and publish</button>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>{% endblock %}

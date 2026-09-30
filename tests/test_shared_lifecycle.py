@@ -47,7 +47,7 @@ def test_shared_change_requires_review(tmp_path):
 def test_sync_preserves_product_and_unrelated_data(tmp_path):
     """Both products get identical common changes without copying identity or data."""
     source = checkout(tmp_path / "wiki", "BananaWiki")
-    target = checkout(tmp_path / "ai", "BananaChat")
+    target = checkout(tmp_path / "chat", "BananaChat")
     (target / "private.txt").write_text("fixture data")
     (source / "banana_ops/example.py").write_text("# reviewed change\n")
     sync.record(source)
@@ -60,7 +60,7 @@ def test_sync_preserves_product_and_unrelated_data(tmp_path):
 def test_sync_refuses_unrecorded_destination_edits(tmp_path):
     """A destination's unfinished local work is never overwritten by synchronization."""
     source = checkout(tmp_path / "wiki", "BananaWiki")
-    target = checkout(tmp_path / "ai", "BananaChat")
+    target = checkout(tmp_path / "chat", "BananaChat")
     path = target / "banana_ops/example.py"
     path.write_text("# unfinished work\n")
     with pytest.raises(ValueError, match="example.py"):
@@ -71,7 +71,7 @@ def test_sync_refuses_unrecorded_destination_edits(tmp_path):
 def test_linked_destination_is_rejected_before_writing(tmp_path):
     """A linked shared file cannot redirect the maintenance copy outside the target."""
     source = checkout(tmp_path / "wiki", "BananaWiki")
-    target = checkout(tmp_path / "ai", "BananaChat")
+    target = checkout(tmp_path / "chat", "BananaChat")
     outside = tmp_path / "outside.py"
     outside.write_text("# private fixture\n")
     path = target / "banana_ops/example.py"
@@ -85,7 +85,7 @@ def test_linked_destination_is_rejected_before_writing(tmp_path):
 def test_removed_common_file_is_removed_on_sync(tmp_path):
     """An intentionally retired common file is removed from the verified copy."""
     source = checkout(tmp_path / "wiki", "BananaWiki")
-    target = checkout(tmp_path / "ai", "BananaChat")
+    target = checkout(tmp_path / "chat", "BananaChat")
     (source / "banana_ops/example.py").unlink()
     sync.record(source)
     sync.synchronize(source, target)
@@ -95,7 +95,7 @@ def test_removed_common_file_is_removed_on_sync(tmp_path):
 
 def test_sync_can_add_a_new_fixed_file_to_an_older_recorded_copy(tmp_path):
     source = checkout(tmp_path / "wiki", "BananaWiki")
-    target = checkout(tmp_path / "ai", "BananaChat")
+    target = checkout(tmp_path / "chat", "BananaChat")
     old_tool = target / "scripts/sync_lifecycle.py"
     old_tool.write_text(old_tool.read_text().replace('    "sqlite_runtime.py",\n', ''))
     (target / "sqlite_runtime.py").unlink()

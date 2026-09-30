@@ -1,0 +1,101 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, empty %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Access{% endblock %}
+{% block admin_content %}
+{% macro counts_text(counts) -%}
+{% set allow, deny = counts.get("allowlist", 0), counts.get("denylist", 0) %}
+{% if allow or deny %}<span class="small muted">{{ allow }} allowed · {{ deny }} denied</span>{% else %}<span class="small faint">No list entries</span>{% endif %}
+{%- endmacro %}
+{% macro mode_badge(policy) -%}
+<span class="badge {{ {'allow_all': 'badge-success', 'deny_except_allowlist': 'badge-warning', 'allow_except_denylist': 'badge-info'}[policy.mode] }}">{{ mode_labels[policy.mode] }}</span>
+{%- if policy.requests_enabled %} <span class="badge">Requests open</span>{% endif %}
+{%- endmacro %}
+
+{{ header("Access", "Decide who may use sensitive features, categories and individual models. A user needs every rule that applies to a model to allow them.") }}
+
+<section id="requests" class="mb-3" aria-labelledby="requests-title">
+  <h2 id="requests-title">Pending requests {% if pending %}<span class="badge badge-warning">{{ pending | length }}</span>{% endif %}</h2>
+  {% if pending %}
+  <div class="grid grid-2">
+    {% for req in pending %}{% include "admin/_access_request.html" %}{% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No requests are waiting. Users can ask for access when a rule is restricted and requests are open.</p>
+  {% endif %}
+</section>
+
+<section class="mb-3" aria-labelledby="capabilities-title">
+  <h2 id="capabilities-title">Capabilities</h2>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th scope="col">Capability</th><th scope="col">Who may use it</th><th scope="col">Lists</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+      {% for item in capabilities %}
+        <tr>
+          <td><strong>{{ item.name }}</strong><div class="small muted">{{ item.description }}</div></td>
+          <td>{{ mode_badge(item.policy) }}</td>
+          <td>{{ counts_text(item.counts) }}</td>
+          <td class="actions"><a class="btn btn-sm" href="{{ url_for('admin.access_detail', scope=item.scope, resource_id=0) }}">Manage</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mb-3" aria-labelledby="categories-title">
+  <h2 id="categories-title">Categories</h2>
+  {% if categories %}
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th scope="col">Category</th><th scope="col">Who may use it</th><th scope="col">Lists</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+      {% for item in categories %}
+        <tr>
+          <td><strong>{{ item.row.name }}</strong><div class="small muted">{{ item.row.model_count }} model(s) · {{ {"chat": "chat only", "api": "API only", "both": "chat and API"}[item.row.scope] }}</div></td>
+          <td>{{ mode_badge(item.policy) }}</td>
+          <td>{{ counts_text(item.counts) }}</td>
+          <td class="actions"><a class="btn btn-sm" href="{{ url_for('admin.access_detail', scope='category', resource_id=item.row.id) }}">Manage</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No categories. <a href="{{ url_for('admin.categories') }}">Create categories</a> to control access to groups of models.</p>
+  {% endif %}
+</section>
+
+<section class="mb-3" aria-labelledby="models-title">
+  <h2 id="models-title">Individual models</h2>
+  {% if models %}
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th scope="col">Model</th><th scope="col">Who may use it</th><th scope="col">Lists</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+      {% for item in models %}
+        <tr>
+          <td><strong>{{ item.row.display_name }}</strong><div class="small muted mono">{{ item.row.ollama_name }}</div></td>
+          <td>{{ mode_badge(item.policy) }}{% if not item.row.is_rolled_out %} <span class="badge">Not published</span>{% endif %}</td>
+          <td>{{ counts_text(item.counts) }}</td>
+          <td class="actions"><a class="btn btn-sm" href="{{ url_for('admin.access_detail', scope='model', resource_id=item.row.id) }}">Manage</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {{ empty("layers", "No models in the catalog") }}
+  {% endif %}
+</section>
+
+{% if recent %}
+<section aria-labelledby="recent-title">
+  <h2 id="recent-title">Recently resolved</h2>
+  <div class="grid grid-2">
+    {% for req in recent %}{% include "admin/_access_request.html" %}{% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,204 @@
+{% extends "admin/_layout.html" %}
+{#- Small local helpers (this page depends only on the shared admin layout). -#}
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
+{% macro when(value) -%}
+{% if value %}<time datetime="{{ value | replace(' ', 'T') }}Z" title="{{ value | datetime }}">{{ value | timeago }}</time>{% else %}<span class="faint">—</span>{% endif %}
+{%- endmacro %}
+{% macro yes_no(value) -%}
+{% if value %}<span class="badge badge-success">Yes</span>{% else %}<span class="badge">No</span>{% endif %}
+{%- endmacro %}
+{% macro empty(icon_name, title, text=None) -%}
+<div class="empty">{{ icon(icon_name) }}<h3>{{ title }}</h3>{% if text %}<p>{{ text }}</p>{% endif %}</div>
+{%- endmacro %}
+{% from "partials/icons.html" import icon %}
+{% set section = "music" %}
+{% block title %}Music program{% endblock %}
+{% block admin_content %}
+<header class="page-header">
+  <div>
+    <h1>Music program</h1>
+    <p>Participants hear music while they use the site and receive larger token limits (per 5-hour window) in exchange. The player never starts by itself and can always be paused.</p>
+  </div>
+</header>
+
+<div class="grid grid-4 mb-3">
+  <div class="card stat"><span class="stat-value">{% if music.music_enabled %}On{% else %}Off{% endif %}</span><span class="stat-label">Program{% if music.music_enabled and not music.music_visible %} (hidden){% endif %}</span></div>
+  <div class="card stat"><span class="stat-value">{{ opted_count | number }}</span><span class="stat-label">Participants</span></div>
+  <div class="card stat"><span class="stat-value">{{ forced_count | number }}</span><span class="stat-label">Enrolled by an administrator</span></div>
+  <div class="card stat"><span class="stat-value">{{ tracks | length }}</span><span class="stat-label">Tracks</span></div>
+</div>
+
+<div class="stack-lg">
+<section class="card" id="settings" aria-labelledby="settings-title">
+  <h2 id="settings-title">Settings</h2>
+  <form method="post" action="{{ url_for('admin.music_settings') }}" class="stack" data-busy>
+    {{ csrf() }}
+    <fieldset class="stack-sm">
+      <legend>Availability</legend>
+      <label class="check"><input type="checkbox" name="music_enabled" value="1"{% if music.music_enabled %} checked{% endif %}><span>Program enabled<small>When off, nobody receives the bonus, the player disappears and audio is no longer served.</small></span></label>
+      <label class="check"><input type="checkbox" name="music_visible" value="1"{% if music.music_visible %} checked{% endif %}><span>Visible to everyone<small>When hidden, only current participants see the Free quota page (so they can still leave); they keep the bonus.</small></span></label>
+      <label class="check"><input type="checkbox" name="music_opt_in_allowed" value="1"{% if music.music_opt_in_allowed %} checked{% endif %}><span>People may join</span></label>
+      <label class="check"><input type="checkbox" name="music_opt_out_allowed" value="1"{% if music.music_opt_out_allowed %} checked{% endif %}><span>People may leave<small>People you enrol yourself can never leave on their own.</small></span></label>
+    </fieldset>
+    <fieldset class="stack-sm">
+      <legend>Bonus</legend>
+      <div class="segmented" role="radiogroup" aria-label="Bonus type">
+        <label><input type="radio" name="music_bonus_mode" value="multiplier"{% if (music.music_bonus_mode or "multiplier") == "multiplier" %} checked{% endif %}><span>Multiply the token limits</span></label>
+        <label><input type="radio" name="music_bonus_mode" value="fixed"{% if music.music_bonus_mode == "fixed" %} checked{% endif %}><span>Add a fixed amount</span></label>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="music_credit_multiplier">Multiplier</label>
+          <input type="number" id="music_credit_multiplier" name="music_credit_multiplier" min="{{ multiplier_range[0] }}" max="{{ multiplier_range[1] }}" step="0.1" required value="{{ music.music_credit_multiplier if music.music_credit_multiplier is not none else 2 }}" aria-describedby="multiplier-hint">
+          <span class="hint" id="multiplier-hint">{{ multiplier_range[0] | int }}–{{ multiplier_range[1] | int }}. Used by “Multiply”: regular and slow tokens are both multiplied.</span>
+        </div>
+        <div class="field">
+          <label for="music_bonus_fixed_tokens">Extra tokens per 5 hours</label>
+          <input type="text" id="music_bonus_fixed_tokens" name="music_bonus_fixed_tokens" inputmode="decimal" autocomplete="off" maxlength="20" required value="{{ fixed[0] | token_input }}">
+        </div>
+        <div class="field">
+          <label for="music_bonus_fixed_slow_tokens">Extra slow tokens per 5 hours</label>
+          <input type="text" id="music_bonus_fixed_slow_tokens" name="music_bonus_fixed_slow_tokens" inputmode="decimal" autocomplete="off" maxlength="20" required value="{{ fixed[1] | token_input }}" aria-describedby="fixed-hint">
+          <span class="hint" id="fixed-hint">Used by “Add”: added to every 5-hour window (seven times as much to a weekly limit). E.g. 30k. Zero is allowed.</span>
+        </div>
+      </div>
+    </fieldset>
+    <div class="field">
+      <label for="music_playback_mode">Playback order</label>
+      <select id="music_playback_mode" name="music_playback_mode">
+        <option value="sequential"{% if music.music_playback_mode != "shuffle" %} selected{% endif %}>In the order below</option>
+        <option value="shuffle"{% if music.music_playback_mode == "shuffle" %} selected{% endif %}>Shuffled for each listener</option>
+      </select>
+    </div>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
+  </form>
+  <div class="card-footer row">
+    {% if music.music_visible %}
+    <form method="post" action="{{ url_for('admin.music_hide') }}" data-confirm="Hide the program? Participants keep their bonus and can still leave; nobody else can join.">
+      {{ csrf() }}<button type="submit" class="btn">{{ icon("eye-off") }}Hide the program</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{{ url_for('admin.music_remove') }}" data-confirm="Remove the program? Everyone is opted out (including people you enrolled) and the program is switched off. Tracks are kept." data-confirm-danger>
+      {{ csrf() }}<button type="submit" class="btn btn-danger">{{ icon("trash") }}Remove the program</button>
+    </form>
+  </div>
+</section>
+
+<section class="card" id="tracks" aria-labelledby="tracks-title">
+  <h2 id="tracks-title">Tracks</h2>
+  <form method="post" action="{{ url_for('admin.music_upload') }}" enctype="multipart/form-data" class="stack mb-3" id="track-upload" data-busy data-max-bytes="{{ max_track_mb * 1024 * 1024 }}">
+    {{ csrf() }}
+    <div class="form-grid">
+      <div class="field">
+        <label for="track-file" class="required">Audio file</label>
+        <input type="file" id="track-file" name="track" required accept=".mp3,.ogg,.wav,.m4a,audio/mpeg,audio/ogg,audio/wav,audio/mp4" aria-describedby="track-file-hint">
+        <span class="hint" id="track-file-hint">{{ allowed_types }}, up to {{ max_track_mb }} MB. Only upload music you have the right to play to your users.</span>
+      </div>
+      <div class="field">
+        <label for="track-name">Display name</label>
+        <input type="text" id="track-name" name="display_name" maxlength="200" aria-describedby="track-name-hint">
+        <span class="hint" id="track-name-hint">Defaults to the file name.</span>
+      </div>
+    </div>
+    <p class="field-error" id="track-error" role="alert" hidden></p>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Upload track</button></div>
+  </form>
+
+  {% if tracks %}
+  <ol class="track-list divider-list">
+    {% for track in tracks %}
+    <li class="list-item track-item" id="track-{{ track.id }}">
+      <span class="badge" aria-hidden="true">{{ loop.index }}</span>
+      <div class="grow stack-sm">
+        <form method="post" action="{{ url_for('admin.music_rename', track_id=track.id) }}" class="row">
+          {{ csrf() }}
+          <label class="visually-hidden" for="track-{{ track.id }}-name">Name of track {{ loop.index }}</label>
+          <input type="text" id="track-{{ track.id }}-name" name="display_name" value="{{ track.display_name }}" maxlength="200" required class="grow">
+          <button type="submit" class="btn btn-sm">Rename</button>
+        </form>
+        <span class="hint">Uploaded {{ when(track.created_at) }} · <a href="{{ url_for('music.audio', filename=track.filename) }}" target="_blank" rel="noopener">Listen</a></span>
+      </div>
+      <div class="row-end">
+        <form method="post" action="{{ url_for('admin.music_move', track_id=track.id) }}">
+          {{ csrf() }}<input type="hidden" name="direction" value="up">
+          <button type="submit" class="btn btn-sm" aria-label="Move “{{ track.display_name }}” up"{% if loop.first %} disabled{% endif %}>Up</button>
+        </form>
+        <form method="post" action="{{ url_for('admin.music_move', track_id=track.id) }}">
+          {{ csrf() }}<input type="hidden" name="direction" value="down">
+          <button type="submit" class="btn btn-sm" aria-label="Move “{{ track.display_name }}” down"{% if loop.last %} disabled{% endif %}>Down</button>
+        </form>
+        <form method="post" action="{{ url_for('admin.music_delete', track_id=track.id) }}" data-confirm="Delete “{{ track.display_name }}”? The file is removed from the server." data-confirm-danger>
+          {{ csrf() }}<button type="submit" class="icon-btn" aria-label="Delete “{{ track.display_name }}”">{{ icon("trash") }}</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  {{ empty("music", "No tracks yet", "Participants see the player once at least one track is uploaded.") }}
+  {% endif %}
+</section>
+
+<section class="card" id="participants" aria-labelledby="participants-title">
+  <div class="card-header">
+    <h2 id="participants-title">Participants</h2>
+    <div class="row">
+      <form method="post" action="{{ url_for('admin.music_opt_in_all') }}" data-confirm="Enrol every regular account? They can leave again while leaving is allowed.">
+        {{ csrf() }}<button type="submit" class="btn btn-sm">Enrol everyone</button>
+      </form>
+      <form method="post" action="{{ url_for('admin.music_opt_out_all') }}" data-confirm="Opt everyone out, including people you enrolled?" data-confirm-danger>
+        {{ csrf() }}<button type="submit" class="btn btn-sm btn-danger">Opt everyone out</button>
+      </form>
+    </div>
+  </div>
+  <form method="get" action="{{ url_for('admin.music', _anchor='participants') }}" class="row mb-2" role="search">
+    <label class="visually-hidden" for="participant-search">Search by username</label>
+    <input type="search" id="participant-search" name="q" value="{{ search }}" placeholder="Search by username" maxlength="64" class="grow">
+    <label class="visually-hidden" for="participant-status">Show</label>
+    <select id="participant-status" name="status">
+      {% for value, label in [("all", "Everyone"), ("in", "Participants"), ("out", "Not participating"), ("forced", "Enrolled by an administrator")] %}
+      <option value="{{ value }}"{% if status == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn">{{ icon("search") }}Search</button>
+  </form>
+  {% if participants %}
+  <div class="table-wrap">
+    <table class="table">
+      <caption class="visually-hidden">Accounts and their participation</caption>
+      <thead><tr><th scope="col">Username</th><th scope="col">Participating</th><th scope="col">Enrolled by an administrator</th><th scope="col">Last sign-in</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+        {% for row in participants %}
+        <tr>
+          <td><strong>{{ row.username }}</strong>{% if row.role == "admin" %} <span class="badge badge-primary">Admin</span>{% endif %}</td>
+          <td>{{ yes_no(row.music_opted_in) }}</td>
+          <td>{{ yes_no(row.music_forced) }}</td>
+          <td>{{ when(row.last_login_at) }}</td>
+          <td class="actions">
+            {% for action, label, show in [("force-in", "Enrol", not row.music_forced), ("release", "Let them leave", row.music_forced), ("force-out", "Remove", row.music_opted_in)] if show %}
+            <form method="post" action="{{ url_for('admin.music_participant', user_id=row.id, action=action) }}">
+              {{ csrf() }}
+              <input type="hidden" name="q" value="{{ search }}"><input type="hidden" name="status" value="{{ status }}"><input type="hidden" name="page" value="{{ page }}">
+              <button type="submit" class="btn btn-sm" aria-label="{{ label }} {{ row.username }}">{{ label }}</button>
+            </form>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="pagination" aria-label="Participant pages">
+    {% if page > 1 %}<a class="btn btn-sm" rel="prev" href="{{ url_for('admin.music', page=page - 1, q=search or None, status=status, _anchor='participants') }}">{{ icon("chevron-left") }}<span>Previous</span></a>{% endif %}
+    <span class="muted small">Page {{ page }} of {{ pages }} · {{ total | number }} accounts</span>
+    {% if page < pages %}<a class="btn btn-sm" rel="next" href="{{ url_for('admin.music', page=page + 1, q=search or None, status=status, _anchor='participants') }}"><span>Next</span>{{ icon("chevron-right") }}</a>{% endif %}
+  </nav>
+  {% endif %}
+  {% else %}
+  {{ empty("users", "No matching accounts") }}
+  {% endif %}
+</section>
+</div>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/admin-music.js') }}"></script>{% endblock %}

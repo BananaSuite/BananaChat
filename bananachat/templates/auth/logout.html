@@ -1,0 +1,11 @@
+{% extends "auth/_layout.html" %}
+{% block title %}{{ t("nav.sign_out") }}{% endblock %}
+{% block card %}
+<h1>{{ t("nav.sign_out") }}</h1>
+<p>{{ t("auth.sign_out_confirm") }}</p>
+<form method="post" action="{{ url_for('auth.logout') }}" class="row-end">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <a class="btn btn-ghost" href="{{ url_for('core.index') }}">{{ t("common.cancel") }}</a>
+  <button type="submit" class="btn btn-primary">{{ t("nav.sign_out") }}</button>
+</form>
+{% endblock %}

@@ -1,96 +1,85 @@
-"""Run with ``gunicorn wsgi:app -c gunicorn.conf.py``."""
+"""Gunicorn settings. Run: ``gunicorn -c gunicorn.conf.py wsgi:app``.
 
-import codecs
+Existing managed installations start the service with exactly this file
+name, so keep it at the repository root.
+"""
+
 import os
+import re
 
-import config as _bc_config  # underscore prefix avoids Gunicorn setting clash
+from gunicorn.glogging import Logger
 
+from bananachat.config import load_config
 
-def _resolve_worker_tmp_dir():
-    """Keep worker heartbeats off disk when writable tmpfs is available."""
-    candidate = "/dev/shm"
-    if os.path.isdir(candidate) and os.access(candidate, os.W_OK):
-        return candidate
-    import sys
-    print(
-        "WARNING: /dev/shm not writable: Gunicorn heartbeats will use /tmp. "
-        "Worker kills under disk I/O pressure are possible.",
-        file=sys.stderr,
-    )
-    return None
-
-def _format_host_for_bind(host: str) -> str:
-    """Bracket bare IPv6 addresses for Gunicorn's host:port syntax."""
-    if ":" in host and not host.startswith("["):
-        return f"[{host}]"
-    return host
+_config = load_config(load_secret=False)
 
 
-# Override with Gunicorn's --bind option.
-bind = f"{_format_host_for_bind(_bc_config.HOST)}:{_bc_config.PORT}"
+def _bind_host(host: str) -> str:
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
-# SQLite serialises all writes, so more workers just increases lock
-# contention without improving throughput. Thread count accommodates streaming
-# clients, with four threads per process reserved from inference admission.
-workers = 2
 
+bind = f"{_bind_host(_config.host)}:{_config.port}"
+
+# SQLite serialises writes, so a few processes with many threads suit the
+# workload: most requests wait on the model, not on Python.
+workers = int(os.environ.get("BC_WORKERS", "2"))
 worker_class = "gthread"
-threads = _bc_config.HTTP_THREADS
+threads = _config.http_threads
 
-# Initialize the persistent session key before workers fork.
+# Create the database and secret key once, before forking.
 preload_app = True
 
-# Application proxy handling also requires PROXY_MODE.
+# Proxy headers are only honoured from the local reverse proxy.
 forwarded_allow_ips = "127.0.0.1,::1"
 
-accesslog = "-"        # stdout
-errorlog = "-"         # stderr
+accesslog = "-"
+errorlog = "-"
 loglevel = "info"
+# Never log query strings (they may carry invitation codes) or share-link tokens.
+access_log_format = '%(h)s "%(m)s %(U)s %(H)s" %(s)s %(B)s %(M)sms "%(a)s"'
+_SHARE_TOKEN = re.compile(r"^(/share/)[^/]+")
 
-# The managed systemd service has a read-only application directory.
+
+class AccessLogger(Logger):
+    """Replaces the token of ``/share/<token>`` paths in the access log: it grants access to a chat."""
+
+    def atoms(self, resp, req, environ, request_time):
+        atoms = super().atoms(resp, req, environ, request_time)
+        atoms["U"] = _SHARE_TOKEN.sub(r"\1[token]", atoms.get("U") or "")
+        return atoms
+
+
+logger_class = AccessLogger
+
+# The managed service has a read-only application directory.
 control_socket_disable = True
+worker_tmp_dir = "/dev/shm" if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK) else None
 
-timeout = max(
-    300,
-    _bc_config.GENERATION_TIMEOUT + 15,
-    int(_bc_config.IMAGE_REQUEST_TIMEOUT + 15)
-    if _bc_config.IMAGE_BACKEND == "comfyui" else 300,
-)  # Keep image requests alive through queueing, polling, and output download.
-# Worker recycling must allow a bounded active generation to finish. The
-# systemd stop deadline still bounds a requested installation shutdown.
-graceful_timeout = timeout
-keepalive = 2          # keep-alive connections (seconds)
-
-# Restart workers after handling this many requests to limit memory growth.
+# gthread workers heartbeat independently of request threads, so long
+# streaming responses are not killed by this timeout.
+timeout = 120
+# On reload or shutdown, running generations get this long to finish; any
+# still running are saved as interrupted answers by the next process.
+graceful_timeout = 60
+keepalive = 5
 max_requests = 5000
 max_requests_jitter = 500
 
-_worker_tmp = _resolve_worker_tmp_dir()
-if _worker_tmp:
-    worker_tmp_dir = _worker_tmp
 
+def post_fork(server, worker):
+    """Drop any database connection inherited from the master process."""
+    from bananachat import db
 
-def pre_request(worker, request):
-    """Bound stalled socket reads/writes without limiting a healthy SSE lifetime."""
-    request.unreader.sock.settimeout(30)
+    db.close_thread_connection()
 
 
 def post_worker_init(worker):
-    """Verify request support before starting the worker's model sync."""
-    from services.http_capacity import configure
-    configure(worker.cfg.threads)
-    try:
-        codecs.lookup("idna")
-    except LookupError as exc:
-        worker.log.critical(
-            "Worker startup self-check failed: Python's idna codec is unavailable"
-        )
-        raise RuntimeError("required Python codec 'idna' is unavailable") from exc
+    from bananachat.app import start_background_services
 
-    from services.ollama import start_background_sync
-    start_background_sync(use_leader_lock=True)
+    start_background_services(worker.wsgi)
 
 
 def worker_exit(server, worker):
-    from services.ollama import stop_background_sync
-    stop_background_sync()
+    from bananachat.services import background
+
+    background.stop()

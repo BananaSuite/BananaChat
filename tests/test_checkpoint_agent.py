@@ -166,8 +166,11 @@ class CheckpointAgentTests(unittest.TestCase):
         agent = self.agent(start_worker=False)
         self.assertTrue(agent.authenticate("Bearer test-bearer-token"))
         self.assertFalse(agent.authenticate(None))
-        self.assertFalse(agent.authenticate("bearer test-bearer-token"))
+        self.assertTrue(agent.authenticate("bearer test-bearer-token"))  # the scheme is case-insensitive
+        self.assertFalse(agent.authenticate("Basic test-bearer-token"))
         self.assertFalse(agent.authenticate("Bearer test-bearer-token-extra"))
+        self.assertFalse(agent.authenticate("Bearer t\u00e9st"))
+        self.assertFalse(agent.authenticate("Bearer \u20ac"))  # not even Latin-1: no TypeError
 
     def test_rejects_malformed_source_traversal_and_non_safetensors(self):
         payload = safetensors()
@@ -423,6 +426,96 @@ class CheckpointAgentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "job state"):
             CheckpointAgent(self.config(), fetcher=FakeFetcher(payload), start_worker=False)
 
+    def test_cancelled_queued_job_frees_its_place(self):
+        payload = safetensors()
+        agent = self.agent(payload=payload, start_worker=False, queue_size=1)
+        first, _ = agent.submit(self.request(payload, key="first"))
+        self.assertEqual(agent.cancel(first["id"])["status"], "canceled")
+        second, created = agent.submit(
+            self.request(payload, key="second", target_name="second.safetensors")
+        )
+        self.assertTrue(created)
+        self.assertEqual(second["status"], "queued")
+
+    def test_waiting_jobs_run_in_arrival_order_after_a_cancellation(self):
+        payload = safetensors(b"order")
+        fetcher = BlockingFetcher(payload)
+        agent = self.agent(fetcher=fetcher, queue_size=3)
+        active, _ = agent.submit(self.request(payload, key="a", target_name="a.safetensors"))
+        self.assertTrue(fetcher.entered.wait(2))
+        dropped, _ = agent.submit(self.request(payload, key="b", target_name="b.safetensors"))
+        kept, _ = agent.submit(self.request(payload, key="c", target_name="c.safetensors"))
+        agent.cancel(dropped["id"])
+        fetcher.release.set()
+        self.assertEqual(self.wait(agent, active["id"])["status"], "completed")
+        self.assertEqual(self.wait(agent, kept["id"])["status"], "completed")
+        self.assertEqual(agent.get_job(dropped["id"])["status"], "canceled")
+
+    def test_finished_jobs_are_pruned_so_state_stays_small(self):
+        from compute import checkpoint_agent as module
+
+        payload = safetensors()
+        agent = self.agent(payload=payload, start_worker=False)
+        template = {
+            "status": "completed", "source": self.request(payload)["source"],
+            "target_name": "old.safetensors", "expected_sha256": "0" * 64, "expected_size": None,
+            "bytes_received": 1, "digest": "0" * 64, "size": 1, "created_at": "2026-01-01T00:00:00Z",
+            "error": None, "request_fingerprint": "x",
+        }
+        now = module._now()
+        with agent._lock:
+            for index in range(module.MAX_FINISHED_JOBS + 50):
+                job_id = "{:032x}".format(index)
+                agent.jobs[job_id] = dict(template, id=job_id, idempotency_key="old-{}".format(index),
+                                          updated_at=now)
+            ancient = "f" * 32
+            agent.jobs[ancient] = dict(template, id=ancient, idempotency_key="ancient",
+                                       updated_at="2020-01-01T00:00:00Z")
+        job, _ = agent.submit(self.request(payload, key="fresh"))
+        self.assertIn(job["id"], agent.jobs)
+        self.assertNotIn(ancient, agent.jobs)
+        finished = [item for item in agent.jobs.values() if item["status"] == "completed"]
+        self.assertEqual(len(finished), module.MAX_FINISHED_JOBS)
+        self.assertLess((self.state / "state.json").stat().st_size, module.MAX_STATE_BYTES // 2)
+        agent.close()
+        self.agents.remove(agent)
+        restarted = self.agent(payload=payload, start_worker=False)
+        self.assertEqual(restarted.get_job(job["id"])["status"], "queued")
+
+    def test_delete_hashes_without_holding_the_global_lock(self):
+        from compute import checkpoint_agent as module
+
+        payload = safetensors(b"lock-free")
+        agent = self.agent(payload=payload)
+        job, _ = agent.submit(self.request(payload))
+        digest = self.wait(agent, job["id"])["digest"]
+        observed = {}
+        original = module._hash_fd
+
+        def hashing(fd):
+            probe = threading.Thread(target=lambda: observed.setdefault("status", agent.status()))
+            probe.start()
+            probe.join(2)
+            return original(fd)
+
+        module._hash_fd = hashing
+        try:
+            agent.delete_checkpoint("vendor/model.safetensors", digest)
+        finally:
+            module._hash_fd = original
+        self.assertEqual(observed["status"]["status"], "ok")
+
+    def test_disk_space_is_checked_once_per_chunk(self):
+        from unittest import mock
+
+        payload = safetensors(b"space")
+        agent = self.agent(payload=payload)
+        real = os.fstatvfs
+        with mock.patch("compute.checkpoint_agent.os.fstatvfs", side_effect=real) as counted:
+            job, _ = agent.submit(self.request(payload))
+            self.assertEqual(self.wait(agent, job["id"])["status"], "completed")
+        self.assertEqual(counted.call_count, 1)
+
     def test_huggingface_url_is_internal_and_redirects_drop_auth(self):
         fetcher = HuggingFaceFetcher(timeout=1)
         captured = {}
@@ -565,6 +658,34 @@ class CheckpointAgentHTTPTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(deleted["deleted"], body["target_name"])
+
+    def test_non_ascii_authorization_is_rejected_not_an_error(self):
+        import socket
+
+        with socket.create_connection(("127.0.0.1", self.server.server_port), timeout=3) as sock:
+            sock.sendall(b"GET /v1/status HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer \xc3\xa9\r\n\r\n")
+            self.assertTrue(sock.recv(4096).startswith(b"HTTP/1.1 401"))
+
+    def test_idle_connections_time_out_and_threads_are_capped(self):
+        import socket
+
+        busy = AgentHTTPServer(("127.0.0.1", 0), self.http_agent, max_threads=1)
+        thread = threading.Thread(target=busy.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        try:
+            idle = socket.create_connection(("127.0.0.1", busy.server_port), timeout=5)
+            idle.sendall(b"GET /v1/status HTTP/1.1\r\n")  # never finishes its request
+            time.sleep(0.2)
+            with socket.create_connection(("127.0.0.1", busy.server_port), timeout=5) as second:
+                second.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+                self.assertTrue(second.recv(4096).startswith(b"HTTP/1.1 503"))
+            started = time.time()
+            self.assertEqual(idle.recv(4096), b"")  # request_timeout (1 s) closes it
+            self.assertLess(time.time() - started, 4)
+            idle.close()
+        finally:
+            busy.shutdown()
+            busy.server_close()
 
     def test_http_rejects_invalid_json_content_type_and_oversize_body(self):
         request = urllib.request.Request(

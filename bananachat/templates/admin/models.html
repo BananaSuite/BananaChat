@@ -1,0 +1,272 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, empty, status_badge %}
+{% from "partials/icons.html" import icon %}
+{% macro state_badges(model) -%}
+{% for badge in states.get(model.id, []) %}<span class="badge{% if badge.tone %} badge-{{ badge.tone }}{% endif %}"{% if badge.title %} title="{{ badge.title }}"{% endif %}>{{ badge.label }}</span>{% endfor %}
+{%- endmacro %}
+{% macro facts(model) -%}
+{%- set parts = [] -%}
+{%- if model.parameter_size %}{% set _ = parts.append(model.parameter_size ~ " parameters") %}{% endif -%}
+{%- if model.quantization %}{% set _ = parts.append(model.quantization) %}{% endif -%}
+{%- if model.context_length %}{% set _ = parts.append((model.context_length | number) ~ " tokens of context") %}{% endif -%}
+{%- if model.family %}{% set _ = parts.append(model.family) %}{% endif -%}
+{{ parts | join(" · ") }}
+{%- endmacro %}
+{% block title %}Models{% endblock %}
+{% block admin_content %}
+{% call header("Models", "Publish models to users, review new ones, retire old ones and tune their defaults.") %}
+  <form method="post" action="{{ url_for('admin.models_sync') }}" data-busy>
+    {{ csrf() }}
+    <button type="submit" class="btn btn-primary">{{ icon("refresh") }}Sync now</button>
+  </form>
+{% endcall %}
+{% include "admin/_models_tabs.html" %}
+
+<div class="mb-2" id="sync-status">
+  {% if sync %}
+  <p class="small mb-0 {{ 'danger-text' if sync.error else 'muted' }}">
+    {{ icon("refresh") }} Last sync {{ when(sync.at) }}{% if sync.ok %}: {{ sync.count }} model{{ "s" if sync.count != 1 }} on the model server{% if sync.new %}; new: <span class="mono">{{ sync.new | join(", ") }}</span>{% endif %}{% if sync.missing %}; now missing: <span class="mono">{{ sync.missing | join(", ") }}</span>{% endif %}.{% else %}. {{ sync.error }}{% if sync.last_success_at %} Last successful sync {{ when(sync.last_success_at) }}; nothing was marked missing meanwhile.{% endif %}{% endif %}
+    {% if sync.note %}{{ sync.note }}{% endif %}
+  </p>
+  {% if sync.errors %}
+  <details class="inline-details small">
+    <summary>{{ sync.errors | length }} model{{ "s" if sync.errors | length != 1 }} could not be inspected</summary>
+    <ul class="plain-list">{% for item in sync.errors %}<li><span class="mono">{{ item.model }}</span> <span class="muted">— {{ item.error }}</span></li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  {% else %}
+  <p class="small muted mb-0">{{ icon("refresh") }} The model server has not been synced yet.</p>
+  {% endif %}
+  <p class="small muted mb-0">New models: <strong>{{ "enabled automatically with limits for their size" if policy.enrollment == "automatic" else "wait for your review" }}</strong> · <a href="{{ url_for('admin.model_settings') }}">Change</a></p>
+</div>
+
+{% if recovery and recovery.open %}
+<section class="card card-attention mb-3" id="recovery" aria-labelledby="recovery-title">
+  <div class="card-header">
+    <h2 id="recovery-title">{{ "Published models not installed" if recovery.origin == "catalog" else "Models to restore" }}</h2>
+    {{ status_badge(recovery.state) }}
+  </div>
+  {% if recovery.state == "invalid" %}
+  <p class="danger-text">{{ recovery.error }}</p>
+  <p class="muted">Fix or remove <code>.model-recovery.json</code> in the instance directory.</p>
+  {% else %}
+  {% if recovery.origin == "catalog" %}
+  <p>These published models are no longer on the model server, for example after it was rebuilt. Choose which to download again; nothing is downloaded until you approve it.</p>
+  {% else %}
+  <p>This installation was restored from a backup without model files. Only the models that are missing are listed{% if recovery.installed_count %} ({{ recovery.installed_count }} already installed){% endif %}; nothing is downloaded until you approve it.</p>
+  {% endif %}
+  {% if not recovery.checked %}<p class="hint">{% if recovery.check_error %}The model server could not be checked: {{ recovery.check_error }}{% else %}Not checked yet; every saved model is listed.{% endif %}</p>{% endif %}
+  <form method="post" action="{{ url_for('admin.model_recovery') }}" class="stack">
+    {{ csrf() }}
+    {% if recovery.missing_choices %}
+    <fieldset>
+      <legend>Missing models</legend>
+      <div class="check-list">
+      {% for item in recovery.missing_choices %}
+        <label class="check"><input type="checkbox" name="items" value="{{ item.id }}"{% if recovery.state == "pending" %} checked{% endif %}><span><span class="mono">{{ item.label }}</span><small>{{ item.source }}</small></span></label>
+      {% endfor %}
+      </div>
+    </fieldset>
+    {% if recovery.missing_choices | selectattr("kind", "equalto", "huggingface") | list and not checkpoint.configured %}
+    <p class="hint">Hugging Face checkpoints need image generation and the checkpoint download agent; configure them first or leave those unchecked.</p>
+    {% endif %}
+    {% endif %}
+    <div class="form-actions form-actions-start">
+      {% if recovery.missing_choices %}
+      <button type="submit" name="action" value="download" class="btn btn-primary">{{ icon("download") }}Download selected models</button>
+      <button type="submit" name="action" value="defer" class="btn btn-ghost" formnovalidate>Not now</button>
+      {% endif %}
+      <button type="submit" name="action" value="dismiss" class="btn btn-ghost" formnovalidate>Dismiss list</button>
+    </div>
+  </form>
+  {% if recovery.manual %}
+  <h3 class="mt-2">Needs manual action</h3>
+  <ul class="plain-list">
+    {% for item in recovery.manual %}<li><span class="mono">{{ item.name }}</span> <span class="muted small">— {{ item.reason }}</span></li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if recovery.jobs %}
+  <p class="muted small mt-1">Queued from this list: {% for job in recovery.jobs %}{{ job.model }} ({{ job.status }}){{ ", " if not loop.last }}{% endfor %}</p>
+  {% endif %}
+  {% for item in recovery.errors %}<p class="danger-text small">{{ item.model }}: {{ item.reason }}</p>{% endfor %}
+  {% endif %}
+</section>
+{% endif %}
+
+{% if new_models %}
+<section class="card card-attention mb-3" id="new-models" aria-labelledby="new-models-title">
+  <div class="card-header">
+    <h2 id="new-models-title">{{ new_models | length }} new model{{ "s" if new_models | length != 1 }}</h2>
+  </div>
+  <p class="muted small">Detected on the model server and hidden from users until you enable them. Ignored models are never offered again (restore them in Settings).</p>
+  <ul class="divider-list lifecycle-list">
+    {% for model in new_models %}
+    <li class="lifecycle-item" id="new-{{ model.id }}">
+      <div class="grow">
+        <strong class="mono break-anywhere">{{ model.ollama_name }}</strong>
+        <div class="small muted">{{ facts(model) or "Details not read yet." }}</div>
+        <div class="badge-row">
+          {% for capability in caps.get(model.id, []) %}<span class="badge">{{ capability }}</span>{% endfor %}
+          <span class="badge badge-info" title="Suggested from the parameter size">{{ presets[suggested[model.id]] }} limits</span>
+          {% if model.embedding_only %}<span class="badge">Embeddings only</span>{% endif %}
+        </div>
+        {% if model.details_error %}<p class="danger-text small mb-0">Details could not be read: {{ model.details_error }}</p>{% endif %}
+      </div>
+      <div class="row lifecycle-actions">
+        {% if not model.embedding_only %}<a class="btn btn-sm btn-primary" href="{{ url_for('admin.model_enable', model_id=model.id) }}">{{ icon("check") }}Enable…</a>{% endif %}
+        <form method="post" action="{{ url_for('admin.model_ignore', model_id=model.id) }}">
+          {{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost" aria-label="Ignore {{ model.ollama_name }}">Ignore</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if attention %}
+<section class="card mb-3" id="attention" aria-labelledby="attention-title">
+  <div class="card-header"><h2 id="attention-title">Needs attention</h2></div>
+  <ul class="divider-list lifecycle-list">
+    {% for model in attention %}
+    <li class="lifecycle-item">
+      <div class="grow">
+        <strong>{{ model.display_name }}</strong> <span class="mono small muted break-anywhere">{{ model.ollama_name }}</span>
+        <div class="badge-row">{{ state_badges(model) }}</div>
+        {% if model.state_reason %}<p class="small muted mb-0">{{ model.state_reason }}{% if model.state_changed_at %} <span class="faint">({{ when(model.state_changed_at) }})</span>{% endif %}</p>{% endif %}
+      </div>
+      <div class="row lifecycle-actions">
+        {% if model.failing_at %}
+        <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}">
+          {{ csrf() }}<input type="hidden" name="return_to" value="catalog">
+          <button type="submit" name="action" value="retry_check" class="btn btn-sm">{{ icon("refresh") }}Check again</button>
+          <button type="submit" name="action" value="force_enable" class="btn btn-sm btn-ghost">Enable anyway</button>
+        </form>
+        {% endif %}
+        {% if model.delete_requested_at %}
+        <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}">
+          {{ csrf() }}<input type="hidden" name="return_to" value="catalog">
+          <button type="submit" name="action" value="cancel_delete" class="btn btn-sm">Keep it</button>
+        </form>
+        {% endif %}
+        {% if model.missing_at and model.backend == "ollama" %}
+        <form method="post" action="{{ url_for('admin.pulls_bulk') }}">
+          {{ csrf() }}<input type="hidden" name="models" value="{{ model.backend_model_name or model.ollama_name }}">
+          <button type="submit" class="btn btn-sm">{{ icon("download") }}Download again</button>
+        </form>
+        {% endif %}
+        {% if model.enrollment == "auto" %}
+        <form method="post" action="{{ url_for('admin.model_reviewed', model_id=model.id) }}">
+          {{ csrf() }}<button type="submit" class="btn btn-sm">{{ icon("check") }}Mark reviewed</button>
+        </form>
+        {% endif %}
+        <a class="btn btn-sm btn-ghost" href="{{ url_for('admin.model_edit', model_id=model.id) }}#lifecycle">{{ icon("edit") }}Edit</a>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section aria-labelledby="catalog-title" class="mb-3">
+  <div class="row-between mb-1">
+    <h2 id="catalog-title" class="mb-0">Catalog</h2>
+    <p class="muted small mb-0">Users only see <strong>published</strong> models that are <strong>available</strong> and that their access rules allow. The order here is the order users see.</p>
+  </div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table class="table catalog-table">
+      <thead><tr>
+        <th scope="col"><span class="visually-hidden">Order</span></th>
+        <th scope="col">Model</th><th scope="col">Server</th><th scope="col">Features</th>
+        <th scope="col">Published</th><th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr></thead>
+      <tbody>
+      {% for model in rows %}
+        <tr id="model-{{ model.id }}">
+          <td class="order-cell">
+            <form method="post" action="{{ url_for('admin.model_move', model_id=model.id) }}" class="order-buttons">
+              {{ csrf() }}
+              <button type="submit" name="direction" value="up" class="icon-btn" aria-label="Move {{ model.display_name }} up"{% if loop.first %} disabled{% endif %}>{{ icon("arrow-up") }}</button>
+              <button type="submit" name="direction" value="down" class="icon-btn icon-flip" aria-label="Move {{ model.display_name }} down"{% if loop.last %} disabled{% endif %}>{{ icon("arrow-up") }}</button>
+            </form>
+          </td>
+          <td>
+            <strong>{{ model.display_name }}</strong>
+            <div class="mono small muted truncate cell-wide">{{ model.ollama_name }}</div>
+            {% set model_categories = categories.get(model.id, []) %}
+            {% if model_categories or states.get(model.id) %}<div class="badge-row">{{ state_badges(model) }}{% for category in model_categories %}<span class="badge">{{ category.name }}</span>{% endfor %}</div>{% endif %}
+          </td>
+          <td>
+            <span class="badge">{{ "ComfyUI" if model.backend == "comfyui" else "Ollama" }}</span>
+            {% if model.backend_available %}<span class="badge badge-success">Available</span>
+            {% else %}<span class="badge badge-danger" title="Last seen {{ model.backend_last_seen_at | datetime }}">Not installed</span>{% endif %}
+          </td>
+          <td>
+            <div class="badge-row">
+              {% if model.is_image_generation %}<span class="badge badge-info">Images</span>{% endif %}
+              {% if model.supports_vision %}<span class="badge badge-info">Vision</span>{% endif %}
+              {% if model.is_reasoning %}<span class="badge badge-info">Reasoning</span>{% endif %}
+              {% if model.is_uncensored %}<span class="badge badge-warning">Uncensored</span>{% endif %}
+              {% if model.system_prompt %}<span class="badge">System prompt</span>{% endif %}
+              {% if model.limit_preset %}<span class="badge" title="Limit preset">{{ presets.get(model.limit_preset, model.limit_preset) }} limits</span>{% endif %}
+            </div>
+          </td>
+          <td>
+            <form method="post" action="{{ url_for('admin.model_rollout', model_id=model.id) }}">
+              {{ csrf() }}
+              <input type="hidden" name="enabled" value="{{ 0 if model.is_rolled_out else 1 }}">
+              {% if model.is_rolled_out %}
+              <button type="submit" class="btn btn-sm btn-published" aria-label="{{ model.display_name }} is published. Hide it from users">{{ icon("check") }}Published</button>
+              {% else %}
+              <button type="submit" class="btn btn-sm" aria-label="{{ model.display_name }} is hidden. Publish it to users">Hidden · Publish</button>
+              {% endif %}
+            </form>
+          </td>
+          <td class="actions">
+            <a class="btn btn-sm" href="{{ url_for('admin.model_edit', model_id=model.id) }}">{{ icon("edit") }}Edit</a>
+            <details class="menu" data-menu>
+              <summary class="icon-btn" aria-label="More actions for {{ model.display_name }}">{{ icon("more") }}</summary>
+              <div class="menu-panel">
+                <form method="post" action="{{ url_for('admin.model_ignore', model_id=model.id) }}" data-confirm="Ignore {{ model.ollama_name }}? It is hidden from users and never offered again until you restore it in Settings.">
+                  {{ csrf() }}<button type="submit">{{ icon("close") }}Ignore</button>
+                </form>
+                <form method="post" action="{{ url_for('admin.model_remove', model_id=model.id) }}" data-confirm="Remove {{ model.display_name }} from the catalog? Its settings and access rules are lost; the files stay on the server.">
+                  {{ csrf() }}<button type="submit">{{ icon("close") }}Remove from catalog</button>
+                </form>
+                {% if model.backend == "ollama" %}
+                <form method="post" action="{{ url_for('admin.model_delete_server', model_id=model.id) }}" data-confirm="Delete {{ model.ollama_name }} from the Ollama server? Its files are removed and must be downloaded again to use it. Refused while requests are using it." data-confirm-danger>
+                  {{ csrf() }}<button type="submit" class="danger">{{ icon("trash") }}Delete from server</button>
+                </form>
+                {% endif %}
+              </div>
+            </details>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {{ empty("layers", "No models yet", "Download a model on the Downloads tab or press Sync now after installing one on the inference server.") }}
+  {% endif %}
+</section>
+
+<section class="card mb-3" id="running" aria-labelledby="running-title">
+  <div class="card-header">
+    <h2 id="running-title">Loaded in memory</h2>
+    <div class="row">
+      <button type="button" class="btn btn-sm" data-running-refresh>{{ icon("refresh") }}Refresh</button>
+      <button type="button" class="btn btn-sm btn-danger" data-unload-all>Unload all</button>
+    </div>
+  </div>
+  <p class="muted small">Models stay in GPU memory for a while after use. Unloading frees memory; the next request loads them again.</p>
+  <div id="running-models" aria-live="polite"><p class="muted">Checking…</p></div>
+  <noscript><p class="hint">Enable JavaScript to see and unload running models.</p></noscript>
+</section>
+
+{% endblock %}
+{% block scripts %}
+<script type="application/json" id="page-data">{{ page_data | tojson }}</script>
+<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

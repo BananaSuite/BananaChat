@@ -1,0 +1,119 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Settings{% endblock %}
+{% block admin_content %}
+{% macro toggle(name, label, checked, hint=None) -%}
+<label class="switch">
+  <input type="checkbox" name="{{ name }}" value="1"{% if checked %} checked{% endif %}>
+  <span class="track" aria-hidden="true"></span>
+  <span>{{ label }}{% if hint %}<small class="block hint">{{ hint }}</small>{% endif %}</span>
+</label>
+{%- endmacro %}
+{% macro preview(mode, colors) -%}
+<svg class="palette-preview" viewBox="0 0 240 120" role="img" aria-label="Preview of the {{ mode }} palette" data-preview="{{ mode }}">
+  <rect data-swatch="bg" x="0" y="0" width="240" height="120" rx="8" fill="{{ colors.bg }}"/>
+  <rect data-swatch="sidebar" x="0" y="0" width="64" height="120" rx="8" fill="{{ colors.sidebar }}"/>
+  <rect data-swatch="secondary" x="80" y="16" width="144" height="60" rx="6" fill="{{ colors.secondary }}"/>
+  <rect data-swatch="text" x="92" y="28" width="96" height="8" rx="4" fill="{{ colors.text }}"/>
+  <rect data-swatch="text" x="92" y="44" width="72" height="6" rx="3" fill="{{ colors.text }}" opacity=".6"/>
+  <rect data-swatch="primary" x="80" y="88" width="64" height="20" rx="5" fill="{{ colors.primary }}"/>
+  <rect data-swatch="accent" x="152" y="88" width="40" height="20" rx="5" fill="{{ colors.accent }}"/>
+  <rect data-swatch="text" x="10" y="16" width="44" height="6" rx="3" fill="{{ colors.text }}" opacity=".8"/>
+  <rect data-swatch="primary" x="10" y="32" width="36" height="6" rx="3" fill="{{ colors.primary }}"/>
+  <rect data-swatch="text" x="10" y="48" width="40" height="6" rx="3" fill="{{ colors.text }}" opacity=".5"/>
+</svg>
+{%- endmacro %}
+
+{{ header("Settings", "How the site presents itself and who can join.") }}
+
+<form method="post" action="{{ url_for('admin.settings_save') }}" class="stack-lg" id="settings-form">
+  {{ csrf() }}
+  <div class="grid grid-2">
+    <section class="card stack" aria-labelledby="general-title">
+      <h2 id="general-title">General</h2>
+      <div class="field">
+        <label for="site-name" class="required">Site name</label>
+        <input type="text" id="site-name" name="site_name" required maxlength="80" value="{{ s.site_name }}">
+      </div>
+      <fieldset>
+        <legend>Sign-up</legend>
+        <label class="check"><input type="radio" name="signup_mode" value="invite"{% if s.signup_mode == "invite" %} checked{% endif %}><span>Invitation only<small>People need an <a href="{{ url_for('admin.invites') }}">invitation</a> to create an account.</small></span></label>
+        <label class="check"><input type="radio" name="signup_mode" value="open"{% if s.signup_mode == "open" %} checked{% endif %}><span>Open<small>Anyone who can reach the site can create an account.</small></span></label>
+        <label class="check"><input type="radio" name="signup_mode" value="disabled"{% if s.signup_mode == "disabled" %} checked{% endif %}><span>Closed<small>Only administrators create accounts.</small></span></label>
+      </fieldset>
+      <fieldset>
+        <legend>Default theme</legend>
+        <div class="segmented">
+          <label><input type="radio" name="default_theme_mode" value="dark"{% if s.default_theme_mode != "light" %} checked{% endif %}><span>{{ icon("moon") }} Dark</span></label>
+          <label><input type="radio" name="default_theme_mode" value="light"{% if s.default_theme_mode == "light" %} checked{% endif %}><span>{{ icon("sun") }} Light</span></label>
+        </div>
+        <p class="hint mt-1">Used for visitors and for users who did not choose a theme.</p>
+      </fieldset>
+    </section>
+
+    <section class="card stack" id="notices" aria-labelledby="notices-title">
+      <h2 id="notices-title">Maintenance and announcements</h2>
+      <fieldset class="stack-sm">
+        <legend>Maintenance</legend>
+        {{ toggle("maintenance_mode", "Pause new messages", s.maintenance_mode, "Pause new messages for everyone except administrators; the site stays reachable and shows your message in a banner. Chats, history and accounts stay available.") }}
+        <div class="field">
+          <label for="maintenance-message">Maintenance message</label>
+          <textarea id="maintenance-message" name="maintenance_message" maxlength="1000" rows="3" data-preview-target="maintenance-preview" aria-describedby="maintenance-message-hint">{{ s.maintenance_message }}</textarea>
+          <span class="hint" id="maintenance-message-hint">For example when you expect to be back. Users also see that their chats are safe.</span>
+        </div>
+        <div class="notice-preview" aria-live="polite">
+          <span class="small muted">Banner preview</span>
+          <div class="alert alert-warning">{{ icon("alert") }}<p><strong>New messages are paused for maintenance.</strong> <span id="maintenance-preview" data-empty="(no message)">{{ s.maintenance_message or "(no message)" }}</span></p></div>
+        </div>
+      </fieldset>
+      <fieldset class="stack-sm">
+        <legend>Announcement banner</legend>
+        <p class="hint">An informational notice on every page. It does not pause anything and is independent of maintenance.</p>
+        {{ toggle("warning_banner_enabled", "Show the announcement", s.warning_banner_enabled) }}
+        {{ toggle("warning_banner_dismissible", "Users can dismiss it", s.warning_banner_dismissible, "Dismissed announcements come back in a new browser session or when the text changes.") }}
+        <div class="field">
+          <label for="banner-message">Announcement</label>
+          <input type="text" id="banner-message" name="warning_banner_message" maxlength="500" value="{{ s.warning_banner_message }}">
+        </div>
+      </fieldset>
+    </section>
+  </div>
+
+  {% for mode in ["dark", "light"] %}
+  <section class="card" id="palette-{{ mode }}" aria-labelledby="palette-{{ mode }}-title">
+    <div class="card-header">
+      <h2 id="palette-{{ mode }}-title">{{ mode | capitalize }} palette</h2>
+      <button type="submit" form="reset-{{ mode }}" class="btn btn-sm btn-ghost">{{ icon("refresh") }}Reset to defaults</button>
+    </div>
+    <div class="palette-layout">
+      <div class="palette-fields">
+        {% for key, column in fields[mode].items() %}
+        <div class="field color-field">
+          <label for="{{ column }}">{{ color_labels[key] }}</label>
+          <div class="color-input">
+            <input type="color" value="{{ palettes[mode][key] }}" data-color-for="{{ column }}" aria-label="{{ color_labels[key] }} ({{ mode }} theme) colour picker">
+            <input type="text" id="{{ column }}" name="{{ column }}" value="{{ palettes[mode][key] }}" required pattern="#[0-9a-fA-F]{6}" maxlength="7" class="mono" data-palette="{{ mode }}" data-key="{{ key }}" aria-describedby="{{ column }}-hint" spellcheck="false">
+          </div>
+          <span class="hint" id="{{ column }}-hint">Default {{ defaults[mode][key] }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      <div>{{ preview(mode, palettes[mode]) }}</div>
+    </div>
+  </section>
+  {% endfor %}
+
+  <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
+</form>
+
+{% for mode in ["dark", "light"] %}
+<form method="post" action="{{ url_for('admin.settings_palette_reset') }}" id="reset-{{ mode }}" data-confirm="Reset the {{ mode }} palette to the default colours? Unsaved changes on this page are lost." hidden>
+  {{ csrf() }}<input type="hidden" name="mode" value="{{ mode }}">
+</form>
+{% endfor %}
+{% endblock %}
+{% block scripts %}
+<script type="application/json" id="page-data">{{ page_data | tojson }}</script>
+<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

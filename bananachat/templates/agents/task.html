@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ task.title }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/agents.css') }}">{% endblock %}
+{% block content %}
+<div class="page agent-page" id="agent-page">
+  <p class="agents-breadcrumb"><a href="{{ url_for('agents.index') }}">{{ icon("chevron-left") }}{{ t("agents.title") }}</a></p>
+
+  <header class="agent-header">
+    <div class="grow">
+      <h1 id="task-title">{{ task.title }}</h1>
+      <div class="agent-meta">
+        <span class="badge" id="task-status" data-status="{{ task.status }}">{{ t("agents.status_" ~ task.status) }}</span>
+        <span class="agent-meta-item">{{ icon("layers") }}<span>{{ task.model_label }}</span></span>
+        <span class="agent-meta-item" id="task-repository"{% if not task.repository %} hidden{% endif %}>{{ icon("code") }}<span class="mono break-anywhere" id="task-repository-label">{{ task.repository.label if task.repository else "" }}</span></span>
+        {% if task.swarm %}<span class="badge badge-info">{{ t("agents.swarm_badge") }}</span>{% endif %}
+        <span class="agent-meta-item" id="task-stats"></span>
+      </div>
+    </div>
+    <div class="agent-actions">
+      <button type="button" class="btn btn-danger" id="stop-button"{% if not task.active %} hidden{% endif %}>{{ icon("stop") }}{{ t("agents.stop") }}</button>
+      <form method="post" action="{{ url_for('agents.delete', task_id=task.id) }}" data-confirm="{{ t('agents.delete_confirm') }}" data-confirm-danger>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-ghost">{{ icon("trash") }}{{ t("agents.delete") }}</button>
+      </form>
+    </div>
+  </header>
+
+  <div id="task-banner" class="agent-banner" role="status" aria-live="polite" hidden></div>
+
+  <div class="agent-layout">
+    <section class="agent-main" aria-labelledby="timeline-title">
+      <h2 id="timeline-title" class="visually-hidden">{{ t("agents.timeline") }}</h2>
+      <ol class="timeline" id="timeline"></ol>
+      <div class="timeline-live" id="timeline-live" hidden>
+        <span class="agent-spinner" aria-hidden="true"></span><span id="timeline-live-text">{{ t("agents.working") }}</span>
+      </div>
+
+      <section class="agent-lanes" id="lanes" aria-labelledby="lanes-title" hidden>
+        <h2 id="lanes-title">{{ t("agents.subagents") }}</h2>
+        <div class="lane-grid" id="lane-grid"></div>
+      </section>
+
+      <form class="agent-composer card" id="follow-up" autocomplete="off"{% if access != "ok" %} hidden{% endif %}>
+        <label for="follow-up-input" class="visually-hidden">{{ t("agents.follow_up_label") }}</label>
+        <textarea id="follow-up-input" rows="2" maxlength="{{ max_message }}" placeholder="{{ t('agents.follow_up_placeholder') }}"></textarea>
+        <div class="agent-composer-bar">
+          <span class="hint" id="follow-up-hint"></span>
+          <button type="submit" class="btn btn-primary" id="follow-up-send" data-send>{{ icon("send") }}{{ t("agents.send") }}</button>
+        </div>
+      </form>
+      {% if access != "ok" %}<p class="hint">{{ t("agents.read_only") }}</p>{% endif %}
+    </section>
+
+    <aside class="agent-side" aria-labelledby="workspace-title">
+      <section class="card workspace" id="workspace">
+        <div class="workspace-head">
+          <h2 id="workspace-title">{{ icon("file") }}{{ t("agents.workspace") }}</h2>
+          <button type="button" class="icon-btn" id="workspace-refresh" aria-label="{{ t('agents.workspace_refresh') }}" title="{{ t('agents.workspace_refresh') }}">{{ icon("refresh") }}</button>
+        </div>
+        <nav class="workspace-crumbs" id="workspace-crumbs" aria-label="{{ t('agents.workspace_path') }}"></nav>
+        <ul class="workspace-list" id="workspace-list"></ul>
+        <div class="workspace-preview" id="workspace-preview" hidden>
+          <div class="workspace-preview-head">
+            <strong class="truncate mono" id="workspace-file-name"></strong>
+            <a class="btn btn-sm" id="workspace-file-download" href="#">{{ icon("download") }}{{ t("agents.download") }}</a>
+          </div>
+          <pre class="workspace-file" id="workspace-file" tabindex="0"></pre>
+        </div>
+        <p class="hint workspace-note" id="workspace-note"></p>
+        <div class="workspace-actions">
+          <a class="btn btn-sm" id="archive-link" href="{{ data.urls.archive }}" download>{{ icon("download") }}{{ t("agents.download_archive") }}</a>
+          <a class="btn btn-sm" id="patch-link" href="{{ data.urls.patch }}" download{% if not (task.workspace and task.repository and task.repository.git) %} hidden{% endif %}>{{ icon("code") }}<span>{{ t("agents.download_patch") }}</span></a>
+          {% if access == "ok" %}
+          <label class="btn btn-sm" for="workspace-upload">{{ icon("paperclip") }}{{ t("agents.upload") }}</label>
+          <input type="file" id="workspace-upload" multiple class="visually-hidden">
+          {% endif %}
+        </div>
+      </section>
+      <section class="card agent-facts">
+        <h2>{{ t("agents.details") }}</h2>
+        <dl class="details">
+          <dt>{{ t("agents.created") }}</dt><dd>{{ task.created_at | datetime }}</dd>
+          <dt>{{ t("agents.steps") }}</dt><dd id="fact-steps"></dd>
+          <dt>{{ t("agents.tokens") }}</dt><dd id="fact-tokens"></dd>
+          <dt>{{ t("agents.tool_calls") }}</dt><dd id="fact-tools"></dd>
+          <dt>{{ t("agents.limits") }}</dt><dd>{{ t("agents.limits_value", steps=task.limits.steps, minutes=task.limits.minutes) }}</dd>
+        </dl>
+      </section>
+    </aside>
+  </div>
+</div>
+{% for name in ["check", "alert", "info", "arrow-up", "folder", "file", "terminal", "search", "edit", "users", "layers"] %}
+<template id="icon-{{ name }}">{{ icon(name) }}</template>
+{% endfor %}
+<script type="application/json" id="page-data">{{ data | tojson }}</script>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/agent-task.js') }}"></script>{% endblock %}

@@ -1,0 +1,6 @@
+{# Section navigation shared by the developer pages. Set `active` before including. #}
+<nav class="tabs" aria-label="{{ t('developer.sections') }}">
+  <a href="{{ url_for('developer.index') }}"{% if active == 'index' %} aria-current="page"{% endif %}>{{ t("developer.tab_overview") }}</a>
+  <a href="{{ url_for('developer.usage') }}"{% if active == 'usage' %} aria-current="page"{% endif %}>{{ t("developer.tab_usage") }}</a>
+  <a href="{{ url_for('developer.playground') }}"{% if active == 'playground' %} aria-current="page"{% endif %}>{{ t("developer.tab_playground") }}</a>
+</nav>

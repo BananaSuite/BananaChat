@@ -1,163 +1,205 @@
-"""BananaChat Worker daemon configuration.
+"""Worker settings, read from environment variables and an optional settings file.
 
-All settings are read from environment variables so the daemon can run as a
-systemd service, a Windows user task, a macOS launchd agent, or a plain
-script with a .env file.
+Nothing happens at import time: :func:`load` reads the settings file (without
+overriding variables that are already exported) and returns a
+:class:`Settings`. Invalid numbers fall back to their defaults with a warning,
+so a typo in a hand-edited file never stops the worker.
 """
 
+from __future__ import annotations
+
+import ipaddress
 import os
 import platform
 import socket
+from dataclasses import dataclass, field
+from typing import List, Mapping, MutableMapping, Optional, Tuple
 from urllib.parse import urlsplit
 
-# Environment file
+LOOPBACK_NAMES = {"localhost"}
 
-# systemd reads EnvironmentFile= for us, but launchd has no equivalent and
-# would need the token written into the plist, which sits world-readable in
-# ~/Library/LaunchAgents. Reading the file here instead keeps the token in one
-# 0600 file on every platform. Anything already exported wins, so a systemd
-# unit or an exported shell variable still overrides the file.
+
 def default_env_file() -> str:
-    """Where the worker keeps its settings, per platform convention.
-
-    service.py builds the same path when it writes the file. They are two
-    short functions rather than one shared import because the worker modules
-    are imported both as a package and as loose modules on sys.path, and a
-    cross-import between them resolves differently in the two cases.
-    test_worker_service keeps them honest.
-    """
+    """Where the worker keeps its settings (``service.py`` writes the same path)."""
     if platform.system() == "Windows":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
         return os.path.join(base, "BananaChat", "bananachat-worker.env")
     return os.path.expanduser("~/.config/bananachat-worker.env")
 
 
-DEFAULT_ENV_FILE = default_env_file()
-
-
-def load_env_file(path=None):
-    """Populate os.environ from a KEY=VALUE file, without overriding exports.
-
-    Returns the path that was read, or None. A malformed line is skipped
-    rather than failing startup: a stray line in a hand-edited file should not
-    take the worker down.
-    """
-    path = path or os.environ.get("BC_WORKER_ENV_FILE") or DEFAULT_ENV_FILE
-    try:
-        with open(path, encoding="utf-8") as handle:
-            lines = handle.readlines()
-    except OSError:
-        return None
-    for line in lines:
+def parse_env_text(text: str) -> List[Tuple[str, str]]:
+    """``KEY=VALUE`` lines; comments, blank and malformed lines are skipped; quotes are removed."""
+    pairs = []
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         name, _, value = line.partition("=")
         name = name.strip()
-        if not name:
+        if name.startswith("export "):
+            name = name[len("export "):].strip()
+        if not name or not name.replace("_", "").isalnum():
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
-        os.environ.setdefault(name, value)
+        pairs.append((name, value))
+    return pairs
+
+
+def load_env_file(path: Optional[str] = None, environ: Optional[MutableMapping[str, str]] = None) -> Optional[str]:
+    """Fill *environ* (default ``os.environ``) from the settings file without overriding exports.
+
+    Returns the path that was read, or None when there is no file.
+    """
+    environ = os.environ if environ is None else environ
+    path = path or environ.get("BC_WORKER_ENV_FILE") or default_env_file()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read(1024 * 1024)
+    except OSError:
+        return None
+    for name, value in parse_env_text(text):
+        environ.setdefault(name, value)
     return path
 
 
-ENV_FILE_LOADED = load_env_file()
+def is_loopback(host: Optional[str]) -> bool:
+    if not host:
+        return False
+    if host.lower() in LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
-# Server connection
 
-# Full URL of the BananaChat platform server, e.g. https://ai.example.com
-SERVER_URL = os.environ.get("BC_SERVER_URL", "").rstrip("/")
+@dataclass(frozen=True)
+class Settings:
+    server_url: str = ""
+    token: str = ""
+    name: str = ""
+    allow_http: bool = False
+    ollama_host: str = "http://127.0.0.1:11434"
+    ollama_binary: str = "ollama"
+    ollama_idle_timeout: int = 600
+    ollama_keep_alive: int = 0
+    first_token_timeout: int = 180
+    read_timeout: int = 30
+    generation_timeout: int = 300
+    idle_threshold: int = 300
+    light_threshold: int = 30
+    gpu_gaming_threshold: float = 70.0
+    gpu_active_threshold: float = 50.0
+    poll_gap: float = 0.5
+    heartbeat_interval: float = 10.0
+    activity_interval: float = 5.0
+    log_level: str = "INFO"
+    log_file: str = ""
+    log_max_bytes: int = 5 * 1024 * 1024
+    log_backups: int = 3
+    env_file: Optional[str] = None
+    warnings: Tuple[str, ...] = field(default=(), compare=False)
 
-# Worker token issued by the admin panel (Admin → Workers → Add Worker).
-WORKER_TOKEN = os.environ.get("BC_WORKER_TOKEN", "").strip()
+    def problems(self) -> List[str]:
+        """What prevents the worker from starting (empty when it can run)."""
+        found = []
+        if not self.server_url:
+            found.append("BC_SERVER_URL is not set (for example BC_SERVER_URL=https://chat.example.org).")
+        else:
+            parts = urlsplit(self.server_url)
+            if (parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password
+                    or parts.query or parts.fragment):
+                found.append("BC_SERVER_URL must be an http(s) address without a password, query or fragment.")
+            elif parts.scheme == "http" and not is_loopback(parts.hostname) and not self.allow_http:
+                found.append("BC_SERVER_URL must use https:// so the worker token and prompts are encrypted. "
+                             "Only on a network you secure yourself, set BC_WORKER_ALLOW_HTTP=1 to allow http://.")
+        if not self.token:
+            found.append("BC_WORKER_TOKEN is not set. Register the worker on the server's Admin → Workers page "
+                         "and copy its token.")
+        elif any(char.isspace() for char in self.token) or len(self.token) > 512:
+            found.append("BC_WORKER_TOKEN contains spaces or is too long; copy it again.")
+        parts = urlsplit(self.ollama_host)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            found.append("BC_OLLAMA_HOST must be an http:// address such as http://127.0.0.1:11434.")
+        return found
 
-# Human-readable name shown in the admin panel.  Defaults to the machine
-# hostname so multiple workers on the same network are easy to distinguish.
-WORKER_NAME = os.environ.get("BC_WORKER_NAME", socket.gethostname())
+    @property
+    def ollama_is_local(self) -> bool:
+        return is_loopback(urlsplit(self.ollama_host).hostname)
 
-# Ollama
+    @property
+    def ollama_listen_address(self) -> str:
+        """``host:port`` for the ``OLLAMA_HOST`` variable of a managed ``ollama serve``."""
+        parts = urlsplit(self.ollama_host)
+        host = parts.hostname or "127.0.0.1"
+        if ":" in host:
+            host = f"[{host}]"
+        return f"{host}:{parts.port or 11434}"
 
-# Base URL of the local Ollama instance this worker will run jobs on.
-OLLAMA_HOST = os.environ.get("BC_OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
 
-# Path to the ollama binary (or just "ollama" if it's on PATH).
-OLLAMA_BINARY = os.environ.get("BC_OLLAMA_BINARY", "ollama")
+class _Reader:
+    def __init__(self, environ: Mapping[str, str]):
+        self.environ = environ
+        self.warnings: List[str] = []
 
-# Seconds of job inactivity before the daemon stops Ollama to free VRAM.
-# Set to 0 to never stop Ollama automatically.
-OLLAMA_IDLE_TIMEOUT = int(os.environ.get("BC_OLLAMA_IDLE_TIMEOUT", "600"))
+    def text(self, name: str, default: str = "") -> str:
+        value = self.environ.get(name)
+        return default if value is None else value.strip()
 
-INFERENCE_READ_TIMEOUT = max(5, min(45, int(os.environ.get("BC_INFERENCE_READ_TIMEOUT", "30"))))
-GENERATION_TIMEOUT = max(10, min(1800, int(os.environ.get("BC_GENERATION_TIMEOUT", "300"))))
+    def number(self, name: str, default, minimum, maximum, kind=int):
+        raw = self.text(name)
+        if not raw:
+            return default
+        try:
+            value = kind(raw)
+        except ValueError:
+            self.warnings.append(f"{name}={raw!r} is not a number; using {default}.")
+            return default
+        if value != value or not minimum <= value <= maximum:  # NaN or out of range
+            clamped = default if value != value else min(max(value, minimum), maximum)
+            self.warnings.append(f"{name}={raw} is outside {minimum}..{maximum}; using {clamped}.")
+            return clamped
+        return value
 
-# keep_alive value sent to Ollama (0 = unload model after each inference).
-OLLAMA_KEEP_ALIVE = int(os.environ.get("BC_OLLAMA_KEEP_ALIVE", "0"))
 
-# Activity / resource thresholds
+def from_environ(environ: Mapping[str, str], env_file: Optional[str] = None) -> Settings:
+    r = _Reader(environ)
+    level = r.text("BC_WORKER_LOG_LEVEL", "INFO").upper() or "INFO"
+    if level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        r.warnings.append(f"BC_WORKER_LOG_LEVEL={level!r} is not a logging level; using INFO.")
+        level = "INFO"
+    return Settings(
+        server_url=r.text("BC_SERVER_URL").rstrip("/"),
+        token=r.text("BC_WORKER_TOKEN"),
+        name=r.text("BC_WORKER_NAME") or socket.gethostname(),
+        allow_http=r.text("BC_WORKER_ALLOW_HTTP") == "1",
+        ollama_host=(r.text("BC_OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/"),
+        ollama_binary=r.text("BC_OLLAMA_BINARY") or "ollama",
+        ollama_idle_timeout=r.number("BC_OLLAMA_IDLE_TIMEOUT", 600, 0, 7 * 86400),
+        ollama_keep_alive=r.number("BC_OLLAMA_KEEP_ALIVE", 0, -1, 7 * 86400),
+        first_token_timeout=r.number("BC_FIRST_TOKEN_TIMEOUT", 180, 10, 3600),
+        read_timeout=r.number("BC_INFERENCE_READ_TIMEOUT", 30, 5, 600),
+        generation_timeout=r.number("BC_GENERATION_TIMEOUT", 300, 10, 3600),
+        idle_threshold=r.number("BC_IDLE_THRESHOLD", 300, 1, 86400),
+        light_threshold=r.number("BC_LIGHT_THRESHOLD", 30, 1, 86400),
+        gpu_gaming_threshold=r.number("BC_GPU_GAMING_THRESHOLD", 70.0, 1.0, 101.0, float),
+        gpu_active_threshold=r.number("BC_GPU_ACTIVE_THRESHOLD", 50.0, 0.0, 100.0, float),
+        poll_gap=r.number("BC_POLL_GAP", 0.5, 0.0, 60.0, float),
+        heartbeat_interval=r.number("BC_HEARTBEAT_INTERVAL", 10.0, 2.0, 30.0, float),
+        activity_interval=r.number("BC_ACTIVITY_CHECK_INTERVAL", 5.0, 1.0, 60.0, float),
+        log_level=level,
+        log_file=r.text("BC_WORKER_LOG_FILE"),
+        log_max_bytes=r.number("BC_WORKER_LOG_MAX_BYTES", 5 * 1024 * 1024, 64 * 1024, 1024 ** 3),
+        log_backups=r.number("BC_WORKER_LOG_BACKUPS", 3, 0, 20),
+        env_file=env_file,
+        warnings=tuple(r.warnings),
+    )
 
-# Seconds of keyboard+mouse inactivity before we consider the user "idle".
-# When idle, inference runs at full priority and Ollama is kept resident.
-IDLE_THRESHOLD_SECONDS = int(os.environ.get("BC_IDLE_THRESHOLD", "300"))   # 5 min
 
-# Seconds of inactivity that still counts as "light" use (moderate priority).
-LIGHT_THRESHOLD_SECONDS = int(os.environ.get("BC_LIGHT_THRESHOLD", "30"))
-
-# GPU utilisation (%) above which we consider the user "gaming / rendering".
-# When in this state the daemon will not start new inference jobs.
-GPU_GAMING_THRESHOLD = int(os.environ.get("BC_GPU_GAMING_THRESHOLD", "70"))
-
-# GPU utilisation (%) above which we consider the user "actively using GPU"
-# (inference still runs but at reduced process priority).
-GPU_ACTIVE_THRESHOLD = int(os.environ.get("BC_GPU_ACTIVE_THRESHOLD", "50"))
-
-# Fraction of VRAM the worker may use when the user is actively gaming.
-# 0.0 = disable inference entirely while gaming (recommended).
-# Positive values let you run small models concurrently (advanced, risky).
-GPU_GAMING_VRAM_FRACTION = float(os.environ.get("BC_GPU_GAMING_VRAM_FRACTION", "0.0"))
-
-# Polling / timing
-
-# Seconds between consecutive /jobs/poll requests when idle.
-# The actual long-poll window is always ~28 s; this adds a gap between polls.
-POLL_GAP_SECONDS = float(os.environ.get("BC_POLL_GAP", "0.5"))
-
-# Seconds between heartbeat POSTs to the server.
-HEARTBEAT_INTERVAL = float(os.environ.get("BC_HEARTBEAT_INTERVAL", "10.0"))
-
-# Seconds between activity / GPU reads.
-ACTIVITY_CHECK_INTERVAL = float(os.environ.get("BC_ACTIVITY_CHECK_INTERVAL", "5.0"))
-
-# Logging
-
-LOG_LEVEL = os.environ.get("BC_WORKER_LOG_LEVEL", "INFO").upper()
-
-# Optional log file. systemd captures stdout in the journal and the macOS
-# agent redirects it, but a Windows Task Scheduler job has nowhere to put it,
-# so the worker writes its own file when this is set.
-LOG_FILE = os.environ.get("BC_WORKER_LOG_FILE", "").strip()
-
-# Bytes per log file and how many to keep, when LOG_FILE is set.
-LOG_MAX_BYTES = max(64 * 1024, int(os.environ.get("BC_WORKER_LOG_MAX_BYTES", str(5 * 1024 * 1024))))
-LOG_BACKUPS = max(0, min(20, int(os.environ.get("BC_WORKER_LOG_BACKUPS", "3"))))
-
-# Validation helper
-
-def validate():
-    """Raise ValueError if required settings are missing."""
-    if not SERVER_URL:
-        raise ValueError(
-            "BC_SERVER_URL is not set. "
-            "Example: BC_SERVER_URL=https://ai.example.com"
-        )
-    endpoint = urlsplit(SERVER_URL)
-    if endpoint.scheme not in {"http", "https"} or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
-        raise ValueError("BC_SERVER_URL must be an HTTP(S) server URL without embedded credentials, query, or fragment")
-    if endpoint.scheme == "http" and endpoint.hostname not in {"localhost", "127.0.0.1", "::1"} and os.environ.get("BC_WORKER_ALLOW_HTTP") != "1":
-        raise ValueError("Use HTTPS for the worker token. On an independently secured private network, explicitly set BC_WORKER_ALLOW_HTTP=1 to use HTTP.")
-    if not WORKER_TOKEN:
-        raise ValueError(
-            "BC_WORKER_TOKEN is not set. "
-            "Create a worker in Admin → Workers, then copy the token here."
-        )
+def load(environ: Optional[MutableMapping[str, str]] = None) -> Settings:
+    """Read the settings file into *environ* (exports win) and build the settings."""
+    environ = os.environ if environ is None else environ
+    loaded = load_env_file(environ=environ)
+    return from_environ(environ, loaded)

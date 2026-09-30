@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "personalities/_macros.html" import avatar %}
+{% block title %}{{ t("personality.edit_title", name=row.name) if row else t("personality.create_title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/personalities.css') }}">{% endblock %}
+{% block content %}
+<div class="page persona-page">
+  <p class="breadcrumb"><a href="{{ url_for('personalities.index', _anchor=('personality-' ~ row.id) if row else None) }}">{{ icon("chevron-left") }}{{ t("personality.back") }}</a></p>
+  <header class="page-header">
+    <div>
+      <h1>{{ t("personality.edit_title", name=row.name) if row else t("personality.create_title") }}</h1>
+      <p>{{ t("personality.editor_subtitle") }}</p>
+    </div>
+  </header>
+
+  {% if templates %}
+  <nav class="template-strip mb-3" aria-labelledby="template-strip-label">
+    <span class="label" id="template-strip-label">{{ t("personality.templates_start") }}</span>
+    <ul>
+      {% for item in templates %}
+      <li><a class="chip chip-link accent-{{ item.color }}" href="{{ url_for('personalities.new', template=item.key) }}"{% if item.key == template_key %} aria-current="true"{% endif %}><span aria-hidden="true">{{ item.avatar }}</span>{{ item.name }}</a></li>
+      {% endfor %}
+      {% if template_key %}<li><a class="chip chip-link" href="{{ url_for('personalities.new') }}">{{ t("personality.templates_blank") }}</a></li>{% endif %}
+    </ul>
+  </nav>
+  {% if template_key %}<p class="alert alert-info mb-3">{{ icon("info") }}<span>{{ t("personality.template_notice") }}</span></p>{% endif %}
+  {% endif %}
+
+  <div class="persona-editor">
+    <form method="post" action="{{ url_for('personalities.update', personality_id=row.id) if row else url_for('personalities.create') }}" class="stack persona-form" id="persona-form" data-busy>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <fieldset class="card">
+        <legend>{{ t("personality.section_identity") }}</legend>
+        <div class="stack">
+          <div class="identity-row">
+            <div class="field avatar-field">
+              <label for="avatar">{{ t("personality.avatar") }}</label>
+              <input type="text" id="avatar" name="avatar" value="{{ values.avatar or '' }}" maxlength="32" autocomplete="off" spellcheck="false" class="emoji-input" placeholder="✨" aria-describedby="avatar-hint">
+            </div>
+            <div class="field grow">
+              <label for="name" class="required">{{ t("personality.name") }}</label>
+              <input type="text" id="name" name="name" required maxlength="{{ limits.name }}" value="{{ values.name or '' }}" autocomplete="off" data-counter>
+            </div>
+          </div>
+          <div class="emoji-picks" role="group" aria-label="{{ t('personality.avatar_picks') }}" hidden>
+            {% for emoji in avatar_choices %}<button type="button" class="emoji-pick" data-emoji="{{ emoji }}" aria-label="{{ t('personality.avatar_use', emoji=emoji) }}">{{ emoji }}</button>{% endfor %}
+            <button type="button" class="emoji-pick emoji-clear" data-emoji="" aria-label="{{ t('personality.avatar_clear') }}">{{ icon("close") }}</button>
+          </div>
+          <span class="hint" id="avatar-hint">{{ t("personality.avatar_hint") }}</span>
+          <div class="field">
+            <span class="label" id="color-label">{{ t("personality.color") }}</span>
+            <div class="swatches" role="radiogroup" aria-labelledby="color-label">
+              <label class="swatch-option" title="{{ t('personality.color_default') }}">
+                <input type="radio" name="color" value=""{% if not values.color %} checked{% endif %}>
+                <span class="swatch accent-default"></span><span class="visually-hidden">{{ t("personality.color_default") }}</span>
+              </label>
+              {% for key in colors %}
+              <label class="swatch-option" title="{{ t('personality.color_' ~ key) }}">
+                <input type="radio" name="color" value="{{ key }}"{% if values.color == key %} checked{% endif %}>
+                <span class="swatch accent-{{ key }}"></span><span class="visually-hidden">{{ t("personality.color_" ~ key) }}</span>
+              </label>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="field">
+            <label for="description">{{ t("personality.description") }}</label>
+            <input type="text" id="description" name="description" maxlength="{{ limits.description }}" value="{{ values.description or '' }}" autocomplete="off" data-counter aria-describedby="description-hint">
+            <span class="hint" id="description-hint">{{ t("personality.description_hint") }}</span>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>{{ t("personality.instructions") }}</legend>
+        <div class="field">
+          <label for="instructions" class="required">{{ t("personality.instructions_label") }}</label>
+          <textarea id="instructions" name="instructions" required maxlength="{{ limits.instructions }}" rows="9" data-counter aria-describedby="instructions-hint">{{ values.instructions or '' }}</textarea>
+          <span class="hint" id="instructions-hint">{{ t("personality.instructions_hint") }}</span>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>{{ t("personality.section_start") }}</legend>
+        <div class="stack">
+          <div class="field">
+            <label for="greeting">{{ t("personality.greeting") }}</label>
+            <textarea id="greeting" name="greeting" maxlength="{{ limits.greeting }}" rows="3" data-counter aria-describedby="greeting-hint">{{ values.greeting or '' }}</textarea>
+            <span class="hint" id="greeting-hint">{{ t("personality.greeting_hint") }}</span>
+          </div>
+          <div class="field">
+            <span class="label" id="starters-label">{{ t("personality.starters") }}</span>
+            <span class="hint" id="starters-hint">{{ t("personality.starters_hint") }}</span>
+            <div class="starter-fields">
+              {% for value in values.starters %}
+              <input type="text" id="starter-{{ loop.index }}" name="starter_{{ loop.index }}" value="{{ value }}" maxlength="{{ limits.starter }}" autocomplete="off" aria-label="{{ t('personality.starter_label', number=loop.index) }}" aria-describedby="starters-hint">
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>{{ t("personality.section_style") }}</legend>
+        <div class="stack">
+          <div class="field">
+            <span class="label" id="length-label">{{ t("personality.length") }}</span>
+            <div class="segmented" role="radiogroup" aria-labelledby="length-label">
+              {% for key in lengths %}
+              <label><input type="radio" name="response_length" value="{{ key }}"{% if (values.response_length or "balanced") == key %} checked{% endif %}><span>{{ t("personality.length_" ~ key) }}</span></label>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="field">
+            <span class="label" id="creativity-label">{{ t("personality.creativity") }}</span>
+            <div class="segmented" role="radiogroup" aria-labelledby="creativity-label" aria-describedby="creativity-hint">
+              {% for key in creativity_levels %}
+              <label><input type="radio" name="creativity" value="{{ key }}"{% if (values.creativity or "balanced") == key %} checked{% endif %}><span>{{ t("personality.creativity_" ~ key) }}</span></label>
+              {% endfor %}
+            </div>
+            <span class="hint" id="creativity-hint">{{ t("personality.style_hint") }}</span>
+          </div>
+          <div class="field">
+            <label for="preferred_model">{{ t("personality.preferred_model") }}</label>
+            <select id="preferred_model" name="preferred_model" aria-describedby="model-hint">
+              <option value="">{{ t("personality.preferred_model_none") }}</option>
+              {% if missing_model %}<option value="{{ values.preferred_model }}" selected>{{ t("personality.preferred_model_missing", model=values.preferred_model) }}</option>{% endif %}
+              {% for model in models %}<option value="{{ model.name }}"{% if values.preferred_model == model.name %} selected{% endif %}>{{ model.label }}</option>{% endfor %}
+            </select>
+            <span class="hint" id="model-hint">{{ t("personality.preferred_model_hint") }}</span>
+            {% if missing_model %}<p class="field-error mb-0">{{ t("personality.model_missing_hint") }}</p>{% endif %}
+          </div>
+        </div>
+      </fieldset>
+
+      <label class="check"><input type="checkbox" name="enabled" value="1"{% if values.enabled %} checked{% endif %}><span>{{ t("personality.enabled_label") }}<small>{{ t("personality.enabled_hint") }}</small></span></label>
+
+      <div class="form-actions">
+        <a class="btn btn-ghost" href="{{ url_for('personalities.index') }}">{{ t("common.cancel") }}</a>
+        <button type="submit" class="btn btn-primary">{{ t("common.save") if row else t("personality.create") }}</button>
+      </div>
+    </form>
+
+    <aside class="persona-preview" aria-labelledby="preview-title">
+      <div class="persona-preview-inner">
+        <h2 class="label" id="preview-title">{{ t("personality.preview") }}</h2>
+        <div class="card persona-card accent-{{ values.color or 'default' }}" data-preview-card>
+          <div class="persona-head">
+            <span data-preview-avatar>{{ avatar({"avatar": values.avatar, "color": values.color, "name": values.name or t("personality.preview_name")}) }}</span>
+            <div class="grow">
+              <h3 data-preview-name data-placeholder="{{ t('personality.preview_name') }}">{{ values.name or t("personality.preview_name") }}</h3>
+              <p class="persona-description" data-preview-description>{{ values.description or '' }}</p>
+            </div>
+          </div>
+        </div>
+        <div class="persona-preview-chat accent-{{ values.color or 'default' }}" data-preview-chat>
+          <p class="hint text-center mb-1">{{ t("personality.preview_chat") }}</p>
+          <div class="persona-intro">
+            <span data-preview-avatar-large>{{ avatar({"avatar": values.avatar, "color": values.color, "name": values.name or t("personality.preview_name")}, "xl") }}</span>
+            <p class="persona-intro-name" data-preview-intro-name>{{ values.name or t("personality.preview_name") }}</p>
+            <p class="persona-greeting" data-preview-greeting>{{ values.greeting or '' }}</p>
+            <ul class="persona-starters" data-preview-starters>
+              {% for value in values.starters if value.strip() %}<li>{{ value }}</li>{% endfor %}
+            </ul>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/personalities.js') }}"></script>{% endblock %}

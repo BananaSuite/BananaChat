@@ -1,5 +1,6 @@
 """Install, checkpoint, update, restore, and remove one remembered deployment."""
 
+from collections import deque
 from contextlib import nullcontext
 from datetime import datetime, timezone
 import json
@@ -18,6 +19,12 @@ from .system import System
 
 
 DEFAULT_POLICY = {"enabled": False, "interval_minutes": 60, "keep_backups": 3}
+# Packages this tool creates on its own; each prefix keeps the keep_backups
+# newest. Operator-requested "manual-" packages are never pruned.
+AUTOMATIC_BACKUPS = ("auto", "before-update", "before-restore", "before-legacy-import", "remote")
+HISTORY_LIMIT = 1000
+# Refuse to purge these even when they look like a managed installation.
+PROTECTED_ROOTS = ("/", "/usr", "/usr/local", "/opt", "/home", "/var", "/etc", "/srv", "/root")
 
 
 class Manager:
@@ -66,7 +73,20 @@ class Manager:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         with os.fdopen(descriptor, "a") as target:
             target.write(json.dumps(value) + "\n")
+        self.trim_history(path)
         return value
+
+    @staticmethod
+    def trim_history(path, limit=HISTORY_LIMIT):
+        """Keep only the newest events, replacing the log atomically."""
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as source:
+            count, tail = 0, deque(maxlen=limit)
+            for line in source:
+                count += 1
+                tail.append(line)
+        if count > limit:
+            atomic_write(path, b"".join(tail))
 
     def layout(self):
         self.root.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -205,7 +225,8 @@ class Manager:
         self.system.data_permissions(settings)
 
     def install(self, checkout, *, mode, name=None, domain="", portal_domain="", port=None, backend_url="",
-                backend_token_file=None, ollama_binary="", source_options=None, reuse_data=False):
+                backend_token_file=None, ollama_binary="", source_options=None, reuse_data=False,
+                backend_token=None, ollama_url=""):
         self.layout()
         with maintenance_lock(self.root):
             existing = read_json(self.config_dir / "installation.json")
@@ -221,34 +242,50 @@ class Manager:
             domain = profile.validate_domain(domain)
             portal_domain = profile.validate_domain(portal_domain or ("portal." + domain if mode == "hosting" and domain else ""))
             if mode == "web" and not backend_url:
-                raise ValueError("The web mode needs --backend-url for its compute server.")
+                raise ValueError("A web server needs its compute server: use --pair with the code printed by "
+                                 "'bananachat compute pairing-code' there, or --backend-url with --backend-token-file.")
             if backend_url:
-                from urllib.parse import urlsplit
-                parsed = urlsplit(backend_url)
-                if (parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "::1", "localhost"})) or parsed.username or parsed.password:
-                    raise ValueError("Use an HTTPS backend URL or a loopback SSH-tunnel URL; store its token separately.")
-            if mode in {"single", "compute"}:
+                from .backend import backend_url as checked_backend_url
+                backend_url = checked_backend_url(backend_url)
+            if ollama_url:
+                from .backend import ollama_url as checked_ollama_url
+                if self.product != "BananaChat" or mode not in {"single", "compute"}:
+                    raise ValueError("--ollama-url applies to BananaChat single and compute servers.")
+                ollama_url, ollama_binary = checked_ollama_url(ollama_url), ""
+            elif mode in {"single", "compute"}:
                 ollama_binary = ollama_binary or shutil.which("ollama") or ""
                 if not ollama_binary or not Path(ollama_binary).is_absolute() or not Path(ollama_binary).is_file():
-                    raise ValueError("Install Ollama from its official packages, then provide --ollama-binary if it is outside PATH.")
+                    raise ValueError("Install Ollama from its official packages and provide --ollama-binary if it is "
+                                     "outside PATH, or use an Ollama that already runs here with --ollama-url.")
+            else:
+                ollama_binary = ""
             port = int(port or {"wiki": 5001, "hosting": 5099, "single": 8000, "web": 8000, "compute": 11435}[mode])
             if not 1024 <= port <= 65535:
                 raise ValueError("Choose an application port between 1024 and 65535.")
+            # Read every operator-supplied secret before changing any state, so
+            # a bad file cannot leave a half-installed root behind.
+            if backend_token:
+                from .backend import check_token
+                backend_token = check_token(backend_token)
+            elif backend_token_file:
+                backend_token = self.read_secret(backend_token_file)
             source = self.configure_source(**(source_options or {}))
             settings = {"schema": 1, "product": self.product, "mode": mode, "root": str(self.root), "service": name,
                         "domain": domain, "portal_domain": portal_domain, "port": port, "backend_url": backend_url,
                         "ollama_binary": ollama_binary, "source_url": source["url"], "installed": False, "revision": ""}
+            if self.product == "BananaChat" and mode in {"single", "compute"}:
+                # Empty: this installation runs and manages its own Ollama.
+                settings["ollama_url"] = ollama_url
             self.system.preflight(settings)
             self.system.account(settings)
             settings["revision"] = GitSource(self.root, source).seed(checkout)
             self.stage(settings)
             self.save(settings)
             self.switch(settings["revision"])
-            self.write_runtime(settings)
-            if backend_token_file:
-                environment = read_environment(self.config_dir / "app.env")
-                environment["BC_OLLAMA_API_KEY"] = self.read_secret(backend_token_file)
-                write_environment(self.config_dir / "app.env", environment)
+            environment = read_environment(self.config_dir / "app.env")
+            if backend_token:
+                environment["BC_OLLAMA_API_KEY"] = backend_token
+            self.write_runtime(settings, environment)
             write_json(self.config_dir / "updates.json", DEFAULT_POLICY.copy())
             self.system.install_units(settings)
             self.system.install_timer(settings, self.policy())
@@ -293,7 +330,9 @@ class Manager:
             database = Path(environment.get("BC_DATABASE_PATH", data / "bananachat.db")).absolute()
             if not database.is_relative_to(data):
                 raise ValueError("Move the BananaChat database inside the managed data directory before making a weight-free package; external databases need a separate backup.")
-            model_inventory = inventory(data, environment)
+            unmanaged = settings["mode"] in {"single", "compute"} and not profile.managed_ollama(settings)
+            model_inventory = inventory(data, environment,
+                                        upstream=profile.ollama_upstream(settings, environment) if unmanaged else None)
             excluded = model_inventory["excluded_paths"]
         allowed_link = (lambda path: profile.hosting_storage_link(path, data)) if settings["mode"] == "hosting" else None
         inputs = [(path, "data/" + name) for path, name in regular_files(data, allowed_link=allowed_link, excluded=excluded)]
@@ -346,7 +385,8 @@ class Manager:
             except BaseException:
                 self.recover()
                 raise
-            self.event("backup", "complete", package=str(result))
+            warnings = self.prune_backups_safely()
+            self.event("backup", "complete", package=str(result), **({"pruning_warnings": warnings} if warnings else {}))
             return result
 
     def update(self, *, automatic=False, allow_divergent=False, retry_failed=False):
@@ -364,8 +404,12 @@ class Manager:
             if not forward and (automatic or not allow_divergent):
                 return self.event("update", "paused", revision=sha, reason="The selected source diverges from the installed revision. Review it and use update --allow-divergent for an intentional switch.")
             failed = read_json(self.config_dir / "failed-revision.json", {})
-            if automatic and failed.get("revision") == sha and not retry_failed:
-                return self.event("update", "paused", revision=sha, reason="This revision previously failed; a maintainer must retry it or select a newer revision.")
+            if failed.get("revision") == sha and not retry_failed:
+                # Neither path repeats a failed revision silently; an operator
+                # opts in with --retry-failed after correcting the cause.
+                reason = ("This revision previously failed; a maintainer must retry it or select a newer revision." if automatic
+                          else "This revision previously failed. Correct the cause, then run update --retry-failed to try it again, or publish a newer revision.")
+                return self.event("update", "paused", revision=sha, reason=reason)
             candidate = {**settings, "revision": sha, "source_url": self.source()["url"]}
             try:
                 self.stage(candidate)
@@ -399,13 +443,22 @@ class Manager:
                 self.recover()
                 self.event("update", "rolled_back", revision=sha, restored_revision=settings["revision"])
                 raise
-            self.prune_backups()
+            # The update has succeeded: record it before any housekeeping, so a
+            # pruning problem cannot report a working deployment as failed.
             write_json(self.config_dir / "last-update.json", {"backup": str(archive), "previous_revision": settings["revision"], "revision": sha})
-            self.prune_releases({settings["revision"], sha})
+            if failed.get("revision") == sha:
+                (self.config_dir / "failed-revision.json").unlink(missing_ok=True)
+            warnings = self.prune_backups_safely()
+            try:
+                self.prune_releases({settings["revision"], sha})
+            except (OSError, ValueError) as error:
+                warnings.append(f"Release pruning failed: {error}")
             return self.event("update", "complete", revision=sha, previous_revision=settings["revision"], branch=selected,
-                              used_fallback=selected != self.source()["branch"], backup=str(archive))
+                              used_fallback=selected != self.source()["branch"], backup=str(archive),
+                              **({"pruning_warnings": warnings} if warnings else {}))
 
-    def restored_settings(self, extracted, manifest, *, name=None, domain=None, port=None):
+    def restored_settings(self, extracted, manifest, *, name=None, domain=None, port=None, ollama_url=None,
+                          existing=None):
         saved = read_json(extracted / "config/installation.json")
         if not saved or saved.get("product") != self.product or saved.get("mode") not in profile.modes(self.product) or saved.get("revision") != manifest["revision"]:
             raise ValueError("The package's installation metadata is inconsistent.")
@@ -414,10 +467,25 @@ class Manager:
             saved["service"] = name
         if not re.fullmatch(r"[a-z][a-z0-9-]{1,45}", saved.get("service", "")):
             raise ValueError("Invalid restored service name.")
-        if saved["mode"] in {"single", "compute"} and not Path(saved.get("ollama_binary", "")).is_file():
+        if (not ollama_url and existing and existing.get("mode") == saved["mode"] and self.product == "BananaChat"
+                and saved["mode"] in {"single", "compute"}):
+            # Which Ollama runs here belongs to this machine, like the service
+            # name: a restored package neither replaces an existing Ollama with
+            # a managed one nor the other way round.
+            if existing.get("ollama_url"):
+                ollama_url = existing["ollama_url"]
+            else:
+                saved.update(ollama_url="", ollama_binary=existing.get("ollama_binary") or "")
+        if ollama_url:
+            from .backend import ollama_url as checked_ollama_url
+            if self.product != "BananaChat" or saved["mode"] not in {"single", "compute"}:
+                raise ValueError("--ollama-url applies to BananaChat single and compute servers.")
+            saved.update(ollama_url=checked_ollama_url(ollama_url), ollama_binary="")
+        if profile.managed_ollama(saved) and not Path(saved.get("ollama_binary", "")).is_file():
             saved["ollama_binary"] = shutil.which("ollama") or ""
             if not saved["ollama_binary"]:
-                raise ValueError("Install Ollama on the new server before restoring this deployment mode.")
+                raise ValueError("Install Ollama on the new server before restoring this deployment mode, or use an "
+                                 "Ollama that already runs there with --ollama-url.")
         if domain is not None:
             saved["domain"] = profile.validate_domain(domain)
             if saved["mode"] == "hosting":
@@ -472,12 +540,14 @@ class Manager:
                 values["HOSTING_MODE"] = "subdomain" if settings.get("domain") else "port"
                 values["HOSTING_PUBLIC_SCHEME"] = "https" if settings.get("domain") else "http"
         if self.product == "BananaChat":
-            from .models import inventory, prepare_recovery
+            from .models import prepare_recovery, reset_restored_jobs
             restored_data = self.root / "data"
-            saved_inventory = (read_json(extracted / "model-inventory.json") if manifest.get("model_weights_excluded")
-                               else inventory(restored_data, values))
-            prepare_recovery(restored_data, saved_inventory,
-                             database=Path(values.get("BC_DATABASE_PATH", restored_data / "bananachat.db")))
+            database = Path(values.get("BC_DATABASE_PATH", restored_data / "bananachat.db"))
+            if manifest.get("model_weights_excluded"):
+                # Only a weight-free package needs an approved re-download.
+                prepare_recovery(restored_data, read_json(extracted / "model-inventory.json"), database=database)
+            else:
+                reset_restored_jobs(restored_data, database)
         self.write_runtime(settings, values)
         if not preserve_policy:
             saved_policy = read_json(extracted / "config/updates.json", DEFAULT_POLICY.copy())
@@ -504,7 +574,7 @@ class Manager:
         self.event("recover", "complete", restored_revision=settings["revision"])
         return True
 
-    def restore(self, package, *, new=False, name=None, domain=None, port=None):
+    def restore(self, package, *, new=False, name=None, domain=None, port=None, ollama_url=None):
         self.layout()
         with maintenance_lock(self.root):
             if not new:
@@ -513,9 +583,16 @@ class Manager:
             if new and existing:
                 raise ValueError("Use restore on an existing installation, or choose an empty --root.")
             with read_package(package, self.product, self.root / "staging") as (extracted, manifest):
-                restored = self.restored_settings(extracted, manifest, name=name, domain=domain, port=port)
+                if existing and ollama_url:
+                    raise ValueError("--ollama-url is chosen when restoring into a new installation root.")
+                restored = self.restored_settings(extracted, manifest, name=name, domain=domain, port=port,
+                                                  ollama_url=ollama_url, existing=existing)
                 if existing and restored["mode"] != existing["mode"]:
                     raise ValueError("A restore cannot change deployment mode. Use a separate installation root.")
+                # The package used another Ollama than the one chosen for this machine.
+                switched = (restored.get("ollama_url") or "") != (
+                    (read_json(extracted / "config/installation.json") or {}).get("ollama_url") or "")
+                machine = read_environment(self.config_dir / "app.env") if existing and switched else None
                 if existing:
                     restored["service"] = existing["service"]
                 self.system.preflight(restored)
@@ -530,6 +607,19 @@ class Manager:
                         write_json(self.config_dir / "transaction.json", journal)
                         self.system.remove_containers(journal["containers"])
                     self.apply_package(extracted, manifest, restored, preserve_policy=False, public_changed=domain is not None)
+                    if switched:
+                        # The saved configuration pointed at another Ollama:
+                        # keep this machine's Ollama settings (or the chosen URL).
+                        values = read_environment(self.config_dir / "app.env")
+                        upstream = "BC_COMPUTE_UPSTREAM" if restored["mode"] == "compute" else "BC_OLLAMA_URL"
+                        for key in (upstream, "OLLAMA_HOST", "OLLAMA_MODELS"):
+                            if machine is not None and key in machine:
+                                values[key] = machine[key]
+                            elif key == upstream:
+                                values[key] = restored["ollama_url"] or profile.DEFAULT_OLLAMA_URL
+                            else:
+                                values.pop(key, None)
+                        write_environment(self.config_dir / "app.env", profile.environment(restored, values))
                     self.switch(restored["revision"])
                     self.system.install_units(restored)
                     self.system.install_timer(restored, self.policy())
@@ -549,7 +639,9 @@ class Manager:
                     if journal:
                         self.recover()
                     raise
-            return self.event("restore", "complete", revision=restored["revision"], automatic_updates=False)
+            warnings = self.prune_backups_safely() if existing else []
+            return self.event("restore", "complete", revision=restored["revision"], automatic_updates=False,
+                              **({"pruning_warnings": warnings} if warnings else {}))
 
     def set_updates(self, enabled, *, interval=None, keep=None):
         settings = self.settings()
@@ -570,10 +662,35 @@ class Manager:
                           fallback_branch=self.source().get("fallback_branch"), interval_minutes=policy["interval_minutes"])
 
     def prune_backups(self):
-        files = sorted((self.root / "backups").glob("auto-*.tar.gz"), key=lambda path: path.name, reverse=True)
-        for path in files[self.policy()["keep_backups"]:]:
-            if path.is_file() and not path.is_symlink():
+        """Apply keep_backups to each kind of automatically created package."""
+        keep = self.policy()["keep_backups"]
+        directory = self.root / "backups"
+        protected = set()
+        for record in ("last-update.json", "transaction.json"):
+            package = (read_json(self.config_dir / record, {}) or {}).get("backup")
+            if package:
+                protected.add(os.path.abspath(package))
+        removed = []
+        for prefix in AUTOMATIC_BACKUPS:
+            # Only names generated by backup_name(); "before-update-" never
+            # matches "auto-" and operator-named files are left alone.
+            pattern = re.compile(re.escape(prefix) + r"-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}\.tar\.gz")
+            files = sorted((path for path in directory.glob(prefix + "-*.tar.gz") if pattern.fullmatch(path.name)),
+                           key=lambda path: path.name, reverse=True)
+            for path in files[keep:]:
+                if str(path) in protected or path.is_symlink() or not path.is_file():
+                    continue
                 path.unlink()
+                removed.append(path.name)
+        return removed
+
+    def prune_backups_safely(self):
+        """Housekeeping must never turn a completed operation into a failure."""
+        try:
+            self.prune_backups()
+        except (OSError, ValueError) as error:
+            return [f"Backup pruning failed: {error}"]
+        return []
 
     def prune_releases(self, preserve):
         releases = sorted((self.root / "releases").iterdir(), key=lambda path: path.stat().st_mtime, reverse=True)
@@ -600,6 +717,8 @@ class Manager:
             settings = self.settings()
             if purge and confirm != settings["service"]:
                 raise ValueError("For permanent deletion, pass --purge --confirm SERVICE_NAME.")
+            if purge:
+                self.check_purge()
             self.set_updates(False)
             if remote.status()["configured"]:
                 self.system.install_backup_timer(settings, remote.set_schedule(False))
@@ -612,5 +731,30 @@ class Manager:
             self.save(settings)
             self.event("uninstall", "complete", data_preserved=not purge)
             if purge:
+                self.check_purge()
                 shutil.rmtree(self.root)
         return {"outcome": "uninstalled", "data_preserved": not purge}
+
+    def check_purge(self):
+        """Delete only a directory that is recognisably this managed installation."""
+        import pwd
+        root = self.root
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError("Refusing to purge: the installation root is not a real directory.")
+        protected = {Path(path) for path in PROTECTED_ROOTS}
+        try:
+            protected.add(Path.home())
+        except (KeyError, RuntimeError):
+            pass
+        for name in filter(None, (os.environ.get("SUDO_USER"), os.environ.get("USER"))):
+            try:
+                protected.add(Path(pwd.getpwnam(name).pw_dir))
+            except KeyError:
+                pass
+        if any(os.path.realpath(root) == os.path.realpath(path) for path in protected):
+            raise ValueError(f"Refusing to purge the system or home directory {root}.")
+        saved = read_json(self.config_dir / "installation.json")
+        releases = root / "releases"
+        if (not saved or saved.get("product") != self.product or saved.get("root") != str(root)
+                or releases.is_symlink() or not releases.is_dir()):
+            raise ValueError(f"Refusing to purge {root}: it does not contain a managed {self.product} installation.")

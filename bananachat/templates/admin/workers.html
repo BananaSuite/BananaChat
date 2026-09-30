@@ -1,0 +1,136 @@
+{% extends "admin/_layout.html" %}
+{% from "partials/icons.html" import icon %}
+{% set section = "workers" %}
+{% block title %}Workers{% endblock %}
+
+{% macro status_badge(status) -%}
+<span class="badge {{ {'online': 'badge-success', 'busy': 'badge-warning', 'disabled': 'badge-danger'}.get(status, '') }}">{{ status }}</span>
+{%- endmacro %}
+
+{% macro activity_badge(activity) -%}
+{% if activity %}<span class="badge {{ {'idle': 'badge-success', 'light': 'badge-info', 'active': 'badge-warning', 'gaming': 'badge-danger'}.get(activity, '') }}">{{ activity }}</span>{% else %}<span class="faint">—</span>{% endif %}
+{%- endmacro %}
+
+{% macro worker_row(w) -%}
+<tr data-worker-id="{{ w.id }}">
+  <td><strong>{{ w.name }}</strong><br><span class="small faint mono">{{ w.id[:12] }}</span>{% if w.platform %}<br><span class="small muted">{{ w.platform }}</span>{% endif %}</td>
+  <td>{{ status_badge(w.status) }}{% if w.working %} <span class="badge badge-primary">running a job</span>{% endif %}</td>
+  <td>{{ activity_badge(w.activity) }}</td>
+  <td>{{ w.gpu_name or "—" }}{% if w.gpu_util is not none %}<br><span class="small muted">{{ w.gpu_util }}% busy</span>{% endif %}</td>
+  <td>
+    {% if w.models %}
+    <details><summary>{{ w.models | length }} model{{ "s" if w.models | length != 1 }}</summary>
+      <ul class="small">{% for model in w.models %}<li class="mono">{{ model }}</li>{% endfor %}</ul>
+    </details>
+    {% else %}<span class="faint">none reported</span>{% endif %}
+    {% if w.ollama_version %}<br><span class="small muted">Ollama {{ w.ollama_version }}</span>{% endif %}
+  </td>
+  <td>{% if w.last_heartbeat %}<span title="{{ w.last_heartbeat | datetime }}">{{ w.last_heartbeat | timeago }}</span>{% else %}never{% endif %}</td>
+  <td class="actions">
+    <form method="post" action="{{ url_for('admin.workers_state', worker_id=w.id) }}"
+          {% if w.status != 'disabled' %}data-confirm="Stop sending jobs to “{{ w.name }}”? A job it is running now is stopped." data-confirm-label="Disable"{% endif %}>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="enabled" value="{{ 1 if w.status == 'disabled' else 0 }}">
+      <button type="submit" class="btn btn-sm">{{ "Enable" if w.status == "disabled" else "Disable" }}</button>
+    </form>
+    <form method="post" action="{{ url_for('admin.workers_delete', worker_id=w.id) }}"
+          data-confirm="Remove “{{ w.name }}”? Its token stops working immediately and a job it is running now is stopped."
+          data-confirm-label="Remove" data-confirm-danger>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm btn-danger">{{ icon("trash") }}<span>Remove</span></button>
+    </form>
+  </td>
+</tr>
+{%- endmacro %}
+
+{% block admin_content %}
+<header class="page-header admin-header">
+  <div>
+    <h1>Workers</h1>
+    <p>Volunteer PCs that run chat and API requests with their own Ollama.</p>
+  </div>
+</header>
+
+<div class="stack">
+{% if not workers_enabled %}
+<div class="alert alert-warning" role="status" id="workers-disabled-banner">
+  {{ icon("alert") }}
+  <div class="grow">
+    <p><strong>Remote workers are turned off on this server.</strong>
+      No request is sent to a worker, and workers are told the feature is disabled (HTTP 503).
+      Set <code>BC_WORKERS_ENABLED=1</code> in the server configuration and restart to turn them on.
+      You can register workers and install their tokens before that.</p>
+  </div>
+</div>
+{% endif %}
+
+<div class="alert alert-info" role="note">
+  {{ icon("shield") }}
+  <div class="grow">
+    <p><strong>Worker operators can read the prompts sent to them.</strong>
+      A request answered by a worker — including the conversation history and any attached images — is processed on
+      that person’s computer, where it can be logged or copied. Register only machines whose owners you trust with
+      your users’ conversations, and tell your users that some answers are produced on volunteer hardware.</p>
+    <p class="small muted">Administrators’ own requests always use the local server. A worker gets a request only when it
+      is online, not gaming and advertises the model; if none takes it within {{ claim_timeout }} seconds, or it fails
+      before answering, the local server answers instead. The server deletes a job’s prompt as soon as it ends and the
+      job record after an hour.</p>
+  </div>
+</div>
+
+{% if new_token %}
+<section class="card" aria-labelledby="new-token-title">
+  <h2 id="new-token-title">Token for “{{ new_name }}”</h2>
+  <p class="muted">Copy it now: it is shown only once. Put it in <code>BC_WORKER_TOKEN</code> in the worker’s settings file.</p>
+  <div class="secret-box"><input type="text" readonly value="{{ new_token }}" aria-label="Worker token"><button type="button" class="btn" data-copy="{{ new_token }}">Copy</button></div>
+</section>
+{% endif %}
+
+<section class="card" aria-labelledby="register-title">
+  <div class="card-header"><h2 id="register-title">Register a worker</h2></div>
+  <form method="post" action="{{ url_for('admin.workers_register') }}" id="register-form" class="row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="field grow">
+      <label for="worker-name">Name</label>
+      <input type="text" id="worker-name" name="name" maxlength="80" required autocomplete="off" placeholder="e.g. Anna’s gaming PC">
+    </div>
+    <button type="submit" class="btn btn-primary">{{ icon("key") }}<span>Register and create token</span></button>
+  </form>
+</section>
+
+<section class="card flush" aria-labelledby="list-title">
+  <div class="card-header">
+    <h2 id="list-title">Registered workers</h2>
+    <span class="small muted" id="workers-updated">Refreshes every 15 seconds{% if job_counts %} · jobs: {% for status, count in job_counts.items() %}{{ count }} {{ status }}{{ ", " if not loop.last }}{% endfor %}{% endif %}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="table" id="workers-table">
+      <thead><tr><th>Name</th><th>Status</th><th>Activity</th><th>GPU</th><th>Models</th><th>Last heartbeat</th><th class="actions">Actions</th></tr></thead>
+      <tbody id="workers-body">
+        {% for w in workers %}{{ worker_row(w) }}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="empty" id="workers-empty"{% if workers %} hidden{% endif %}>No workers yet. Register one above.</p>
+</section>
+
+<section class="card" aria-labelledby="setup-title">
+  <h2 id="setup-title">Set up a worker PC</h2>
+  <ol class="stack-sm">
+    <li>Register the worker above and copy its token.</li>
+    <li>On the PC, install <a href="https://ollama.com/download" rel="noopener">Ollama</a> and pull the models it should serve, for example <code>ollama pull qwen3:4b</code>. Use the same model names as this server.</li>
+    <li>Copy the <code>worker/</code> folder of this server’s source code to the PC (Python 3.9 or newer is needed; nothing else).</li>
+    <li>Run <code>python bananachat_worker.py install</code> in that folder. It creates the settings file and a background service.</li>
+    <li>Edit the settings file (<code>~/.config/bananachat-worker.env</code>, or <code>%APPDATA%\BananaChat\bananachat-worker.env</code> on Windows):
+      <pre class="card mt-1">BC_SERVER_URL={{ server_url }}
+BC_WORKER_TOKEN=&lt;the token&gt;
+BC_WORKER_NAME=My gaming PC</pre></li>
+    <li>Start it with <code>python bananachat_worker.py start</code> and watch it appear here as <em>online</em>.</li>
+  </ol>
+  <p class="small muted">The worker steps aside when its owner plays games and lowers its priority while they use the PC. See <code>docs/workers.md</code> in the source code for details.</p>
+</section>
+</div>
+
+<script type="application/json" id="page-data">{{ page_data | tojson }}</script>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/admin-workers.js') }}"></script>{% endblock %}

@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.12", "3.13"]
+        python: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -45,6 +45,39 @@ jobs:
         run: python -m ruff check .
       - run: python -m pytest -q
 
+  # The agent sandbox runner against a real Docker engine: no network, read-only
+  # root, non-root user, memory/pids limits, timeouts, output caps, path
+  # traversal, archives, reaper, capacity and authentication. Then the agent
+  # image (compute/sandbox-image): Git under the sandbox flags, and a task
+  # imported from a repository with its changes exported as a patch.
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Pull the sandbox image (Docker Hub mirror, avoids rate limits)
+        run: docker pull mirror.gcr.io/library/python:3.12-slim
+      - run: python -m pip install pytest
+      - name: Sandbox runner tests
+        env:
+          BC_SANDBOX_REQUIRE_DOCKER: "1"
+        run: python -m pytest -q tests/test_sandbox_runner.py tests/test_sandbox_runner_docker.py
+      - name: Build the agent image
+        run: docker build -t bananachat-agent:1 compute/sandbox-image
+      - run: python -m pip install -r requirements.txt
+      - name: Agent image tests (Git in the sandbox, repository import, patch export)
+        env:
+          BC_SANDBOX_REQUIRE_AGENT_IMAGE: "1"
+        run: python -m pytest -q tests/app/test_agents_git_docker.py
+      - name: Remove leftover sandboxes
+        if: always()
+        run: docker ps -aq --filter label=io.bananachat.sandbox=1 | xargs -r docker rm -f
+
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -62,8 +95,11 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - name: Check desktop and mobile chat
         run: python scripts/check_browser.py
+      # Screenshots are only kept when the check fails, and a full artifact
+      # storage quota must not turn a passing check red.
       - name: Retain browser results
-        if: always()
+        if: failure()
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: browser-results

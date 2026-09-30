@@ -19,6 +19,26 @@ SNAPSHOT = re.compile(r"[0-9]{8}T[0-9]{6}(?:\.[0-9]{6})?Z-[0-9a-f]{8}")
 SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 
+def redact(text, secrets=(), limit=600):
+    """Return a short, single-line tail of Git output without credentials.
+
+    Git and remote servers can echo URLs, headers, or tokens. Known secrets are
+    removed verbatim, then anything shaped like a credential is masked.
+    """
+    text = str(text or "")
+    for secret in secrets:
+        if secret and len(secret) >= 4:
+            text = text.replace(secret, "[redacted]")
+    text = re.sub(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]*@", r"\1[redacted]@", text)
+    text = re.sub(r"(?i)\b((?:proxy-)?authorization\s*[:=]\s*)[^\r\n]*", r"\1[redacted]", text)
+    text = re.sub(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}", r"\1 [redacted]", text)
+    text = re.sub(r"(?i)\b((?:access[-_]?|private[-_]?)?(?:token|password|passwd|secret))(\s*[:=]\s*)[^\s'\"]+",
+                  r"\1\2[redacted]", text)
+    text = re.sub(r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,})", "[redacted]", text)
+    text = " ".join("".join(char if char.isprintable() else " " for char in text).split())
+    return text[-limit:]
+
+
 def location(url, forge):
     parsed = urllib.parse.urlsplit(url)
     if (forge not in {"github", "forgejo"} or parsed.scheme != "https" or not parsed.hostname
@@ -76,7 +96,11 @@ class Git:
         self.maximum = int(config["max_mib"]) * 1024 * 1024 + OVERHEAD
         self.allow_local = allow_local
         self.url = str(config["url"]) if allow_local else location(config["url"], config["forge"])["url"]
-        private_bytes(token_file)
+        if self.url.startswith("-"):
+            raise ValueError("Invalid backup repository URL.")
+        token = private_bytes(token_file).decode(errors="replace").strip()
+        # Never repeat the token in an error message, even if Git echoes it.
+        self.secrets = (token,) if token else ()
         helper = self.work / "askpass"
         atomic_write(helper, "#!" + sys.executable + "\nimport os,sys\nfrom pathlib import Path\n"
                      "print(os.environ['BANANA_BACKUP_USER'] if 'username' in sys.argv[1].lower() else Path(os.environ['BANANA_BACKUP_TOKEN_FILE']).read_text().strip())\n")
@@ -92,10 +116,11 @@ class Git:
                         "-c", "protocol.ext.allow=never", "-c", "protocol.file.allow=" + ("always" if allow_local else "never"),
                         "-c", "http.followRedirects=false", "-c", "http.lowSpeedLimit=1024", "-c", "http.lowSpeedTime=30",
                         "-c", "fetch.unpackLimit=1", "-c", "transfer.fsckObjects=true", "-c", "gc.auto=0"]
-        result = subprocess.run([*self.options, "init", "--bare", str(self.repository)], env=self.environment,
+        result = subprocess.run([*self.options, "init", "--bare", "--", str(self.repository)], env=self.environment,
                                 capture_output=True, timeout=30)
         if result.returncode:
-            raise RuntimeError("Could not initialize backup Git storage.")
+            detail = redact(result.stderr.decode(errors="replace"), self.secrets)
+            raise RuntimeError("Could not initialize backup Git storage." + (f" Git reported: {detail}" if detail else ""))
 
     def run(self, *arguments, input=None, source=None, output=None, bounded=False):
         def limits():
@@ -105,12 +130,15 @@ class Git:
                                 stdout=output or subprocess.PIPE, stderr=subprocess.PIPE, timeout=900,
                                 preexec_fn=limits if bounded else None)
         if result.returncode:
-            # Git can repeat tokens or remote response bodies. Withhold both.
-            raise RuntimeError(f"Backup Git {arguments[0]} failed. Check repository access, free space, and branch permissions.")
+            # Git can repeat tokens or remote response bodies: report only a
+            # short tail with known secrets and credential-shaped text removed.
+            detail = redact(result.stderr.decode(errors="replace") if result.stderr else "", self.secrets)
+            raise RuntimeError(f"Backup Git {arguments[0]} failed. Check repository access, free space, and branch permissions."
+                               + (f" Git reported: {detail}" if detail else ""))
         return result.stdout or b""
 
     def heads(self, prefix):
-        raw = self.run("ls-remote", "--heads", self.url, prefix + "*")
+        raw = self.run("ls-remote", "--heads", "--", self.url, prefix + "*")
         if len(raw) > 1024 * 1024:
             raise ValueError("Too many backup branches. Review retention in the repository.")
         result = {}
@@ -121,7 +149,7 @@ class Git:
         return result
 
     def ref_sha(self, ref):
-        raw = self.run("ls-remote", "--heads", self.url, ref).decode().strip()
+        raw = self.run("ls-remote", "--heads", "--", self.url, ref).decode().strip()
         if not raw:
             return None
         sha, name = raw.split("\t", 1)
@@ -140,10 +168,10 @@ class Git:
 
     def push(self, sha, ref):
         # Even a coincident snapshot name cannot replace someone else's branch.
-        self.run("push", "--porcelain", "--force-with-lease=" + ref + ":", self.url, sha + ":" + ref)
+        self.run("push", "--porcelain", "--force-with-lease=" + ref + ":", "--", self.url, sha + ":" + ref)
 
     def fetch(self, ref, expected):
-        self.run("fetch", "--no-tags", "--depth=1", self.url, ref, bounded=True)
+        self.run("fetch", "--no-tags", "--depth=1", "--", self.url, ref, bounded=True)
         sha = self.run("rev-parse", "FETCH_HEAD").decode().strip()
         if sha != expected:
             raise ValueError("The backup branch changed while downloading. Retry after reviewing the repository.")
@@ -169,4 +197,4 @@ class Git:
         return entries
 
     def remove(self, ref, sha):
-        self.run("push", "--porcelain", "--force-with-lease=" + ref + ":" + sha, self.url, ":" + ref)
+        self.run("push", "--porcelain", "--force-with-lease=" + ref + ":" + sha, "--", self.url, ":" + ref)

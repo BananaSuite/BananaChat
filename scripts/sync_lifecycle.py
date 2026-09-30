@@ -12,11 +12,6 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = "banana_ops/shared-files.json"
 FIXED_FILES = {
-    "http_transport.py",
-    "tests/test_http_transport.py",
-    "private_logs.py",
-    "ops_observability.py",
-    "tests/test_private_logs.py",
     "sqlite_runtime.py",
     "sqlite_migrations.py",
     "sqlite_snapshot.py",
@@ -26,6 +21,7 @@ FIXED_FILES = {
     "banana",
     "scripts/sync_lifecycle.py",
     "tests/test_managed_lifecycle.py",
+    "tests/test_ops_hardening.py",
     "tests/test_private_update_source.py",
     "tests/test_release_permissions.py",
     "tests/test_shared_lifecycle.py",

@@ -1,0 +1,178 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, empty %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Administration{% endblock %}
+{% block admin_content %}
+{{ header("Overview", "The state of " ~ site_name ~ " at a glance.") }}
+
+{% if recovery and recovery.open %}
+{% set where = "in Ollama on this machine" if ollama_is_local else "on the compute server" %}
+{% set size = (" (about " if recovery.size_complete else " (at least ") ~ (recovery.size_bytes | filesize) ~ ")" if recovery.size_bytes else "" %}
+<div class="alert {{ 'alert-info' if recovery.state in ('deferred', 'requested') else 'alert-warning' }} mb-3" role="status" id="model-recovery">
+  {{ icon("alert") }}
+  <div class="grow">
+    {% if recovery.state == "invalid" %}
+    <p><strong>The restored model list could not be read.</strong> {{ recovery.error }}</p>
+    {% elif not recovery.checked %}
+    <p><strong>{{ recovery.missing_count }} model{{ "s" if recovery.missing_count != 1 }} from the backup may be missing {{ where }}.</strong>
+      {% if recovery.check_error %}They could not be checked yet: {{ recovery.check_error }}{% else %}Checking which ones are installed…{% endif %}</p>
+    {% else %}
+    <p><strong>{% if recovery.origin == "catalog" %}{{ recovery.missing_count }} published model{{ "s are" if recovery.missing_count != 1 else " is" }} not installed {{ where }}{% else %}{{ recovery.missing_count }} model{{ "s" if recovery.missing_count != 1 }} from the backup {{ "are" if recovery.missing_count != 1 else "is" }} missing {{ where }}{% endif %}{{ size }}.</strong>
+      {% if recovery.state == "requested" %}{{ recovery.active_jobs }} download{{ "s" if recovery.active_jobs != 1 }} in progress.{% elif recovery.state == "deferred" %}Postponed.{% endif %}
+      {% if recovery.manual %}{{ recovery.manual | length }} of them need{{ "s" if recovery.manual | length == 1 }} manual action.{% endif %}</p>
+    {% endif %}
+    <div class="row">
+      {% if recovery.state != "invalid" %}
+      {% if recovery.missing_choices and recovery.state != "requested" %}
+      <form method="post" action="{{ url_for('admin.model_recovery') }}" data-busy>
+        {{ csrf() }}<input type="hidden" name="return_to" value="dashboard">
+        <button type="submit" name="action" value="download_missing" class="btn btn-sm btn-primary">{{ icon("download") }}Download them</button>
+      </form>
+      {% endif %}
+      <a class="btn btn-sm" href="{{ url_for('admin.models') }}#recovery">Choose…</a>
+      <form method="post" action="{{ url_for('admin.model_recovery') }}">
+        {{ csrf() }}<input type="hidden" name="return_to" value="dashboard">
+        <button type="submit" name="action" value="dismiss" class="btn btn-sm btn-ghost">Dismiss</button>
+      </form>
+      {% else %}
+      <a class="btn btn-sm" href="{{ url_for('admin.models') }}#recovery">Review models</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if pending.quota or pending.access or pending.new_models or pending.failing_models %}
+<div class="alert alert-info mb-3" role="status">
+  {{ icon("info") }}
+  <div class="grow row">
+    <strong>Waiting for you:</strong>
+    {% if pending.quota %}<a href="{{ url_for('admin.quota_requests') }}">{{ pending.quota }} quota request{{ "s" if pending.quota != 1 }}</a>{% endif %}
+    {% if pending.access %}<a href="{{ url_for('admin.access') }}#requests">{{ pending.access }} access request{{ "s" if pending.access != 1 }}</a>{% endif %}
+    {% if pending.new_models %}<a href="{{ url_for('admin.models') }}#new-models">{{ pending.new_models }} new model{{ "s" if pending.new_models != 1 }} to review</a>{% endif %}
+    {% if pending.failing_models %}<a href="{{ url_for('admin.models') }}#attention">{{ pending.failing_models }} failing model{{ "s" if pending.failing_models != 1 }}</a>{% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% set state_info = {
+  "ok": ("badge-success", "Operational", "Everyone can use the site and start new answers."),
+  "degraded": ("badge-info", "Degraded", "The main AI server is unreachable; requests go to the backup server."),
+  "maintenance": ("badge-warning", "Maintenance", "New answers are paused for everyone except administrators. The site stays reachable and shows your message in a banner."),
+  "outage": ("badge-danger", "AI server outage", "The AI server is unreachable, so new answers are paused for everyone. The site stays reachable; this clears by itself when the server is back."),
+}[service_state] %}
+<section class="card mb-3 status-card status-{{ service_state }}" aria-labelledby="status-title">
+  <div class="card-header">
+    <h2 id="status-title">Service status <span class="badge {{ state_info[0] }}">{{ state_info[1] }}</span></h2>
+    <a class="btn btn-sm" href="{{ url_for('admin.settings') }}#notices">{{ icon("settings") }}{{ "Turn off maintenance" if service_state == "maintenance" else "Maintenance and banner" }}</a>
+  </div>
+  <p class="mb-1">{{ state_info[2] }}</p>
+  {% set kind_labels = {"maintenance": "Maintenance", "outage": "Outage", "fallback": "Backup server in use", "announcement": "Announcement banner"} %}
+  {% if notices %}
+  <ul class="plain-list">
+    {% for notice in notices %}
+    <li><span class="badge badge-{{ notice.level }}">{{ kind_labels.get(notice.kind, notice.kind) }}</span>
+      {% if notice.message %}<span class="small">“{{ notice.message }}”</span>{% elif notice.kind == "maintenance" %}<span class="small muted">No message written; users see a generic explanation.</span>{% endif %}
+      {% if notice.since %}<span class="small muted">since {{ notice.since | datetime }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="small muted mb-0">No notices are shown to users.</p>
+  {% endif %}
+  <p class="small muted mt-1 mb-0">Monitors can read the public status at <a href="{{ url_for('core.status') if has_endpoint('core.status') else '/status' }}"><code>/status</code></a>.</p>
+</section>
+
+<section class="grid grid-4 mb-3" aria-label="Key figures">
+  <a class="card stat stat-link" href="{{ url_for('admin.users') }}">
+    <span class="stat-label">Users</span>
+    <span class="stat-value">{{ user_counts.total | number }}</span>
+    <span class="small muted">{{ user_counts.admins }} admin · {{ user_counts.suspended }} suspended · {{ user_counts.new_week }} new this week</span>
+  </a>
+  <a class="card stat stat-link" href="{{ url_for('admin.models') }}">
+    <span class="stat-label">Models</span>
+    <span class="stat-value">{{ model_counts.live | number }}</span>
+    <span class="small muted">live of {{ model_counts.total }} · {{ model_counts.available }} available · {{ model_counts.rolled_out }} rolled out</span>
+  </a>
+  <div class="card stat">
+    <span class="stat-label">Inference queue</span>
+    <span class="stat-value">{{ queue_stats.running }} / {{ queue_stats.max_concurrent }}</span>
+    <span class="small muted">running · {{ queue_stats.waiting }} waiting (limit {{ queue_stats.max_depth }})</span>
+  </div>
+  <a class="card stat stat-link" href="{{ url_for('admin.metrics') }}">
+    <span class="stat-label">Requests today (UTC)</span>
+    <span class="stat-value">{{ today.requests | number }}</span>
+    <span class="small muted">{{ (today.tokens_in + today.tokens_out) | number }} tokens · {{ today.errors }} failed</span>
+  </a>
+</section>
+
+<div class="grid grid-2">
+  <section class="card" aria-labelledby="inference-title">
+    <div class="card-header">
+      <h2 id="inference-title">Inference server</h2>
+      {% if health_state.down %}<span class="badge badge-danger">Unreachable</span>{% endif %}
+    </div>
+    <dl class="details" id="inference-details" aria-live="polite">
+      <dt>Server</dt><dd>{{ "Ollama on this machine" if ollama_is_local else "Compute server" }}{% if inference_server %} <span class="mono small muted">{{ inference_server }}</span>{% endif %}</dd>
+      <dt>Status</dt><dd data-inference="status"><span class="muted">Checking…</span></dd>
+      <dt>Ollama version</dt><dd data-inference="version">—</dd>
+      <dt>Loaded models</dt><dd data-inference="running">—</dd>
+      {% if health_state.checked_at %}
+      <dt>Last health probe</dt><dd>{{ health_state.failures or 0 }} consecutive failure(s){% if health_state.error %} · <span class="danger-text">{{ health_state.error }}</span>{% endif %}</dd>
+      {% endif %}
+      {% if snapshot %}
+      <dt>Latest snapshot</dt>
+      <dd>{{ when(snapshot.recorded_at) }}{% if snapshot.gpu_memory_used_mb %} · GPU {{ (snapshot.gpu_memory_used_mb / 1024) | number(1) }} GB{% if snapshot.gpu_memory_total_mb %} of {{ (snapshot.gpu_memory_total_mb / 1024) | number(1) }} GB{% endif %}{% endif %}</dd>
+      {% endif %}
+    </dl>
+    <noscript><p class="hint mt-1">Enable JavaScript to check the inference server from this page.</p></noscript>
+    <div class="card-footer row">
+      <a class="btn btn-sm" href="{{ url_for('admin.models') }}#running">{{ icon("layers") }}Running models</a>
+      <a class="btn btn-sm" href="{{ url_for('admin.metrics') }}">{{ icon("chart") }}Metrics</a>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="database-title">
+    <div class="card-header"><h2 id="database-title">Database</h2></div>
+    <p class="muted">An integrity check reads the whole database and can take a while on large installations, so it only runs when you ask for it.</p>
+    <form method="post" action="{{ url_for('admin.database_check') }}" data-busy>
+      {{ csrf() }}
+      <button type="submit" class="btn">{{ icon("shield") }}Check database integrity</button>
+    </form>
+    <div class="card-footer row">
+      <a class="btn btn-sm" href="{{ url_for('admin.migration') }}">{{ icon("download") }}Backup &amp; migration</a>
+      <a class="btn btn-sm" href="{{ url_for('admin.errors') }}">{{ icon("alert") }}Error log</a>
+    </div>
+  </section>
+</div>
+
+<section class="card flush mt-3" aria-labelledby="audit-title">
+  <div class="card-header">
+    <h2 id="audit-title">Recent administrator activity</h2>
+    <a class="btn btn-sm btn-ghost" href="{{ url_for('admin.audit') }}">Full audit log</a>
+  </div>
+  {% if recent_audit %}
+  <div class="table-wrap table-plain">
+    <table class="table">
+      <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Action</th><th scope="col">Target</th></tr></thead>
+      <tbody>
+      {% for entry in recent_audit %}
+        <tr>
+          <td class="nowrap">{{ when(entry.created_at) }}</td>
+          <td>{{ entry.actor_name or "system" }}</td>
+          <td><code>{{ entry.action }}</code></td>
+          <td class="truncate cell-wide">{{ entry.target }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  {{ empty("file", "No activity yet", "Administrator actions are recorded here.") }}
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script type="application/json" id="page-data">{{ page_data | tojson }}</script>
+<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

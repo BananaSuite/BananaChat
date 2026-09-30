@@ -1,0 +1,101 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, utc_input %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Access · {{ resource.name }}{% endblock %}
+{% block admin_content %}
+{% set scope_labels = {"uncensored": "Uncensored models", "image_generation": "Image generation", "custom_personality": "Custom personalities", "agents": "Agents", "category": "Category", "model": "Model"} %}
+<p class="breadcrumb"><a href="{{ url_for('admin.access') }}">{{ icon("chevron-left") }}Access</a></p>
+{{ header(resource.kind ~ ": " ~ resource.name, resource.description) }}
+
+<div class="grid grid-2 mb-3">
+  <section class="card" aria-labelledby="rule-title">
+    <h2 id="rule-title">Who may use it</h2>
+    <form method="post" action="{{ url_for('admin.access_policy', scope=resource.scope, resource_id=resource.id) }}" class="stack">
+      {{ csrf() }}
+      <fieldset>
+        <legend class="visually-hidden">Access mode</legend>
+        {% for mode, label in mode_labels.items() %}
+        <label class="check"><input type="radio" name="mode" value="{{ mode }}"{% if policy.mode == mode %} checked{% endif %}><span>{{ label }}<small>{{ mode_help[mode] }}</small></span></label>
+        {% endfor %}
+      </fieldset>
+      <label class="switch">
+        <input type="checkbox" name="requests_enabled" value="1"{% if policy.requests_enabled %} checked{% endif %}>
+        <span class="track" aria-hidden="true"></span>
+        <span>Let users ask for access<small class="block hint">Users who are not allowed see a request form; you approve or deny requests here.</small></span>
+      </label>
+      {% if not policy.persisted %}<p class="hint">This is the default rule; saving it makes it explicit.</p>{% endif %}
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save rule</button></div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="add-title">
+    <h2 id="add-title">Add someone to a list</h2>
+    <form method="post" action="{{ url_for('admin.access_member_add', scope=resource.scope, resource_id=resource.id) }}" class="stack">
+      {{ csrf() }}
+      <div class="form-grid">
+        <div class="field">
+          <label for="member-username" class="required">Username</label>
+          <input type="text" id="member-username" name="username" required maxlength="32" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="member-list">List</label>
+          <select id="member-list" name="list_type">
+            <option value="allowlist"{% if policy.mode != "allow_except_denylist" %} selected{% endif %}>Allowlist (may use it)</option>
+            <option value="denylist"{% if policy.mode == "allow_except_denylist" %} selected{% endif %}>Denylist (may not use it)</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="member-reason">Reason (optional)</label>
+        <input type="text" id="member-reason" name="reason" maxlength="500">
+      </div>
+      {{ utc_input("expires_at", "member-expires", "Expires (optional)", "Coordinated Universal Time. Leave empty to keep the entry until you remove it.", min=min_datetime) }}
+      <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Add</button></div>
+    </form>
+  </section>
+</div>
+
+{% for list_type, title, explanation in [("allowlist", "Allowlist", "Used when only people on the allowlist may use it."), ("denylist", "Denylist", "Used when everyone except people on the denylist may use it.")] %}
+<section class="mb-3" aria-labelledby="{{ list_type }}-title">
+  <div class="row-between">
+    <h2 id="{{ list_type }}-title" class="mb-0">{{ title }} <span class="badge">{{ lists[list_type] | length }}</span></h2>
+    <p class="small muted mb-0">{{ explanation }}{% if (list_type == "allowlist" and policy.mode != "deny_except_allowlist") or (list_type == "denylist" and policy.mode != "allow_except_denylist") %} <strong>Not in effect with the current rule.</strong>{% endif %}</p>
+  </div>
+  {% if lists[list_type] %}
+  <div class="table-wrap mt-1">
+    <table class="table">
+      <thead><tr><th scope="col">User</th><th scope="col">Reason</th><th scope="col">Expires</th><th scope="col">Added</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+      {% for entry in lists[list_type] %}
+        <tr{% if entry.expired %} class="row-muted"{% endif %}>
+          <td><a href="{{ url_for('admin.user_detail', user_id=entry.row.user_id) }}">{{ entry.row.username }}</a></td>
+          <td>{{ entry.row.reason or "—" }}</td>
+          <td class="nowrap">{% if entry.expired %}<span class="badge">Expired {{ entry.row.expires_at | datetime }}</span>{% elif entry.row.expires_at %}{{ entry.row.expires_at | datetime }}{% else %}Never{% endif %}</td>
+          <td class="nowrap small">{{ entry.row.created_at | datetime(true) }}{% if entry.row.added_by_name %} · {{ entry.row.added_by_name }}{% endif %}</td>
+          <td class="actions">
+            <form method="post" action="{{ url_for('admin.access_member_remove', scope=resource.scope, resource_id=resource.id) }}" data-confirm="Remove {{ entry.row.username }} from the {{ list_type }}?">
+              {{ csrf() }}<input type="hidden" name="user_id" value="{{ entry.row.user_id }}"><input type="hidden" name="list_type" value="{{ list_type }}">
+              <button type="submit" class="btn btn-sm btn-ghost">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted mt-1">Nobody is on the {{ list_type }}.</p>
+  {% endif %}
+</section>
+{% endfor %}
+
+{% if requests %}
+<section aria-labelledby="req-title">
+  <h2 id="req-title">Requests</h2>
+  <div class="grid grid-2">
+    {% set return_to = "detail" %}
+    {% for req in requests %}{% include "admin/_access_request.html" %}{% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

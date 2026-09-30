@@ -1,4 +1,4 @@
-"""Legacy exports remain usable through maintenance with automatic rollback."""
+"""`bananachat restore --legacy-database`: importing an old database export."""
 
 from contextlib import closing
 import io
@@ -8,77 +8,86 @@ import tarfile
 
 import pytest
 
-from test_chat_runtime import runtime_app, _client  # noqa: F401
 from test_managed_lifecycle import checkout, installed  # noqa: F401
-from banana_ops.legacy_ai import restore_database, stage_database
 from banana_ops.files import read_json
-import config
-import db
-from db import _chat_runs as runs
-from sqlite_snapshot import snapshot
+from banana_ops.legacy_import import restore_database, stage_database
+
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "legacy_v4.sql"
 
 
-def _installed_ai(tmp_path, checkout, runtime_app):
-    manager, services = installed(tmp_path, checkout, product="BananaChat", mode="web")
-    destination = manager.root / "data/bananachat.db"
-    snapshot(config.DATABASE_PATH, destination)
-    with closing(sqlite3.connect(destination)) as conn:
-        conn.execute("UPDATE users SET username='current-user' WHERE username='runtime-user'")
+def _database(path, *, username="alice", busy=False):
+    """A database written by the previous release, optionally mid-generation."""
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(FIXTURE.read_text())
+        conn.execute("UPDATE users SET username=? WHERE username='alice'", (username,))
+        if busy:
+            session = conn.execute("SELECT id FROM chat_sessions WHERE deleted_at IS NULL AND is_incognito=0").fetchone()[0]
+            conn.execute("INSERT INTO active_streams (session_id, owner_token, heartbeat_at, partial_content, started_at) "
+                         "VALUES (?, 'owner', strftime('%s','now'), 'Retained partial', strftime('%s','now'))", (session,))
+            conn.execute("INSERT INTO model_pull_jobs (ollama_name, status, idempotency_key) "
+                         "VALUES ('restored:latest', 'queued', 'k1')")
         conn.commit()
+    return path
+
+
+def _installed_chat(tmp_path, checkout):
+    manager, services = installed(tmp_path, checkout, product="BananaChat", mode="web")
+    destination = _database(manager.root / "data/bananachat.db", username="current-user")
     return manager, services, destination
 
 
 def _username(path):
     with closing(sqlite3.connect(path)) as conn:
-        return conn.execute("SELECT username FROM users WHERE username IN ('current-user','runtime-user')").fetchone()[0]
+        return conn.execute("SELECT username FROM users WHERE username IN ('current-user','alice')").fetchone()[0]
 
 
-def test_legacy_restore_quiesces_and_requires_new_model_download_approval(runtime_app, checkout, tmp_path, monkeypatch):
-    manager, services, destination = _installed_ai(tmp_path, checkout, runtime_app)
-    _, user, session, model, _ = runtime_app
-    db.enqueue_pull_job("restored:latest", user["id"])
-    token = runs.begin_chat_run(session, user, "Before migration")
-    runs.checkpoint_chat_run(session, token, "Retained partial", model["id"])
-    source = snapshot(config.DATABASE_PATH, tmp_path / "legacy.db")
+def test_legacy_restore_quiesces_and_requires_new_model_download_approval(checkout, tmp_path, monkeypatch):
+    manager, services, destination = _installed_chat(tmp_path, checkout)
+    source = _database(tmp_path / "legacy.db", busy=True)
     observed = []
     original_package = manager.package
+
     def package(*args, **kwargs):
         assert not services.running
         assert (manager.root / "data/.banana-maintenance").exists()
         observed.append("quiesced")
         return original_package(*args, **kwargs)
+
     monkeypatch.setattr(manager, "package", package)
     result = restore_database(manager, source)
     assert observed == ["quiesced"] and result["outcome"] == "complete"
     assert Path(result["safety_backup"]).is_file()
-    assert _username(destination) == "runtime-user"
+    assert _username(destination) == "alice"
     assert not (manager.config_dir / "transaction.json").exists()
     assert read_json(manager.root / "data/.model-recovery.json")["state"] == "pending"
-    monkeypatch.setattr(config, "DATABASE_PATH", str(destination))
-    assert db.claim_next_pull_job() is None
-    recovered = runs.get_chat_run_status(session)
-    assert recovered["state"] == "interrupted" and recovered["last_message"]["content"] == "Retained partial"
+    with closing(sqlite3.connect(destination)) as conn:
+        assert conn.execute("SELECT status FROM model_pull_jobs WHERE ollama_name='restored:latest'").fetchone()[0] \
+            == "cancelled"
+        heartbeat, partial = conn.execute("SELECT heartbeat_at, partial_content FROM active_streams").fetchone()
+        assert heartbeat == 0 and partial == "Retained partial"
 
 
-def test_failed_legacy_startup_restores_previous_database_and_files(runtime_app, checkout, tmp_path):
-    manager, services, destination = _installed_ai(tmp_path, checkout, runtime_app)
+def test_failed_legacy_startup_restores_previous_database_and_files(checkout, tmp_path):
+    manager, services, destination = _installed_chat(tmp_path, checkout)
     key = manager.root / "data/private.key"
     key.write_text("Keep operator credentials")
     checks = []
+
     def check(_settings):
         checks.append(_username(destination))
         if len(checks) == 1:
             raise RuntimeError("Simulated restored startup failure")
+
     services.on_health = check
     with pytest.raises(RuntimeError, match="Simulated"):
-        restore_database(manager, config.DATABASE_PATH)
-    assert checks == ["runtime-user", "current-user"]
+        restore_database(manager, _database(tmp_path / "legacy.db"))
+    assert checks == ["alice", "current-user"]
     assert _username(destination) == "current-user" and key.read_text() == "Keep operator credentials"
     assert not (manager.config_dir / "transaction.json").exists()
 
 
-def test_invalid_legacy_archive_leaves_running_data_untouched(runtime_app, checkout, tmp_path):
-    manager, services, destination = _installed_ai(tmp_path, checkout, runtime_app)
+def test_invalid_legacy_archive_leaves_running_data_untouched(checkout, tmp_path):
+    manager, services, destination = _installed_chat(tmp_path, checkout)
     archive = tmp_path / "invalid.tar.gz"
     with tarfile.open(archive, "w:gz") as output:
         member = tarfile.TarInfo("../../bananachat.db")
@@ -91,17 +100,16 @@ def test_invalid_legacy_archive_leaves_running_data_untouched(runtime_app, check
     assert not list((manager.root / "backups").glob("*.tar.gz"))
 
 
-def test_web_export_roundtrips_and_old_web_import_does_not_replace_live_data(runtime_app, tmp_path):
-    application, user, *_ = runtime_app
-    db.set_user_role(user["id"], "admin")
-    client = _client(application, user)
-    response = client.get("/admin/migration/export")
-    assert response.status_code == 200 and response.headers["Cache-Control"] == "private, no-store"
-    export = tmp_path / "export.tar.gz"
-    export.write_bytes(response.data)
-    response.close()
-    with stage_database(export, tmp_path) as staged:
-        assert _username(staged) == "runtime-user"
-    result = client.post("/admin/migration/import", data={"backup_file": (io.BytesIO(b"invalid"), "old.db")}, follow_redirects=True)
-    assert result.status_code == 200 and b"restore --legacy-database" in result.data
-    assert db.get_user_by_id(user["id"])["username"] == "runtime-user"
+def test_a_raw_database_and_an_export_archive_are_both_accepted(tmp_path):
+    raw = _database(tmp_path / "raw.db")
+    with stage_database(raw, tmp_path) as staged:
+        assert _username(staged) == "alice"
+    archive = tmp_path / "export.tar.gz"
+    with tarfile.open(archive, "w:gz") as output:
+        output.add(raw, arcname="bananachat.db")
+        meta = b'{"format": "bananachat-migration-v1"}'
+        info = tarfile.TarInfo("export_meta.json")
+        info.size = len(meta)
+        output.addfile(info, io.BytesIO(meta))
+    with stage_database(archive, tmp_path) as staged:
+        assert _username(staged) == "alice"

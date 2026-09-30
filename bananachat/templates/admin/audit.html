@@ -1,0 +1,44 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, empty, pagination %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Audit log{% endblock %}
+{% block admin_content %}
+{% call header("Audit log", "Administrator and security-relevant actions, newest first.") %}
+  <a class="btn" href="{{ url_for('admin.errors') }}">{{ icon("alert") }}Error log</a>
+{% endcall %}
+
+<form method="get" action="{{ url_for('admin.audit') }}" class="toolbar mb-2" aria-label="Filter">
+  <div class="field field-inline">
+    <label for="audit-action">Action</label>
+    <select id="audit-action" name="action" data-autosubmit>
+      <option value="">All actions</option>
+      {% for item in actions %}<option value="{{ item }}"{% if item == action %} selected{% endif %}>{{ item }}</option>{% endfor %}
+    </select>
+  </div>
+  <noscript><button type="submit" class="btn">Filter</button></noscript>
+</form>
+
+{% if rows %}
+<div class="table-wrap">
+  <table class="table">
+    <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Who</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col">Details</th><th scope="col">Address</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td class="nowrap">{{ row.created_at | datetime }}</td>
+        <td>{% if row.actor_id %}<a href="{{ url_for('admin.user_detail', user_id=row.actor_id) }}">{{ row.actor_name }}</a>{% else %}{{ row.actor_name or "system" }}{% endif %}</td>
+        <td><code>{{ row.action }}</code></td>
+        <td class="break-anywhere">{{ row.target }}</td>
+        <td class="small break-anywhere">{{ details(row.details) }}</td>
+        <td class="mono small">{{ row.ip_address }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{{ pagination(page, "admin.audit", "Audit log pages", action=action or None) }}
+{% else %}
+{{ empty("file", "Nothing recorded yet") }}
+{% endif %}
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>{% endblock %}

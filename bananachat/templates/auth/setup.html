@@ -1,0 +1,33 @@
+{% extends "auth/_layout.html" %}
+{% block title %}{{ t("auth.setup_title") }}{% endblock %}
+{% block card %}
+<h1>{{ t("auth.setup_title") }}</h1>
+<p class="muted">{{ t("auth.setup_intro") }}</p>
+<form method="post" action="{{ url_for('auth.setup') }}" class="stack">
+  {% include "auth/_bot_fields.html" %}
+  <div class="field">
+    <label for="setup_token" class="required">{{ t("auth.setup_token") }}</label>
+    <input type="password" id="setup_token" name="setup_token" required autocomplete="off" spellcheck="false" aria-describedby="token-hint">
+    <span class="hint" id="token-hint">{{ t("auth.setup_token_hint") }}</span>
+  </div>
+  <div class="field">
+    <label for="site_name">{{ t("auth.site_name") }}</label>
+    <input type="text" id="site_name" name="site_name" maxlength="100" value="{{ request.form.get('site_name') or product_name }}">
+  </div>
+  <div class="field">
+    <label for="username" class="required">{{ t("auth.admin_username") }}</label>
+    <input type="text" id="username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]+" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{ request.form.get('username', '') }}">
+    <span class="hint">{{ t("auth.username_rules") }}</span>
+  </div>
+  <div class="field">
+    <label for="password" class="required">{{ t("auth.password") }}</label>
+    <input type="password" id="password" name="password" required minlength="8" maxlength="1024" autocomplete="new-password">
+    <span class="hint">{{ t("auth.password_length") }}</span>
+  </div>
+  <div class="field">
+    <label for="confirm_password" class="required">{{ t("auth.confirm_password") }}</label>
+    <input type="password" id="confirm_password" name="confirm_password" required minlength="8" maxlength="1024" autocomplete="new-password">
+  </div>
+  <button type="submit" class="btn btn-primary btn-lg btn-block">{{ t("auth.setup_submit") }}</button>
+</form>
+{% endblock %}

@@ -1,11 +1,11 @@
 # Contributing to BananaChat
 
-The [development guide](docs/development.md) maps chat, inference, storage, and
-browser changes to their modules.
+The [development guide](docs/development.md) explains how to run and test the
+project, and [architecture](docs/architecture.md) the conventions the code follows.
 
 Open an issue to discuss a substantial change, or send a pull request with a focused fix. Describe the problem, the resulting behavior, and the checks you ran. Include screenshots when a visible change needs them. Do not include runtime data, credentials, or generated build output.
 
-Use Python 3.12 or newer, create a virtual environment, and install `requirements.txt`. Install `pytest` to run the tests with `python -m pytest`. Tests should exercise behavior and regressions rather than reproduce implementation details.
+Use Python 3.12 or newer, create a virtual environment, and install `requirements.txt` plus `pytest` and `ruff`. Run `python -m pytest -q` and `python -m ruff check .` before sending a change. Tests should exercise behavior and regressions rather than reproduce implementation details. User-facing text needs both an English and an Italian translation.
 
 Keep changes small enough to review. Preserve access checks, CSRF protection, resource limits, and third-party notices. Document new configuration and migration steps. Report security vulnerabilities using [SECURITY.md](SECURITY.md).
 
@@ -23,7 +23,7 @@ python -m playwright install --with-deps chromium
 python scripts/check_browser.py
 ```
 
-This creates a temporary local app with fixture users and chats. It checks desktop and mobile layouts, real login with CSRF enabled, private-chat access, Markdown escaping, source links, simulated voice callbacks, declining model downloads after restore, and continuing a chat when its model fails. It needs no model server or microphone. The app and its data are removed afterward; screenshots and results are saved under `.browser-artifacts/`. CI runs this check and Ruff's undefined-name checks alongside the Python suite.
+This starts a temporary local instance with an imitation model server and checks sign-in with CSRF enabled, chatting and streaming, Markdown escaping, the model picker, and desktop and mobile layouts. It needs no real model server or microphone. The instance is removed afterwards; screenshots and results are saved under `.browser-artifacts/`. CI runs this check and Ruff's correctness rules alongside the Python suite.
 
 Contributions are made under the project's GNU AGPL version 3 license. Contributors retain copyright in their contributions.
 

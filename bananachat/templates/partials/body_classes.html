@@ -1,0 +1,4 @@
+{%- if prefs.contrast %}contrast-{{ prefs.contrast }} {% endif -%}
+{%- if prefs.reduce_motion %}reduce-motion {% endif -%}
+{%- if prefs.background_image and current_user %}has-background {% endif -%}
+{%- for key in ["bold", "italic", "code", "link", "heading"] %}{% if prefs["semantic_" ~ key] %}sem-{{ key }}-{{ prefs["semantic_" ~ key] }} {% endif %}{% endfor -%}

@@ -1,353 +1,277 @@
-"""Cross-platform system activity and GPU utilisation monitoring.
+"""What the PC's owner is doing: idle time and GPU utilisation, on Linux, macOS and Windows.
 
-Supports Windows, all common Linux distributions (X11, Wayland, Mir,
-headless) and macOS on both Intel and Apple Silicon.  Each platform uses the
-best available mechanism and falls back gracefully when optional tools are
-absent.
+States (thresholds from the settings; defaults in brackets):
 
-macOS has no NVIDIA telemetry to read: Apple Silicon has no supported
-per-process GPU counter outside root-only powermetrics, and Intel Macs run
-AMD or Intel parts that nvidia-smi knows nothing about.  So on a Mac the GPU
-gate is simply absent and the idle-time reading carries the decision, which
-is why idle detection there is not optional.
+* ``gaming`` - GPU utilisation at or above ``BC_GPU_GAMING_THRESHOLD`` [70 %]:
+  the worker takes no new job and returns jobs it has not started;
+* ``idle`` - no input for ``BC_IDLE_THRESHOLD`` [300 s] and a calm GPU (< 30 %):
+  inference runs at normal priority;
+* ``light`` - no input for ``BC_LIGHT_THRESHOLD`` [30 s]: below-normal priority;
+* ``active`` - someone is using the PC: below-normal priority.
 
-Activity states
----------------
-  idle: user idle ≥ IDLE_THRESHOLD_SECONDS AND gpu_util < 30 %
-            → run inference at full priority, keep Ollama loaded
-  light: user idle ≥ LIGHT_THRESHOLD_SECONDS OR gpu_util < GPU_ACTIVE_THRESHOLD
-            → run inference at normal / below-normal priority
-  active: user recently active AND gpu_util < GPU_GAMING_THRESHOLD
-            → run inference at below-normal priority
-  gaming: gpu_util ≥ GPU_GAMING_THRESHOLD
-            → do NOT start new inference; wait for GPU to settle
+Without an idle reading (headless, some Wayland sessions) the GPU decides:
+below ``BC_GPU_ACTIVE_THRESHOLD`` [50 %] is idle, above it active. Without any
+reading the PC counts as idle. macOS has no GPU reading (Apple Silicon offers
+no unprivileged counter and ``nvidia-smi`` does not exist there), so the idle
+reading from IOKit decides alone.
+
+While the worker itself runs a job its own inference loads the GPU, so the GPU
+alone then means ``gaming`` only when someone is also at the keyboard.
 """
+
+from __future__ import annotations
 
 import logging
 import platform
 import subprocess
+import threading
 import time
+from typing import Optional
 
-import config
-
-_logger = logging.getLogger("bananachat.worker.activity")
+log = logging.getLogger("bananachat.worker.activity")
 
 _OS = platform.system()  # 'Windows' | 'Linux' | 'Darwin'
+STATES = ("idle", "light", "active", "gaming")
+CALM_GPU = 30.0
+_UNSET = object()
 
 
-# GPU utilisation
+def _run(command, timeout: float = 3.0) -> Optional[str]:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return result.stdout if result.returncode == 0 else None
 
-def _gpu_util_pynvml() -> float | None:
-    """Query GPU utilisation via pynvml (nvidia-ml-py3).  Returns % or None."""
+
+# ----- GPU -------------------------------------------------------------------------------------
+
+_nvml = {"ready": None}
+
+
+def _nvml_module():
+    if _nvml["ready"] is False:
+        return None
     try:
         import pynvml  # type: ignore
-        if not _gpu_util_pynvml._init:
+        if not _nvml["ready"]:
             pynvml.nvmlInit()
-            _gpu_util_pynvml._init = True
-        count = pynvml.nvmlDeviceGetCount()
-        if count == 0:
-            return None
-        total_util = 0.0
-        total_mem  = 0
-        for i in range(count):
-            h   = pynvml.nvmlDeviceGetHandleByIndex(i)
-            u   = pynvml.nvmlDeviceGetUtilizationRates(h)
-            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
-            total_util += u.gpu * mem.total
-            total_mem  += mem.total
-        return total_util / total_mem if total_mem > 0 else 0.0
-    except Exception:
+            _nvml["ready"] = True
+        return pynvml
+    except Exception:  # noqa: BLE001 - optional dependency, missing driver
+        _nvml["ready"] = False
         return None
 
-_gpu_util_pynvml._init = False  # type: ignore[attr-defined]
 
-
-def _gpu_util_smi() -> float | None:
-    """Query GPU utilisation via nvidia-smi subprocess.  Returns % or None."""
+def _gpu_util_nvml() -> Optional[float]:
+    pynvml = _nvml_module()
+    if pynvml is None:
+        return None
     try:
-        proc = subprocess.run(
-            ["nvidia-smi",
-             "--query-gpu=memory.total,utilization.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=3,
-        )
-        if proc.returncode != 0:
-            return None
-        rows = []
-        for line in proc.stdout.strip().splitlines():
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) == 2:
-                rows.append((float(parts[0]), float(parts[1])))
-        if not rows:
-            return None
-        total_mem  = sum(r[0] for r in rows)
-        weighted   = sum(r[1] * r[0] for r in rows) / total_mem if total_mem else 0.0
-        return weighted
-    except Exception:
+        weighted, memory = 0.0, 0
+        for index in range(pynvml.nvmlDeviceGetCount()):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+            total = pynvml.nvmlDeviceGetMemoryInfo(handle).total
+            weighted += pynvml.nvmlDeviceGetUtilizationRates(handle).gpu * total
+            memory += total
+        return weighted / memory if memory else None
+    except Exception:  # noqa: BLE001
         return None
 
 
-def get_gpu_utilisation() -> float | None:
-    """Return the weighted-average GPU utilisation % across all NVIDIA GPUs,
-    or None if no GPU telemetry is available."""
-    result = _gpu_util_pynvml()
-    if result is not None:
-        return result
-    return _gpu_util_smi()
+def parse_smi_utilisation(output: str) -> Optional[float]:
+    """Memory-weighted utilisation from ``nvidia-smi --query-gpu=memory.total,utilization.gpu`` CSV."""
+    rows = []
+    for line in (output or "").strip().splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 2:
+            continue
+        try:
+            rows.append((float(parts[0]), float(parts[1])))
+        except ValueError:
+            continue
+    memory = sum(row[0] for row in rows)
+    if not rows or memory <= 0:
+        return None
+    return sum(total * util for total, util in rows) / memory
 
 
-def _gpu_name_macos() -> str | None:
-    """Name the Apple Silicon SoC, or the discrete GPU on an Intel Mac.
+def get_gpu_utilisation() -> Optional[float]:
+    """Utilisation (%) across NVIDIA GPUs, or None when unknown."""
+    if _OS == "Darwin":
+        return None
+    value = _gpu_util_nvml()
+    if value is not None:
+        return value
+    output = _run(["nvidia-smi", "--query-gpu=memory.total,utilization.gpu", "--format=csv,noheader,nounits"])
+    return parse_smi_utilisation(output) if output else None
 
-    Cached: system_profiler takes about a second, and the answer cannot
-    change while the worker is running.
-    """
-    if _gpu_name_macos._cached is not _UNSET:
-        return _gpu_name_macos._cached
+
+def _gpu_name_macos() -> Optional[str]:
+    if _gpu_name_macos._cached is not _UNSET:  # type: ignore[attr-defined]
+        return _gpu_name_macos._cached  # type: ignore[attr-defined]
     name = None
     if platform.machine() == "arm64":
-        try:
-            proc = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
-                                  capture_output=True, text=True, timeout=3)
-            if proc.returncode == 0 and proc.stdout.strip():
-                name = proc.stdout.strip()
-        except Exception:
-            name = None
+        output = _run(["sysctl", "-n", "machdep.cpu.brand_string"])
+        name = output.strip() if output and output.strip() else None
     if name is None:
-        try:
-            proc = subprocess.run(["system_profiler", "SPDisplaysDataType"],
-                                  capture_output=True, text=True, timeout=15)
-            if proc.returncode == 0:
-                models = [line.split(":", 1)[1].strip()
-                          for line in proc.stdout.splitlines()
-                          if "Chipset Model:" in line]
-                name = " + ".join(m for m in models if m) or None
-        except Exception:
-            name = None
-    _gpu_name_macos._cached = name
+        output = _run(["system_profiler", "SPDisplaysDataType"], timeout=15)
+        if output:
+            models = [line.split(":", 1)[1].strip() for line in output.splitlines() if "Chipset Model:" in line]
+            name = " + ".join(model for model in models if model) or None
+    _gpu_name_macos._cached = name  # type: ignore[attr-defined]
     return name
 
-_UNSET = object()
+
 _gpu_name_macos._cached = _UNSET  # type: ignore[attr-defined]
 
 
-def get_gpu_name() -> str | None:
-    """Return a string describing the GPU(s), or None."""
+def get_gpu_name() -> Optional[str]:
     if _OS == "Darwin":
         return _gpu_name_macos()
-    try:
-        import pynvml  # type: ignore
-        pynvml.nvmlInit()
-        count = pynvml.nvmlDeviceGetCount()
-        names = []
-        for i in range(count):
-            h = pynvml.nvmlDeviceGetHandleByIndex(i)
-            names.append(pynvml.nvmlDeviceGetName(h))
-        return " + ".join(names) if names else None
-    except Exception:
-        pass
-    try:
-        proc = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=3,
-        )
-        if proc.returncode == 0:
-            names = [l.strip() for l in proc.stdout.strip().splitlines() if l.strip()]
-            return " + ".join(names) if names else None
-    except Exception:
-        pass
-    return None
-
-
-# User idle time
-
-def _idle_seconds_windows() -> float:
-    """Milliseconds since last keyboard/mouse event via Win32 GetLastInputInfo."""
-    import ctypes
-    import ctypes.wintypes
-
-    class LASTINPUTINFO(ctypes.Structure):
-        _fields_ = [
-            ("cbSize", ctypes.c_uint),
-            ("dwTime", ctypes.c_uint),
-        ]
-
-    lii = LASTINPUTINFO()
-    lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
-    ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii))  # type: ignore
-    tick_ms = ctypes.windll.kernel32.GetTickCount()           # type: ignore
-    idle_ms = tick_ms - lii.dwTime
-    return max(0, idle_ms) / 1000.0
-
-
-def _idle_seconds_xprintidle() -> float | None:
-    """xprintidle returns idle time in milliseconds (X11 only)."""
-    try:
-        proc = subprocess.run(
-            ["xprintidle"], capture_output=True, text=True, timeout=2
-        )
-        if proc.returncode == 0:
-            return int(proc.stdout.strip()) / 1000.0
-    except Exception:
-        pass
-    return None
-
-
-def _idle_seconds_dbus_screensaver() -> float | None:
-    """D-Bus org.freedesktop.ScreenSaver.GetSessionIdleTime (seconds, KDE/GNOME)."""
-    try:
-        proc = subprocess.run(
-            [
-                "dbus-send", "--session", "--print-reply",
-                "--dest=org.freedesktop.ScreenSaver",
-                "/ScreenSaver",
-                "org.freedesktop.ScreenSaver.GetSessionIdleTime",
-            ],
-            capture_output=True, text=True, timeout=2,
-        )
-        if proc.returncode == 0:
-            # Output: method return time=... uint32 <idle_ms>
-            for token in proc.stdout.split():
-                try:
-                    return int(token) / 1000.0
-                except ValueError:
-                    continue
-    except Exception:
-        pass
-    return None
-
-
-def _idle_seconds_gnome_mutter() -> float | None:
-    """GNOME Shell / Mutter idle via D-Bus (Wayland + X11)."""
-    try:
-        proc = subprocess.run(
-            [
-                "dbus-send", "--session", "--print-reply",
-                "--dest=org.gnome.Mutter.IdleMonitor",
-                "/org/gnome/Mutter/IdleMonitor/Core",
-                "org.gnome.Mutter.IdleMonitor.GetIdletime",
-            ],
-            capture_output=True, text=True, timeout=2,
-        )
-        if proc.returncode == 0:
-            for token in proc.stdout.split():
-                try:
-                    return int(token) / 1000.0
-                except ValueError:
-                    continue
-    except Exception:
-        pass
-    return None
-
-
-def _idle_seconds_macos() -> float | None:
-    """Seconds since the last HID event, from IOKit via ioreg.
-
-    HIDIdleTime is published in nanoseconds by IOHIDSystem and is the same
-    source Apple's own idle handling uses. It needs no permissions and no
-    extra dependency, which matters because the worker must keep working on a
-    machine where nobody has installed anything else.
-    """
-    try:
-        proc = subprocess.run(
-            ["ioreg", "-c", "IOHIDSystem", "-d", "4", "-r"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if proc.returncode != 0:
-            return None
-        for line in proc.stdout.splitlines():
-            if "HIDIdleTime" not in line:
-                continue
-            _, _, value = line.partition("=")
-            value = value.strip().strip("<>").strip()
-            try:
-                nanoseconds = int(value)
-            except ValueError:
-                continue
-            if nanoseconds < 0:
-                return None
-            return nanoseconds / 1_000_000_000.0
-    except Exception:
-        pass
-    return None
-
-
-def _idle_seconds_linux() -> float | None:
-    """Try all available Linux idle detection methods in order."""
-    # 1. xprintidle (X11, widely available)
-    idle = _idle_seconds_xprintidle()
-    if idle is not None:
-        return idle
-    # 2. GNOME Mutter (Wayland GNOME sessions)
-    idle = _idle_seconds_gnome_mutter()
-    if idle is not None:
-        return idle
-    # 3. Generic ScreenSaver D-Bus (KDE Plasma)
-    idle = _idle_seconds_dbus_screensaver()
-    if idle is not None:
-        return idle
-    return None
-
-
-_last_idle_check = 0.0
-_cached_idle: float | None = None
-
-
-def get_user_idle_seconds() -> float | None:
-    """Return seconds since last user input, or None if unavailable."""
-    global _last_idle_check, _cached_idle
-    now = time.monotonic()
-    if now - _last_idle_check < 1.0:
-        return _cached_idle
-    _last_idle_check = now
-
-    if _OS == "Windows":
+    pynvml = _nvml_module()
+    if pynvml is not None:
         try:
-            _cached_idle = _idle_seconds_windows()
-        except Exception:
-            _cached_idle = None
-    elif _OS == "Darwin":
-        _cached_idle = _idle_seconds_macos()
-    else:
-        _cached_idle = _idle_seconds_linux()
+            names = []
+            for index in range(pynvml.nvmlDeviceGetCount()):
+                name = pynvml.nvmlDeviceGetName(pynvml.nvmlDeviceGetHandleByIndex(index))
+                names.append(name.decode() if isinstance(name, bytes) else str(name))
+            if names:
+                return " + ".join(names)
+        except Exception:  # noqa: BLE001
+            pass
+    output = _run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+    if output:
+        names = [line.strip() for line in output.splitlines() if line.strip()]
+        return " + ".join(names) or None
+    return None
 
-    return _cached_idle
+
+# ----- idle time -------------------------------------------------------------------------------
+
+def _idle_seconds_windows() -> Optional[float]:
+    try:
+        import ctypes
+
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        info = LASTINPUTINFO()
+        info.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):  # type: ignore[attr-defined]
+            return None
+        ticks = ctypes.windll.kernel32.GetTickCount() & 0xFFFFFFFF  # type: ignore[attr-defined]
+        return ((ticks - info.dwTime) & 0xFFFFFFFF) / 1000.0  # wraps after 49.7 days
+    except Exception:  # noqa: BLE001
+        return None
 
 
-# Activity state
+def parse_dbus_integer(output: Optional[str]) -> Optional[int]:
+    """The value of a ``dbus-send --print-reply`` answer such as ``   uint64 12345``."""
+    for line in (output or "").splitlines():
+        tokens = line.split()
+        if len(tokens) >= 2 and tokens[0] in ("uint32", "uint64", "int32", "int64"):
+            try:
+                return int(tokens[1])
+            except ValueError:
+                return None
+    return None
 
-STATES = ("idle", "light", "active", "gaming")
+
+def _idle_seconds_linux() -> Optional[float]:
+    output = _run(["xprintidle"], timeout=2)
+    if output and output.strip().isdigit():
+        return int(output.strip()) / 1000.0
+    for command in (
+        ["dbus-send", "--session", "--print-reply", "--dest=org.gnome.Mutter.IdleMonitor",
+         "/org/gnome/Mutter/IdleMonitor/Core", "org.gnome.Mutter.IdleMonitor.GetIdletime"],
+        ["dbus-send", "--session", "--print-reply", "--dest=org.freedesktop.ScreenSaver", "/ScreenSaver",
+         "org.freedesktop.ScreenSaver.GetSessionIdleTime"],
+    ):
+        value = parse_dbus_integer(_run(command, timeout=2))
+        if value is not None:
+            return value / 1000.0
+    return None
 
 
-def get_activity_state() -> str:
-    """Return one of: 'idle', 'light', 'active', 'gaming'.
+def parse_ioreg_idle(output: Optional[str]) -> Optional[float]:
+    """Seconds from IOKit's ``HIDIdleTime`` (nanoseconds) in ``ioreg -c IOHIDSystem`` output."""
+    for line in (output or "").splitlines():
+        if "HIDIdleTime" not in line:
+            continue
+        value = line.partition("=")[2].strip().strip("<>").strip()
+        try:
+            nanoseconds = int(value)
+        except ValueError:
+            continue
+        return nanoseconds / 1e9 if nanoseconds >= 0 else None
+    return None
 
-    The GPU utilisation gate always takes precedence because it is the most
-    reliable cross-platform indicator that the user is doing GPU-heavy work
-    (gaming, rendering, ML training, etc.).
-    """
-    gpu = get_gpu_utilisation()
 
-    # Gaming / heavy GPU work: do not run inference
-    if gpu is not None and gpu >= config.GPU_GAMING_THRESHOLD:
-        return "gaming"
+def _idle_seconds_macos() -> Optional[float]:
+    return parse_ioreg_idle(_run(["ioreg", "-c", "IOHIDSystem", "-d", "4", "-r"], timeout=5))
 
-    idle_secs = get_user_idle_seconds()
 
-    # If we can measure idle time, use it together with GPU util
-    if idle_secs is not None:
-        if idle_secs >= config.IDLE_THRESHOLD_SECONDS:
-            # Also require GPU to be calm
-            if gpu is None or gpu < 30:
-                return "idle"
-            return "light"
-        if idle_secs >= config.LIGHT_THRESHOLD_SECONDS:
+def get_user_idle_seconds() -> Optional[float]:
+    """Seconds since the last keyboard or mouse input, or None when unknown."""
+    if _OS == "Windows":
+        return _idle_seconds_windows()
+    if _OS == "Darwin":
+        return _idle_seconds_macos()
+    return _idle_seconds_linux()
+
+
+# ----- classification ----------------------------------------------------------------------------
+
+def classify(gpu: Optional[float], idle: Optional[float], settings, *, own_job: bool = False) -> str:
+    """The activity state for these readings (see the module docstring)."""
+    if gpu is not None and gpu >= settings.gpu_gaming_threshold:
+        if not own_job or (idle is not None and idle < settings.light_threshold):
+            return "gaming"
+        gpu = None  # the load is (most likely) our own inference
+    if idle is not None:
+        if idle >= settings.idle_threshold:
+            return "idle" if gpu is None or gpu < CALM_GPU else "light"
+        if idle >= settings.light_threshold:
             return "light"
         return "active"
-
-    # No idle-time measurement available: fall back to GPU-only heuristic
-    if gpu is None:
-        return "idle"   # No GPU telemetry at all: assume idle
-    if gpu < config.GPU_ACTIVE_THRESHOLD:
+    if gpu is None or gpu < settings.gpu_active_threshold:
         return "idle"
     return "active"
+
+
+class Monitor:
+    """Samples the readings every ``activity_interval`` seconds in a background thread."""
+
+    def __init__(self, settings, *, gpu_reader=get_gpu_utilisation, idle_reader=get_user_idle_seconds):
+        self.settings = settings
+        self._gpu_reader = gpu_reader
+        self._idle_reader = idle_reader
+        self._lock = threading.Lock()
+        self.state = "idle"
+        self.gpu: Optional[float] = None
+        self.idle: Optional[float] = None
+        self.own_job = False
+        self.sampled_at = 0.0
+
+    def sample(self) -> str:
+        gpu, idle = self._gpu_reader(), self._idle_reader()
+        with self._lock:
+            state = classify(gpu, idle, self.settings, own_job=self.own_job)
+            if state != self.state:
+                log.info("Activity: %s -> %s (GPU %s, idle %s)", self.state, state,
+                         "n/a" if gpu is None else f"{gpu:.0f}%", "n/a" if idle is None else f"{idle:.0f}s")
+            self.state, self.gpu, self.idle, self.sampled_at = state, gpu, idle, time.monotonic()
+            return state
+
+    def run(self, stop: threading.Event, on_change=None) -> None:
+        while not stop.is_set():
+            before = self.state
+            try:
+                state = self.sample()
+            except Exception:  # noqa: BLE001 - a reading must never stop the worker
+                log.debug("Activity sampling failed", exc_info=True)
+                state = before
+            if on_change is not None and state != before:
+                on_change(state)
+            stop.wait(self.settings.activity_interval)

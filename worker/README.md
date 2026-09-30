@@ -1,79 +1,146 @@
-# Optional personal worker
+# BananaChat worker
 
-The personal worker contributes inference from a separate PC and adjusts activity around local use. Dedicated server deployments use the main `banana` command with `single`, `web`, or `compute` mode; see [server deployment](../docs/deployment.md).
+The worker lets a BananaChat server use the Ollama on your computer — a gaming
+PC, a workstation, a Mac — to answer chat and API requests. It runs quietly in
+the background, steps aside while you use the machine and stops taking work
+while you play games.
 
-The worker has one entrypoint:
+**Before you start, know this:** the requests your computer answers include the
+users' messages (and any images they attached). Whoever controls this computer
+could read them. Only run a worker for a server whose operator and users are
+fine with that, and keep the computer's accounts secure.
+
+## What you need
+
+- Python 3.9 or newer (nothing else to install). Optionally
+  `pip install nvidia-ml-py psutil` for faster GPU readings and for lowering the
+  priority of the Ollama process.
+- [Ollama](https://ollama.com/download) with the models the server wants,
+  under the same names (for example `ollama pull qwen3:4b`).
+- A worker token from the server's administrator (Admin → Workers → Register).
+- This `worker` folder, copied anywhere on the computer.
+
+## Install
 
 ```sh
-python worker/bananachat_worker.py --help
+python bananachat_worker.py install
 ```
 
-## Supported platforms
+This creates the settings file and a background service for your account:
 
-| | Linux | macOS (Intel and Apple Silicon) | Windows |
+| | Settings file | Service | Logs |
 | --- | --- | --- | --- |
-| Per-user service | systemd user unit | launchd LaunchAgent | Task Scheduler job at login |
-| Starts at boot | `install --system` | `install --system` | not offered |
-| Settings file | `~/.config/bananachat-worker.env` | `~/.config/bananachat-worker.env` | `%APPDATA%\BananaChat\bananachat-worker.env` |
-| Logs | journal | `~/Library/Logs/bananachat-worker.log` | file beside the settings file |
-| Idle detection | xprintidle, GNOME Mutter, D-Bus screensaver | IOKit `HIDIdleTime` | `GetLastInputInfo` |
-| GPU utilisation | pynvml or nvidia-smi | not available | pynvml or nvidia-smi |
-| Returns to full speed on its own | needs `CAP_SYS_NICE` | needs privilege | yes |
+| Linux | `~/.config/bananachat-worker.env` | systemd user service `bananachat-worker` | `journalctl --user -u bananachat-worker` |
+| macOS (Intel and Apple Silicon) | `~/.config/bananachat-worker.env` | LaunchAgent `com.bananasuite.bananachat.worker` | `~/Library/Logs/bananachat-worker.log` |
+| Windows | `%APPDATA%\BananaChat\bananachat-worker.env` | Task Scheduler task `BananaChatWorker` at logon | `bananachat-worker.log` beside the settings file |
 
-The settings file is created by `install` with mode 0600 on every platform, and
-anything already exported overrides it. `python worker/bananachat_worker.py config`
-prints which of these apply on the machine in front of you, along with the
-current idle and GPU readings.
+Open the settings file and fill in the first two lines:
 
-Install its `worker/requirements.txt` dependencies in a Python environment, configure `BC_SERVER_URL` and a private `BC_WORKER_TOKEN` issued by the administrator's Workers page, and use the entrypoint's `run`, `install`, `start`, `stop`, `status`, and `uninstall` commands. Its help describes platform and service options. Keep worker credentials out of shell history and source control.
+```ini
+BC_SERVER_URL=https://chat.example.org
+BC_WORKER_TOKEN=bcw_...the token you were given...
+BC_WORKER_NAME=Anna's gaming PC
+```
 
-The old separate binary-builder/install/uninstall shell scripts have been retired. The Python source remains available under the project's AGPL-3.0-only license, with the same personal-worker behavior.
+Then start it:
 
-On Windows, installation creates a task for the current user at login with least privilege, running under `pythonw.exe` when it is present so no console window appears. It writes the settings file under `%APPDATA%\BananaChat` and points the worker at a log file beside it, because a Task Scheduler job has nowhere to send its output. Start, stop, status and uninstall use that same job. An older Windows system service must be removed before installing the user task; see [deployment](../docs/deployment.md#optional-desktop-worker). Native Windows and GPU operation still needs verification on the intended machine.
+```sh
+python bananachat_worker.py start
+python bananachat_worker.py status
+```
 
-On Linux, `install --system`, `start --system`, `stop --system` and `status --system` operate on the boot-time service. Run installation from the worker's non-root account; it uses sudo for service management, and inference runs as that account. User services omit `--system`. Worker HTTP requests never follow redirects with credentials. Use HTTPS; on an independently secured private network, `BC_WORKER_ALLOW_HTTP=1` explicitly permits non-loopback HTTP.
+The administrator's Workers page shows the computer as *online* within a few
+seconds. `python bananachat_worker.py config` prints the settings in use, the
+idle and GPU readings and the models Ollama offers — the first thing to run
+when something does not work. `python bananachat_worker.py run` runs the
+worker in the foreground instead (Ctrl+C stops it).
 
-On macOS, installation writes a LaunchAgent to `~/Library/LaunchAgents` that starts at login and logs to `~/Library/Logs/bananachat-worker.log`. `install --system` writes a LaunchDaemon to `/Library/LaunchDaemons` instead, which starts at boot; run that from the worker's own account, because the daemon is pinned to that account rather than left running as root. Start, stop and status use `launchctl kickstart`, `bootout` and `print`; older Intel Macs without `bootstrap` fall back to `load -w`. Both Intel and Apple Silicon are supported, and the agent is marked `ProcessType: Background` so the macOS scheduler already keeps it behind whatever you are doing.
+The settings file is created with mode 0600 (only you can read it). Values you
+export in the environment win over the file; `BC_WORKER_ENV_FILE` points to a
+different file.
 
-Because launchd has no equivalent of systemd's `EnvironmentFile`, the worker reads `~/.config/bananachat-worker.env` itself, and the installer creates that file with mode 0600. The plist holds only its path, never the token. Set `BC_WORKER_ENV_FILE` to move it. Anything already exported wins over the file, so a systemd unit or a shell export still takes precedence.
+On Linux and macOS, `install --system` (and `start|stop|status|uninstall
+--system`) sets up a service that starts at boot instead of at login. Run it
+from your normal account: it uses `sudo` for the service files, and the worker
+still runs as you, never as root. On Windows, an old `BananaChatWorker` system
+service from an early release must first be removed from an administrator
+terminal (`sc.exe stop BananaChatWorker`, `sc.exe delete BananaChatWorker`).
 
-## How it shares the machine
+To remove the worker: `python bananachat_worker.py uninstall` (the settings
+file is kept; delete it yourself).
 
-The worker watches what you are doing and gets out of the way. It reads GPU
-utilisation through pynvml or `nvidia-smi`, and your idle time through
-`GetLastInputInfo` on Windows, `HIDIdleTime` from IOKit on macOS, or
-xprintidle, the D-Bus screensaver interface or GNOME Mutter on Linux. Wayland
-and headless machines that expose none of those fall back to the GPU reading
-alone, and a machine with no GPU telemetry at all is treated as idle.
+## How it shares your computer
 
-A Mac has no GPU reading to fall back on. Apple Silicon exposes no supported
-utilisation counter outside root-only `powermetrics`, and an Intel Mac runs
-AMD or Intel parts that `nvidia-smi` knows nothing about. So on macOS the
-gaming gate never fires and the idle reading carries the decision on its own:
-the worker steps down to below-normal priority while you are at the keyboard
-and returns to normal once you have been away for the idle threshold. The
-Workers page still names the chip, read from `machdep.cpu.brand_string` on
-Apple Silicon or `system_profiler` on Intel.
+Every few seconds the worker checks how long it has been since you touched the
+keyboard or mouse and how busy an NVIDIA GPU is:
 
-That gives four states. Above 70 percent GPU utilisation it assumes you are
-gaming or rendering and does not start new work at all: it stops polling, and a
-job it was about to claim goes back to the server for another worker or a later
-retry. Below that, five minutes of no input counts as idle and inference runs
-at normal priority; anything more recent drops both the worker and the Ollama
-process it manages to below-normal priority. The thresholds are environment
-variables (`BC_IDLE_THRESHOLD`, `BC_LIGHT_THRESHOLD`, `BC_GPU_GAMING_THRESHOLD`,
-`BC_GPU_ACTIVE_THRESHOLD`) if your machine wants different ones.
+| State | When | What the worker does |
+| --- | --- | --- |
+| idle | no input for 5 minutes and the GPU is calm | runs requests at normal priority |
+| light | no input for 30 seconds | runs requests at lower priority |
+| active | you are using the computer | runs requests at lower priority |
+| gaming | GPU at 70 % or more | takes no requests; a request it has not started answering goes back to the server for another worker |
 
-A job already in flight is not interrupted when you come back to the keyboard.
-It finishes at the lower priority, and the worker does not claim the next one.
+A request that is already being answered finishes (at lower priority). While it
+runs its own request the worker ignores the GPU load it causes itself, unless
+you are at the keyboard. On a Mac there is no GPU reading, so the idle time
+decides alone. Where no idle reading exists (a headless Linux box) the GPU
+decides; with neither, the computer counts as idle.
 
-On Linux, lowering a process's priority needs no privileges, but raising it
-again needs `CAP_SYS_NICE`, which the generated service deliberately does not
-have. So once the worker has stepped down for local activity it stays down
-until it restarts, even after the machine goes idle again. Inference is slower
-than it could be, never more intrusive, and the log says so once when it
-happens. Give the unit `AmbientCapabilities=CAP_SYS_NICE` if you would rather
-have the full behaviour. Windows has no such restriction and returns to normal
-priority on its own.
+On Linux and macOS, a process may lower its priority but not raise it again
+without privileges, so after stepping aside the worker stays at the lower
+priority until it restarts (it logs this once). Windows returns to normal on
+its own.
 
-Remote jobs are bounded by the server's queue, time and response limits. Token batches are sent at most every 100 ms or 4,096 characters, and cancellation is final. Failed or disconnected workers leave an explicit interrupted/failed response; they cannot complete an old job after its lease expires.
+If Ollama is not running, the worker starts `ollama serve` on the address of
+`BC_OLLAMA_HOST` and stops it again after 10 minutes without a request, to give
+the memory back. An Ollama you started yourself is never stopped. The first
+request after a pause may need to load the model; the server allows for that
+(3 minutes by default).
+
+When the worker stops (shutdown, logout, `stop`), a request it has not started
+answering goes back to the server; one in the middle of its answer is reported
+as interrupted.
+
+## Security
+
+- The token is sent only to `BC_SERVER_URL`. That address must be `https://`;
+  plain `http://` is accepted for `localhost` only, or on a network you
+  secure yourself with `BC_WORKER_ALLOW_HTTP=1`.
+- Redirects are never followed and proxy environment variables are ignored, so
+  the token cannot be sent anywhere else. Answers from the server are size-limited.
+- Keep the token out of shell history and chat messages. If it leaks, the
+  administrator removes the worker and registers it again.
+
+## All settings
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BC_SERVER_URL` | (required) | The BananaChat server's address |
+| `BC_WORKER_TOKEN` | (required) | The token from Admin → Workers |
+| `BC_WORKER_NAME` | computer name | Name shown to administrators |
+| `BC_WORKER_ALLOW_HTTP` | `0` | `1` allows `http://` to a non-local server |
+| `BC_OLLAMA_HOST` | `http://127.0.0.1:11434` | Your Ollama |
+| `BC_OLLAMA_BINARY` | `ollama` | The program started as `ollama serve` |
+| `BC_OLLAMA_IDLE_TIMEOUT` | `600` | Seconds without a request before a started Ollama is stopped (0 = never) |
+| `BC_OLLAMA_KEEP_ALIVE` | `0` | Seconds Ollama keeps a model loaded after a request |
+| `BC_FIRST_TOKEN_TIMEOUT` | `180` | Seconds allowed for the first words (model loading); the server's value wins |
+| `BC_INFERENCE_READ_TIMEOUT` | `30` | Longest pause allowed between words |
+| `BC_GENERATION_TIMEOUT` | `300` | Longest answer; the server's value wins |
+| `BC_IDLE_THRESHOLD` | `300` | Seconds without input that count as idle |
+| `BC_LIGHT_THRESHOLD` | `30` | Seconds without input that count as light use |
+| `BC_GPU_GAMING_THRESHOLD` | `70` | GPU % that counts as gaming |
+| `BC_GPU_ACTIVE_THRESHOLD` | `50` | GPU % that counts as active when there is no idle reading |
+| `BC_HEARTBEAT_INTERVAL` | `10` | Seconds between status reports (2–30) |
+| `BC_ACTIVITY_CHECK_INTERVAL` | `5` | Seconds between activity readings |
+| `BC_POLL_GAP` | `0.5` | Pause between requests for work |
+| `BC_WORKER_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
+| `BC_WORKER_LOG_FILE` | | Write a rotating log file here (set by the Windows installer) |
+| `BC_WORKER_LOG_MAX_BYTES`, `BC_WORKER_LOG_BACKUPS` | `5242880`, `3` | Log rotation |
+| `BC_WORKER_ENV_FILE` | see above | Settings file to read |
+
+An invalid number falls back to its default with a warning in the log.
+
+The Windows task and the macOS agent are tested against the files and commands
+they produce, not on real Windows or Mac hardware; try a request on your
+machine before relying on it unattended.

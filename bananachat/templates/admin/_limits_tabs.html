@@ -1,0 +1,8 @@
+{#- Tabs of the Limits area. Expects `tab` and `pending_count`. -#}
+<nav class="tabs" aria-label="Limits">
+  {% for key, endpoint, label in [("policies", "admin.quotas", "Services"), ("models", "admin.limit_models", "Models"),
+                                  ("effort", "admin.limit_effort", "Reasoning effort"), ("requests", "admin.quota_requests", "Requests"),
+                                  ("tiers", "admin.limit_tiers", "Tiers"), ("grants", "admin.limit_grants", "Grants")] %}
+  <a href="{{ url_for(endpoint) }}"{% if tab == key %} aria-current="page"{% endif %}>{{ label }}{% if key == "requests" and pending_count %} <span class="badge badge-warning">{{ pending_count }}</span>{% endif %}</a>
+  {% endfor %}
+</nav>

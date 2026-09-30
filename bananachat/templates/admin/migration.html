@@ -1,0 +1,38 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Backup &amp; migration{% endblock %}
+{% block admin_content %}
+{{ header("Backup & migration", "Keep copies of your data and move the installation to another server.") }}
+
+<div class="grid grid-2">
+  <section class="card stack" aria-labelledby="backup-title">
+    <h2 id="backup-title">{{ icon("shield") }} Backups</h2>
+    <p>Backups are made on the server with the management tool, which briefly pauses the site so the copy is consistent. Run these commands in a terminal on the server:</p>
+    <dl class="command-list">
+      <dt>A complete local backup (with model files)</dt>
+      <dd><pre><code>sudo bananachat backup</code></pre></dd>
+      <dt>A small backup without model files</dt>
+      <dd><pre><code>sudo bananachat backup --exclude-model-weights --output /root/chat-data.tar.gz</code></pre></dd>
+      <dt>Restore a backup</dt>
+      <dd><pre><code>sudo bananachat restore /root/chat-data.tar.gz</code></pre></dd>
+    </dl>
+    <p class="muted small">Encrypted, scheduled backups to a private GitHub or Forgejo repository are also available (<code>sudo bananachat backups configure</code>, then <code>backups enable</code>); see <em>docs/backups.md</em>. Keep an offline copy of the recovery key. Backups without model files record which models were installed: after a restore, the <a href="{{ url_for('admin.models') }}#recovery">Models</a> page offers to download them again.</p>
+  </section>
+
+  <section class="card stack" aria-labelledby="export-title">
+    <h2 id="export-title">{{ icon("download") }} Database export</h2>
+    <p>Downloads a consistent copy of the database ({{ database_size | filesize if database_size is not none else "size unknown" }}, schema version {{ schema_version }}) as a <code>.tar.gz</code> file. Use it to move the accounts, chats and settings of an older installation to a new managed server:</p>
+    <pre><code>sudo bananachat restore --legacy-database /root/bananachat_export.tar.gz</code></pre>
+    <div class="alert alert-warning">{{ icon("alert") }}<div>
+      <p><strong>The file contains every account, password hash and chat.</strong> Store and transfer it as securely as the server itself, and delete it when you are done.</p>
+      <p>It does not include model files, uploaded audio, the secret key or the server configuration; copy those separately while the service is stopped.</p>
+    </div></div>
+    <form method="post" action="{{ url_for('admin.migration_export') }}" data-confirm="Download a copy of the whole database? It contains private data of every user.">
+      {{ csrf() }}
+      <button type="submit" class="btn btn-primary">{{ icon("download") }}Download database export</button>
+    </form>
+    <p class="hint">Importing through the browser is not possible: a restore must stop every server process, which only the management tool can do safely.</p>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,24 @@
+{#- Building blocks shared by the personality pages (and the administrator's list). -#}
+
+{#- The emoji avatar in the personality's accent colour; the first letter of the name when there is no emoji. -#}
+{% macro avatar(row, size="") -%}
+<span class="persona-avatar accent-{{ row.color or 'default' }}{% if size %} {{ size }}{% endif %}{% if not row.avatar %} is-letter{% endif %}" aria-hidden="true">{{ row.avatar or ((row.name or "?")[:1] | upper) }}</span>
+{%- endmacro %}
+
+{#- Style chips (only what differs from the balanced default) and the preferred model. Needs t(). -#}
+{% macro traits(card) -%}
+{%- set row = card.row -%}
+{%- set show_model = row.preferred_model and not card.hide_model -%}
+{%- if row.response_length != "balanced" or row.creativity != "balanced" or show_model or card.starters %}
+<ul class="chip-list" aria-label="{{ t('personality.traits') }}">
+  {% if row.response_length and row.response_length != "balanced" %}<li class="chip">{{ t("personality.length_" ~ row.response_length) }}</li>{% endif %}
+  {% if row.creativity and row.creativity != "balanced" %}<li class="chip">{{ t("personality.creativity_" ~ row.creativity) }}</li>{% endif %}
+  {% if show_model %}
+  <li class="chip{% if card.model_missing %} chip-warning{% endif %}"{% if card.model_missing %} title="{{ t('personality.model_missing_hint') }}"{% endif %}>
+    {{ t("personality.model_chip", model=card.model_label) }}{% if card.model_missing %} · {{ t("personality.model_missing") }}{% endif %}
+  </li>
+  {% endif %}
+  {% if card.starters %}<li class="chip">{{ t("personality.starters_chip", count=card.starters | length) }}</li>{% endif %}
+</ul>
+{%- endif %}
+{%- endmacro %}

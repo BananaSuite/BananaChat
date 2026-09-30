@@ -1,0 +1,18 @@
+{# Theme variables. Values are validated (#rrggbb, numbers from fixed choices) before they reach this block. #}
+<style nonce="{{ csp_nonce }}">
+:root {
+  --palette-bg: {{ palette.bg }};
+  --palette-sidebar: {{ palette.sidebar }};
+  --palette-secondary: {{ palette.secondary }};
+  --palette-text: {{ palette.text }};
+  --palette-primary: {{ palette.primary }};
+  --palette-accent: {{ palette.accent }};
+  --font-scale: {{ prefs.font_scale }};
+  --line-height: {{ ["1.55", "1.8", "2.05"][prefs.line_height] }};
+  --letter-spacing: {{ ["normal", "0.03em", "0.07em"][prefs.letter_spacing] }};
+  --sidebar-width: {{ prefs.sidebar_width }}px;
+{%- if prefs.background_image and current_user %}
+  --background-image: url("{{ url_for('customization.background', filename=prefs.background_image) }}");
+{%- endif %}
+}
+</style>

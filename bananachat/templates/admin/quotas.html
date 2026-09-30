@@ -1,0 +1,111 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf %}
+{% from "admin/_limit_fields.html" import toggle, token_field, rules_editor %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Limits{% endblock %}
+{% block admin_content %}
+{{ header("Limits", "Everything is counted in tokens (prompt and answer together). Administrators are never limited.") }}
+{% include "admin/_limits_tabs.html" %}
+
+{% if pending_count %}
+<div class="alert alert-warning mb-3">{{ icon("alert") }}<p>{{ pending_count }} request{{ "s" if pending_count != 1 }} waiting for you. <a href="{{ url_for('admin.quota_requests') }}">Review requests</a></p></div>
+{% endif %}
+
+<section class="card stack mb-3" aria-labelledby="how-title">
+  <h2 id="how-title">How limits work</h2>
+  <ul class="plain-list small">
+    <li><strong>Request rate</strong> – how often an account may send requests, e.g. “60 per minute” and “1,000 per day”. Every API key, the playground, chat and agents of one account share it.</li>
+    <li><strong>5-hour tokens</strong> – a window opens with an account's first request and lasts 5 hours; when it ends, the allowance is full again. Optional <strong>slow tokens</strong> keep people going afterwards, behind everyone else in the queue.</li>
+    <li><strong>Weekly tokens</strong> (off by default) – a rolling week that starts with the first request after the previous week ended. When used up, requests wait until the week ends.</li>
+    <li><strong>Models</strong> count by their weight (a heavy model ×3 uses the allowance three times as fast) and can have their own limits: see the <a href="{{ url_for('admin.limit_models') }}">Models</a> tab.</li>
+  </ul>
+  <p class="muted small mb-0">An account's limit is, in order: its <strong>custom limit</strong> (set on its page or by an approved request), else the <strong>policy</strong> below (times its tier when tiers are on) → the <strong>dynamic</strong> adjustment → the music bonus → <strong>grants</strong>. {{ custom_count }} account(s) have custom limits; {{ grant_count }} grant(s) are active.</p>
+</section>
+
+<div class="stack-lg">
+  {% for pool, policy in policies.items() %}
+  {#- A refused form shows again as typed. -#}
+  {% if refused.pool == pool %}{% set policy = refused.policy %}{% endif %}
+  <form method="post" action="{{ url_for('admin.quotas_policy', pool=pool) }}" class="card stack" id="policy-{{ pool }}" aria-labelledby="policy-{{ pool }}-title">
+    {{ csrf() }}
+    <div>
+      <h2 id="policy-{{ pool }}-title">{{ pool_labels[pool] }}</h2>
+      <p class="limit-summary">Now: {{ summaries[pool] }}</p>
+    </div>
+    <fieldset class="stack">
+      <legend>Request rate</legend>
+      {{ toggle("rate_enabled", "Limit how often", policy.rate.enabled, "Each account has one bucket per rule; bursts use what is saved up.") }}
+      {{ rules_editor(policy.rate.rules, "rules-" ~ pool, units, rule_rows) }}
+      {{ toggle("rate_dynamic", "Slow down when busy", policy.rate.dynamic, "Lowers the rate while the server is overloaded. Never raises it; custom rates are not changed.") }}
+    </fieldset>
+    <div class="grid grid-2">
+      <fieldset class="stack">
+        <legend>Tokens per 5 hours</legend>
+        {{ toggle("window_enabled", "Limit usage per 5 hours", policy.window.enabled, "Off: unlimited, except accounts with a custom 5-hour limit.") }}
+        <div class="form-grid">
+          {{ token_field("window_tokens", "Tokens", policy.window.tokens, "window-" ~ pool, "Per 5-hour window, e.g. 50k.") }}
+          {{ token_field("window_slow_tokens", "Slow tokens", policy.window.slow_tokens, "slow-" ~ pool, "Used after the tokens run out; slow requests wait behind others. 0 for none.", false) }}
+        </div>
+        {{ toggle("window_dynamic", "Adjust to demand", policy.window.dynamic, "More when the server is quiet and for off-peak, regular users; less under heavy load (0.5×–2×).") }}
+        {{ toggle("window_auto_tiers", "Raise with tier levels", policy.window.auto_tiers, "Multiply by the account's tier; accounts move up automatically.") }}
+      </fieldset>
+      <fieldset class="stack">
+        <legend>Tokens per week</legend>
+        {{ toggle("weekly_enabled", "Limit weekly usage", policy.weekly.enabled, "A rolling week from the first request after the previous one ended. When used up, requests wait (no slow lane).") }}
+        {{ token_field("weekly_tokens", "Tokens", policy.weekly.tokens, "weekly-" ~ pool, "Per week, e.g. 500k. Usually a few times the 5-hour amount.") }}
+        {{ toggle("weekly_dynamic", "Adjust to demand", policy.weekly.dynamic) }}
+        {{ toggle("weekly_auto_tiers", "Raise with tier levels", policy.weekly.auto_tiers) }}
+      </fieldset>
+    </div>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Save limits</button></div>
+  </form>
+  {% endfor %}
+
+  <div class="grid grid-2">
+    {% if refused.options %}{% set s = refused.options %}{% endif %}
+    <form method="post" action="{{ url_for('admin.quotas_save') }}" class="card stack" id="options" aria-labelledby="options-title">
+      {{ csrf() }}
+      <h2 id="options-title">Slow tokens and automatic approval</h2>
+      {{ toggle("slow_credits_enabled", "Offer slow tokens", s.slow_credits_enabled, "When off, people stop at their regular tokens in every service.") }}
+      <p class="muted small mb-0">Requests for more 5-hour (or weekly) tokens up to these amounts are approved at once. Rate, temporary and reasoning-effort requests always wait for you.</p>
+      {{ toggle("quota_auto_approve_enabled", "Approve small requests automatically", s.quota_auto_approve_enabled) }}
+      <div class="form-grid">
+        {{ token_field("quota_auto_approve_max_tokens", "5-hour tokens up to", s.quota_auto_approve_max_tokens or 0, "auto-tokens", "0: always wait for you.") }}
+        {{ token_field("quota_auto_approve_max_slow_tokens", "Slow tokens up to", s.quota_auto_approve_max_slow_tokens or 0, "auto-slow", "0: always wait for you.") }}
+        {{ token_field("quota_auto_approve_max_weekly_tokens", "Weekly tokens up to", s.quota_auto_approve_max_weekly_tokens or 0, "auto-weekly", "0: weekly requests always wait for you.") }}
+      </div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save options</button></div>
+    </form>
+
+    <section class="card stack" id="global" aria-labelledby="global-title">
+      <h2 id="global-title">Everyone</h2>
+      <p class="muted small mb-0">Resetting usage ends everyone's open windows: the next request starts a fresh one. The usage history is kept.</p>
+      <div class="row">
+        <form method="post" action="{{ url_for('admin.quotas_reset_usage') }}" data-confirm="Reset the 5-hour usage of every account? Everyone gets their full 5-hour tokens back.">
+          {{ csrf() }}<input type="hidden" name="period" value="window">
+          <button type="submit" class="btn">Reset 5-hour usage</button>
+        </form>
+        <form method="post" action="{{ url_for('admin.quotas_reset_usage') }}" data-confirm="Reset the weekly usage of every account? Everyone gets their full 5-hour and weekly tokens back.">
+          {{ csrf() }}<input type="hidden" name="period" value="week">
+          <button type="submit" class="btn">Reset weekly usage</button>
+        </form>
+      </div>
+      <p class="muted small mb-0">Restoring defaults removes every custom limit (per service and per model, including approved requests and model locks) and every slow-down or speed-up. Tiers, grants and reasoning-effort unlocks are kept.</p>
+      <form method="post" action="{{ url_for('admin.quotas_restore_defaults') }}" data-confirm="Remove the custom limits and speed settings of {{ custom_count }} account(s) and apply the policies to everyone?" data-confirm-danger>
+        {{ csrf() }}
+        <button type="submit" class="btn btn-danger">Restore everyone's default limits</button>
+      </form>
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="dynamic-title">
+    <h2 id="dynamic-title">Dynamic adjustment now</h2>
+    <dl class="details">
+      <dt>Queue</dt><dd>{% if demand is none %}No recent sample (neutral){% else %}{{ "%.2f" | format(demand) }} requests per inference slot (15-minute average){% endif %}</dd>
+      <dt>People using the site</dt><dd>{% if people is none %}No recent sample (neutral){% else %}{{ people }} in the last 15 minutes ({{ "%.1f" | format(people / slots) }} per inference slot){% endif %}</dd>
+      <dt>Peak hours (UTC)</dt><dd>{% if peak_hours %}{% for hour in peak_hours %}{{ "%02d:00" | format(hour) }}{{ ", " if not loop.last }}{% endfor %}{% else %}Not enough usage yet{% endif %}</dd>
+    </dl>
+    <p class="hint mb-0">A quiet queue (below 0.2) gives +25 %, an overloaded one (2 or more) −30 %; up to one person per inference slot gives +10 %, twelve or more −20 %. Accounts that mostly use off-peak hours and come back regularly get up to +25 %, mostly peak-hour users up to −15 %. The result stays between 0.5× and 2× in 5 % steps; heavy models react more strongly (their sensitivity); custom limits are never reduced.</p>
+  </section>
+</div>
+{% endblock %}

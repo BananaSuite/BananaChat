@@ -1,14 +1,14 @@
+"""WSGI entry point: ``gunicorn -c gunicorn.conf.py wsgi:app``.
+
+The managed service units of existing installations run exactly that
+command, so the module name and the ``app`` attribute must not change.
+While the lifecycle tool's maintenance file exists (during updates and
+backups) visitors see a short "updating" page; the health checks and
+``/status`` keep answering.
 """
-WSGI entry point for BananaChat.
 
-Usage with Gunicorn:
-    gunicorn wsgi:app -c gunicorn.conf.py
+from bananachat import create_app
+from bananachat.update_gate import UpdateGate
 
-Or with default settings:
-    gunicorn wsgi:app --bind X.X.X.X:8000 --workers 2
-"""
-
-from app import app  # noqa: F401
-from banana_ops.gate import MaintenanceGate
-
-app.wsgi_app = MaintenanceGate(app.wsgi_app)
+app = create_app()
+app.wsgi_app = UpdateGate(app.wsgi_app)

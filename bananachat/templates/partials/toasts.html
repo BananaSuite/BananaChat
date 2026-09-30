@@ -1,0 +1,9 @@
+{% from "partials/icons.html" import icon %}
+<div class="toasts" id="toasts" role="status" aria-live="polite">
+{%- for category, message in get_flashed_messages(with_categories=true) %}
+  <div class="toast toast-{{ category if category in ('success', 'error', 'warning') else 'info' }}" data-flash>
+    <div class="grow">{{ message }}</div>
+    <button type="button" class="icon-btn" data-dismiss-toast aria-label="{{ t('common.dismiss') }}">{{ icon("close") }}</button>
+  </div>
+{%- endfor %}
+</div>

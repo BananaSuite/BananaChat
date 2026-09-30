@@ -1,0 +1,29 @@
+{#- Music program player, for participants only (see web/music.py). The script moves it into the top bar;
+    it never starts playing before the person presses "Start music", and it can always be paused and turned down. -#}
+{% if music_player %}
+{% from "partials/icons.html" import icon %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/music.css') }}">
+<section class="music-player" id="music-player" aria-label="{{ t('music.player_label') }}" hidden>
+  <button type="button" class="btn btn-sm music-toggle" data-music-toggle>
+    <span data-music-icon="play">{{ icon("play") }}</span><span data-music-icon="pause" hidden>{{ icon("pause") }}</span>
+    <span class="music-toggle-label" data-music-label>{{ t("music.start") }}</span>
+  </button>
+  <button type="button" class="icon-btn" data-music-next aria-label="{{ t('music.next') }}" title="{{ t('music.next') }}">{{ icon("skip") }}</button>
+  <details class="menu music-menu" data-menu>
+    <summary class="icon-btn" aria-label="{{ t('music.player_settings') }}" title="{{ t('music.player_settings') }}">{{ icon("volume") }}</summary>
+    <div class="menu-panel music-panel">
+      <div class="menu-label">{{ t("music.now_playing") }}</div>
+      <p class="music-title" data-music-title>—</p>
+      <div class="field">
+        <label for="music-volume">{{ t("music.volume") }} <output for="music-volume" data-music-volume-value>35%</output></label>
+        <input type="range" id="music-volume" min="0" max="100" step="5" value="35" data-music-volume>
+      </div>
+      <p class="hint">{{ t("music.mode_" ~ music_player.mode) }}</p>
+      <a href="{{ music_player.page }}">{{ icon("music") }}{{ t("music.program_page") }}</a>
+    </div>
+  </details>
+  <audio preload="none" data-music-audio></audio>
+  <script type="application/json" id="music-player-data">{{ music_player | tojson }}</script>
+</section>
+<script type="module" src="{{ url_for('static', filename='js/music-player.js') }}"></script>
+{% endif %}

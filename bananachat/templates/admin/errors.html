@@ -1,0 +1,14 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, empty %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Error log{% endblock %}
+{% block admin_content %}
+<p class="breadcrumb"><a href="{{ url_for('admin.audit') }}">{{ icon("chevron-left") }}Audit log</a></p>
+{{ header("Error log", "Unexpected errors with their technical details, newest at the bottom. It can contain private data: do not share it publicly.") }}
+<p class="small muted">Stored in <code>{{ path }}</code>. Only the most recent part is shown.</p>
+{% if content %}
+<pre class="log-view" tabindex="0" aria-label="Error log">{{ content }}</pre>
+{% else %}
+{{ empty("check", "No errors recorded") }}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,61 @@
+/* Developer area: tokens, usage and the API playground. Builds on app.css tokens. */
+
+.dev-wide { max-width: 1320px; }
+.dev-note svg { width: 1em; height: 1em; vertical-align: -.15em; }
+.dev-meter { display: flex; flex-direction: column; gap: .3rem; }
+
+/* tokens */
+.dev-tokens th[scope="row"] { font-weight: 550; overflow-wrap: anywhere; }
+.dev-create { display: flex; align-items: flex-end; gap: .75rem; flex-wrap: wrap; }
+.dev-create .field { min-width: min(100%, 240px); }
+/* The rename fallback form (no JavaScript) opens inside the row instead of floating over the table. */
+.dev-rename > summary { display: inline-flex; }
+.dev-rename[open] .menu-panel { position: static; margin-top: .4rem; min-width: 220px; box-shadow: none; text-align: left; }
+.dev-model-id { gap: .25rem; flex-wrap: nowrap; min-width: 11rem; }  /* keeps short ids on one line on phones */
+.dev-model-id code { overflow-wrap: anywhere; }
+
+/* snippets */
+.dev-snippet { margin: 0; }
+.dev-snippet pre { white-space: pre; }
+.dev-snippet figcaption { font-family: var(--font); }
+
+/* playground layout */
+.dev-playground { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 1rem; align-items: start; }
+.dev-settings { position: sticky; top: calc(var(--topbar-height) + 1rem); }
+.dev-params { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.dev-small-textarea { min-height: 64px; }
+.dev-conversation { display: flex; flex-direction: column; min-height: 520px; }
+.dev-log {
+  flex: 1 1 auto; display: flex; flex-direction: column; gap: .75rem; min-height: 280px; max-height: 62vh; overflow-y: auto;
+  padding: .25rem; margin: 0 -.25rem;
+}
+.dev-log-empty { margin: auto 0; }
+.dev-msg { border: 1px solid var(--border); border-radius: var(--radius); padding: .65rem .85rem; background: var(--raised); }
+.dev-msg-user { background: color-mix(in srgb, var(--primary) 7%, var(--raised)); }
+.dev-msg-header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .35rem; }
+.dev-msg-role { font-size: .78rem; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.dev-msg-remove { width: 28px; height: 28px; font-size: 1.1rem; }
+.dev-msg-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dev-msg-meta { margin: .5rem 0 0; }
+.dev-msg-error { margin: .5rem 0 0; }
+.dev-msg.is-streaming .dev-msg-body:empty::after { content: "…"; color: var(--text-muted); }
+.dev-reasoning { margin-bottom: .5rem; font-size: .92rem; color: var(--text-muted); }
+.dev-reasoning > summary { cursor: pointer; font-weight: 550; }
+.dev-status { min-height: 1.4em; margin: .6rem 0 .3rem; }
+.dev-composer { border-top: 1px solid var(--border); padding-top: .75rem; display: flex; flex-direction: column; gap: .6rem; }
+.dev-role { width: auto; min-height: 32px; padding: .2rem .5rem; font-size: .88rem; }
+.dev-request > summary { cursor: pointer; color: var(--text-muted); font-size: .9rem; }
+.dev-request pre { max-height: 320px; }
+
+@media (max-width: 900px) {
+  .dev-playground { grid-template-columns: 1fr; }
+  .dev-settings { position: static; }
+  .dev-log { max-height: none; }
+}
+@media (max-width: 640px) {
+  .dev-tokens .actions .btn span:not(.visually-hidden) { display: none; }
+  .dev-params { grid-template-columns: 1fr 1fr; }
+}
+
+/* Sending paused (maintenance or AI-server outage): the live region stays in the DOM, empty when fine. */
+.status-paused:empty { display: none; }

@@ -203,7 +203,7 @@ def test_remote_backup_restores_each_deployment_into_a_new_root(tmp_path, checko
 
 
 @pytest.mark.parametrize('mode', ['single', 'web', 'compute'])
-def test_lightweight_ai_restore_preserves_data_and_waits_for_model_consent(tmp_path, checkout, mode):
+def test_weight_free_restore_preserves_data_and_waits_for_model_consent(tmp_path, checkout, mode):
     manager, _ = installed(tmp_path, checkout, product='BananaChat', mode=mode)
     data = manager.root / 'data'
     weights = data / 'models/blobs/sha256-fixture'
@@ -235,7 +235,7 @@ def test_lightweight_ai_restore_preserves_data_and_waits_for_model_consent(tmp_p
         assert (extracted / 'data/uploads/customer.bin').read_bytes() == attachment.read_bytes()
         assert read_json(extracted / 'model-inventory.json')['ollama'] == ['tiny:latest']
         assert not (extracted / 'config/remote-backup').exists()
-    restored = Manager(tmp_path / 'restored-ai', product='BananaChat', system=Services())
+    restored = Manager(tmp_path / 'restored-weight-free', product='BananaChat', system=Services())
     restored.restore(archive, new=True)
     pending = read_json(restored.root / 'data/.model-recovery.json')
     assert pending['state'] == 'pending'

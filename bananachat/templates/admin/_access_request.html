@@ -1,0 +1,24 @@
+{#- One access request as a card. Uses `req`, `scope_labels` and optional `return_to`. -#}
+{% from "admin/_macros.html" import csrf, when, status_badge %}
+<article class="request-card" aria-labelledby="req-{{ req.id }}-title">
+  <div class="row-between">
+    <h3 id="req-{{ req.id }}-title" class="mb-0">{{ req.username }} → {{ req.resource_name or scope_labels.get(req.scope, req.scope) }}</h3>
+    <span class="small muted">{{ when(req.created_at) }}</span>
+  </div>
+  <p class="small muted mb-1">{{ scope_labels.get(req.scope, req.scope) }}{% if req.scope in ("model", "category") %} · <a href="{{ url_for('admin.access_detail', scope=req.scope, resource_id=req.resource_id) }}">Access rule</a>{% endif %}</p>
+  <blockquote class="quote">{{ req.use_case }}</blockquote>
+  {% if req.status == "pending" %}
+  <form method="post" action="{{ url_for('admin.access_request_resolve', request_id=req.id) }}" class="stack-sm">
+    {{ csrf() }}
+    {% if return_to %}<input type="hidden" name="return" value="{{ return_to }}">{% endif %}
+    <label for="req-{{ req.id }}-message" class="label">Message to {{ req.username }} (optional)</label>
+    <textarea id="req-{{ req.id }}-message" name="message" maxlength="1000" rows="2"></textarea>
+    <div class="form-actions form-actions-start">
+      <button type="submit" name="decision" value="approve" class="btn btn-primary">{{ "Approve" }}</button>
+      <button type="submit" name="decision" value="deny" class="btn btn-danger">Deny</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="small">{{ status_badge(req.status) }} by {{ req.resolved_by_name or "an administrator" }} {{ when(req.resolved_at) }}{% if req.admin_message %} · “{{ req.admin_message }}”{% endif %}</p>
+  {% endif %}
+</article>

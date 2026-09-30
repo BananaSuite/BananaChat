@@ -1,0 +1,35 @@
+{% extends "admin/_layout.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "chat/_message.html" import message with context %}
+{% set section = "chats" %}
+{% block title %}Chat audit{% endblock %}
+{% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">{% endblock %}
+{% block admin_content %}
+<p><a href="{{ url_for('admin.chats') }}">{{ icon("chevron-left") }}Chat audit</a></p>
+<header class="page-header">
+  <div>
+    <h1>{{ "Untitled chat" if untitled else session.title }}</h1>
+    <p>
+      {{ session.username }} · created {{ session.created_at | datetime }} · updated {{ session.updated_at | datetime }}
+      {% if session.deleted_at %}<span class="badge badge-danger">Deleted {{ session.deleted_at | datetime }}</span>{% endif %}
+      {% if session.is_incognito %}<span class="badge badge-info">No history</span>{% endif %}
+      {% if session.shared_token %}<span class="badge badge-primary">Shared</span>{% endif %}
+    </p>
+  </div>
+  <form method="post" action="{{ url_for('admin.chat_delete', session_id=session.id) }}" data-confirm="Permanently delete this chat and its messages? This cannot be undone." data-confirm-label="Delete" data-confirm-danger>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-danger">{{ icon("trash") }}Delete permanently</button>
+  </form>
+</header>
+{% if truncated %}
+<div class="alert alert-info">{{ icon("info") }}<p>Only the latest {{ messages | length }} messages are shown.</p></div>
+{% endif %}
+<div class="page-narrow">
+  <div class="chat-messages read-only">
+    {% for m in messages %}{{ message(m, "User", "Assistant", {"stopped": "Stopped before the end.", "failed": "The answer failed.", "interrupted": "Interrupted (server stopped)."}) }}{% else %}
+    <p class="empty">This chat has no messages.</p>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/chat-view.js') }}"></script>{% endblock %}

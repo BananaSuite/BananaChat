@@ -1,0 +1,28 @@
+{% from "partials/icons.html" import icon %}<!doctype html>
+<html lang="{{ lang }}" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="{{ theme }}">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="{{ palette.bg }}">
+  {% set page_title = self.title() | trim %}
+  <title>{% if page_title %}{{ page_title }} · {% endif %}{{ site_name }}</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  {% block styles %}{% endblock %}
+  {% include "partials/theme.html" %}
+</head>
+<body class="{% include 'partials/body_classes.html' %} {% block body_class %}{% endblock %}">
+<a class="skip-link" href="#main">{{ t("common.skip_to_content") }}</a>
+{% block topbar %}{% include "partials/topbar.html" %}{% endblock %}
+{% block status %}{% include "partials/status_banner.html" %}{% endblock %}
+<main id="main" tabindex="-1">{% block content %}{% endblock %}</main>
+{% block footer %}{% include "partials/footer.html" %}{% endblock %}
+{% include "partials/toasts.html" %}
+{% if current_user %}{% include "partials/music_player.html" ignore missing %}{% endif %}
+{% include "partials/boot.html" %}
+<script type="module" src="{{ url_for('static', filename='js/core.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

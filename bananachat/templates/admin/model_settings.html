@@ -1,0 +1,126 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, empty %}
+{% from "partials/icons.html" import icon %}
+{% macro number_field(key, label, hint=None) -%}
+{%- set low, high = bounds[key][1], bounds[key][2] -%}
+<div class="field">
+  <label for="setting-{{ key }}">{{ label }}</label>
+  <input type="number" id="setting-{{ key }}" name="{{ key }}" min="{{ low }}" max="{{ high }}" step="1" required value="{{ policy[key] }}"{% if hint %} aria-describedby="setting-{{ key }}-hint"{% endif %}>
+  {% if hint %}<span class="hint" id="setting-{{ key }}-hint">{{ hint }}</span>{% endif %}
+</div>
+{%- endmacro %}
+{% block title %}Model settings{% endblock %}
+{% block admin_content %}
+{% call header("Models", "Decide how new models are enrolled, when missing or broken ones are retired, and how downloads run.") %}{% endcall %}
+{% include "admin/_models_tabs.html" %}
+
+<form method="post" action="{{ url_for('admin.model_settings_save') }}" class="stack-lg mb-3">
+  {{ csrf() }}
+  <section class="card stack" aria-labelledby="enrollment-title">
+    <h2 id="enrollment-title">New models</h2>
+    <fieldset>
+      <legend class="visually-hidden">Enrollment</legend>
+      <label class="check"><input type="radio" name="enrollment" value="manual"{% if policy.enrollment == "manual" %} checked{% endif %}><span>Manual review<small>A model found on the model server is added as “new — waiting for review” and hidden until you enable it and choose its name, access, limits and features.</small></span></label>
+      <label class="check"><input type="radio" name="enrollment" value="automatic"{% if policy.enrollment == "automatic" %} checked{% endif %}><span>Enable automatically<small>New chat models are published at once with limits for their size (heavy from 30B parameters, standard from 7B, light below) and flagged “enabled automatically — review” until you mark them reviewed. Embedding models and models on the ignore list are never enabled.</small></span></label>
+    </fieldset>
+  </section>
+
+  <section class="card stack" aria-labelledby="retirement-title">
+    <h2 id="retirement-title">Missing and broken models</h2>
+    <p class="muted small">A missing model is hidden from users (chats keep their history) and returns to its previous state when it is back. A failing model is hidden from selection and fallback and re-tested with a small prompt when the server has room; outages, busy servers and cancelled answers do not count as failures.</p>
+    <div class="form-grid">
+      {{ number_field("missing_syncs", "Missing after this many syncs", "Consecutive successful syncs without the model. Failed syncs never count.") }}
+      {{ number_field("missing_minutes", "…or after this many minutes", "0 to count syncs only.") }}
+      {{ number_field("retention_days", "Remove missing models after (days)", "Then it leaves the catalog; chats keep its name.") }}
+      {{ number_field("failure_threshold", "Failing after this many failures") }}
+      {{ number_field("failure_window_minutes", "…within (minutes)", "Without a successful answer in between.") }}
+      {{ number_field("recheck_minutes", "First re-check after (minutes)", "Later checks wait twice as long each time, up to six hours.") }}
+    </div>
+  </section>
+
+  <section class="card stack" id="downloads-settings" aria-labelledby="download-settings-title">
+    <h2 id="download-settings-title">Downloads</h2>
+    <div class="form-grid">
+      {{ number_field("download_concurrency", "Downloads at the same time", "1 is kindest to the model server's disk and network.") }}
+      {{ number_field("download_retries", "Retries after a network error", "With a growing pause (30 s, 2 min, 8 min…). Errors that name the model, and a full disk, are not retried.") }}
+      {{ number_field("stall_minutes", "Retry a download without progress for (minutes)") }}
+    </div>
+  </section>
+  <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
+</form>
+
+<section class="card mb-3" id="ignore-list" aria-labelledby="ignore-title">
+  <h2 id="ignore-title">Ignore list</h2>
+  <p class="muted small">Models matching these names or patterns are never offered or enabled. A new rule also ignores the models waiting for review that it matches; models you already enabled are not affected (use Ignore on them). <code>*</code> matches anything, <code>?</code> one character.</p>
+  <form method="post" action="{{ url_for('admin.model_ignore_rule_add') }}" class="form-grid mb-2">
+    {{ csrf() }}
+    <div class="field">
+      <label for="ignore-pattern" class="required">Name or pattern</label>
+      <input type="text" id="ignore-pattern" name="pattern" required maxlength="200" placeholder="*-embed*" spellcheck="false" autocomplete="off" class="mono">
+    </div>
+    <div class="field">
+      <label for="ignore-note">Note</label>
+      <input type="text" id="ignore-note" name="note" maxlength="200" placeholder="Why it is ignored">
+    </div>
+    <div class="form-actions form-actions-start"><button type="submit" class="btn">{{ icon("plus") }}Add to the ignore list</button></div>
+  </form>
+  {% if rules %}
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th scope="col">Rule</th><th scope="col">Note</th><th scope="col">Added</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+        {% for rule in rules %}
+        <tr>
+          <td class="mono break-anywhere name-cell">{{ rule.pattern }}</td>
+          <td class="small">{{ rule.note or "—" }}</td>
+          <td class="small nowrap">{{ when(rule.created_at) }}{% if rule.created_by_name %}<br><span class="muted">{{ rule.created_by_name }}</span>{% endif %}</td>
+          <td class="actions">
+            <form method="post" action="{{ url_for('admin.model_ignore_rule_delete', rule_id=rule.id) }}">
+              {{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost" aria-label="Remove the rule {{ rule.pattern }}">{{ icon("close") }}Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted mb-0">No rules yet.</p>
+  {% endif %}
+</section>
+
+<section class="card mb-3" id="ignored" aria-labelledby="ignored-title">
+  <h2 id="ignored-title">Ignored models</h2>
+  {% if ignored %}
+  <ul class="divider-list lifecycle-list">
+    {% for model in ignored %}
+    <li class="lifecycle-item">
+      <div class="grow">
+        <span class="mono break-anywhere">{{ model.ollama_name }}</span>
+        <div class="small muted">{{ model.state_reason or "Ignored." }}{% if not model.backend_available %} Not installed.{% endif %}</div>
+      </div>
+      <form method="post" action="{{ url_for('admin.model_restore', model_id=model.id) }}">
+        {{ csrf() }}<button type="submit" class="btn btn-sm">{{ icon("refresh") }}Restore</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted mb-0">No model is ignored.</p>
+  {% endif %}
+</section>
+
+<section class="card" aria-labelledby="events-title">
+  <h2 id="events-title">Recent changes</h2>
+  {% if events %}
+  <ul class="plain-list event-list divider-list">
+    {% for event in events %}
+    <li><span class="event-name">{{ event.event | replace("_", " ") | capitalize }}</span> · <span class="mono small">{{ event.model_name }}</span> <span class="small muted">— {{ event.reason }}</span> <span class="small faint">{{ when(event.created_at) }}{% if event.actor_name %} · {{ event.actor_name }}{% endif %}</span></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted mb-0">Nothing has changed yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>{% endblock %}

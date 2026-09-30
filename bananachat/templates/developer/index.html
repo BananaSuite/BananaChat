@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ t("developer.title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/developer.css') }}">{% endblock %}
+{% block content %}
+{% set active = "index" %}
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1>{{ t("developer.title") }}</h1>
+      <p>{{ t("developer.intro") }}</p>
+    </div>
+  </header>
+  {% include "developer/_tabs.html" %}
+
+  <div class="stack-lg">
+    <div class="grid grid-2">
+      {% include "developer/_credits.html" %}
+
+      <section class="card" aria-labelledby="endpoint-title">
+        <div class="card-header"><h2 id="endpoint-title">{{ t("developer.endpoint_title") }}</h2></div>
+        <p class="muted">{{ t("developer.endpoint_text") }}</p>
+        <div class="secret-box">
+          <input type="text" readonly value="{{ api_base }}" aria-label="{{ t('developer.base_url') }}" class="mono">
+          <button type="button" class="btn" data-copy="{{ api_base }}">{{ icon("copy") }}{{ t("common.copy") }}</button>
+        </div>
+        <p class="hint mt-1 mb-0"><a href="{{ url_for('developer.playground') }}">{{ t("developer.try_playground") }}</a></p>
+      </section>
+    </div>
+
+    <section class="card" aria-labelledby="tokens-title">
+      <div class="card-header">
+        <h2 id="tokens-title">{{ t("developer.tokens_title") }}</h2>
+        <span class="badge">{{ t("developer.tokens_count", count=tokens | length, max=max_tokens) }}</span>
+      </div>
+      <p class="muted">{{ t("developer.tokens_text") }}</p>
+      {% if tokens %}
+      <div class="table-wrap mb-2">
+        <table class="table dev-tokens">
+          <caption class="visually-hidden">{{ t("developer.tokens_title") }}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{{ t("common.name") }}</th>
+              <th scope="col">{{ t("developer.token_prefix") }}</th>
+              <th scope="col">{{ t("common.created") }}</th>
+              <th scope="col">{{ t("developer.token_last_used") }}</th>
+              <th scope="col" class="actions">{{ t("common.actions") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for token in tokens %}
+            {% set label = token.name or t("developer.token_unnamed") %}
+            <tr>
+              <th scope="row" class="dev-token-name">{{ label }}</th>
+              <td><code>{{ token.token_prefix }}…</code></td>
+              <td class="nowrap"><time datetime="{{ token.created_at }}" title="{{ token.created_at | datetime }}">{{ token.created_at | timeago }}</time></td>
+              <td class="nowrap">{% if token.last_used_at %}<time datetime="{{ token.last_used_at }}" title="{{ token.last_used_at | datetime }}">{{ token.last_used_at | timeago }}</time>{% else %}<span class="muted">{{ t("developer.token_never_used") }}</span>{% endif %}</td>
+              <td class="actions">
+                <div class="row-end">
+                  <details class="menu dev-rename" data-menu>
+                    <summary class="btn btn-sm btn-ghost">{{ icon("edit") }}<span>{{ t("developer.rename") }}</span><span class="visually-hidden"> {{ label }}</span></summary>
+                    <div class="menu-panel">
+                      <form method="post" action="{{ url_for('developer.rename_token', token_id=token.id) }}" class="stack-sm">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <label for="rename-{{ token.id }}" class="label">{{ t("developer.token_name") }}</label>
+                        <input type="text" id="rename-{{ token.id }}" name="name" value="{{ token.name }}" maxlength="64" required>
+                        <button type="submit" class="btn btn-sm btn-primary">{{ t("common.save") }}</button>
+                      </form>
+                    </div>
+                  </details>
+                  <form method="post" action="{{ url_for('developer.rotate_token', token_id=token.id) }}" data-token-form="rotate"
+                        data-confirm="{{ t('developer.rotate_confirm', name=label) }}" data-confirm-label="{{ t('developer.rotate') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-sm">{{ icon("refresh") }}<span>{{ t("developer.rotate") }}</span><span class="visually-hidden"> {{ label }}</span></button>
+                  </form>
+                  <form method="post" action="{{ url_for('developer.revoke_token', token_id=token.id) }}"
+                        data-confirm="{{ t('developer.revoke_confirm', name=label) }}" data-confirm-label="{{ t('developer.revoke') }}" data-confirm-danger>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-sm btn-danger">{{ icon("trash") }}<span>{{ t("developer.revoke") }}</span><span class="visually-hidden"> {{ label }}</span></button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">{{ icon("key") }}<p>{{ t("developer.tokens_empty") }}</p></div>
+      {% endif %}
+
+      {% if tokens | length < max_tokens %}
+      <form method="post" action="{{ url_for('developer.create_token') }}" class="dev-create" data-token-form="create">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="field grow">
+          <label for="token-name">{{ t("developer.token_name") }} <span class="faint">({{ t("common.optional") }})</span></label>
+          <input type="text" id="token-name" name="name" maxlength="64" placeholder="{{ t('developer.token_name_placeholder') }}" autocomplete="off">
+        </div>
+        <button type="submit" class="btn btn-primary">{{ icon("plus") }}{{ t("developer.create_token") }}</button>
+      </form>
+      {% else %}
+      <p class="alert alert-info mb-0" role="status">{{ t("developer.token_limit", count=max_tokens) }}</p>
+      {% endif %}
+    </section>
+
+    <section class="card" aria-labelledby="quickstart-title">
+      <div class="card-header"><h2 id="quickstart-title">{{ t("developer.quickstart_title") }}</h2></div>
+      <p class="muted">{{ t("developer.quickstart_text") }}</p>
+      <div class="stack">
+        {% for title_key, snippet in snippets %}
+        {% set title = t(title_key) if title_key.startswith("developer.") else title_key %}
+        <figure class="code-block dev-snippet">
+          <header><figcaption>{{ title }}</figcaption>
+            <button type="button" class="btn btn-sm btn-ghost" data-copy="{{ snippet }}">{{ icon("copy") }}{{ t("common.copy") }}<span class="visually-hidden"> {{ title }}</span></button>
+          </header>
+          <pre tabindex="0"><code>{{ snippet }}</code></pre>
+        </figure>
+        {% endfor %}
+      </div>
+      <p class="hint mb-0">{{ t("developer.quickstart_hint") }}</p>
+    </section>
+
+    <section class="card" aria-labelledby="models-title">
+      <div class="card-header"><h2 id="models-title">{{ t("developer.models_title") }}</h2></div>
+      {% if models %}
+      <p class="muted">{{ t("developer.models_text") }}</p>
+      <div class="table-wrap">
+        <table class="table">
+          <caption class="visually-hidden">{{ t("developer.models_title") }}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{{ t("developer.model_id") }}</th>
+              <th scope="col">{{ t("common.name") }}</th>
+              <th scope="col">{{ t("developer.model_features") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>auto</code></td>
+              <td>{{ t("developer.model_auto") }}</td>
+              <td></td>
+            </tr>
+            {% for model in models %}
+            <tr>
+              <td>
+                <span class="row dev-model-id"><code>{{ model.ollama_name }}</code>
+                <button type="button" class="icon-btn" data-copy="{{ model.ollama_name }}" aria-label="{{ t('developer.copy_model_id', id=model.ollama_name) }}">{{ icon("copy") }}</button></span>
+              </td>
+              <td>{{ model.display_name }}{% if model.enrollment == "new" %} <span class="badge badge-warning">{{ t("developer.model_unreviewed") }}</span>{% endif %}{% if model.description %}<br><span class="hint">{{ model.description }}</span>{% endif %}</td>
+              <td>
+                <span class="row">
+                {% if model.is_image_generation %}<span class="badge badge-info">{{ t("developer.feature_images") }}</span>{% endif %}
+                {% if model.supports_vision %}<span class="badge badge-primary">{{ t("developer.feature_vision") }}</span>{% endif %}
+                {% if model.is_reasoning %}<span class="badge">{{ t("developer.feature_reasoning") }}</span>{% endif %}
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">{{ icon("layers") }}<p>{{ t("developer.models_empty") }}</p></div>
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/developer.js') }}"></script>{% endblock %}

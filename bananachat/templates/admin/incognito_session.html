@@ -1,0 +1,37 @@
+{% extends "admin/_layout.html" %}
+{% from "partials/icons.html" import icon %}
+{% set section = "chats" %}
+{% block title %}No-history audit{% endblock %}
+{% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">{% endblock %}
+{% block admin_content %}
+<p><a href="{{ url_for('admin.incognito') }}">{{ icon("chevron-left") }}No-history audit</a></p>
+<header class="page-header">
+  <div>
+    <h1>No-history chat</h1>
+    <p><span class="mono">{{ session_id }}</span> · {{ owner }} · {% if live %}<span class="badge badge-success">Active</span>{% else %}<span class="badge">Erased</span>{% endif %}</p>
+  </div>
+  <form method="post" action="{{ url_for('admin.incognito_delete_session', session_id=session_id) }}" data-confirm="Delete every audit entry of this chat (and the chat, if still active)?" data-confirm-label="Delete" data-confirm-danger>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-danger">{{ icon("trash") }}Delete all entries</button>
+  </form>
+</header>
+<div class="page-narrow">
+  <div class="chat-messages read-only">
+    {% for m in messages %}
+    <article class="message message-{{ m.role }}" aria-label="{{ owner if m.role == 'user' else (m.model_name or 'Assistant') }}">
+      <div class="message-body">
+        {% if m.role == "assistant" %}<div class="prose message-content" data-markdown>{{ m.content }}</div>{% else %}<div class="message-content message-text">{{ m.content }}</div>{% endif %}
+      </div>
+      <div class="row message-meta">
+        <span>{% if m.role == "assistant" %}{{ m.model_name or "Assistant" }}{% if m.tokens_out %} · {{ m.tokens_out }} tokens{% endif %}{% else %}{{ owner }}{% endif %} · {{ m.created_at | datetime }}</span>
+        <form method="post" action="{{ url_for('admin.incognito_delete_entry', entry_id=m.id) }}" data-confirm="Delete this entry?" data-confirm-label="Delete" data-confirm-danger>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-ghost btn-sm">{{ icon("trash") }}Delete entry</button>
+        </form>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/chat-view.js') }}"></script>{% endblock %}

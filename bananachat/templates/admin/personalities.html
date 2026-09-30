@@ -1,0 +1,138 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, empty, pagination, utc_input %}
+{% from "partials/icons.html" import icon %}
+{% from "personalities/_macros.html" import avatar %}
+{% block title %}Personalities{% endblock %}
+{% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/personalities.css') }}">{% endblock %}
+{% macro keep() -%}
+<input type="hidden" name="q" value="{{ search }}"><input type="hidden" name="page" value="{{ page.number }}"><input type="hidden" name="kind" value="{{ kind }}">
+{%- endmacro %}
+{% block admin_content %}
+{% call header("Personalities", "Moderate the personalities users create and publish featured ones for everyone.") %}
+<a class="btn btn-primary" href="{{ url_for('admin.personality_featured_new') }}">{{ icon("plus") }}New featured personality</a>
+{% endcall %}
+
+<div class="alert alert-info mb-2">
+  {{ icon("sparkles") }}
+  <div>
+    <p><strong>Featured personalities</strong> are written here and shown to every user who may use personalities (the <em>custom personalities</em> access policy), read-only, with a “Duplicate to my personalities” action. None exist until you create one; drafts stay hidden until you publish them.</p>
+    <p>Their instructions are layered below each model's system prompt, like users' own personalities. {{ featured_count }} of {{ max_featured }} featured personalities exist.</p>
+  </div>
+</div>
+
+<nav class="tabs" aria-label="Filter personalities">
+  {% for key, label in [("", "All"), ("user", "Users'"), ("featured", "Featured"), ("shared", "Shared by link")] %}
+  <a href="{{ url_for('admin.personalities', kind=key or None, q=search or None) }}"{% if kind == key %} aria-current="page"{% endif %}>{{ label }}</a>
+  {% endfor %}
+</nav>
+
+<div class="toolbar mb-2">
+  <form method="get" action="{{ url_for('admin.personalities') }}" class="search-form" role="search">
+    {% if kind %}<input type="hidden" name="kind" value="{{ kind }}">{% endif %}
+    <label class="visually-hidden" for="personality-search">Search by owner or name</label>
+    <input type="search" id="personality-search" name="q" value="{{ search }}" placeholder="Owner or name" maxlength="64">
+    <button type="submit" class="btn">{{ icon("search") }}Search</button>
+    {% if search %}<a class="btn btn-ghost" href="{{ url_for('admin.personalities', kind=kind or None) }}">Clear</a>{% endif %}
+  </form>
+  <details class="disclosure">
+    <summary class="btn">{{ icon("plus") }}Create for a user</summary>
+    <form method="post" action="{{ url_for('admin.personality_create') }}" class="card stack mt-1">
+      {{ csrf() }}
+      <p class="hint mb-0">Adds a private personality to one user's list (it counts towards their limit). To offer one to everyone, create a featured personality instead.</p>
+      <div class="form-grid">
+        <div class="field"><label for="p-owner" class="required">Owner (username)</label><input type="text" id="p-owner" name="username" required maxlength="32" autocomplete="off"></div>
+        <div class="field"><label for="p-name" class="required">Name</label><input type="text" id="p-name" name="name" required maxlength="{{ max_name }}"></div>
+      </div>
+      <div class="field">
+        <label for="p-instructions" class="required">Instructions</label>
+        <textarea id="p-instructions" name="instructions" required maxlength="{{ max_instructions }}" rows="5" aria-describedby="p-instructions-hint"></textarea>
+        <span class="hint" id="p-instructions-hint">Added to the model's instructions when the user chooses this personality. Up to {{ max_instructions | number }} characters.</span>
+      </div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Create personality</button></div>
+    </form>
+  </details>
+</div>
+
+{% if rows %}
+<div class="table-wrap">
+  <table class="table">
+    <thead><tr><th scope="col">Personality</th><th scope="col">Owner</th><th scope="col">Status</th><th scope="col">Updated</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      {% set featured = row.kind == "featured" %}
+      <tr>
+        <td class="cell-wide">
+          <div class="admin-persona">
+            {{ avatar(row, "sm") }}
+            <div class="grow">
+              <strong>{{ row.name }}</strong>
+              {% if row.description %}<div class="small muted">{{ row.description }}</div>{% endif %}
+              <details class="inline-details"><summary>Instructions</summary><div class="pre-wrap small">{{ row.instructions }}</div></details>
+            </div>
+          </div>
+        </td>
+        <td>
+          {% if featured %}<span class="badge badge-primary">{{ icon("sparkles") }}Featured</span><div class="small muted">by {{ row.username }}</div>
+          {% else %}<a href="{{ url_for('admin.user_detail', user_id=row.user_id) }}">{{ row.username }}</a>{% endif %}
+          {% if row.share_token %}<div><span class="badge badge-info">{{ icon("share") }}Shared by link</span></div>{% endif %}
+        </td>
+        <td>
+          {% if is_blocked(row) %}
+          <span class="badge badge-danger">Disabled{% if row.disabled_until %} until {{ row.disabled_until | datetime }}{% endif %}</span>
+          {% if row.disabled_reason %}<div class="small muted">{{ row.disabled_reason }}</div>{% endif %}
+          {% elif featured and not row.is_enabled %}<span class="badge badge-warning">Draft</span>
+          {% elif featured %}<span class="badge badge-success">Published</span>
+          {% elif row.admin_disabled and row.disabled_until %}<span class="badge">Suspension ended</span>
+          {% elif not row.is_enabled %}<span class="badge">Turned off by owner</span>
+          {% else %}<span class="badge badge-success">Active</span>{% endif %}
+        </td>
+        <td class="nowrap">{{ when(row.updated_at) }}</td>
+        <td class="actions">
+          {% if featured %}
+          <a class="btn btn-sm" href="{{ url_for('admin.personality_featured_edit', personality_id=row.id) }}" aria-label="Edit {{ row.name }}">{{ icon("edit") }}</a>
+          <form method="post" action="{{ url_for('admin.personality_publish', personality_id=row.id) }}">
+            {{ csrf() }}{{ keep() }}<input type="hidden" name="published" value="{{ '0' if row.is_enabled else '1' }}">
+            <button type="submit" class="btn btn-sm{% if not row.is_enabled %} btn-published{% endif %}">{{ "Unpublish" if row.is_enabled else "Publish" }}</button>
+          </form>
+          {% endif %}
+          {% if row.share_token %}
+          <form method="post" action="{{ url_for('admin.personality_unshare', personality_id=row.id) }}" data-confirm="Revoke the share link of “{{ row.name }}”? Copies already saved are not affected.">
+            {{ csrf() }}{{ keep() }}
+            <button type="submit" class="btn btn-sm">Revoke link</button>
+          </form>
+          {% endif %}
+          {% if row.admin_disabled %}
+          <form method="post" action="{{ url_for('admin.personality_enable', personality_id=row.id) }}">
+            {{ csrf() }}{{ keep() }}
+            <button type="submit" class="btn btn-sm">Re-enable</button>
+          </form>
+          {% else %}
+          <details class="menu" data-menu>
+            <summary class="btn btn-sm">Disable…</summary>
+            <div class="menu-panel menu-form">
+              <form method="post" action="{{ url_for('admin.personality_disable', personality_id=row.id) }}" class="stack-sm">
+                {{ csrf() }}{{ keep() }}
+                <div class="field"><label for="reason-{{ row.id }}">{{ "Reason (kept for the record)" if featured else "Reason shown to the owner" }}</label><input type="text" id="reason-{{ row.id }}" name="reason" maxlength="500"></div>
+                {{ utc_input("until", "until-" ~ row.id, "Until (optional)", "UTC. Leave empty to disable until re-enabled.", min=min_datetime) }}
+                <button type="submit" class="btn btn-danger btn-sm">Disable</button>
+              </form>
+            </div>
+          </details>
+          {% endif %}
+          <form method="post" action="{{ url_for('admin.personality_delete', personality_id=row.id) }}" data-confirm="{% if featured %}Delete the featured personality “{{ row.name }}”? Users' copies are kept; chats using it continue without it.{% else %}Delete “{{ row.name }}” of {{ row.username }}? Chats that used it keep their messages.{% endif %}" data-confirm-danger>
+            {{ csrf() }}{{ keep() }}
+            <button type="submit" class="btn btn-sm btn-danger" aria-label="Delete {{ row.name }}">{{ icon("trash") }}</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{{ pagination(page, "admin.personalities", "Personality pages", q=search or None, kind=kind or None) }}
+{% elif kind == "featured" and not search %}
+{{ empty("sparkles", "No featured personalities yet", "Create one to offer every user a ready-made personality. Nothing is published until you choose to.") }}
+{% else %}
+{{ empty("sparkles", "No personalities found", "Try another search." if search else "Nothing matches this filter yet.") }}
+{% endif %}
+{% endblock %}

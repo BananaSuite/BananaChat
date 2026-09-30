@@ -1,260 +1,311 @@
-"""BananaChat Worker daemon main loop.
+"""The worker loop: heartbeats, activity, polling for jobs and streaming answers back.
 
-Architecture
-------------
-Three concurrent threads cooperate via simple shared state:
+Threads:
 
-  heartbeat_thread: POSTs /worker/v1/heartbeat every HEARTBEAT_INTERVAL
-                     seconds to keep the worker visible in the admin panel.
+* heartbeat - every ``BC_HEARTBEAT_INTERVAL`` seconds reports status, activity,
+  GPU and models; the server's reply can stop the running job;
+* activity - samples idle time and GPU use, adjusts process priority and, when
+  the owner starts gaming before the running job produced any text, hands the
+  job back to the server so another worker can take it;
+* main - long-polls for a job, runs it on the local Ollama, streams the answer
+  in pieces (at most every 100 ms or 4,096 characters) and completes it.
 
-  activity_thread: Refreshes activity state (idle/light/active/gaming)
-                     and adjusts process priority every ACTIVITY_CHECK_INTERVAL
-                     seconds.
-
-  main loop: Polls the server for jobs.  Before each poll it checks
-                     the activity state.  If gaming, it sleeps and skips the
-                     poll.  Otherwise it claims and runs the job.
-
-Job execution flow
-------------------
-  1. poll_for_job(): long-polls server (blocks up to 28 s)
-  2. ensure_ollama_running: start Ollama if not already up
-  3. generate_stream(): run inference on local Ollama
-  4. submit_chunk(): POST each chunk to server
-  5. complete_job(): POST final token counts
-  6. Update last_job_time: used to auto-stop Ollama after idle timeout
+SIGTERM/SIGINT stop the worker gracefully: a job that has not produced text
+goes back to the pool, a job in the middle of its answer is reported as
+failed, and the Ollama the worker started is stopped.
 """
 
+from __future__ import annotations
+
 import logging
-import sys
+import platform
+import signal
 import threading
 import time
+from typing import List, Optional
 
-import config
-import activity
-import ollama_mgr
-import resources
-import server_client
+from .activity import Monitor, get_gpu_name
+from .client import Client, ServerError
+from .local_ollama import Cancelled, LocalOllama, OllamaError
+from .resources import Priority
 
-_logger = logging.getLogger("bananachat.worker.daemon")
+log = logging.getLogger("bananachat.worker")
 
-# Shared state: written by activity_thread, read by main loop and heartbeat.
-_state_lock            = threading.Lock()
-_activity_state: str   = "idle"    # idle / light / active / gaming
-_gpu_name: str | None  = None
-_ollama_version: str | None = None
-_available_models: list[str] = []
-
-_last_job_time: float  = 0.0       # monotonic timestamp of last completed job
-_stop_event            = threading.Event()
+PIECE_CHARS = 4096
+PIECE_SECONDS = 0.1
+MODEL_REFRESH_SECONDS = 60
+PERMANENT_STATUSES = (401, 403, 503)
 
 
-# Heartbeat thread
-
-def _heartbeat_loop():
-    """Send periodic heartbeats to keep this worker visible on the server."""
-    while not _stop_event.wait(config.HEARTBEAT_INTERVAL):
-        with _state_lock:
-            state  = _activity_state
-            gpu    = _gpu_name
-            ver    = _ollama_version
-            models = list(_available_models)
-
-        gpu_util = activity.get_gpu_utilisation()
-        ok = server_client.send_heartbeat(
-            status="online" if state != "gaming" else "busy",
-            gpu_name=gpu,
-            ollama_version=ver,
-            capabilities={"models": models},
-            activity_state=state,
-            gpu_util=gpu_util,
-        )
-        if not ok:
-            _logger.debug("Heartbeat not acknowledged (server may be unreachable)")
+class _Stop(Exception):
+    """The server no longer wants this job."""
 
 
-# Activity monitoring thread
+class Job:
+    def __init__(self, payload: dict):
+        self.payload = payload
+        self.id = payload["job_id"]
+        self.cancel = threading.Event()
+        self.sent_any = False
+        self.reason = ""          # "defer", "shutdown" or "server"
+        self._response = None
+        self._lock = threading.Lock()
 
-def _activity_loop():
-    """Refresh activity state and adjust process priority on schedule."""
-    global _activity_state, _gpu_name, _ollama_version, _available_models
+    def attach(self, response) -> None:
+        with self._lock:
+            self._response = response
+            if self.cancel.is_set():
+                response.abort()
 
-    while not _stop_event.wait(config.ACTIVITY_CHECK_INTERVAL):
-        state     = activity.get_activity_state()
-        gpu_name  = activity.get_gpu_name()
-        managed_pid = ollama_mgr.get_managed_pid()
-
-        # Refresh model list while Ollama is running
-        models = []
-        if ollama_mgr.is_alive():
-            models = ollama_mgr.list_models()
-            ver    = ollama_mgr.get_version()
-        else:
-            ver = None
-
-        with _state_lock:
-            _activity_state  = state
-            if gpu_name:
-                _gpu_name = gpu_name
-            if ver:
-                _ollama_version = ver
-            if models:
-                _available_models = models
-
-        resources.apply_for_state(state, ollama_pid=managed_pid)
-
-        _logger.debug(
-            "Activity: %s | GPU util: %s%%",
-            state,
-            f"{activity.get_gpu_utilisation():.0f}" if activity.get_gpu_utilisation() is not None else "n/a",
-        )
+    def stop(self, reason: str) -> None:
+        with self._lock:
+            if not self.reason:
+                self.reason = reason
+            self.cancel.set()
+            if self._response is not None:
+                self._response.abort()
 
 
-# Job execution
+class Worker:
+    def __init__(self, settings, *, client=None, ollama=None, monitor=None, priority=None):
+        self.settings = settings
+        self.client = client or Client(settings)
+        self.ollama = ollama or LocalOllama(settings)
+        self.monitor = monitor or Monitor(settings)
+        self.priority = priority or Priority()
+        self.stop_event = threading.Event()
+        self.models: List[str] = []
+        self.ollama_version: Optional[str] = None
+        self.gpu_name: Optional[str] = None
+        self.current: Optional[Job] = None
+        self._models_at = 0.0
+        self._problem = ""
 
-def _run_job(job: dict):
-    """Execute one inference job and stream results back to the server."""
-    global _last_job_time
+    # ----- lifecycle ---------------------------------------------------------------------------
+    def request_stop(self, *_args) -> None:
+        if not self.stop_event.is_set():
+            log.info("Stopping the worker")
+        self.stop_event.set()
+        job = self.current
+        if job is not None:
+            job.stop("shutdown")
 
-    job_id     = job["job_id"]
-    model      = job["model"]
-    messages   = job["messages"]
-    options    = job.get("options")
+    def install_signal_handlers(self) -> None:
+        for name in ("SIGTERM", "SIGINT", "SIGBREAK", "SIGHUP"):
+            number = getattr(signal, name, None)
+            if number is not None:
+                try:
+                    signal.signal(number, self.request_stop)
+                except (OSError, ValueError):
+                    pass
 
-    _logger.info("Starting job %s  model=%s  msgs=%d", job_id[:8], model, len(messages))
+    def run(self) -> int:
+        problems = self.settings.problems()
+        if problems:
+            for problem in problems:
+                log.error("Configuration: %s", problem)
+            return 2
+        for warning in self.settings.warnings:
+            log.warning("Configuration: %s", warning)
+        log.info("BananaChat worker %s starting; server %s", self.settings.name, self.settings.server_url)
+        self.gpu_name = get_gpu_name()
+        try:
+            self.monitor.sample()
+        except Exception:  # noqa: BLE001
+            log.debug("First activity sample failed", exc_info=True)
+        self.refresh_models(start=True)
+        threads = [
+            threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True),
+            threading.Thread(target=self.monitor.run, args=(self.stop_event, self._activity_changed),
+                             name="activity", daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+        self.send_heartbeat()
+        try:
+            self._loop()
+        finally:
+            self.stop_event.set()
+            self.send_heartbeat(status="offline")
+            self.ollama.stop_managed()
+            log.info("Worker stopped")
+        return 0
 
-    seq, tokens_in, tokens_out = 0, 0, 0
-    completed = False
-    pending = ""
-    last_send = time.monotonic()
-    stream = None
-    try:
-        if not ollama_mgr.ensure_running():
-            raise RuntimeError("Ollama could not be started")
-        stream = ollama_mgr.generate_stream(model, messages, options)
-        for content, done, usage in stream:
-            if not isinstance(content, str):
-                raise RuntimeError("Ollama returned invalid text")
-            pending += content
-            while pending and (len(pending) >= 4096 or done or time.monotonic() - last_send >= 0.1):
-                piece, pending = pending[:4096], pending[4096:]
-                if not server_client.submit_chunk(job_id, seq, piece, False):
-                    raise RuntimeError("Server stopped accepting inference output")
-                seq += 1
-                last_send = time.monotonic()
-            if done:
-                if not server_client.submit_chunk(job_id, seq, "", True):
-                    raise RuntimeError("Server stopped accepting inference output")
-                tokens_in, tokens_out = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
-                completed = server_client.complete_job(job_id, tokens_in, tokens_out, usage.get("finish_reason", "stop"))
-                break
-        if not completed:
-            raise RuntimeError("Inference ended before its result was accepted")
-        _logger.info("Job %s done (%d input / %d output tokens)", job_id[:8], tokens_in, tokens_out)
-    except Exception as exc:
-        _logger.error("Job %s failed: %s", job_id[:8], exc)
-        server_client.fail_job(job_id, str(exc))
-    finally:
-        if stream is not None:
-            stream.close()
+    # ----- state reports --------------------------------------------------------------------
+    def refresh_models(self, *, start: bool = False) -> None:
+        alive = self.ollama.is_alive() or (start and self.ollama.ensure_running())
+        if alive:
+            models = self.ollama.models()
+            if models != self.models:
+                log.info("Models offered: %s", ", ".join(models) or "none")
+            self.models = models  # kept while Ollama is stopped for being idle
+            self.ollama_version = self.ollama.version() or self.ollama_version
+        self._models_at = time.monotonic()
 
-    _last_job_time = time.monotonic()
+    def heartbeat_payload(self, status: Optional[str] = None) -> dict:
+        state = self.monitor.state
+        gpu = self.monitor.gpu
+        payload = {
+            "status": status or ("busy" if state == "gaming" else "online"),
+            "gpu_name": (self.gpu_name or None) and self.gpu_name[:500],
+            "ollama_version": self.ollama_version,
+            "capabilities": {"models": self.models[:512]},
+            "activity_state": state,
+            "gpu_util": None if gpu is None else round(min(100.0, max(0.0, float(gpu))), 1),
+            "platform": f"{platform.system()} {platform.machine()}".strip()[:120],
+        }
+        job = self.current
+        if job is not None:
+            payload["job_id"] = job.id
+        return payload
 
+    def send_heartbeat(self, status: Optional[str] = None) -> None:
+        try:
+            reply = self.client.heartbeat(self.heartbeat_payload(status))
+        except ServerError as error:
+            self._report(error, "Heartbeat")
+            return
+        self._problem = ""
+        job = self.current
+        if job is not None and reply.get("job_stop"):
+            log.info("The server stopped job %s", job.id[:8])
+            job.stop("server")
 
-# Ollama idle shutdown
+    def _report(self, error: ServerError, what: str) -> None:
+        text = {401: "The server rejected the worker token. Check BC_WORKER_TOKEN.",
+                403: "An administrator disabled this worker.",
+                503: "Remote workers are turned off on the server (or it is in maintenance)."}.get(error.status)
+        message = f"{what} failed: {text or error}"
+        if message != self._problem:
+            log.warning("%s", message)
+            self._problem = message
 
-def _maybe_stop_ollama_idle():
-    """Stop Ollama if it has been idle longer than OLLAMA_IDLE_TIMEOUT."""
-    if config.OLLAMA_IDLE_TIMEOUT <= 0:
-        return
-    if _last_job_time == 0.0:
-        return   # Never ran a job yet: Ollama wasn't started by us
-    idle_secs = time.monotonic() - _last_job_time
-    if idle_secs >= config.OLLAMA_IDLE_TIMEOUT:
-        if ollama_mgr.get_managed_pid() is not None:
-            _logger.info(
-                "Ollama idle for %.0f s (threshold %d s): stopping to free VRAM",
-                idle_secs, config.OLLAMA_IDLE_TIMEOUT,
-            )
-            ollama_mgr.stop_managed()
+    def _heartbeat_loop(self) -> None:
+        while not self.stop_event.wait(self.settings.heartbeat_interval):
+            self.send_heartbeat()
 
+    def _activity_changed(self, state: str) -> None:
+        self.priority.apply(state, self.ollama.managed_pid)
+        job = self.current
+        if state == "gaming" and job is not None and not job.sent_any:
+            log.info("The owner started gaming; handing job %s back to the server", job.id[:8])
+            job.stop("defer")
+        if state == "gaming":
+            self.send_heartbeat()
 
-# Main daemon entry point
-
-def run():
-    """Start all threads and enter the job-polling loop."""
-    try:
-        config.validate()
-    except ValueError as exc:
-        _logger.error("Configuration error: %s", exc)
-        sys.exit(1)
-
-    _logger.info(
-        "BananaChat Worker starting  name=%s  server=%s",
-        config.WORKER_NAME, config.SERVER_URL,
-    )
-
-    server_client.send_heartbeat(status="online")
-
-    heartbeat_t = threading.Thread(
-        target=_heartbeat_loop, name="heartbeat", daemon=True
-    )
-    activity_t  = threading.Thread(
-        target=_activity_loop, name="activity",  daemon=True
-    )
-    heartbeat_t.start()
-    activity_t.start()
-
-    _logger.info("Worker daemon running: polling for jobs")
-
-    try:
-        while not _stop_event.is_set():
-            # Check activity state before attempting to claim a job
-            with _state_lock:
-                state  = _activity_state
-                models = list(_available_models)
-
-            if state == "gaming":
-                _logger.debug("GPU busy (gaming/rendering): skipping job poll")
-                time.sleep(5)
+    # ----- jobs ---------------------------------------------------------------------------------
+    def _loop(self) -> None:
+        backoff = 1.0
+        while not self.stop_event.is_set():
+            if self.monitor.state == "gaming":
+                self.stop_event.wait(5)
                 continue
-
-            _maybe_stop_ollama_idle()
-
-            # Long-poll for a job (blocks up to 28 s on the server)
-            job = server_client.poll_for_job(available_models=models or None)
-
-            if job is None:
-                # No job during this poll window: small gap then poll again
-                if not _stop_event.wait(config.POLL_GAP_SECONDS):
-                    continue
-                break
-
-            # Re-check state in case user started gaming while we were polling
-            with _state_lock:
-                state = _activity_state
-            if state == "gaming":
-                _logger.info(
-                    "GPU became busy while polling: deferring job %s back to server",
-                    job.get("job_id", "?")[:8],
-                )
-                # The job will time out and be retried when GPU is free again.
-                # We do NOT call fail_job here; server-side timeout handles it.
-                time.sleep(5)
+            self.ollama.stop_if_idle()
+            if time.monotonic() - self._models_at > MODEL_REFRESH_SECONDS:
+                self.refresh_models()
+            if not self.models:
+                self._report(ServerError("no models are installed in Ollama (or it is not running)"), "Polling")
+                self.stop_event.wait(30)
+                self.refresh_models(start=True)
                 continue
+            try:
+                payload = self.client.poll(self.models)
+            except ServerError as error:
+                self._report(error, "Polling")
+                wait = 60.0 if error.status in PERMANENT_STATUSES else backoff
+                backoff = min(60.0, backoff * 2)
+                self.stop_event.wait(wait)
+                continue
+            backoff = 1.0
+            self._problem = ""
+            if payload is None:
+                self.stop_event.wait(self.settings.poll_gap)
+                continue
+            if self.stop_event.is_set() or self.monitor.state == "gaming":
+                self.client.fail(payload["job_id"], "", requeue=True)
+                continue
+            self.run_job(payload)
+            self.stop_event.wait(self.settings.poll_gap)
 
-            _run_job(job)
-            time.sleep(config.POLL_GAP_SECONDS)
+    def _send(self, job: Job, seq: int, content: str, done: bool) -> None:
+        for attempt in range(3):
+            try:
+                if not self.client.chunk(job.id, seq, content, done):
+                    raise _Stop()
+                job.sent_any = True
+                return
+            except ServerError as error:
+                if error.status is not None and error.status < 500 or attempt == 2:
+                    raise _Stop() from None
+                time.sleep(attempt + 1)  # accepted chunks are acknowledged again, so retrying is safe
 
-    except KeyboardInterrupt:
-        _logger.info("Interrupted: shutting down")
-    finally:
-        _stop_event.set()
-        server_client.send_heartbeat(status="offline")
-        ollama_mgr.stop_managed()
-        _logger.info("Worker daemon stopped")
+    def run_job(self, payload: dict) -> str:
+        """Run one job; returns ``completed``, ``deferred``, ``stopped`` or ``failed``."""
+        job = Job(payload)
+        self.current = job
+        self.monitor.own_job = True
+        self.priority.apply(self.monitor.state, self.ollama.managed_pid)
+        settings = self.settings
+        first_token = _positive(payload.get("first_token_timeout"), settings.first_token_timeout)
+        total = _positive(payload.get("generation_timeout"), settings.generation_timeout)
+        log.info("Job %s: %s, %d messages", job.id[:8], payload["model"], len(payload["messages"]))
+        seq, pending, last_send = 0, "", time.monotonic()
+        try:
+            if not self.ollama.ensure_running():
+                raise OllamaError("Ollama is not running and could not be started.")
+            for content, done, usage in self.ollama.chat(
+                    payload["model"], payload["messages"], payload.get("options") or None,
+                    first_token_timeout=first_token, read_timeout=settings.read_timeout, total_timeout=total,
+                    cancel=job.cancel, on_open=job.attach):
+                pending += content
+                while pending and (done or len(pending) >= PIECE_CHARS or time.monotonic() - last_send >= PIECE_SECONDS):
+                    piece, pending = pending[:PIECE_CHARS], pending[PIECE_CHARS:]
+                    self._send(job, seq, piece, False)
+                    seq += 1
+                    last_send = time.monotonic()
+                if done:
+                    self._send(job, seq, "", True)
+                    ok = self.client.complete(job.id, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                                              usage.get("finish_reason", "stop"))
+                    log.info("Job %s %s", job.id[:8], "completed" if ok else "was not accepted by the server")
+                    return "completed" if ok else "stopped"
+            raise OllamaError("Ollama ended without finishing the answer.")
+        except (Cancelled, _Stop):
+            return self._interrupted(job)
+        except OllamaError as error:
+            if job.cancel.is_set():
+                return self._interrupted(job)
+            log.warning("Job %s failed: %s", job.id[:8], error)
+            self.client.fail(job.id, str(error))
+            return "failed"
+        except ServerError as error:
+            log.warning("Job %s: the server could not be reached: %s", job.id[:8], error)
+            self.client.fail(job.id, "The worker lost contact with the server.")
+            return "failed"
+        finally:
+            self.current = None
+            self.monitor.own_job = False
+
+    def _interrupted(self, job: Job) -> str:
+        if job.reason == "server" or (not job.reason and not job.cancel.is_set()):
+            log.info("Job %s stopped by the server", job.id[:8])
+            return "stopped"
+        if not job.sent_any:
+            self.client.fail(job.id, "", requeue=True)
+            log.info("Job %s handed back to the server", job.id[:8])
+            return "deferred"
+        self.client.fail(job.id, "The worker is shutting down." if job.reason == "shutdown"
+                         else "The worker's owner needed the computer.")
+        return "stopped"
 
 
-def stop():
-    """Signal the daemon to stop cleanly (for use by the service manager)."""
-    _stop_event.set()
+def _positive(value, default) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value <= 24 * 3600:
+        return float(value)
+    return float(default)
+
+
+def run(settings) -> int:
+    worker = Worker(settings)
+    worker.install_signal_handlers()
+    return worker.run()

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ t("developer.usage_title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/developer.css') }}">{% endblock %}
+{% block content %}
+{% set active = "usage" %}
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1>{{ t("developer.title") }}</h1>
+      <p>{{ t("developer.usage_intro") }}</p>
+    </div>
+  </header>
+  {% include "developer/_tabs.html" %}
+  <div class="stack-lg">
+    {% include "developer/_credits.html" %}
+    <section class="card" aria-labelledby="history-title">
+      <div class="card-header">
+        <h2 id="history-title">{{ t("developer.usage_title") }}</h2>
+        {% if history %}<span class="hint">{{ t("developer.usage_limit", count=limit) }}</span>{% endif %}
+      </div>
+      {% if history %}
+      <div class="table-wrap">
+        <table class="table dev-usage">
+          <caption class="visually-hidden">{{ t("developer.usage_title") }}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{{ t("developer.usage_when") }}</th>
+              <th scope="col">{{ t("developer.usage_source") }}</th>
+              <th scope="col">{{ t("developer.usage_model") }}</th>
+              <th scope="col" class="text-right">{{ t("developer.usage_tokens_in") }}</th>
+              <th scope="col" class="text-right">{{ t("developer.usage_tokens_out") }}</th>
+              <th scope="col" class="text-right">{{ t("developer.usage_counted") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for row in history %}
+            <tr>
+              <td class="nowrap"><time datetime="{{ row.created_at }}">{{ row.created_at | datetime }}</time></td>
+              <td>
+                {% if row.request_type == "playground" %}<span class="badge badge-primary">{{ t("developer.source_playground") }}</span>
+                {% elif row.token_name is not none or row.token_prefix %}<span class="badge">{{ t("developer.source_token", name=row.token_name or row.token_prefix) }}</span>
+                {% elif row.token_id %}<span class="badge">{{ t("developer.source_api") }}</span>
+                {% else %}<span class="badge">{{ t("developer.source_web") }}</span>{% endif %}
+              </td>
+              <td>{{ row.model_name or "—" }}</td>
+              <td class="text-right mono">{{ row.tokens_in | number }}</td>
+              <td class="text-right mono">{{ row.tokens_out | number }}</td>
+              <td class="text-right mono nowrap">
+                {{ row.counted_tokens | number }}
+                {% if row.is_slow %}<span class="badge badge-warning">{{ t("developer.usage_slow") }}</span>{% endif %}
+                {% if row.usage_estimated %}<span class="badge" title="{{ t('developer.usage_estimated_hint') }}">{{ t("developer.usage_estimated") }}</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="hint mt-1 mb-0">{{ t("developer.usage_hint") }}</p>
+      {% else %}
+      <div class="empty">{{ icon("chart") }}<p>{{ t("developer.usage_empty") }}</p>
+        <a class="btn" href="{{ url_for('developer.playground') }}">{{ t("developer.try_playground") }}</a></div>
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,28 @@
+{#- One message in a read-only conversation (shared link, administrator audit).
+    `m` is a message dict from web.chat.messages_json. Assistant text is rendered as
+    Markdown by static/js/chat-view.js; until then (or without scripts) it shows as plain text. -#}
+{% macro message(m, you_label, assistant_label, state_labels) -%}
+<article class="message message-{{ m.role }}" aria-label="{{ you_label if m.role == 'user' else (m.model_name or assistant_label) }}">
+  <div class="message-body">
+    {% if m.role == "assistant" %}
+    <div class="prose message-content" data-markdown>{{ m.content }}</div>
+    {% else %}
+    <div class="message-content message-text">{{ m.content }}</div>
+    {% endif %}
+    {% if m.attachments %}
+    <ul class="attachment-list">
+      {% for attachment in m.attachments %}
+      <li class="file-chip"><span class="file-chip-kind">{{ t("js.chat_kind_" ~ attachment.kind) | upper }}</span><span class="truncate">{{ attachment.filename }}</span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if m.role == "assistant" and m.state in state_labels %}
+    <p class="message-state state-{{ m.state }}">{{ state_labels[m.state] }}</p>
+    {% endif %}
+  </div>
+  <p class="message-meta">
+    {%- if m.role == "assistant" %}{{ m.model_name or assistant_label }}{% if m.tokens_out %} · {{ t("js.chat_tokens", count=m.tokens_out) }}{% endif %}{% else %}{{ you_label }}{% endif %}
+    {%- if m.created_at %} · <time datetime="{{ m.created_at }}">{{ m.created_at | datetime }}</time>{% endif -%}
+  </p>
+</article>
+{%- endmacro %}

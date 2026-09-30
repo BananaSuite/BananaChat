@@ -1,4 +1,4 @@
-"""Service installer checks for all three platforms.
+"""Service installer and command-line checks for all three platforms.
 
 These exercise the artefacts the installer generates and the commands it
 issues, with the platform forced and the tools mocked. None of them claims a
@@ -254,3 +254,51 @@ def test_every_supported_platform_writes_its_settings_file_once(monkeypatch, tmp
     env_file.write_text('BC_SERVER_URL=https://edited.example.com\n')
     assert service._write_env_template(str(env_file)) is False
     assert 'edited.example.com' in env_file.read_text()
+
+
+def test_linux_unit_stops_gracefully_and_settings_file_is_private_from_the_start(monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setattr(service, '_OS', 'Linux')
+    created = []
+    real_open = os.open
+
+    def recording_open(path, flags, mode=0o777, *args, **kwargs):
+        if str(path).endswith('bananachat-worker.env'):
+            created.append(mode)
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(service.os, 'open', recording_open)
+    monkeypatch.setattr(service.subprocess, 'run',
+                        lambda command, **kwargs: subprocess.CompletedProcess(command, 0))
+    service.install(system=False)
+    unit = (tmp_path / '.config' / 'systemd' / 'user' / 'bananachat-worker.service').read_text()
+    assert 'KillSignal=SIGTERM' in unit and 'TimeoutStopSec=' in unit
+    assert 'EnvironmentFile=-"' in unit
+    assert created == [0o600]
+    assert 'BC_WORKER_TOKEN=paste-your-token-here' in (tmp_path / '.config' / 'bananachat-worker.env').read_text()
+
+
+def test_command_line_runs_as_a_script_without_shadowing_modules(tmp_path):
+    """Started as ``python bananachat_worker.py``, the folder's config.py and
+    service.py must not become the top-level ``config``/``service`` modules."""
+    import sys
+
+    script = Path(__file__).resolve().parents[1] / 'worker' / 'bananachat_worker.py'
+    env = {'PATH': os.environ.get('PATH', ''), 'HOME': str(tmp_path), 'BC_WORKER_ENV_FILE': str(tmp_path / 'none.env'),
+           'BC_OLLAMA_HOST': 'http://127.0.0.1:9'}
+    result = subprocess.run([sys.executable, str(script), 'config'], capture_output=True, text=True, env=env,
+                            timeout=60, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert 'BC_SERVER_URL is not set' in result.stdout
+    assert 'Ollama is not running' in result.stdout
+    bad = subprocess.run([sys.executable, str(script), 'fly'], capture_output=True, text=True, env=env, timeout=60)
+    assert bad.returncode == 1 and 'Unknown command' in bad.stderr
+    run = subprocess.run([sys.executable, str(script), 'run'], capture_output=True, text=True, env=env, timeout=60)
+    assert run.returncode == 2 and 'BC_WORKER_TOKEN is not set' in run.stderr
+
+
+def test_service_description_names_every_backend(monkeypatch):
+    for system, word in (('Linux', 'systemd'), ('Darwin', 'launchd'), ('Windows', 'BananaChatWorker'),
+                         ('Plan9', 'not supported')):
+        monkeypatch.setattr(service, '_OS', system)
+        assert word in service.describe_backend()

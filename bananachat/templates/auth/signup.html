@@ -1,0 +1,31 @@
+{% extends "auth/_layout.html" %}
+{% block title %}{{ t("auth.create_account") }}{% endblock %}
+{% block card %}
+<h1>{{ t("auth.create_account") }}</h1>
+{% if signup_mode == "invite" %}<p class="muted">{{ t("auth.invite_only") }}</p>{% endif %}
+<form method="post" action="{{ url_for('auth.signup') }}" class="stack">
+  {% include "auth/_bot_fields.html" %}
+  {% if signup_mode == "invite" %}
+  <div class="field">
+    <label for="invite_code" class="required">{{ t("auth.invite_code") }}</label>
+    <input type="text" id="invite_code" name="invite_code" required maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false" value="{{ invite }}">
+  </div>
+  {% endif %}
+  <div class="field">
+    <label for="username" class="required">{{ t("auth.username") }}</label>
+    <input type="text" id="username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]+" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="username-hint" value="{{ request.form.get('username', '') }}">
+    <span class="hint" id="username-hint">{{ t("auth.username_rules") }}</span>
+  </div>
+  <div class="field">
+    <label for="password" class="required">{{ t("auth.password") }}</label>
+    <input type="password" id="password" name="password" required minlength="8" maxlength="1024" autocomplete="new-password" aria-describedby="password-hint">
+    <span class="hint" id="password-hint">{{ t("auth.password_length") }}</span>
+  </div>
+  <div class="field">
+    <label for="confirm_password" class="required">{{ t("auth.confirm_password") }}</label>
+    <input type="password" id="confirm_password" name="confirm_password" required minlength="8" maxlength="1024" autocomplete="new-password">
+  </div>
+  <button type="submit" class="btn btn-primary btn-lg btn-block">{{ t("auth.create_account") }}</button>
+</form>
+{% endblock %}
+{% block below %}<p>{{ t("auth.have_account") }} <a href="{{ url_for('auth.login') }}">{{ t("auth.sign_in") }}</a></p>{% endblock %}

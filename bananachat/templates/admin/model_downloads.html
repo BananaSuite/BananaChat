@@ -1,0 +1,187 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, when, status_badge %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Model downloads{% endblock %}
+{% block admin_content %}
+{% call header("Models", "Download models to the inference server, one after another or several at once.") %}{% endcall %}
+{% include "admin/_models_tabs.html" %}
+
+<section class="card mb-3" id="queue" aria-labelledby="queue-title">
+  <div class="card-header">
+    <h2 id="queue-title">Queue</h2>
+    <div class="row">
+      <form method="post" action="{{ url_for('admin.pulls_queue') }}">
+        {{ csrf() }}
+        {% if queue.queue_paused %}
+        <button type="submit" name="action" value="resume_all" class="btn btn-sm btn-primary">{{ icon("play") }}Resume all</button>
+        {% else %}
+        <button type="submit" name="action" value="pause_all" class="btn btn-sm">{{ icon("pause") }}Pause all</button>
+        {% endif %}
+      </form>
+      <form method="post" action="{{ url_for('admin.pulls_queue') }}" data-confirm="Cancel every queued and running download? Partial downloads of models that were not installed are removed." data-confirm-danger>
+        {{ csrf() }}<button type="submit" name="action" value="cancel_all" class="btn btn-sm btn-ghost"{% if not queue.active %} disabled{% endif %}>Cancel all</button>
+      </form>
+    </div>
+  </div>
+  <div class="grid grid-3 queue-stats">
+    <div><span class="stat-label">Waiting or running</span> <strong id="queue-active">{{ queue.active }}</strong></div>
+    <div><span class="stat-label">At the same time</span> <strong>{{ queue.concurrency }}</strong> <a class="small" href="{{ url_for('admin.model_settings') }}#downloads-settings">Change</a></div>
+    <div class="queue-meter">
+      <span class="stat-label">Overall progress</span>
+      <progress class="meter" id="queue-progress" max="100" value="{{ queue.percent }}" aria-label="Overall download progress">{{ queue.percent }}%</progress>
+      <span class="small muted" id="queue-bytes">{% if queue.bytes_total %}{{ queue.bytes_done | filesize }} of {{ queue.bytes_total | filesize }}{% else %}{{ queue.percent }}%{% endif %}</span>
+    </div>
+  </div>
+  {% if queue.queue_paused %}<p class="alert alert-warning mb-0 mt-1">The queue is paused. Nothing downloads until you resume it; paused downloads continue from where they stopped.</p>{% endif %}
+  <p class="small {{ 'danger-text' if disk.checked and not disk.ok else 'muted' }} mb-0 mt-1" id="disk-space">{{ icon("server") }} {{ disk.message }}</p>
+</section>
+
+<div class="grid grid-2 mb-3 download-forms">
+  <form method="post" action="{{ url_for('admin.pull_create') }}" class="stack sub-card" data-busy>
+    {{ csrf() }}
+    <h3>Ollama model</h3>
+    <div class="field">
+      <label for="pull-name" class="required">Model name</label>
+      <input type="text" id="pull-name" name="name" required maxlength="300" placeholder="llama3.2:3b" autocomplete="off" spellcheck="false" aria-describedby="pull-name-hint">
+      <span class="hint" id="pull-name-hint">A name from the Ollama library (<code>qwen3:8b</code>) or a Hugging Face GGUF (<code>hf.co/owner/repository:Q4_K_M</code>).</span>
+    </div>
+    <div class="form-actions form-actions-start"><button type="submit" class="btn btn-primary">{{ icon("download") }}Download</button></div>
+  </form>
+
+  <form method="post" action="{{ url_for('admin.pulls_bulk') }}" class="stack sub-card" id="bulk" data-busy>
+    {{ csrf() }}
+    <h3>Several models</h3>
+    <div class="field">
+      <label for="bulk-names">Model names</label>
+      <textarea id="bulk-names" name="names" rows="4" maxlength="20000" spellcheck="false" class="mono" placeholder="llama3.2:3b&#10;qwen3:8b" aria-describedby="bulk-names-hint"></textarea>
+      <span class="hint" id="bulk-names-hint">One per line (or separated by commas), up to {{ max_bulk }}. Installed and already queued models are skipped.</span>
+    </div>
+    {% if missing %}
+    <fieldset>
+      <legend>Catalog models no longer on the server</legend>
+      <div class="check-list">
+        {% for item in missing %}
+        <label class="check"><input type="checkbox" name="models" value="{{ item.name }}"><span><span class="mono">{{ item.name }}</span><small>{{ item.display_name }}{% if item.published %} · published{% endif %}</small></span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endif %}
+    {% if suggestions %}
+    <fieldset>
+      <legend>Suggestions</legend>
+      <div class="check-list">
+        {% for item in suggestions %}
+        <label class="check"><input type="checkbox" name="models" value="{{ item.name }}"><span><span class="mono">{{ item.name }}</span><small>{{ item.description }}</small></span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endif %}
+    <div class="form-actions form-actions-start"><button type="submit" class="btn btn-primary">{{ icon("download") }}Queue downloads</button></div>
+  </form>
+</div>
+
+<section class="card mb-3" aria-labelledby="checkpoint-title">
+  <h2 id="checkpoint-title">ComfyUI checkpoint</h2>
+  {% if checkpoint.configured %}
+  <form method="post" action="{{ url_for('admin.pull_checkpoint') }}" class="stack" data-busy>
+    {{ csrf() }}
+    <div class="form-grid">
+      <div class="field"><label for="ckpt-repo" class="required">Repository</label><input type="text" id="ckpt-repo" name="repo_id" required maxlength="192" placeholder="owner/repository" spellcheck="false"></div>
+      <div class="field"><label for="ckpt-revision">Revision</label><input type="text" id="ckpt-revision" name="revision" maxlength="128" placeholder="main" spellcheck="false"></div>
+      <div class="field"><label for="ckpt-file" class="required">File</label><input type="text" id="ckpt-file" name="source_filename" required maxlength="512" placeholder="model.safetensors" spellcheck="false"></div>
+      <div class="field"><label for="ckpt-target">Save as</label><input type="text" id="ckpt-target" name="target_name" maxlength="512" placeholder="Same file name" spellcheck="false"></div>
+      <div class="field"><label for="ckpt-sha" class="required">SHA-256</label><input type="text" id="ckpt-sha" name="expected_sha256" required minlength="64" maxlength="64" pattern="[0-9a-fA-F]{64}" spellcheck="false" class="mono"></div>
+      <div class="field"><label for="ckpt-size">Size in bytes</label><input type="number" id="ckpt-size" name="expected_size" min="1" step="1"></div>
+    </div>
+    <p class="hint">The checkpoint agent on the compute server downloads the file and verifies its SHA-256 before ComfyUI can use it.</p>
+    <div class="form-actions form-actions-start"><button type="submit" class="btn btn-primary">{{ icon("download") }}Download checkpoint</button></div>
+  </form>
+  {% elif not checkpoint.images_enabled %}
+  <p class="muted mb-0">Image generation is disabled (<code>BC_IMAGE_BACKEND</code>), so checkpoints are not downloaded from here.</p>
+  {% elif checkpoint.problem %}
+  <p class="danger-text mb-0">{{ checkpoint.problem }}</p>
+  {% else %}
+  <p class="muted mb-0">Configure the checkpoint download agent (<code>BC_CHECKPOINT_AGENT_URL</code> and <code>BC_CHECKPOINT_AGENT_TOKEN_FILE</code>) to download Hugging Face checkpoints for ComfyUI.</p>
+  {% endif %}
+</section>
+
+<section id="downloads" aria-labelledby="downloads-title">
+  <div class="row-between mb-1">
+    <h2 id="downloads-title" class="mb-0">Downloads</h2>
+    {% if jobs | selectattr("status", "in", ["done", "failed", "cancelled"]) | list %}
+    <form method="post" action="{{ url_for('admin.pulls_clear') }}" data-confirm="Remove finished downloads from the list? Completed checkpoint downloads are kept because backups use them to restore checkpoints.">
+      {{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost">Clear finished</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if jobs %}
+  <div class="table-wrap">
+    <table class="table" id="download-table">
+      <thead><tr><th scope="col"><span class="visually-hidden">Order</span></th><th scope="col">Model</th><th scope="col">Status</th><th scope="col">Progress</th><th scope="col">Requested</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+      {% set waiting = jobs | selectattr("status", "equalto", "queued") | list %}
+      {% for job in jobs %}
+        <tr id="job-{{ job.id }}" data-job="{{ job.id }}" data-status="{{ job.status }}" data-paused="{{ job.paused }}">
+          <td class="order-cell">
+            {% if job.status == "queued" %}
+            <form method="post" action="{{ url_for('admin.pull_move', job_id=job.id) }}" class="order-buttons">
+              {{ csrf() }}
+              <button type="submit" name="direction" value="up" class="icon-btn" aria-label="Move {{ job.ollama_name }} up"{% if job.id == waiting[0].id %} disabled{% endif %}>{{ icon("arrow-up") }}</button>
+              <button type="submit" name="direction" value="down" class="icon-btn icon-flip" aria-label="Move {{ job.ollama_name }} down"{% if job.id == waiting[-1].id %} disabled{% endif %}>{{ icon("arrow-up") }}</button>
+            </form>
+            {% endif %}
+          </td>
+          <td class="name-cell"><span class="mono break-anywhere">{{ job.ollama_name }}</span>{% if job.backend == "comfyui" %} <span class="badge">Checkpoint</span>{% endif %}{% if job.source == "bulk" %} <span class="badge">Bulk</span>{% endif %}</td>
+          <td data-job-status>{{ status_badge(job.status) }}{% if job.paused and job.status == "queued" %} <span class="badge badge-warning">paused</span>{% endif %}{% if job.status == "queued" and job.next_attempt_at %} <span class="badge badge-warning" title="Next attempt {{ job.next_attempt_at | datetime }}">retrying</span>{% endif %}</td>
+          <td class="progress-cell">
+            {% if job.status in ("queued", "pulling") %}
+            <progress class="meter" max="100" value="{{ job.progress_pct }}" aria-label="Download progress of {{ job.ollama_name }}">{{ job.progress_pct }}%</progress>
+            {% endif %}
+            <span class="small {{ 'danger-text' if job.status == 'failed' else 'muted' }}" data-job-detail>{{ job.error_message if job.status == "failed" else job.progress_detail }}</span>
+            {% if job.status == "done" and job.digest %}<span class="small faint mono" title="{{ job.digest }}">verified {{ job.digest[:12] }}</span>{% endif %}
+          </td>
+          <td class="nowrap small">{{ when(job.created_at) }}{% if job.requested_by_name %}<br><span class="muted">{{ job.requested_by_name }}</span>{% endif %}</td>
+          <td class="actions">
+            {% if job.status in ("queued", "pulling") %}
+            <form method="post" action="{{ url_for('admin.pull_pause', job_id=job.id) }}">
+              {{ csrf() }}
+              {% if job.paused %}<input type="hidden" name="resume" value="1"><button type="submit" class="btn btn-sm" aria-label="Resume {{ job.ollama_name }}">{{ icon("play") }}Resume</button>
+              {% else %}<button type="submit" class="btn btn-sm" aria-label="Pause {{ job.ollama_name }}">Pause</button>{% endif %}
+            </form>
+            <details class="menu" data-menu>
+              <summary class="btn btn-sm" aria-label="Cancel the download of {{ job.ollama_name }}">Cancel</summary>
+              <div class="menu-panel">
+                <form method="post" action="{{ url_for('admin.pull_cancel', job_id=job.id) }}" data-confirm="Cancel the download of {{ job.ollama_name }} and remove what was downloaded?">
+                  {{ csrf() }}<button type="submit" class="danger">{{ icon("trash") }}Cancel and remove partial files</button>
+                </form>
+                <form method="post" action="{{ url_for('admin.pull_cancel', job_id=job.id) }}">
+                  {{ csrf() }}<input type="hidden" name="keep_partial" value="1"><button type="submit">{{ icon("close") }}Cancel, keep partial files</button>
+                </form>
+              </div>
+            </details>
+            {% else %}
+            {% if job.status in ("failed", "cancelled") %}
+            <form method="post" action="{{ url_for('admin.pull_retry', job_id=job.id) }}">
+              {{ csrf() }}<button type="submit" class="btn btn-sm">{{ icon("refresh") }}Retry</button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ url_for('admin.pull_delete', job_id=job.id) }}">
+              {{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost" aria-label="Remove {{ job.ollama_name }} from the list">{{ icon("close") }}</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint mt-1" id="downloads-notice" hidden>Downloads changed. <a href="{{ url_for('admin.model_downloads') }}#downloads">Reload the page</a> to see the latest state.</p>
+  {% else %}
+  <p class="muted">No downloads yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script type="application/json" id="page-data">{{ page_data | tojson }}</script>
+<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

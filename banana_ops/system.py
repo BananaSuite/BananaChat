@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 from .files import atomic_write, digest_file, read_environment, read_json
 from . import profile
@@ -59,6 +60,51 @@ def set_release_owner(path, uid, gid, *, readonly=False):
         os.close(descriptor)
 
 
+def walk_tree(top, entry, regular, directory, skipped):
+    """Visit a tree through directory descriptors, never following links.
+
+    ``entry`` sees each child's lstat() result first and returns False to
+    leave it alone. Regular files and directories are then opened with
+    O_NOFOLLOW, so an entry swapped for a link after that check is refused by
+    the kernel instead of followed. ``regular`` and ``directory`` receive open
+    descriptors; directories are handled after their contents.
+    """
+    def visit(descriptor, path):
+        for name in os.listdir(descriptor):
+            child_path = path / name
+            info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if not entry(descriptor, child_path, info):
+                continue
+            if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                skipped.append((child_path, "special file"))
+                continue
+            try:
+                child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=descriptor)
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOENT, errno.ENXIO}:
+                    skipped.append((child_path, "changed during inspection"))
+                    continue
+                raise
+            try:
+                current = os.fstat(child)
+                if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                    skipped.append((child_path, "changed during inspection"))
+                elif stat.S_ISDIR(current.st_mode):
+                    visit(child, child_path)
+                    directory(child)
+                elif stat.S_ISREG(current.st_mode):
+                    regular(child, child_path, current)
+            finally:
+                os.close(child)
+
+    descriptor = os.open(top, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        visit(descriptor, Path(top))
+        directory(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class System:
     unit_dir = Path("/etc/systemd/system")
     bin_dir = Path("/usr/local/bin")
@@ -76,15 +122,17 @@ class System:
         if command.exists() and ("# Managed by BananaSuite" not in command.read_text()
                                   or str(root / "current/banana") not in command.read_text()):
             raise ValueError("An installed command already uses this name. Choose another --name.")
-        ports = [(settings["port"], settings["service"])]
-        if settings["mode"] in {"single", "compute"}:
-            ports.append((11434, settings["service"] + "-ollama"))
-        for port, service in ports:
+        ports = [(settings["port"], settings["service"], " Choose another --port.")]
+        if profile.managed_ollama(settings):
+            port = urlsplit(profile.ollama_upstream(settings)).port or 11434
+            ports.append((port, settings["service"] + "-ollama",
+                          f" An Ollama is probably running here already: keep it by adding --ollama-url http://127.0.0.1:{port}"
+                          " (it is then used as it is, never started, stopped or reconfigured), or stop it first."))
+        for port, service, detail in ports:
             with socket.socket() as probe:
                 probe.settimeout(1)
                 occupied = probe.connect_ex(("127.0.0.1", port)) == 0
             if occupied and not self.active(service):
-                detail = " Stop the existing Ollama service first, or use web mode with that backend." if port == 11434 else " Choose another --port."
                 raise ValueError(f"Port {port} is already occupied." + detail)
 
     def run(self, command, *, check=True, timeout=600, cwd=None):
@@ -110,7 +158,7 @@ class System:
         if settings["mode"] == "hosting":
             self.run(["docker", "info"], timeout=30)
             self.run(["usermod", "-aG", "docker", name])
-        elif settings["product"] == "BananaChat" and settings["mode"] in {"single", "compute"}:
+        elif profile.managed_ollama(settings):
             for group in ("render", "video"):
                 try:
                     grp.getgrnam(group)
@@ -120,24 +168,68 @@ class System:
         return identity
 
     def data_permissions(self, settings):
+        """Give the service its data, and publish the static site, as root.
+
+        The data directory is writable by the service account, so every entry
+        is opened relative to its already-opened parent without following
+        links, and ownership and modes change through that descriptor. Links,
+        special files, and hard-linked files are skipped and recorded rather
+        than touched: changing them could reach files outside the directory.
+        """
         identity = pwd.getpwnam(settings["service"])
-        data = Path(settings["root"]) / "data"
+        root = Path(settings["root"])
+        data = root / "data"
         data.mkdir(mode=0o700, parents=True, exist_ok=True)
-        for root, directories, files in os.walk(data):
-            for path in (Path(root), *(Path(root) / name for name in (*directories, *files))):
-                if path.is_symlink():
-                    if settings["mode"] == "hosting" and profile.hosting_storage_link(path, data):
-                        os.chown(path, identity.pw_uid, identity.pw_gid, follow_symlinks=False)
-                        continue
-                    raise ValueError("Managed data must not contain symlinks.")
-                os.chown(path, identity.pw_uid, identity.pw_gid)
-                path.chmod(0o700 if path.is_dir() else 0o600)
-        site = Path(settings["root"]) / "site"
-        for root, directories, files in os.walk(site):
-            for path in (Path(root), *(Path(root) / name for name in (*directories, *files))):
-                if path.is_symlink():
-                    raise ValueError("The static site must not contain symlinks.")
-                path.chmod(0o755 if path.is_dir() else 0o644)
+        hosting = settings["mode"] == "hosting"
+        skipped = []
+
+        def data_entry(descriptor, path, info):
+            if stat.S_ISLNK(info.st_mode):
+                if hosting and profile.hosting_storage_link(path, data):
+                    os.chown(path.name, identity.pw_uid, identity.pw_gid, dir_fd=descriptor, follow_symlinks=False)
+                else:
+                    skipped.append((path, "symbolic link"))
+                return False
+            return True
+
+        def data_file(child, path, info):
+            if info.st_nlink != 1:
+                skipped.append((path, "hard link"))
+                return
+            os.fchown(child, identity.pw_uid, identity.pw_gid)
+            os.fchmod(child, 0o600)
+
+        def data_directory(child):
+            os.fchown(child, identity.pw_uid, identity.pw_gid)
+            os.fchmod(child, 0o700)
+
+        walk_tree(data, data_entry, data_file, data_directory, skipped)
+        if self.log_dir:
+            record = self.log_dir / "data-permissions-skipped.json"
+            if skipped:
+                atomic_write(record, json.dumps({"checked_at": time.time(), "skipped": [
+                    {"path": str(path.relative_to(data)), "reason": reason} for path, reason in skipped[:1000]],
+                    "omitted": max(0, len(skipped) - 1000)}, indent=2) + "\n")
+            else:
+                record.unlink(missing_ok=True)
+        if skipped:
+            print(f"Skipped {len(skipped)} linked or special entries in {data}; their ownership and modes were not changed.",
+                  file=sys.stderr, flush=True)
+
+        def site_entry(descriptor, path, info):
+            if stat.S_ISLNK(info.st_mode):
+                raise ValueError("The static site must not contain symlinks.")
+            return True
+
+        def site_file(child, path, info):
+            os.fchmod(child, 0o644)
+
+        site = root / "site"
+        if site.is_symlink():
+            raise ValueError("The static site must not contain symlinks.")
+        if site.is_dir():
+            walk_tree(site, site_entry, site_file, lambda child: os.fchmod(child, 0o755), [])
+        return skipped
 
     def prepare_release(self, settings, release):
         identity = pwd.getpwnam(settings["service"])
@@ -192,6 +284,13 @@ class System:
                                 or str(root / "current/banana") not in command.read_text()):
             raise ValueError("An unrelated command already uses this service name.")
         atomic_write(command, "#!/bin/sh\n# Managed by BananaSuite\nexec /usr/bin/python3 " + str(root / "current/banana") + " --root " + str(root) + ' "$@"\n', 0o755)
+        stale = self.unit_dir / (settings["service"] + "-ollama.service")
+        if (settings["product"] == "BananaChat" and settings["service"] + "-ollama" not in commands and stale.exists()
+                and "# Managed by BananaSuite" in stale.read_text()
+                and f"WorkingDirectory={root / 'current'}\n" in stale.read_text()):
+            # This installation now uses an existing Ollama: its former managed one must not start again.
+            self.run(["systemctl", "disable", "--now", settings["service"] + "-ollama"], check=False)
+            stale.unlink()
         self.run(["systemctl", "daemon-reload"])
         self.run(["systemctl", "enable", *commands])
 
