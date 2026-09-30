@@ -355,6 +355,14 @@ def _grants(user_id: str, at: str):
     return _once(("grants", user_id), lambda: store.active_grants(user_id, at))
 
 
+def _renounced(user_id: str, at: str) -> dict:
+    """Tokens the account renounced for others, in force now: ``{(pool, model_id, scope): (tokens, until)}``."""
+    def load():
+        return {(row["pool"], row["model_id"], row["scope"]): (float(row["tokens"] or 0), row["ends_at"])
+                for row in store.active_pledges(user_id, at)}
+    return _once(("renounced", user_id), load)
+
+
 def _effort_levels(user_id: str):
     return _once(("effort", user_id), lambda: store.effort_levels(user_id))
 
@@ -727,7 +735,8 @@ def _rate(enabled: bool, base_rules, custom_rules, *, dynamic: float | None, dyn
 
 def _window(period: str, policy: dict, custom_tokens, custom_slow, *, tier, dynamic, dynamic_on, bonus,
             slow_enabled, grants, started: datetime | None, used: tuple[float, float], length: timedelta,
-            limited_override: bool | None = None, capacity: float = 1.0) -> Window:
+            limited_override: bool | None = None, capacity: float = 1.0,
+            renounced: tuple[float, str | None] = (0.0, None)) -> Window:
     custom = custom_tokens is not None or custom_slow is not None
     limited = (policy["enabled"] or custom) if limited_override is None else limited_override
     start, end = (started, started + length) if started else (None, None)
@@ -776,6 +785,10 @@ def _window(period: str, policy: dict, custom_tokens, custom_slow, *, tier, dyna
     for grant in extras:
         regular += grant["amount"]
         reasons.append(_grant_reason(grant))
+    if renounced[0] > 0:
+        # Tokens the account renounced to support someone else's request (community consent).
+        regular = max(0.0, regular - renounced[0])
+        reasons.append(_reason("renounced", tokens=renounced[0], until=_until(renounced[1])))
     return Window(period, True, _whole(regular), _whole(slow), used[0], used[1], started is not None, start, end,
                   _whole(base), custom, tuple(reasons))
 
@@ -824,14 +837,16 @@ def effective(user, pool: str, *, usage: bool = True, now: datetime | None = Non
 
     multiplier = dynamic.multiplier if dynamic else None
     common = {"tier": tier, "dynamic": multiplier, "bonus": bonus, "slow_enabled": slow_enabled, "grants": grants}
+    renounced = _renounced(user_id, db.timestamp(now))
     window = _window("window", policy["window"], _custom(override, "window_tokens", policy["window"], "tokens", tier),
                      _custom(override, "window_slow_tokens", policy["window"], "slow_tokens", tier), **common,
                      dynamic_on=policy["window"]["dynamic"], started=window_start,
-                     used=(round(regular_used, 2), round(slow_used, 2)), length=WINDOW)
+                     used=(round(regular_used, 2), round(slow_used, 2)), length=WINDOW,
+                     renounced=renounced.get((pool, None, "window"), (0.0, None)))
     weekly = _window("weekly", policy["weekly"], _custom(override, "weekly_tokens", policy["weekly"], "tokens", tier),
                      None, **common,
                      dynamic_on=policy["weekly"]["dynamic"], started=week_start, used=(round(weekly_used, 2), 0.0),
-                     length=WEEK)
+                     length=WEEK, renounced=renounced.get((pool, None, "weekly"), (0.0, None)))
     rate = _rate(policy["rate"]["enabled"], policy["rate"]["rules"], override.rate_rules, dynamic=multiplier,
                  dynamic_on=policy["rate"]["dynamic"], grants=grants)
     return Effective(pool, False, rate, window, weekly, prefs.speed, tier, tiers_apply, dynamic, dynamic_applies,
@@ -930,10 +945,13 @@ def model_limits(user, model, *, usage: bool = True, now: datetime | None = None
                      "tokens": policy["window_tokens"] or 0, "slow_tokens": 0, "auto_tiers": policy["auto_tiers"]}
     weekly_policy = {"enabled": enabled and policy["weekly_tokens"] is not None,
                      "tokens": policy["weekly_tokens"] or 0, "auto_tiers": policy["auto_tiers"]}
+    renounced = _renounced(user_id, db.timestamp(now))
     window = _window("window", window_policy, override.window_tokens, None, **common, started=window_start,
-                     used=(round(window_used, 2), 0.0), length=WINDOW)
+                     used=(round(window_used, 2), 0.0), length=WINDOW,
+                     renounced=renounced.get((None, model["id"], "window"), (0.0, None)))
     weekly = _window("weekly", weekly_policy, override.weekly_tokens, None, **common, started=week_start,
-                     used=(round(weekly_used, 2), 0.0), length=WEEK)
+                     used=(round(weekly_used, 2), 0.0), length=WEEK,
+                     renounced=renounced.get((None, model["id"], "weekly"), (0.0, None)))
     rate = _rate(enabled, policy["rate_rules"], override.rate_rules, dynamic=dynamic, dynamic_on=True,
                  grants=grants, capacity=capacity)
     return ModelLimits(model["id"], name, False, policy["weight"], counts, override.locked, rate, window, weekly,
@@ -1205,6 +1223,60 @@ def prefer_usable(user, selection, requested: str | None, *, pool: str | None = 
     return selection
 
 
+def fallback_directions(settings: dict | None = None) -> tuple[bool, bool]:
+    """``(cloud → local, local → cloud)``: which way a chosen model may be replaced when its quota runs out
+    (both on by default)."""
+    settings = settings if settings is not None else _settings()
+
+    def on(name):
+        value = settings.get(name)
+        return True if value is None else bool(value)
+
+    return on("quota_fallback_to_local"), on("quota_fallback_to_cloud")
+
+
+def crosses_allowed(model, other, directions: tuple[bool, bool]) -> bool:
+    """Whether *other* may stand in for *model*: the same kind (local or cloud) always, the other kind when the
+    administrator allows that direction."""
+    local, other_local = is_local(model), is_local(other)
+    if local == other_local:
+        return True
+    to_local, to_cloud = directions
+    return to_local if other_local else to_cloud
+
+
+def quota_fallback(user, selection, requested: str | None, *, pool: str, candidates, settings: dict | None = None):
+    """For a model chosen by name: when its quota is used up for the account (locked, its own limits or its
+    provider's pooled quota spent, or it counts toward the pool's spent tokens), switch to a usable model -
+    the same kind first (local or cloud), then the other kind when the administrator allows that direction.
+    The switch is recorded as ``selection.reason = "quota"`` with the original in ``selection.requested``.
+
+    A model that is not blocked keeps its place and gets fallbacks of the other kind (when allowed), so a cloud
+    model whose upstream quota runs out mid-request can still be answered locally, and vice versa.
+    ``candidates()`` lists every model the request could use. ``auto`` is left to :func:`prefer_usable`.
+    """
+    if user["role"] == "admin" or (requested or "auto") == "auto" or selection.reason:
+        return selection
+    directions = fallback_directions(settings)
+    model = selection.model
+    budget = credits.budget(user, pool)
+    options = [other for other in candidates() if other["id"] != model["id"] and crosses_allowed(model, other,
+                                                                                                    directions)]
+    if not model_blocked(user, model, pool, budget=budget):
+        if not selection.fallbacks:
+            others = [other for other in options if is_local(other) != is_local(model)]
+            selection.fallbacks = [other for other in others if not model_blocked(user, other, pool,
+                                                                                  budget=budget)][:2]
+        return selection
+    same = [other for other in options if is_local(other) == is_local(model)]
+    usable = [other for other in same + [o for o in options if o not in same]
+              if not model_blocked(user, other, pool, budget=budget)]
+    if usable:
+        selection.requested, selection.reason = model, "quota"
+        selection.model, selection.fallbacks = usable[0], usable[1:3]
+    return selection
+
+
 def usable_fallbacks(user, pool: str, fallbacks, *, think=None, effort: str | None = None) -> list:
     """Fallback models a request may switch to: not blocked for the account, within the pool limits when they
     count toward them, and able to take the same reasoning setting (the effort must be unlocked for them)."""
@@ -1278,6 +1350,31 @@ def _base(policy: dict, override, tier) -> dict:
         "weekly_enabled": policy["weekly"]["enabled"] or override.has_weekly,
         "rate_enabled": (policy["rate"]["enabled"] or override.has_rate) and bool(rules),
     }
+
+
+def model_base(user_id: str, model) -> dict:
+    """The account's own limits for one model before dynamic adjustment, capacity and grants, in the shape of
+    :func:`base_limits` (model-specific requests and pledges compare to these)."""
+    policy = store.get_model_policy(model)
+    override = store.get_model_override(user_id, model["id"]) or store.ModelOverride(model["id"])
+    enabled = policy["enabled"]
+    tier = resolve_tier(store.user_settings(user_id).tier_id) if policy["auto_tiers"] and enabled else None
+
+    def amount(name):
+        own = getattr(override, name)
+        if own is not None:
+            return float(own)
+        value = policy[name] if enabled else None
+        if value is None:
+            return None
+        return _whole(float(value) * float(tier["multiplier"])) if tier is not None else float(value)
+
+    window, weekly = amount("window_tokens"), amount("weekly_tokens")
+    rules = list(override.rate_rules) if override.rate_rules is not None else \
+        (list(policy["rate_rules"]) if enabled else [])
+    return {"window_tokens": window or 0.0, "window_slow_tokens": 0.0, "weekly_tokens": weekly or 0.0,
+            "rate_rules": [dict(rule) for rule in rules], "window_enabled": window is not None,
+            "weekly_enabled": weekly is not None, "rate_enabled": bool(rules)}
 
 
 def limit_on(user_id: str | None, pool: str | None, scope: str, model=None) -> bool:

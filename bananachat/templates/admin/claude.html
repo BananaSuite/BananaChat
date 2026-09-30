@@ -1,0 +1,60 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Claude subscription pool{% endblock %}
+{% block admin_content %}
+{% call header("Claude", "Pool the site's Claude subscriptions; users chat with Claude models here while the backend uses the pooled accounts.") %}{% endcall %}
+{% include "admin/_models_tabs.html" %}
+
+<section class="card mb-3">
+  <div class="card-header"><h2>Pool quota</h2>
+    <form method="post" action="{{ url_for('admin.claude_refresh') }}">{{ csrf() }}<button class="btn btn-sm" type="submit">Re-read quota</button></form>
+  </div>
+  <p class="muted small">Token-based. Claude models do <strong>not</strong> count toward the service (pool) limits by default; each has its own strict 5-hour token window (weekly optional, off by default). While less than half of the pooled subscription quota is left, their limits shrink automatically — on top of dynamic adjustment for demand, active people and usage pattern. Opus is strictest, then Sonnet, then Haiku.</p>
+  <p>Pooled remaining: 5-hour {% if quota.window_left is none %}unknown{% else %}{{ (quota.window_left * 100) | round(1) }}%{% endif %} · weekly {% if quota.weekly_left is none %}unknown{% else %}{{ (quota.weekly_left * 100) | round(1) }}%{% endif %} · {{ quota.accounts }} active account(s), {{ quota.usable if quota.usable is defined else quota.accounts }} with quota left now.</p>
+  <p class="muted small mb-0">The pool is the sum of its active accounts: one exhausted subscription only removes its share. Requests go to the highest-priority account with quota left; when the Claude site reports an account out of quota (or it fails), it rests and the next account answers. With no account able to answer, Claude models count as used up and the chat falls back to local models (Limits → Services → Model fallback).</p>
+  {% if not has_client %}<div class="alert alert-warning mt-1">{{ icon("alert") }}<p>No Claude site client is registered on this server, so Claude models cannot answer yet: their requests fail over to local models while the model fallback allows it. Register one with <code>claude_pool.register_site_chat(handler)</code>.</p></div>{% endif %}
+</section>
+
+<section class="card mb-3">
+  <div class="card-header"><h2>Subscription accounts ({{ accounts | length }})</h2></div>
+  <form method="post" action="{{ url_for('admin.claude_account_add') }}" class="row" data-busy>
+    {{ csrf() }}
+    <div class="field"><label for="claude-label" class="required">Account name</label><input id="claude-label" name="label" required maxlength="80" placeholder="claude-1"></div>
+    <div class="field"><label for="claude-priority">Priority</label><input id="claude-priority" name="priority" type="number" value="0" min="-100" max="100"></div>
+    <div class="field"><label for="claude-window">5-hour tokens</label><input id="claude-window" name="window_limit" type="number" min="0" max="1000000000" placeholder="optional"></div>
+    <div class="field"><label for="claude-weekly">Weekly tokens</label><input id="claude-weekly" name="weekly_limit" type="number" min="0" max="1000000000" placeholder="optional, off by default"></div>
+    <div class="form-actions"><button class="btn btn-primary" type="submit">Add account</button></div>
+  </form>
+  {% for account in accounts %}
+  <form method="post" action="{{ url_for('admin.claude_account_save', account_id=account.id) }}" class="row mt-1" data-busy>
+    {{ csrf() }}
+    <strong class="mono">{{ account.label }}</strong>
+    <select name="status" aria-label="Status">{% for value in ["active", "disabled", "error"] %}<option value="{{ value }}"{% if account.status == value %} selected{% endif %}>{{ value }}</option>{% endfor %}</select>
+    <input name="priority" type="number" value="{{ account.priority }}" min="-100" max="100" aria-label="Priority" title="Priority">
+    <input name="window_limit" type="number" value="{{ account.window_limit or '' }}" min="0" max="1000000000" placeholder="5h tokens" aria-label="5-hour tokens">
+    <input name="weekly_limit" type="number" value="{{ account.weekly_limit or '' }}" min="0" max="1000000000" placeholder="weekly" aria-label="Weekly tokens">
+    <input name="note" value="{{ account.note }}" maxlength="500" placeholder="note" aria-label="Note">
+    <button class="btn btn-sm btn-primary" type="submit" name="action" value="save">Save</button>
+    <button class="btn btn-sm btn-ghost" type="submit" name="action" value="delete" data-confirm="Remove {{ account.label }} from the pool?">Remove</button>
+    <span class="small muted">used {{ account.window_used }} / {{ account.window_limit or '?' }} per 5h · {{ account.weekly_used }} / {{ account.weekly_limit or '?' }} per week{% if account.id in resting %} · resting until {{ resting[account.id] }} UTC{% endif %}{% if account.last_error %} · {{ account.last_error }}{% endif %}</span>
+  </form>
+  {% endfor %}
+</section>
+
+<section class="card mb-3">
+  <div class="card-header"><h2>Claude models</h2></div>
+  <p class="muted small">Select which Claude models to offer. New models follow enrollment (currently <strong>{{ enrollment }}</strong> in Models → Settings): manual waits for review, automatic enables at once with strict limits. Reasoning effort defaults to low/medium; users request high/max unlocks via quota requests (approving max also allows high and below; sustained use auto-unlocks one level at a time).</p>
+  <form method="post" action="{{ url_for('admin.claude_sync') }}" data-busy>
+    {{ csrf() }}
+    <div class="check-list">
+      {% for entry in curated %}
+      <label class="check"><input type="checkbox" name="models" value="{{ entry.item.name }}"{% if entry.row %} checked{% endif %}>
+        <span><span class="mono">{{ entry.item.name }}</span><small>{{ entry.item.display }} · {{ entry.item.family }} · strict {{ entry.strict.window_tokens }} tokens/5h{% if entry.row %} · {% if entry.row.is_rolled_out %}published{% else %}hidden{% endif %}{% if entry.row.missing_at %} · missing{% endif %}{% else %} · not enrolled{% endif %}{% if entry.ignored %} · ignored{% endif %}</small></span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="form-actions form-actions-start"><button class="btn btn-primary" type="submit">Sync selected models</button></div>
+  </form>
+</section>
+{% endblock %}

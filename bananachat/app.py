@@ -60,6 +60,9 @@ def create_app(config: Config | None = None, *, testing: bool = False) -> Flask:
     from bananachat.web import register_blueprints
     from bananachat.services import housekeeping  # noqa: F401  (registers core background jobs)
     from bananachat.services import limits  # noqa: F401  (registers the limit jobs)
+    from bananachat.services import community  # noqa: F401  (registers the community-consent job)
+    from bananachat.services import claude_pool
+    claude_pool.ensure_registered()
     register_blueprints(app)
     # Never hand a connection opened here to forked worker processes.
     db.close_thread_connection()

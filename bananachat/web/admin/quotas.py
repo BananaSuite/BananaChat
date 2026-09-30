@@ -12,7 +12,7 @@ from bananachat.db import limits as limits_db
 from bananachat.db import settings as site_settings
 from bananachat.formatting import compact
 from bananachat.security import admin_required
-from bananachat.services import limits
+from bananachat.services import community, limits
 
 from . import bp
 from ._helpers import FormError, audit, back, flag, integer, me, text, tokens
@@ -20,7 +20,9 @@ from ._helpers import FormError, audit, back, flag, integer, me, text, tokens
 TOKENS_MAX = limits_db.TOKENS_MAX
 REQUEST_MAX = credits.REQUEST_TOKENS_MAX  # the largest 5-hour amount users can ask for
 WEEKLY_REQUEST_MAX = credits.REQUEST_WEEKLY_MAX
-REQUEST_STATUSES = ("pending", "approved", "denied", "all")
+REQUEST_STATUSES = ("pending", "approved", "denied", "cancelled", "all")
+KIND_LABELS = {"window": "5-hour tokens", "weekly": "Weekly tokens", "rate": "Request rate",
+               "temporary": "Temporary increases", "effort": "Reasoning effort"}
 POOL_LABELS = {"api": "API, playground and images", "chat": "Chat", "agent": "Agents"}
 UNIT_LABELS = {"second": "second", "minute": "minute", "hour": "hour", "day": "day"}
 RULE_ROWS = limits_db.RULES_MAX
@@ -107,6 +109,8 @@ def _quotas_page(refused: dict | None = None):
         summaries={pool: policy_summary(policy) for pool, policy in policies.items()},
         custom_count=limits_db.count_custom(), grant_count=limits_db.count_active_grants(),
         demand=limits.current_demand(), people=people, slots=slots, peak_hours=limits.peak_hours(),
+        community=community.settings(settings), community_bounds=community.BOUNDS, kind_labels=KIND_LABELS,
+        community_open=community.count_open(),
         limits={"tokens": TOKENS_MAX, "request": REQUEST_MAX, "weekly_request": WEEKLY_REQUEST_MAX,
                 "requests": limits_db.REQUESTS_MAX, "burst": limits_db.BURST_MAX},
         **_tabs_context())
@@ -180,6 +184,39 @@ def save():
     return back("admin.quotas", _anchor="options")
 
 
+@bp.post("/quotas/community", endpoint="quotas_community")
+@admin_required
+def save_community():
+    """Community consent: on or off, which kinds of request, and how much consent approves one."""
+    try:
+        values = {"community_quota_enabled": 1 if flag("community_quota_enabled") else 0,
+                  "community_kinds": ",".join(kind for kind in community.KINDS if flag(f"community_kind_{kind}"))}
+        labels = {"min_supporters": "Supporters needed", "approval_percent": "Share in favour",
+                  "coverage_percent": "Tokens covered", "hours": "Voting hours", "boost_hours": "Increase lasts",
+                  "min_account_days": "Account age to vote", "max_pledge_percent": "Most a person can renounce"}
+        for name, (low, high) in community.BOUNDS.items():
+            values[f"community_{name}"] = integer(f"community_{name}", minimum=low, maximum=high, label=labels[name])
+    except FormError as error:
+        flash(str(error), "error")
+        return back("admin.quotas", _anchor="community")
+    site_settings.update(**values)
+    audit("quotas_community", "site", values)
+    flash("Community consent saved.", "success")
+    return back("admin.quotas", _anchor="community")
+
+
+@bp.post("/quotas/fallback", endpoint="quotas_fallback")
+@admin_required
+def save_fallback():
+    """Which way chat may switch models when someone's quota for the chosen model runs out."""
+    values = {"quota_fallback_to_local": 1 if flag("quota_fallback_to_local") else 0,
+              "quota_fallback_to_cloud": 1 if flag("quota_fallback_to_cloud") else 0}
+    site_settings.update(**values)
+    audit("quotas_fallback", "site", values)
+    flash("Model fallback saved.", "success")
+    return back("admin.quotas", _anchor="fallback")
+
+
 # ----- global actions -----------------------------------------------------------------------
 
 @bp.post("/quotas/reset-usage", endpoint="quotas_reset_usage")
@@ -213,6 +250,8 @@ def _request_tokens(row, name: str, legacy: str):
 def request_summary(row) -> str:
     """What a request asks for, in English."""
     kind, pool = credits.request_kind(row), POOL_LABELS.get(row["pool"] or "api", row["pool"])
+    if kind != "effort" and row["model_id"] is not None:
+        pool = f"model {row['model_name'] or '(removed)'}"
     if kind == "effort":
         target = row["model_name"] or ("every model" if row["effort_all_models"] else "a removed model")
         return f"Reasoning effort up to {limits.effort_label(row['effort_level'] or 'medium')} · {target}"
@@ -238,7 +277,7 @@ def current_summary(row, base: dict | None = None) -> str:
     kind = credits.request_kind(row)
     if kind in ("temporary", "effort"):
         return ""
-    base = base or limits.base_limits(row["user_id"], row["pool"] or "api")
+    base = base or community.base_for(row["user_id"], row)
     if kind == "weekly":
         return f"now {tokens_en(base['weekly_tokens'])} per week" + ("" if base["weekly_enabled"] else " (not limited)")
     if kind == "rate":
@@ -291,7 +330,9 @@ def requests_page():
     if status not in REQUEST_STATUSES:
         status = "pending"
     rows = credits.list_requests(None if status == "all" else status, limit=200)
-    pending = [row for row in rows if row["status"] == "pending" and credits.request_kind(row) != "effort"]
+    options = community.settings()
+    pending = [row for row in rows if row["status"] == "pending" and credits.request_kind(row) != "effort"
+               and row["model_id"] is None]
     bases = limits.base_limits_many((row["user_id"], row["pool"] or "api") for row in pending)
     efforts = effort_currents(row for row in rows if row["status"] == "pending" and credits.request_kind(row) == "effort")
     items = []
@@ -299,9 +340,14 @@ def requests_page():
         current = ""
         if row["status"] == "pending":
             current = efforts.get(row["id"], "") if credits.request_kind(row) == "effort" else \
-                current_summary(row, bases[(row["user_id"], row["pool"] or "api")])
+                current_summary(row, bases.get((row["user_id"], row["pool"] or "api")) if row["model_id"] is None
+                                else None)
+        consent = None
+        if row["community"]:
+            result = community.consent(row, options)
+            consent = {"consent": result, "open": community.voting_open(row, options)}
         items.append({"row": row, "kind": credits.request_kind(row), "summary": request_summary(row),
-                      "current": current})
+                      "current": current, "community": consent})
     return render_template("admin/quota_requests.html", tab="requests", requests=items, status=status,
                            **_tabs_context())
 

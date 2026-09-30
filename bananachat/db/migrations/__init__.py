@@ -14,6 +14,8 @@ from .v9_limits_tokens import upgrade as v9_limits_tokens
 from .v10_model_lifecycle import upgrade as v10_model_lifecycle
 from .v11_limits_automatic import upgrade as v11_limits_automatic
 from .v12_pull_claims import upgrade as v12_pull_claims
+from .v13_claude import upgrade as v13_claude
+from .v14_community import upgrade as v14_community
 
 # The on-disk identity of BananaChat databases. The value is ASCII "BAIA" and
 # dates from when the project was named BananaAI; every existing database
@@ -33,6 +35,8 @@ MIGRATIONS = (
     v10_model_lifecycle,
     v11_limits_automatic,
     v12_pull_claims,
+    v13_claude,
+    v14_community,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

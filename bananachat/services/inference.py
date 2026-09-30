@@ -111,6 +111,9 @@ class TextRequest:
     owner_key: str | None = None
     fallbacks: list = field(default_factory=list)
     think: bool | str | None = None  # Ollama's think: see think_for()
+    # The resolved reasoning effort level (services.limits.resolve_effort), for backends that take levels
+    # directly (the Claude pool) rather than Ollama's think.
+    effort: str | None = None
     max_response_bytes: int | None = None
     # Called once admitted, before inference: return an error message to refuse
     # (e.g. the user was suspended or ran out of credits while waiting).
@@ -339,7 +342,7 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
             request = replace(request, messages=messages, options=options)
         if index:
             slot.set_model(_backend_name(model))
-        via_worker = not request.tools and remote.should_route(request.user, model,
+        via_worker = not request.tools and model["backend"] == "ollama" and remote.should_route(request.user, model,
                                                                 request_type=request.request_type,
                                                                 think=request.think)
         notice = "" if index == 0 else f"{tried['display_name']} failed, so " \
@@ -425,6 +428,12 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
 
 def _open_stream(request, model, via_worker, cancel, config):
     name = model["backend_model_name"] or model["ollama_name"]
+    if model["backend"] == "claude":
+        # Claude models are served by the pooled subscription accounts, never by Ollama or a worker PC.
+        from bananachat.services import claude_pool
+
+        return claude_pool.stream_chunks(name, request.messages, options=request.options, think=request.think,
+                                         effort=request.effort, cancel=cancel)
     if via_worker:
         return remote.stream(name, request.messages, request.options, cancel=cancel, priority=request.priority,
                              think=request.think,

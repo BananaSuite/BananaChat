@@ -384,8 +384,8 @@ class CompletionRun:
         self.request = inference.TextRequest(
             user=user, model=model, messages=messages, options=options, request_type=request_type,
             priority=queue.priority_for(user, slow=admission.slow, api=True),
-            owner_key=f"user:{user['id']}:api", fallbacks=fallbacks, think=think, authorize=self._authorize,
-            prepare=self._for_model)
+            owner_key=f"user:{user['id']}:api", fallbacks=fallbacks, think=think, effort=self.effort,
+            authorize=self._authorize, prepare=self._for_model)
 
     def _for_model(self, model) -> tuple[list, dict]:
         """The client's messages with *model*'s system prompt (unless they sent one) and its option defaults."""

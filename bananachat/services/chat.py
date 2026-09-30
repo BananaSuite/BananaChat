@@ -160,6 +160,7 @@ class Prepared:
     priority: int
     lang: str
     think: bool | str | None = None  # Ollama's think (inference.think_for)
+    effort: str | None = None  # the resolved reasoning effort level (limits.resolve_effort)
     notice: str = ""
     personality: str | None = None
     # What the user asked for (before any model's defaults) and the personality's
@@ -215,8 +216,11 @@ def _prepare(user, session, form, files, *, lang: str) -> Prepared:
     budget = credits.budget(user, "chat")
     # A model that does not count toward the chat limits can still be asked for by name, and ``auto`` moves to
     # one when there is one (limits.prefer_usable). Otherwise refuse before any upload is parsed.
+    # A local model chosen by name may also switch to a cloud model outside the used-up tokens
+    # (limits.quota_fallback), when the administrator allows it.
     if not budget.available and not (limits.any_outside_pool() if requested == "auto" else
-                                     limits.outside_pool(requested)):
+                                     limits.outside_pool(requested) or
+                                     (limits.fallback_directions()[1] and limits.any_outside_pool())):
         raise SendError(quota_message(budget, lang), 429, "quota_exhausted", retry_after=budget.seconds_until_reset())
     if runs.session_busy(session["id"]) or (not is_admin and runs.user_busy(user["id"])):
         raise SendError(t("chat.error_busy"), 409, "busy", retry_after=5)
@@ -240,6 +244,8 @@ def _prepare(user, session, form, files, *, lang: str) -> Prepared:
             "chat.error_no_vision_model" if vision else "chat.error_no_model")
         raise SendError(t(key), 403 if error.status == 403 else 503, "model_unavailable") from None
     selection = limits.prefer_usable(user, selection, requested, pool="chat", candidates=lambda: (
+        inference.candidates(context, "chat", vision=vision)))
+    selection = limits.quota_fallback(user, selection, requested, pool="chat", candidates=lambda: (
         inference.candidates(context, "chat", vision=vision)))
     model = selection.model
     notice = ""
@@ -270,7 +276,7 @@ def _prepare(user, session, form, files, *, lang: str) -> Prepared:
     return Prepared(
         user=dict(user), session=dict(session), content=content, attachments=stored, selection=selection,
         options=options_for(model, overrides, creativity, config),
-        priority=queue.priority_for(user, slow=admission.slow), lang=lang, think=think, notice=notice,
+        priority=queue.priority_for(user, slow=admission.slow), lang=lang, think=think, effort=effort, notice=notice,
         personality=personality_service.prompt_text(personality) if personality else None,
         overrides=overrides, creativity=creativity)
 
@@ -426,8 +432,8 @@ class Run:
         request = inference.TextRequest(
             user=prepared.user, model=self.model, messages=self._messages(), options=prepared.options,
             request_type="chat_incognito" if prepared.session["is_incognito"] else "chat", priority=prepared.priority, owner_key=f"user:{prepared.user['id']}:chat",
-            fallbacks=prepared.selection.fallbacks, think=prepared.think, authorize=self._authorize,
-            prepare=self._for_model)
+            fallbacks=prepared.selection.fallbacks, think=prepared.think, effort=prepared.effort,
+            authorize=self._authorize, prepare=self._for_model)
         try:
             for event in inference.generate(request, self.cancel):
                 self._handle(event)

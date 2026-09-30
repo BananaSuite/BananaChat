@@ -111,7 +111,7 @@ def offered(model) -> bool:
 
 
 def is_text_model(model) -> bool:
-    return bool(model and model["backend"] == "ollama" and model["backend_available"]
+    return bool(model and model["backend"] in ("ollama", "claude") and model["backend_available"]
                 and not model["is_image_generation"] and not _column(model, "embedding_only") and offered(model))
 
 

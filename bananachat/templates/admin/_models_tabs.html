@@ -1,6 +1,7 @@
 {#- Tabs of the Models area. Expects `tab` and `counts` ({"downloads", "new"}). -#}
 <nav class="tabs" aria-label="Models">
   {% for key, endpoint, label in [("catalog", "admin.models", "Catalog"), ("downloads", "admin.model_downloads", "Downloads"),
+                                  ("claude", "admin.claude_pool", "Claude"),
                                   ("settings", "admin.model_settings", "Settings")] %}
   <a href="{{ url_for(endpoint) }}"{% if tab == key %} aria-current="page"{% endif %}>{{ label }}{% if key == "catalog" and counts.new %} <span class="badge badge-info" title="New models waiting for review">{{ counts.new }} new</span>{% elif key == "downloads" and counts.downloads %} <span class="badge badge-primary" title="Queued or running downloads">{{ counts.downloads }}</span>{% endif %}</a>
   {% endfor %}

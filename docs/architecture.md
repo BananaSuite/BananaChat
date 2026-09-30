@@ -349,6 +349,33 @@ limit off, since a custom value would switch it back on for one account.
 Migration 9 converted credits (1 credit = 1,000 tokens) and kept the credit
 columns of earlier releases.
 
+A request's `model_id` also targets one model's own limits for the `window`,
+`weekly`, `rate` and `temporary` kinds (approval sets `user_model_limits`, or a
+grant for that model). Requests can be withdrawn (`status='cancelled'`).
+
+**Community consent** (`services/community.py`, board in `web/community.py`,
+migration 14): a request sent with `community=1` is open for votes until
+`community_until`. Each person has one row in `quota_request_votes` (support or
+object; a support may renounce `tokens` in the request's `scope` of its `pool`
+or `model_id`, capped by `community_max_pledge_percent` of their own base limit
+across everything they hold). `community.consent` counts supporters, the share
+in favour and the renounced tokens against the increase ×
+`community_coverage_percent`; when reached, `community.apply` grants the
+increase for `community_boost_hours` (a temporary request: its own hours; an
+effort request unlocks the level) with `resolution_source='community'`, and the
+supporters' pledges get `starts_at`/`ends_at`, which `limits.effective` and
+`limits.model_limits` subtract from their limits (reason `renounced`). An
+administrator's decision, a cancellation or the `community-quota` job closing
+expired voting release unapplied pledges (`released_at`); a closed request
+stays pending for administrators.
+
+**Quota fallback** (`limits.quota_fallback`, chat only): a model chosen by
+name that is blocked for the account switches to a usable candidate, the same
+kind (local/cloud, `limits.is_local`) first, then the other kind when
+`quota_fallback_to_local`/`quota_fallback_to_cloud` allow it; unblocked choices
+get fallbacks of the other kind for failures before any output. The API keeps
+named models strict.
+
 ## Personalities
 
 A personality (`db/personalities.py`, rules in `services/personalities.py`,

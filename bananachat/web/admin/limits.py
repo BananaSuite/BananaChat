@@ -35,7 +35,7 @@ def _reason_texts(reasons) -> list[str]:
 
 def _models():
     """Catalog models that limits apply to (text and image models), in catalog order."""
-    return [model for model in catalog.list_models() if model["backend"] in ("ollama", "comfyui")]
+    return [model for model in catalog.list_models() if model["backend"] in ("ollama", "comfyui", "claude")]
 
 
 def _model_or_404(model_id: int):

@@ -267,7 +267,12 @@ def test_auto_moves_to_a_model_outside_a_used_up_service(app, make_user, fake_ol
     assert response.status_code == 200, response.get_data(as_text=True)
     wait_idle(app, session_id)
     assert [body for path, body in fake_ollama.requests if path == "/api/chat"][-1]["model"] == "qwen3:4b"
-    assert send(browser, session_id, model="llama3.2:3b").status_code == 429
+    # A model chosen by name whose tokens are used up now falls back to a usable one too (limits.quota_fallback),
+    # saying so; the API keeps named models strict (the 429 above).
+    response = send(browser, session_id, model="llama3.2:3b")
+    assert response.status_code == 200, response.get_data(as_text=True)
+    wait_idle(app, session_id)
+    assert [body for path, body in fake_ollama.requests if path == "/api/chat"][-1]["model"] == "qwen3:4b"
 
 
 def test_refused_limit_forms_come_back_as_typed(app, admin, make_user):

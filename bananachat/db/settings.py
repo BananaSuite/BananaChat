@@ -36,6 +36,10 @@ COLUMNS = frozenset({
     "music_bonus_fixed_tokens", "music_bonus_fixed_slow_tokens",
     "effort_gating_enabled", "effort_default_level", "effort_auto_unlock", "effort_auto_active_days",
     "effort_auto_tokens", "effort_auto_period_days", "effort_auto_clean_days", "effort_auto_ceiling",
+    # Community consent for quota requests and quota fallbacks between local and cloud models (schema version 14).
+    "community_quota_enabled", "community_kinds", "community_min_supporters", "community_approval_percent",
+    "community_coverage_percent", "community_hours", "community_boost_hours", "community_min_account_days",
+    "community_max_pledge_percent", "quota_fallback_to_local", "quota_fallback_to_cloud",
 })
 
 

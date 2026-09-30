@@ -401,15 +401,20 @@ def request_rules(row) -> list[dict]:
 def submit_request(user_id: str, tokens: int | None = None, slow: int | None = None, reason: str = "", *,
                    kind: str = "window", pool: str = "api", weekly: int | None = None, per: str | None = None,
                    requests: int | None = None, hours: int | None = None, unlimited: bool = False,
-                   model_id: int | None = None, level: str | None = None) -> dict:
+                   model_id: int | None = None, level: str | None = None, community: bool = False) -> dict:
     """Ask for more: 5-hour (``window``) or ``weekly`` tokens, a higher request ``rate`` (one rule of the
     account, by its unit), a ``temporary`` grant, or a higher reasoning ``effort`` level (one model or all).
 
-    5-hour (and, when configured, weekly) requests within the automatic-approval
-    amounts are approved at once; rate, temporary and effort requests always
-    wait for an administrator. One request can be pending per account.
+    With *model_id*, the 5-hour, weekly, rate and temporary kinds ask for more of that one model's own limits
+    (every service shares them) instead of a service's; for ``effort`` it names the model (None: all models).
+
+    Service 5-hour (and, when configured, weekly) requests within the automatic-approval
+    amounts are approved at once; other requests wait for an administrator, and with *community* (when the
+    site allows it for the kind) for other people's consent too (``services.community``). One request can be
+    pending per account.
     """
     from bananachat.db import limits as limits_db
+    from bananachat.services import community as community_service
     from bananachat.services import limits
 
     reason = (reason or "").strip()
@@ -420,7 +425,14 @@ def submit_request(user_id: str, tokens: int | None = None, slow: int | None = N
         raise RequestError("Explain the request in 5-1000 characters.", "quota_reason_length",
                            min=REQUEST_REASON_MIN, max=REQUEST_REASON_MAX)
     with db.transaction():
-        base = limits.base_limits(user_id, pool)
+        target = None
+        if model_id is not None and kind != "effort":
+            target = db.one("SELECT * FROM ai_models WHERE id=?", (model_id,))
+            if target is None:
+                raise RequestError("That model does not exist.", "quota_failed")
+            if kind in ("window", "temporary"):
+                slow = 0
+        base = limits.model_base(user_id, target) if target is not None else limits.base_limits(user_id, pool)
         if db.one("SELECT 1 FROM quota_requests WHERE user_id=? AND status='pending'", (user_id,)):
             raise RequestError("You already have a pending request.", "quota_already_pending")
         settings = _settings()
@@ -442,7 +454,8 @@ def submit_request(user_id: str, tokens: int | None = None, slow: int | None = N
                                    "quota_must_raise")
             values.update(new_tokens=int(tokens), new_slow_tokens=int(slow))
             # Slow tokens the request leaves as they are (always, while slow tokens are off) are not a raise.
-            automatic = auto and tokens <= int(settings.get("quota_auto_approve_max_tokens") or 0) and \
+            automatic = auto and target is None and \
+                tokens <= int(settings.get("quota_auto_approve_max_tokens") or 0) and \
                 (slow == current_slow or slow <= int(settings.get("quota_auto_approve_max_slow_tokens") or 0))
         elif kind == "weekly":
             if not base["weekly_enabled"]:
@@ -454,7 +467,7 @@ def submit_request(user_id: str, tokens: int | None = None, slow: int | None = N
                 raise RequestError("A request must raise your quota.", "quota_must_raise")
             values.update(new_weekly_tokens=int(weekly))
             weekly_max = int(settings.get("quota_auto_approve_max_weekly_tokens") or 0)
-            automatic = auto and weekly_max > 0 and weekly <= weekly_max
+            automatic = auto and target is None and weekly_max > 0 and weekly <= weekly_max
         elif kind == "rate":
             if not base["rate_enabled"]:
                 raise RequestError("This service has no request-rate limit.", "quota_not_limited")
@@ -494,20 +507,27 @@ def submit_request(user_id: str, tokens: int | None = None, slow: int | None = N
                                    max=REQUEST_TOKENS_MAX)
             values.update(new_tokens=0 if unlimited else int(tokens), grant_hours=int(hours),
                           grant_unlimited=int(bool(unlimited)))
+        if target is not None:
+            values["model_id"] = target["id"]
         status = "approved" if automatic else "pending"
+        community = bool(community) and not automatic and community_service.offered(kind, settings)
+        community_until = db.now(timedelta(hours=community_service.settings(settings)["hours"])) \
+            if community else None
         # The credit columns are what earlier releases read.
         credits_value = (values["new_tokens"] or 0) / TOKENS_PER_CREDIT
         cursor = db.execute(
             "INSERT INTO quota_requests (user_id, kind, pool, new_credits, new_slow_credits, new_weekly_credits, "
             "new_tokens, new_slow_tokens, new_weekly_tokens, new_rate_rules, grant_hours, grant_unlimited, model_id, "
             "effort_level, effort_all_models, reason, duration_type, status, resolution_source, created_at, "
-            "resolved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'permanent', ?, ?, ?, ?)",
+            "resolved_at, community, community_until) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'permanent', ?, ?, ?, ?, "
+            "?, ?)",
             (user_id, kind, pool, _ceil(credits_value), _ceil((values["new_slow_tokens"] or 0) / TOKENS_PER_CREDIT),
              _ceil(values["new_weekly_tokens"] / TOKENS_PER_CREDIT) if values["new_weekly_tokens"] else None,
              values["new_tokens"], values["new_slow_tokens"], values["new_weekly_tokens"], values["new_rate_rules"],
              values["grant_hours"], values["grant_unlimited"], values["model_id"], values["effort_level"],
              values["effort_all_models"], reason,
-             status, "automatic" if automatic else "manual", db.now(), db.now() if automatic else None))
+             status, "automatic" if automatic else "manual", db.now(), db.now() if automatic else None,
+             int(community), community_until))
         if automatic:
             # A granted raise is a custom limit, so restoring defaults for everyone is a deliberate choice.
             _apply(db.one("SELECT * FROM quota_requests WHERE id=?", (cursor.lastrowid,)), user_id)
@@ -526,6 +546,9 @@ def _apply(row, resolved_by: str) -> None:
         if row["model_id"] is None and not row["effort_all_models"]:
             raise ValueError("The model of this request was removed; deny it instead.")
         limits.unlock_effort(user_id, row["model_id"], row["effort_level"], source="request", updated_by=resolved_by)
+        return
+    if row["model_id"] is not None:
+        _apply_model(row, resolved_by)
         return
     base = limits.base_limits(user_id, pool)
     # A custom value switches its limit on, so a request sent before the limit was switched off
@@ -573,6 +596,65 @@ def _apply(row, resolved_by: str) -> None:
         raise ValueError("Unknown kind of request.")
 
 
+def _apply_model(row, resolved_by: str) -> None:
+    """An approved request for one model's own limits: a custom model limit (never lower than now) or a grant."""
+    from bananachat.db import limits as limits_db
+    from bananachat.services import limits
+
+    kind, user_id = request_kind(row), row["user_id"]
+    model = db.one("SELECT * FROM ai_models WHERE id=?", (row["model_id"],))
+    if model is None:
+        raise ValueError("The model of this request was removed; deny it instead.")
+    base = limits.model_base(user_id, model)
+    if kind in ("window", "weekly", "rate") and not base[f"{kind}_enabled"]:
+        what = {"rate": "request rate", "window": "5-hour", "weekly": "weekly"}[kind]
+        raise ValueError(f"This model no longer has a {what} limit; deny the request instead.")
+    if kind == "window":
+        limits_db.set_model_override(user_id, model["id"], resolved_by,
+                                     window_tokens=_ceil(max(base["window_tokens"], row["new_tokens"] or 0)))
+    elif kind == "weekly":
+        limits_db.set_model_override(user_id, model["id"], resolved_by,
+                                     weekly_tokens=_ceil(max(base["weekly_tokens"], row["new_weekly_tokens"] or 0)))
+    elif kind == "rate":
+        asked = {rule["per"]: int(rule["requests"]) for rule in request_rules(row)}
+        rules = []
+        for rule in base["rate_rules"]:
+            wanted = asked.get(rule["per"], 0)
+            if wanted > rule["requests"]:
+                burst = max(int(rule["burst"]), math.ceil(rule["burst"] * wanted / rule["requests"]))
+                rule = {"requests": wanted, "per": rule["per"], "burst": min(limits_db.BURST_MAX, burst)}
+            rules.append(rule)
+        limits_db.set_model_override(user_id, model["id"], resolved_by, rate_rules=rules)
+    elif kind == "temporary":
+        unlimited = bool(row["grant_unlimited"])
+        if not unlimited and not base["window_enabled"]:
+            raise ValueError("This model no longer has a 5-hour limit, so extra tokens would do nothing; "
+                             "deny the request instead.")
+        now = datetime.now(timezone.utc)
+        grant_id = limits_db.create_grant(
+            created_by=resolved_by, user_id=user_id, pool=None, model_id=model["id"],
+            scope=None if unlimited else "window", kind="unlimited" if unlimited else "extra",
+            amount=0 if unlimited else row["new_tokens"], starts_at=db.timestamp(now),
+            ends_at=db.timestamp(now + timedelta(hours=int(row["grant_hours"]))),
+            reason=f"Request #{row['id']}: {row['reason']}"[:limits_db.REASON_MAX])
+        db.execute("UPDATE quota_requests SET grant_id=? WHERE id=?", (grant_id, row["id"]))
+    else:
+        raise ValueError("Unknown kind of request.")
+
+
+def cancel_request(request_id: int, user_id: str) -> bool:
+    """The requester withdraws a pending request; its pledges are released. False when it is not pending."""
+    from bananachat.services import community
+
+    with db.transaction():
+        changed = db.execute("UPDATE quota_requests SET status='cancelled', cancelled_at=?, resolved_at=? "
+                             "WHERE id=? AND user_id=? AND status='pending'",
+                             (db.now(), db.now(), request_id, user_id)).rowcount == 1
+        if changed:
+            community.release(request_id)
+    return changed
+
+
 def pending_request(user_id: str):
     return db.one("SELECT r.*, m.display_name AS model_name FROM quota_requests r "
                   "LEFT JOIN ai_models m ON m.id=r.model_id WHERE r.user_id=? AND r.status='pending'", (user_id,))
@@ -606,3 +688,6 @@ def resolve_request(request_id: int, admin_id: str, approved: bool, message: str
         db.execute("UPDATE quota_requests SET status=?, admin_message=?, resolved_at=?, resolved_by=? WHERE id=?",
                    ("approved" if approved else "denied", (message or "")[:1000] or None, db.now(), admin_id,
                     request_id))
+        # An administrator's decision needs nobody's tokens: pledges made for it are released.
+        from bananachat.services import community
+        community.release(request_id)

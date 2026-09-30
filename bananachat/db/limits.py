@@ -856,6 +856,18 @@ def count_active_grants() -> int:
                      "AND (ends_at IS NULL OR ends_at>?)", (at, at), 0)
 
 
+# ----- renounced tokens (community consent) ---------------------------------------------
+
+def active_pledges(user_id: str, at: str | None = None):
+    """Tokens *user_id* renounced to support approved community requests, in force at *at*, summed per
+    ``(pool, model_id, scope)`` with the latest end (``quota_request_votes``, see ``services.community``)."""
+    at = at or db.now()
+    return db.query(
+        "SELECT pool, model_id, scope, SUM(tokens) AS tokens, MAX(ends_at) AS ends_at FROM quota_request_votes "
+        "WHERE user_id=? AND stance='support' AND tokens>0 AND released_at IS NULL AND starts_at IS NOT NULL "
+        "AND starts_at<=? AND ends_at>? GROUP BY pool, model_id, scope", (user_id, at, at))
+
+
 # ----- request-rate buckets ---------------------------------------------------------
 
 def bucket_key(scope: str, user_id: str, rule: str) -> str:

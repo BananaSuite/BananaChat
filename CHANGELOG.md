@@ -12,7 +12,7 @@ previous release's updater backs up the installation, starts the new version
 and checks its health before letting users in; if anything fails it restores
 the old code and database together.
 
-On first start the database is upgraded in place (schema version 12). The
+On first start the database is upgraded in place (schema version 14). The
 upgrade only adds: accounts, chats, attachments, API tokens, quotas, access
 policies, models, settings and sign-ins all carry over, and no configuration
 change is required.
@@ -110,6 +110,30 @@ temporary increase or a higher reasoning effort. Amounts raised by automatic
 approval are minimums, so later tier promotions still apply; amounts an
 administrator sets are exact.
 
+**Community consent for quota requests** (on by default; administrators can
+switch it off or limit it to some kinds of request under Limits → Services).
+A request for more — for a service or for one model's own limits, including a
+boost such as unlimited use for 24 hours — can also be offered to the
+community. Administrators can still approve it at once. Other people can back
+it on the new Community page by renouncing part of their own quota in the same
+service or model, or object to it. With enough consent (by default 3
+supporters, two thirds of the votes, and the renounced tokens covering the
+increase, within 72 hours) it is applied automatically as a time-limited
+increase, and the supporters' renounced tokens come off their own limits for
+the same time. When voting closes without consent the request keeps waiting
+for an administrator until it is decided or its author cancels it; requests
+can now be cancelled from the account page, which gives back any tokens
+promised to them. Supporters must have had their account for a week and can
+renounce at most half of a limit at a time (all adjustable).
+
+**Model fallback when quota runs out**: when someone picks a model whose
+quota is used up for them (its own limits, the Claude pool's shared quota, or
+the service tokens it counts toward), the chat answers with a model they can
+still use and says so — the same kind first, then cloud → local or local →
+cloud, each direction switchable by administrators (both on by default). A
+chosen model also gets fallbacks of the other kind when it fails before
+answering.
+
 The upgrade converts the previous release's settings: 1 credit becomes 1,000
 tokens and the daily amount becomes the same amount per 5 hours, which is
 more generous than before, so administrators may want to lower it.
@@ -117,6 +141,16 @@ more generous than before, so administrators may want to lower it.
 (still read as its default).
 
 ### Models
+
+**Claude subscription pool.** Claude models are now actually served through the
+pooled subscription accounts (they previously went to Ollama). The pool's quota
+is the sum of its active accounts, so one exhausted subscription no longer
+blocks the others; windows that ended count as empty; the highest-priority
+account with quota left answers, and an account the Claude site reports out of
+quota rests while the next one answers. With no account able to answer, Claude
+models count as used up and the chat falls back to local models. Claude
+models never run on worker PCs or as agents. Claude Fable 5.1, Opus 5.5 and
+Sonnet 5.5 join the curated list (Fable with the strictest limits).
 
 - **Detection**: each new or updated model's capabilities, context length,
   family, size, quantisation and reasoning levels are read; a failed or empty

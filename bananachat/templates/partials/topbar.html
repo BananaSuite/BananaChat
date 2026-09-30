@@ -24,6 +24,9 @@
     {% if music_nav_visible is defined and music_nav_visible %}
     <a href="{{ url_for('music.free_quota') }}"{% if path.startswith('/free-quota') %} aria-current="page"{% endif %}>{{ t("nav.free_quota") }}</a>
     {% endif %}
+    {% if community_nav_visible is defined and community_nav_visible %}
+    <a href="{{ url_for('community.index') }}"{% if path.startswith('/community') %} aria-current="page"{% endif %}>{{ t("nav.community") }}</a>
+    {% endif %}
     {% if is_admin %}
     <a href="{{ url_for('admin.dashboard') }}"{% if path.startswith('/admin') %} aria-current="page"{% endif %}>{{ t("nav.admin") }}</a>
     {% endif %}

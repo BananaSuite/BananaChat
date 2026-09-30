@@ -77,6 +77,44 @@
       <div class="form-actions"><button type="submit" class="btn btn-primary">Save options</button></div>
     </form>
 
+    <form method="post" action="{{ url_for('admin.quotas_community') }}" class="card stack" id="community" aria-labelledby="community-title">
+      {{ csrf() }}
+      <h2 id="community-title">Community consent</h2>
+      <p class="muted small mb-0">People can offer a quota request to the community. Others support it (renouncing part of their own limit in the same service or model) or object. With enough consent it is applied automatically as a time-limited increase, and the renounced tokens are taken off the supporters for the same time. You can still decide any request at once; after voting closes, requests wait for you until you decide or their author cancels them.{% if community_open %} {{ community_open }} request{{ "s" if community_open != 1 }} open for voting now.{% endif %}</p>
+      {{ toggle("community_quota_enabled", "Let the community approve requests", community.enabled, "On by default. Off: requests only wait for you (voting already under way stops counting).") }}
+      <fieldset class="stack-sm">
+        <legend class="label">Kinds the community can approve</legend>
+        {% for kind, label in kind_labels.items() %}
+        <label class="check"><input type="checkbox" name="community_kind_{{ kind }}" value="1"{% if kind in community.kinds %} checked{% endif %}><span>{{ label }}</span></label>
+        {% endfor %}
+      </fieldset>
+      <div class="form-grid">
+        {% for name, label, hint in [("min_supporters", "Supporters needed", "At least this many people."),
+                                     ("approval_percent", "Share in favour (%)", "Supporters among everyone who voted."),
+                                     ("coverage_percent", "Tokens covered (%)", "Of a token increase, renounced by supporters. 0: votes alone decide."),
+                                     ("hours", "Voting hours", "How long a request stays open for voting."),
+                                     ("boost_hours", "Increase lasts (hours)", "For approved non-temporary requests; temporary ones last their own hours."),
+                                     ("min_account_days", "Account age to vote (days)", "Newer accounts cannot vote."),
+                                     ("max_pledge_percent", "Most a person can renounce (%)", "Of their own limit, across every request at once.")] %}
+        <div class="field">
+          <label for="community-{{ name }}">{{ label }}</label>
+          <input type="number" id="community-{{ name }}" name="community_{{ name }}" min="{{ community_bounds[name][0] }}" max="{{ community_bounds[name][1] }}" step="1" required value="{{ community[name] }}" aria-describedby="community-{{ name }}-hint">
+          <span class="hint" id="community-{{ name }}-hint">{{ hint }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save community consent</button></div>
+    </form>
+
+    <form method="post" action="{{ url_for('admin.quotas_fallback') }}" class="card stack" id="fallback" aria-labelledby="fallback-title">
+      {{ csrf() }}
+      <h2 id="fallback-title">Model fallback when quota runs out</h2>
+      <p class="muted small mb-0">When someone picks a model in the chat whose quota is used up for them (its own limits, the provider's pooled quota, or the service tokens it counts toward), the chat answers with another model they can still use and says so. Models of the same kind are tried first. These switches allow crossing between local models (this site's servers) and cloud models (such as the Claude pool); they also give a chosen model fallbacks of the other kind when it fails before answering.</p>
+      {{ toggle("quota_fallback_to_local", "Cloud → local", s.quota_fallback_to_local if s.quota_fallback_to_local is not none else 1, "When a cloud model's quota runs out, answer with a local model.") }}
+      {{ toggle("quota_fallback_to_cloud", "Local → cloud", s.quota_fallback_to_cloud if s.quota_fallback_to_cloud is not none else 1, "When the service tokens of local models run out, answer with a cloud model that does not count toward them.") }}
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save fallback</button></div>
+    </form>
+
     <section class="card stack" id="global" aria-labelledby="global-title">
       <h2 id="global-title">Everyone</h2>
       <p class="muted small mb-0">Resetting usage ends everyone's open windows: the next request starts a fresh one. The usage history is kept.</p>

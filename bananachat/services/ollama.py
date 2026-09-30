@@ -90,7 +90,23 @@ def list_tags(config=None, *, timeout: float = 15, primary: bool = False) -> lis
     url, headers = endpoint(config, primary=primary)
     data = request_json("GET", url, "/api/tags", headers=headers, timeout=timeout)
     models = (data or {}).get("models") or []
-    return [model for model in models if isinstance(model, dict) and isinstance(model.get("name"), str)]
+    # Harden detection: ignore malformed entries, over-long names and
+    # duplicates so one bad record never breaks a catalog sync (capped).
+    seen: set[str] = set()
+    result = []
+    for model in models:
+        if not isinstance(model, dict) or not isinstance(model.get("name"), str):
+            continue
+        name = model["name"].strip()
+        if not name or len(name) > 300 or "\x00" in name or name in seen:
+            continue
+        if not MODEL_NAME_RE.fullmatch(name):
+            continue
+        seen.add(name)
+        result.append(model)
+        if len(result) >= 5000:
+            break
+    return result
 
 
 def list_running(config=None) -> list[dict]:
@@ -328,6 +344,10 @@ def _count(value) -> int | None:
 
 def pull(name: str, *, cancel: CancelToken | None = None, config=None):
     """Download a model; yields progress dicts from Ollama (``status``, ``completed``, ``total``)."""
+    if not MODEL_NAME_RE.fullmatch((name or "").strip()) or ".." in name or "//" in name:
+        from bananachat.services.upstream import UpstreamError as _UpstreamError
+
+        raise _UpstreamError(f"Invalid model name: {name[:120]}")
     url, headers = endpoint(config, primary=True)
     with open_request("POST", url, "/api/pull", body={"model": name, "name": name, "stream": True},
                       headers=headers, first_byte_timeout=120, read_timeout=300,

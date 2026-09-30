@@ -15,6 +15,7 @@ BLUEPRINTS = (
     ("bananachat.web.auth", "bp"),
     ("bananachat.web.chat", "bp"),
     ("bananachat.web.account", "bp"),
+    ("bananachat.web.community", "bp"),
     ("bananachat.web.customization", "bp"),
     ("bananachat.web.personalities", "bp"),
     ("bananachat.web.music", "bp"),

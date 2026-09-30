@@ -10,12 +10,12 @@
   <div class="row-between">
     <h2 id="requests-title" class="mb-0">Quota requests {% if pending_count %}<span class="badge badge-warning">{{ pending_count }} pending</span>{% endif %}</h2>
     <nav class="tabs tabs-compact" aria-label="Request status">
-      {% for key, label in [("pending", "Pending"), ("approved", "Approved"), ("denied", "Denied"), ("all", "All")] %}
+      {% for key, label in [("pending", "Pending"), ("approved", "Approved"), ("denied", "Denied"), ("cancelled", "Cancelled"), ("all", "All")] %}
       <a href="{{ url_for('admin.quota_requests', status=key) }}"{% if status == key %} aria-current="page"{% endif %}>{{ label }}</a>
       {% endfor %}
     </nav>
   </div>
-  <p class="muted small">Approving applies the change at once: a custom limit for the account (never lower than what it has), a grant for a temporary increase that ends by itself, or the requested reasoning effort level (and every level below it).</p>
+  <p class="muted small">Approving applies the change at once: a custom limit for the account (never lower than what it has), a grant for a temporary increase that ends by itself, or the requested reasoning effort level (and every level below it). You can decide any request at any time, also while the community is voting on it; tokens people renounced for it are then given back. A request whose community voting closed keeps waiting here until you decide or its author cancels it.</p>
   {% if requests %}
   <div class="grid grid-2 mt-1">
     {% for item in requests %}
@@ -29,6 +29,12 @@
         {% if item.current %}<span class="muted">({{ item.current }})</span>{% endif %}
         {% if req.duration_type != "permanent" %}<span class="badge">One day (legacy)</span>{% endif %}</p>
       <blockquote class="quote">{{ req.reason }}</blockquote>
+      {% if item.community %}
+      {% set c = item.community.consent %}
+      <p class="small mb-1"><span class="badge badge-info">Community</span>
+        {% if req.status == "pending" %}{% if item.community.open %}voting open until {{ when(req.community_until) }}{% else %}voting closed without consent: waiting for you{% endif %} · {% endif %}
+        {{ c.supporters }} supporting ({{ c.min_supporters }} needed), {{ c.objectors }} objecting ({{ c.percent }}% in favour, {{ c.approval_percent }}% needed){% if c.needed %} · {{ c.pledged | tokens }} of {{ c.needed | tokens }} renounced{% endif %}{% if req.boost_ends_at %} · increase until {{ when(req.boost_ends_at) }}{% endif %}</p>
+      {% endif %}
       {% if req.status == "pending" %}
       <form method="post" action="{{ url_for('admin.quota_request_resolve', request_id=req.id) }}" class="stack-sm">
         {{ csrf() }}
@@ -40,7 +46,7 @@
         </div>
       </form>
       {% else %}
-      <p class="small">{{ status_badge(req.status) }} {% if req.resolution_source == "automatic" %}automatically{% else %}by {{ req.resolved_by_name or "an administrator" }}{% endif %} {{ when(req.resolved_at) }}{% if req.admin_message %} · “{{ req.admin_message }}”{% endif %}{% if req.grant_id %} · <a href="{{ url_for('admin.limit_grants') }}#grant-{{ req.grant_id }}">grant #{{ req.grant_id }}</a>{% endif %}</p>
+      <p class="small">{{ status_badge(req.status) }} {% if req.resolution_source == "automatic" %}automatically{% elif req.resolution_source == "community" %}by the community{% elif req.status == "cancelled" %}by {{ req.username }}{% else %}by {{ req.resolved_by_name or "an administrator" }}{% endif %} {{ when(req.resolved_at) }}{% if req.admin_message %} · “{{ req.admin_message }}”{% endif %}{% if req.grant_id %} · <a href="{{ url_for('admin.limit_grants') }}#grant-{{ req.grant_id }}">grant #{{ req.grant_id }}</a>{% endif %}</p>
       {% endif %}
     </article>
     {% endfor %}

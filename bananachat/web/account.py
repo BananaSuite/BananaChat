@@ -18,7 +18,7 @@ from bananachat.db import catalog, credits, users
 from bananachat.db import limits as limits_db
 from bananachat.formatting import parse_amount, tokens_text
 from bananachat.i18n import translate
-from bananachat.services import exports, limits
+from bananachat.services import community, exports, limits
 from bananachat.services.access import AccessContext, is_image_model, is_text_model
 
 bp = Blueprint("account", __name__)
@@ -282,6 +282,7 @@ def _page(draft: dict | None = None):
     bonus_mode, bonus_regular, bonus_slow = credits.music_bonus(user["id"], settings)
     access = access_overview(user)
     pending = credits.pending_request(user["id"])
+    community_options = community.settings(settings)
     form = _request_form(user) if user["role"] != "admin" else None
     if draft is None and form is not None and request.args.get("request") == "effort":
         # "Request access" from a locked level in the chat composer.
@@ -306,6 +307,11 @@ def _page(draft: dict | None = None):
         auto_max_weekly=int(settings.get("quota_auto_approve_max_weekly_tokens") or 0),
         pending_quota=pending,
         pending_summary=request_summary(pending) if pending else "",
+        pending_consent=_consent_view(pending) if pending and pending["community"] else None,
+        community=community_options,
+        community_kinds_text=", ".join(_t(f"account.quota_kind_{kind}") for kind in community_options["kinds"]),
+        pledges=[{"row": row, "summary": pledge_summary(row)} for row in community.my_pledges(user["id"])]
+        if user["role"] != "admin" else [],
         quota_history=[{"row": row, "summary": request_summary(row)} for row in credits.user_requests(user["id"])],
         sessions=_sessions(user["id"]),
         access=access,
@@ -350,13 +356,36 @@ def _effort_targets(user) -> list[dict]:
     return targets
 
 
+MODEL_TARGET = "model:"
+
+
+def _model_targets(user) -> dict:
+    """Models with limits of their own for the account (5-hour, weekly or rate): ``{"model:<name>": (row, base)}``.
+    Requests for them raise that model's limits, which every service shares."""
+    context = AccessContext.load(user)
+    result = {}
+    for model in catalog.list_models(rolled_out_only=True):
+        if not (context.can_use(model, "chat") or context.can_use(model, "api")):
+            continue
+        base = limits.model_base(user["id"], model)
+        if base["window_enabled"] or base["weekly_enabled"] or base["rate_enabled"]:
+            result[f"{MODEL_TARGET}{model['ollama_name']}"] = (model, base)
+    return result
+
+
 def _request_form(user) -> dict:
-    """What the request form offers: kinds, pools, and the account's current values per pool (for defaults)."""
+    """What the request form offers: kinds, targets (services, and models with their own limits), and the
+    account's current values per target (for defaults)."""
     pools = limits.visible_pools(user)
     bases = {pool: limits.base_limits(user["id"], pool) for pool in pools}
-    window_pools = [pool for pool in pools if bases[pool]["window_enabled"]]
-    weekly_pools = [pool for pool in pools if bases[pool]["weekly_enabled"]]
-    rate_pools = [pool for pool in pools if bases[pool]["rate_enabled"]]
+    labels = {pool: _t(f"account.pool_{pool}") for pool in pools}
+    for value, (model, base) in _model_targets(user).items():
+        bases[value] = base
+        labels[value] = _t("account.quota_target_model", model=model["display_name"])
+    targets = list(bases)
+    window_pools = [pool for pool in targets if bases[pool]["window_enabled"]]
+    weekly_pools = [pool for pool in targets if bases[pool]["weekly_enabled"]]
+    rate_pools = [pool for pool in targets if bases[pool]["rate_enabled"]]
     efforts = _effort_targets(user)
     kinds = [kind for kind, offered in (("window", window_pools), ("weekly", weekly_pools), ("rate", rate_pools),
                                         ("temporary", True), ("effort", efforts)) if offered]
@@ -365,11 +394,30 @@ def _request_form(user) -> dict:
                       "rules": [{"per": rule["per"], "requests": rule["requests"],
                                  "label": limits.rule_text(g.lang, rule)} for rule in base["rate_rules"]]}
                for pool, base in bases.items()}
-    return {"pools": pools, "kinds": kinds, "current": current, "extra_pools": window_pools,
-            "pools_for": {"window": window_pools, "weekly": weekly_pools, "rate": rate_pools, "temporary": pools,
+    temporary = pools + [value for value in targets if value in window_pools and value not in pools]
+    return {"pools": targets, "labels": labels, "kinds": kinds, "current": current, "extra_pools": window_pools,
+            "pools_for": {"window": window_pools, "weekly": weekly_pools, "rate": rate_pools, "temporary": temporary,
                           "effort": pools},
             "efforts": efforts,
             "hours_max": credits.REQUEST_HOURS_MAX, "weekly_max": credits.REQUEST_WEEKLY_MAX}
+
+
+def _consent_view(row) -> dict:
+    """How far the community backs a pending request, for the page."""
+    options = community.settings(g.settings)
+    consent = community.consent(row, options)
+    return {"supporters": consent.supporters, "objectors": consent.objectors, "pledged": consent.pledged,
+            "needed": consent.needed, "min": consent.min_supporters, "percent": consent.percent,
+            "approval": consent.approval_percent, "open": community.voting_open(row, options),
+            "until": row["community_until"], "closed": bool(row["community_closed_at"])}
+
+
+def pledge_summary(row) -> str:
+    """"12k tokens per 5 hours of Chat for alice, until …" for one renounced amount."""
+    what = row["model_name"] if row["model_id"] is not None else _t(f"account.pool_{row['pool'] or 'api'}")
+    key = "account.pledge_active" if row["starts_at"] else "account.pledge_promised"
+    return _t(key, tokens=_amount(row["tokens"]), period=_t(f"account.pledge_scope_{row['scope'] or 'window'}"),
+              target=what, user=row["username"], until=(row["ends_at"] or "")[:16])
 
 
 def _request_tokens(row, name: str, legacy: str):
@@ -381,6 +429,8 @@ def request_summary(row) -> str:
     """What a quota request asks for, in one line."""
     kind = credits.request_kind(row)
     pool = _t(f"account.pool_{row['pool'] or 'api'}")
+    if kind != "effort" and row["model_id"] is not None:
+        pool = _t("account.quota_target_model", model=row["model_name"] or "—")
     if kind == "effort":
         model = row["model_name"] or (_t("account.effort_all_models") if row["effort_all_models"] else "—")
         return _t("account.quota_summary_effort", level=limits.effort_label(row["effort_level"] or "medium", g.lang),
@@ -556,7 +606,7 @@ def _int(value, default=None):
 
 
 REQUEST_FIELDS = ("kind", "pool", "tokens", "slow_tokens", "weekly_tokens", "rate_per", "rate_requests", "hours",
-                  "extra_tokens", "unlimited", "effort_model", "effort_level", "reason")
+                  "extra_tokens", "unlimited", "effort_model", "effort_level", "reason", "community")
 
 
 def _tokens_field(value):
@@ -581,6 +631,14 @@ def quota_request():
     draft = {"form": "quota", **{name: (form.get(name) or "").strip() for name in REQUEST_FIELDS}}
     slow_enabled = bool(g.settings.get("slow_credits_enabled", 1))
     model_id = None
+    if pool.startswith(MODEL_TARGET) and kind != "effort":
+        target = _model_targets(user).get(pool)
+        if target is None:
+            flash(_t("account.quota_effort_model"), "error")
+            return _page(draft)
+        model_id, pool = target[0]["id"], "chat"
+    elif pool.startswith(MODEL_TARGET):
+        pool = "chat"
     if kind == "effort":
         target = (form.get("effort_model") or "").strip()
         if target != "all":
@@ -597,7 +655,8 @@ def quota_request():
             else None,
             form.get("reason") or "", kind=kind, pool=pool, weekly=_tokens_field(form.get("weekly_tokens")),
             per=form.get("rate_per"), requests=_int(form.get("rate_requests")), hours=_int(form.get("hours")),
-            unlimited=form.get("unlimited") == "1", model_id=model_id, level=form.get("effort_level"))
+            unlimited=form.get("unlimited") == "1", model_id=model_id, level=form.get("effort_level"),
+            community=form.get("community") == "1")
     except credits.RequestError as error:
         params = dict(error.params)
         if "max" in params and error.key == "quota_range":
@@ -618,8 +677,25 @@ def quota_request():
                                                        "effort": row["effort_level"]}, security.client_ip())
     if outcome["status"] == "approved":
         flash(_t("account.quota_approved_now", summary=request_summary(row)), "success")
+    elif row["community"]:
+        flash(_t("account.quota_submitted_community"), "success")
     else:
         flash(_t("account.quota_submitted"), "success")
+    return _back("quota")
+
+
+@bp.post("/account/quota-request/cancel", endpoint="quota_cancel")
+@security.login_required
+def quota_cancel():
+    """Withdraw the pending quota request (pledges made for it are released)."""
+    user = security.current_user()
+    pending = credits.pending_request(user["id"])
+    if pending is None or not credits.cancel_request(pending["id"], user["id"]):
+        flash(_t("account.quota_cancel_none"), "info")
+        return _back("quota")
+    users.audit(user, "quota.cancel", str(pending["id"]), {"kind": credits.request_kind(pending)},
+                security.client_ip())
+    flash(_t("account.quota_cancelled"), "success")
     return _back("quota")
 
 

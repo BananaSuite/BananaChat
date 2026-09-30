@@ -212,6 +212,8 @@ def should_route(user, model, *, request_type: str | None = None, think=None, co
     config = _config(config)
     if not config.workers_enabled or model is None:
         return False
+    if _field(model, "backend") not in (None, "ollama"):
+        return False  # worker PCs run Ollama models only (never the Claude pool)
     if think:
         # Worker jobs carry no reasoning setting and the daemon relays only the
         # answer, so a request that asks for reasoning stays on this server.

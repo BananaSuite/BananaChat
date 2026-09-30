@@ -149,7 +149,8 @@
   "time.duration_soon": "less than a minute",
   "time.duration_days_hours": "{days} d {hours} h",
   "time.duration_hours_minutes": "{hours} h {minutes} min",
-  "time.duration_minutes": "{minutes} min"
+  "time.duration_minutes": "{minutes} min",
+  "nav.community": "Community"
  },
  "it": {
   "common.skip_to_content": "Vai al contenuto",
@@ -301,6 +302,7 @@
   "time.duration_soon": "meno di un minuto",
   "time.duration_days_hours": "{days} g {hours} h",
   "time.duration_hours_minutes": "{hours} h {minutes} min",
-  "time.duration_minutes": "{minutes} min"
+  "time.duration_minutes": "{minutes} min",
+  "nav.community": "Community"
  }
 }

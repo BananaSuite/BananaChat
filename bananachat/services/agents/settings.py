@@ -127,6 +127,10 @@ def enabled() -> bool:
 # ----- models ----------------------------------------------------------------------
 
 def supports_tools(model, caps: dict, overrides: dict) -> bool:
+    # Agent tool calls run on this site's Ollama server only: models of other backends (the Claude pool) cannot
+    # run agents, whatever an override says.
+    if model["backend"] != "ollama":
+        return False
     override = overrides.get(str(model["id"]))
     if override == "deny":
         return False

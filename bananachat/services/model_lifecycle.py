@@ -237,7 +237,19 @@ def parameters_billions(size: str | None, count=None) -> float | None:
 
 
 def preset_for(model) -> str:
-    """Heavy from 30B parameters, standard from 7B, light below; standard when unknown."""
+    """Heavy from 30B parameters, standard from 7B, light below; standard when unknown.
+
+    Claude subscription models use per-family strictness instead: opus is
+    heavy/strict, sonnet standard, haiku light.
+    """
+    try:
+        backend = model["backend"]
+    except (IndexError, KeyError, TypeError):
+        backend = None
+    if backend == "claude":
+        from bananachat.services import claude_pool
+
+        return claude_pool.strict_policy(model["ollama_name"])["preset"]
     billions = parameters_billions(model["parameter_size"])
     if billions is None:
         return "standard"
@@ -397,6 +409,24 @@ def sync(config=None, *, source: str = "background") -> dict:
     state.update(ok=True, count=len(tags), new=[name for _id, name in summary["inserted"]][:50],
                  missing=[name for _id, name, _reason in summary["missing"]][:50],
                  returned=[name for _id, name in summary["returned"]][:50])
+    try:
+        from bananachat.services import claude_pool
+
+        # Claude models enroll only once the pool is in use (accounts exist)
+        # or already enrolled; otherwise every Ollama sync would add curated
+        # Claude rows to sites that never asked for them.
+        from bananachat.db import claude_pool as _pool_db
+
+        has_claude = bool(db.scalar("SELECT 1 FROM ai_models WHERE backend='claude' LIMIT 1", default=None))
+        has_accounts = bool(_pool_db.list_accounts())
+        if has_claude or has_accounts:
+            claude_state = claude_pool.sync_catalog(source=source)
+            state["new"] = (state["new"] + claude_state.get("new", []))[:50]
+            state["enabled"] = (state["enabled"] + claude_state.get("enabled", []))[:50]
+            state["missing"] = (state["missing"] + claude_state.get("missing", []))[:50]
+    except Exception:  # noqa: BLE001 - Claude enrollment must never break the Ollama sync
+        log.warning("Claude catalog sync failed", exc_info=True)
+        db.close_thread_connection()
     _save_sync_state(state)
     if state["errors"]:
         log.warning("Model sync: %d model(s) could not be inspected", len(state["errors"]))
@@ -453,6 +483,8 @@ def apply_limit_preset(model_id: int, preset: str, actor=None) -> bool:
 
 
 def _auto_candidate(row) -> bool:
+    if row["backend"] != "ollama":
+        return False
     if row["enrolled_at"] or not row["backend_available"] or not row["details_at"] or row["details_error"]:
         return False
     if row["embedding_only"] or (row["backend_digest"] and row["details_digest"] != row["backend_digest"]):
@@ -804,6 +836,9 @@ def delete_from_server(model, actor=None, *, when_idle: bool = False, config=Non
     for them (the ``model-lifecycle`` job finishes it).
     """
     config = _config(config)
+    if model["backend"] == "claude":
+        raise ValueError("Claude subscription models are removed from the catalog, not from a model server: "
+                         "retire or delete the catalog entry instead.")
     if model["backend"] != "ollama":
         raise ValueError("Only Ollama models can be deleted from here; remove checkpoints on the ComfyUI server.")
     name = _name(model)

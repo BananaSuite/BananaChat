@@ -205,7 +205,8 @@
   "js.chat_effort_request": "Request access",
   "js.chat_effort_selected": "Reasoning effort: {level}",
   "js.chat_badge_weight": "counts ×{factor}",
-  "chat.model_unreviewed": "New — not reviewed"
+  "chat.model_unreviewed": "New — not reviewed",
+  "chat.notice_model_quota": "Your quota for {requested} is used up for now, so {model} is answering instead."
  },
  "it": {
   "chat.untitled": "Nuova chat",
@@ -413,6 +414,7 @@
   "js.chat_effort_request": "Richiedi l'accesso",
   "js.chat_effort_selected": "Livello di ragionamento: {level}",
   "js.chat_badge_weight": "conta ×{factor}",
-  "chat.model_unreviewed": "Nuovo — non ancora esaminato"
+  "chat.model_unreviewed": "Nuovo — non ancora esaminato",
+  "chat.notice_model_quota": "La tua quota per {requested} è esaurita per ora, quindi risponde {model}."
  }
 }
