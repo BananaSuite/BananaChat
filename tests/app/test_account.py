@@ -34,7 +34,7 @@ def test_account_page_shows_budgets_including_the_music_bonus(app, make_user):
     browser = _signed_in(app, "anna")
     html = browser.get("/account").get_data(as_text=True)
     assert 'value="10000.0" max="90000.0"' in html     # 30k tokens x3, 10k used
-    assert 'max="45000.0"' in html                      # 15k slow tokens x3
+    assert 'max="45000.0"' not in html                  # no second allowance
     assert 'value="0" max="120000.0"' in html or 'value="0.0" max="120000.0"' in html  # chat pool 40k x3
     assert "×3" in html
 
@@ -206,7 +206,7 @@ def test_quota_request_pending_path(app, make_user):
     with app.app_context():
         pending = credits.pending_request(user["id"])
         assert pending is not None and pending["new_tokens"] == 60_000 and pending["new_credits"] == 60
-        assert credits.get_quota(user["id"]) == (30_000, 15_000)
+        assert credits.get_quota(user["id"]) == (45_000, 0)
     html = browser.get("/account").get_data(as_text=True)
     assert "60k" in html
     browser.post("/account/quota-request", {"tokens": "70000", "slow_tokens": "15000", "reason": "Another one"})
@@ -224,7 +224,7 @@ def test_quota_request_automatic_approval(app, make_user):
     browser = _signed_in(app, "jill")
     browser.post("/account/quota-request", {"tokens": "80k", "slow_tokens": "20k", "reason": "Testing things"})
     with app.app_context():
-        assert credits.get_quota(user["id"]) == (80_000, 20_000)
+        assert credits.get_quota(user["id"]) == (80_000, 0)
         assert credits.user_requests(user["id"])[0]["status"] == "approved"
 
 
@@ -242,11 +242,11 @@ def test_quota_request_must_raise(app, make_user):
 def test_rejected_requests_keep_what_was_typed(app, make_user):
     make_user("mona")
     browser = _signed_in(app, "mona")
-    response = browser.post("/account/quota-request", {"tokens": "999999999", "slow_tokens": "15k",
+    response = browser.post("/account/quota-request", {"tokens": "2000000001", "slow_tokens": "15k",
                                                        "reason": "A long reason worth keeping"})
     assert response.status_code == 400
     html = response.get_data(as_text=True)
-    assert "A long reason worth keeping</textarea>" in html and 'value="999999999"' in html
+    assert "A long reason worth keeping</textarea>" in html and 'value="2000000001"' in html
     form = {"resource": "uncensored:0", "use_case": "Research I would hate to type twice.", "confirmed_safe": "1"}
     response = browser.post("/account/access-request", form)
     assert response.status_code == 400

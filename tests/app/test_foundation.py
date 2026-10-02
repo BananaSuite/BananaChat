@@ -326,7 +326,7 @@ def test_an_unreachable_ai_server_shows_a_banner_instead_of_an_error(make_app, m
     user = Browser(app)
     user.login("erin2")
     page = user.get("/account", headers={"Accept-Language": "en"})
-    assert page.status_code == 200 and "The AI server is unreachable" in page.get_data(as_text=True)
+    assert page.status_code == 200 and "Model server unavailable" in page.get_data(as_text=True)
     report = user.fetch("/status?banner=1")
     assert report.status_code == 200 and report.json["status"] == "outage"
     assert report.json["can_send"] is False and 'data-kind="outage"' in report.json["banner_html"]

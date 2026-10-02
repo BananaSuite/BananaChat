@@ -5,29 +5,53 @@
 {% block body_class %}admin-page{% endblock %}
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">{% block admin_styles %}{% endblock %}{% endblock %}
 {% block content %}
-{%- set admin_nav = [
-  ("dashboard", "admin.dashboard", "Overview", "chart"),
-  ("users", "admin.users", "Users", "users"),
-  ("invites", "admin.invites", "Invitations", "key"),
-  ("models", "admin.models", "Models", "layers"),
-  ("access", "admin.access", "Access", "shield"),
-  ("quotas", "admin.quotas", "Limits", "sliders"),
-  ("personalities", "admin.personalities", "Personalities", "sparkles"),
-  ("chats", "admin.chats", "Chat audit", "chat"),
-  ("workers", "admin.workers", "Workers", "server"),
-  ("agents", "admin.agents", "Agents", "terminal"),
-  ("music", "admin.music", "Music program", "music"),
-  ("metrics", "admin.metrics", "Metrics", "chart"),
-  ("audit", "admin.audit", "Audit log", "file"),
-  ("settings", "admin.settings", "Settings", "settings"),
-  ("migration", "admin.migration", "Backup & migration", "download"),
+{%- set admin_groups = [
+  ("People", [
+    ("users", "admin.users", "Users", "users"),
+    ("invites", "admin.invites", "Invitations", "key"),
+    ("chats", "admin.chats", "Chat audit", "chat"),
+  ]),
+  ("Models & access", [
+    ("models", "admin.models", "Models", "layers"),
+    ("access", "admin.access", "Permissions", "shield"),
+    ("quotas", "admin.quotas", "Limits", "sliders"),
+    ("personalities", "admin.personalities", "Personalities", "sparkles"),
+  ]),
+  ("Services", [
+    ("workers", "admin.workers", "Workers", "server"),
+    ("agents", "admin.agents", "Cloud sessions", "terminal"),
+    ("music", "admin.music", "Music program", "music"),
+  ]),
+  ("System", [
+    ("metrics", "admin.metrics", "Metrics", "chart"),
+    ("audit", "admin.audit", "Audit log", "file"),
+    ("settings", "admin.settings", "Site settings", "settings"),
+    ("migration", "admin.migration", "Backup & migration", "download"),
+  ]),
 ] -%}
-<div class="admin-shell">
-  <nav class="admin-nav" aria-label="Administration">
-    {% for key, endpoint, label, icon_name in admin_nav if has_endpoint(endpoint) %}
+{% set current = namespace(label="Overview", icon="chart") %}
+{% for group_label, links in admin_groups %}
+  {% for key, endpoint, label, icon_name in links if section == key %}
+    {% set current.label = label %}{% set current.icon = icon_name %}
+  {% endfor %}
+{% endfor %}
+{% macro navigation() -%}
+  <a href="{{ url_for('admin.dashboard') }}"{% if section == 'dashboard' %} aria-current="page"{% endif %}>{{ icon("chart") }}<span>Overview</span></a>
+  {% for group_label, links in admin_groups %}
+  <div class="admin-nav-group">
+    <span class="admin-nav-label">{{ group_label }}</span>
+    {% for key, endpoint, label, icon_name in links if has_endpoint(endpoint) %}
     <a href="{{ url_for(endpoint) }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(icon_name) }}<span>{{ label }}</span></a>
     {% endfor %}
-  </nav>
+  </div>
+  {% endfor %}
+{%- endmacro %}
+<div class="admin-shell">
+  <nav class="admin-nav admin-nav-desktop" aria-label="Administration">{{ navigation() }}</nav>
+  <details class="admin-nav-mobile" data-menu>
+    <summary>{{ icon(current.icon) }}<span><span class="muted">Admin</span><span class="admin-nav-divider" aria-hidden="true">/</span>{{ current.label }}</span>{{ icon("chevron-down") }}</summary>
+    <nav class="admin-nav" aria-label="Administration">{{ navigation() }}</nav>
+  </details>
   <div class="admin-main">
     {% block admin_content %}{% endblock %}
   </div>

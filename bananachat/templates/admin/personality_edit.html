@@ -13,7 +13,7 @@
 <div class="persona-editor persona-page">
   <form method="post" action="{{ url_for('admin.personality_featured_update', personality_id=row.id) if row else url_for('admin.personality_featured_create') }}" class="stack persona-form" id="persona-form" data-busy>
     {{ csrf() }}
-    <fieldset class="card">
+    <fieldset class="settings-section">
       <legend>Look</legend>
       <div class="stack">
         <div class="identity-row">
@@ -26,10 +26,13 @@
             <input type="text" id="name" name="name" required maxlength="{{ limits.name }}" value="{{ values.name or '' }}" autocomplete="off" data-counter>
           </div>
         </div>
-        <div class="emoji-picks" role="group" aria-label="Suggested emoji" hidden>
-          {% for emoji in avatar_choices %}<button type="button" class="emoji-pick" data-emoji="{{ emoji }}" aria-label="Use {{ emoji }}">{{ emoji }}</button>{% endfor %}
-          <button type="button" class="emoji-pick emoji-clear" data-emoji="" aria-label="No emoji">{{ icon("close") }}</button>
-        </div>
+        <details class="persona-avatar-options">
+          <summary>Suggested emoji</summary>
+          <div class="emoji-picks" role="group" aria-label="Suggested emoji" hidden>
+            {% for emoji in avatar_choices %}<button type="button" class="emoji-pick" data-emoji="{{ emoji }}" aria-label="Use {{ emoji }}">{{ emoji }}</button>{% endfor %}
+            <button type="button" class="emoji-pick emoji-clear" data-emoji="" aria-label="No emoji">{{ icon("close") }}</button>
+          </div>
+        </details>
         <span class="hint" id="avatar-hint">A single emoji. Empty shows the first letter of the name.</span>
         <div class="field">
           <span class="label" id="color-label">Accent colour</span>
@@ -47,7 +50,7 @@
       </div>
     </fieldset>
 
-    <fieldset class="card">
+    <fieldset class="settings-section">
       <legend>Instructions</legend>
       <div class="field">
         <label for="instructions" class="required">What should the assistant do?</label>
@@ -56,7 +59,7 @@
       </div>
     </fieldset>
 
-    <fieldset class="card">
+    <fieldset class="settings-section">
       <legend>Chat start</legend>
       <div class="stack">
         <div class="field">
@@ -76,7 +79,7 @@
       </div>
     </fieldset>
 
-    <fieldset class="card">
+    <fieldset class="settings-section">
       <legend>Response style</legend>
       <div class="stack">
         <div class="field">
@@ -114,7 +117,7 @@
   <aside class="persona-preview" aria-labelledby="preview-title">
     <div class="persona-preview-inner">
       <h2 class="label" id="preview-title">Preview</h2>
-      <div class="card persona-card accent-{{ values.color or 'default' }}" data-preview-card>
+      <div class="persona-card accent-{{ values.color or 'default' }}" data-preview-card>
         <div class="persona-head">
           <span data-preview-avatar>{{ avatar({"avatar": values.avatar, "color": values.color, "name": values.name or "Personality"}) }}</span>
           <div class="grow">

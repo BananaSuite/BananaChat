@@ -34,7 +34,7 @@ PRIORITY_ADMIN = 0
 PRIORITY_FAST = 1   # accounts an administrator sped up
 PRIORITY_API = 2
 PRIORITY_CHAT = 3
-PRIORITY_SLOW = 4   # slow credits, and accounts an administrator slowed down
+PRIORITY_SLOW = 4   # accounts an administrator slowed down
 LEASE_SECONDS = 90
 MAX_PER_OWNER = 3
 # Longest pause between admission checks; requests in this process are also
@@ -65,6 +65,15 @@ def _memory_ok() -> bool:
     except ImportError:
         return True
     return psutil.virtual_memory().available >= config.min_free_memory_mb * 1024 * 1024
+
+
+def _model_memory_ok(name):
+    if name:
+        row = db.one("SELECT backend FROM ai_models WHERE backend IN ('external', 'claude') AND "
+                     "(ollama_name=? OR (backend='claude' AND backend_model_name=?))", (name, name))
+        if row is not None and row["backend"] in ("external", "claude"):
+            return True  # Hosted inference does not allocate a local model.
+    return _memory_ok()
 
 
 def _wake_waiters() -> None:
@@ -147,7 +156,7 @@ class Slot:
                             (cutoff,), 0)
         if running >= max_concurrent:
             return False
-        if not self._is_next(cutoff) or not _memory_ok():
+        if not self._is_next(cutoff) or not _model_memory_ok(self.model):
             return False
         with db.transaction():
             running = db.scalar("SELECT COUNT(*) FROM inference_queue WHERE status='running' AND heartbeat_at>=?",
@@ -159,10 +168,18 @@ class Slot:
             return updated.rowcount == 1
 
     def _is_next(self, cutoff: float) -> bool:
+        memory_filter = ""
+        if not _memory_ok():
+            # A local request waiting for model memory must not stall hosted
+            # requests. Priority/arrival order still applies to eligible work.
+            memory_filter = "AND EXISTS (SELECT 1 FROM ai_models m WHERE m.backend IN ('external','claude') " \
+                            "AND (m.ollama_name=w.model_name OR " \
+                            "(m.backend='claude' AND m.backend_model_name=w.model_name))) "
         first = db.one(
             "SELECT w.req_id FROM inference_queue w WHERE w.status='waiting' AND w.heartbeat_at>=? AND "
             "(w.owner_key IS NULL OR NOT EXISTS (SELECT 1 FROM inference_queue r WHERE r.status='running' "
-            "AND r.owner_key=w.owner_key AND r.heartbeat_at>=?)) ORDER BY w.priority, w.seq LIMIT 1",
+            "AND r.owner_key=w.owner_key AND r.heartbeat_at>=?)) " + memory_filter +
+            "ORDER BY w.priority, w.seq LIMIT 1",
             (cutoff, cutoff))
         return first is not None and first["req_id"] == self.request_id
 
@@ -226,11 +243,11 @@ def stats() -> dict:
             "max_concurrent": max_concurrent, "max_depth": max_depth}
 
 
-def priority_for(user, *, slow: bool, api: bool = False) -> int:
-    """Queue priority: administrators first, then fast accounts, API, chat, and the slow lane.
+def priority_for(user, *, api: bool = False, slow: bool = False) -> int:
+    """Queue priority: administrators first, then fast accounts, API, chat, and slow accounts.
 
-    Slow credits and accounts set to ``slow`` always wait in the slow lane;
-    accounts set to ``fast`` get the priority lane otherwise.
+    Account speed is an independent administrator setting. The deprecated
+    *slow* argument is ignored; spending tokens never changes queue priority.
     """
     if user is not None and user["role"] == "admin":
         return PRIORITY_ADMIN
@@ -239,7 +256,7 @@ def priority_for(user, *, slow: bool, api: bool = False) -> int:
         from bananachat.db import limits
 
         speed = limits.speed_of(user["id"])
-    if slow or speed == "slow":
+    if speed == "slow":
         return PRIORITY_SLOW
     if speed == "fast":
         return PRIORITY_FAST

@@ -18,7 +18,7 @@ from bananachat.services import limits
 from . import bp
 
 from ._helpers import FormError, audit, back, choice, me, page, text, user_or_404, utc_datetime, utc_input_min
-from .quotas import POOL_LABELS
+from ._quota_ui import POOL_LABELS
 
 PAGE_SIZE = 50
 

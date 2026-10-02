@@ -2,19 +2,255 @@
 
 ## Unreleased
 
+### Cloud sessions and production hardening
+
+- Add explicit administrator-only, everyone-signed-in and existing-access-list
+  audiences for cloud coding sessions. New installations keep sessions disabled
+  and select administrators only; upgrades preserve enabled access policies.
+- Keep session history, workspace files, patches, follow-ups, cancellation and
+  runner limits in the existing isolated agent subsystem.
+- Recheck fresh account, audience, model and token permissions after queue waits,
+  on each model attempt and before tool work; respect tightened run budgets.
+- Show enrolled external tool-capable models in cloud-session administration.
+- Reject IPv6 transition routes that could bypass provider metadata-address
+  restrictions, including trusted-private provider configurations.
+
+### Model-server offline warnings
+
+- Administrators can show or hide offline model-server notices in Site settings;
+  the setting is enabled by default and upgrades preserve existing data.
+- Users can hide these notices for 24 hours in their current browser. Reloads,
+  status polling and other tabs keep the original expiry; separate accounts
+  keep separate choices. Blocked storage falls back to the current page.
+- Hidden notices leave health reporting, permissions and inference safeguards
+  intact. Hosted Claude models can continue during a local compute outage.
+- Open pages pick up global notice changes without changing sending state.
+- Version static assets together so an ordinary reload after an update loads
+  current scripts, relative module imports and styles. Legacy links revalidate;
+  dynamic pages, including public sign-in/setup forms, remain uncached.
+- Keep active database transactions intact when another app instance selects
+  the same database; only a different database invalidates connections.
+
+### Claude subscription discovery and pool completion
+
+- Discover canonical Claude models and supported efforts through the official
+  CLI’s unbilled control protocol; keep manual selection and allowlists.
+- Read actual subscription usage and reset times automatically, preserving the
+  provider observation timestamp; display plan, upstream allowances and local
+  token budgets separately. Failed reports isolate their account.
+- Retain last-known subscription values as stale when upstream throttling keeps
+  an old CLI snapshot, while leaving that account paused. Back off automatic
+  checks for five minutes and manual refreshes for one minute; authentication or
+  identity invalidation clears cached observations.
+- Respect model-family weekly limits, distinct native subscription identities,
+  and per-Claude automatic enrollment without re-enabling excluded models.
+- Bound concurrent profile refreshes and share in-flight usage requests;
+  recheck changed logins before admission and quarantine accounts if process
+  descendants cannot be stopped safely.
+- Return a retryable capacity error when Claude has no eligible subscription
+  quota or request slot, without counting it as a failed model.
+- Preserve hosted strict/custom quotas during publication and preset changes;
+  permit hosted inference during local memory pressure; harden metadata address
+  blocking and preserve model ID sequences during schema upgrades.
+
+### Claude Code live validation
+
+- Preserve operator proxy settings in the subscription CLI transport while keeping API credentials and provider overrides isolated.
+- Verify native subscription streaming through BananaChat’s API, exact pool token accounting and cancellation with the official CLI.
+
+### External API providers
+
+- Administrators configure OpenAI-compatible and native Anthropic API providers
+  with base URLs, private server credentials, connection checks, model selection
+  and optional automatic enrollment. Published models use BananaChat's existing
+  chat, playground, agents and public API, alongside local and subscription models.
+- Provider-scoped IDs prevent collisions. API keys share their owner's budgets
+  and rate buckets. External presets enforce five-hour model limits before and
+  after publication; weekly limits remain optional. Model capabilities are
+  explicit, and fresh reasoning access is enforced before provider execution.
+- Connections pin verified DNS destinations, require HTTPS for public endpoints,
+  block metadata addresses and never forward credentials through redirects.
+  Structured streams require terminal success; cancellation, usage and tools
+  retain the existing accounting and authorization rules.
+- Hosted models remain available during a local-server outage. Schema version 19
+  adds provider metadata and model bindings while preserving existing data.
+  See [provider setup](docs/external-providers.md) for compatibility options.
+
+### Claude Code subscription connector
+
+- An opt-in official CLI transport supports one or multiple private subscription
+  profiles, selected by administrators. Native subscription authentication is
+  verified; inherited API keys and alternate provider settings are excluded.
+- Text and thinking stream without duplicate complete-message output. Actual
+  input, cache and output tokens are recorded. Terminal success and successful
+  process exit are required; cancellation and timeout terminate the process
+  group before its account lease is released.
+- Admin profile bindings are unique and cannot change during an active request.
+  Operator-verified model lists and optional fresh authorized usage observations
+  feed existing enrollment and strict five-hour/weekly quota controls. No exact
+  subscription balance or live model catalog is fabricated.
+- See [setup](docs/claude-code.md). The connector is disabled until configured;
+  live deployment requires private logins and model/account validation.
+
+### Interface refinement
+
+- Chat keeps model, reasoning and personality choices together before secondary
+  tools. Pickers share keyboard and dismissal behavior, show the selected item
+  clearly and recover from invalid saved reasoning preferences.
+- Quota forms group token accounting and limits before optional demand and
+  reasoning settings. Shared template fields and a route-free quota UI helper
+  keep validation and administration views consistent.
+- Account usage summaries accommodate three services. API credentials are
+  labeled as keys in English and Italian, distinct from model token usage.
+- Primary button labels follow the selected color's contrast instead of the
+  theme. Disabled controls no longer brighten on hover. Landing conversation
+  and model-selection screenshots show the current interface.
+
+### Account and model controls
+
+- Internal token and request-rate exemptions can be set independently for an
+  account or for an account's own model limits. Models also have separate token
+  and rate switches. Provider exhaustion, access rules, model locks and usage
+  recording remain enforced. All four second/minute/hour/day model rate rules
+  survive form saves.
+- Reasoning supports a distinct Extra tier (`xhigh` API alias) between High and
+  Max, restricted to each model's declared capabilities. Model gating and
+  model/account automatic-unlock opt-outs are independent. A model with no
+  permitted default effort is refused instead of bypassing its ceiling.
+- Claude account selection uses exclusive database leases. Quota snapshots
+  validate bounds, reset timestamps and freshness; invalid reporter results
+  block capacity. Discovery must confirm a model before enrollment or use, and
+  streams require a valid terminal record and release resources on cancellation.
+- `BC_CLAUDE_EXTENSION` loads an operator-installed adapter with chat, discovery
+  and quota callbacks, disabled by default. An opt-in official Claude Code connector is now included; a
+  website bot and subscription credentials are not included. Shared subscriptions
+  require Anthropic's prior approval; see [router design](docs/claude-router.md).
+- Model enrollment installs presets before publication. Download cancellation,
+  stale worker cleanup, backend deletion and cancelled-model discovery are
+  coordinated so an old task cannot publish or delete a replacement task's
+  model. Fallbacks register their running model before checking deletion state.
+- Migrations 17 and 18 preserve existing data while adding provider leases,
+  quota freshness, independent exemptions and the Extra effort tier.
+
+### Single token allowance
+
+- Services now use one five-hour token allowance, with optional weekly
+  limits. The separate slow-token allowance and spillover are retired from
+  settings, account displays and quota requests; exhausted allowances refuse
+  further counted requests until the reset or an approved increase.
+- Migration 16 combines the previous regular and slow allocations when the
+  site's slow tokens were enabled. Disabled sites keep their regular amounts.
+  Historical regular and slow usage count together without resetting open
+  windows. Legacy columns remain inactive for compatibility and rollback.
+- Request rates, model limits and weights, tiers, dynamic adjustment, grants,
+  music bonuses, reasoning settings and appearance customization remain
+  supported. Explicit slow/normal/fast account priorities remain available;
+  consuming tokens no longer changes a request's queue lane.
+- Fixed music bonuses have separate five-hour and weekly amounts, preserving
+  the previous weekly bonus while combining active five-hour allocations.
+- Automatic approval compares the requested total against the combined
+  configured approval caps. The old exception for keeping slow tokens unchanged
+  is retired; administrators can adjust the total ceiling in Admin → Limits.
+
+### Chat token consumption
+
+- Admin → Limits has separate consumption switches for local and cloud chats.
+  Local chats are unmetered by default; cloud chats consume configured token
+  allowances by default. Regular and no-history chats follow the same rules,
+  including model fallbacks. Site-owned remote Ollama workers remain local.
+  Enable **Apply token limits to local chats** to keep deducting existing local chat
+  allowances after upgrading; the configured amounts are preserved.
+- Unmetered chats keep usage history and metrics without spending service or
+  model token allowances. Enabling consumption does not charge earlier free
+  chats. Request rates, access rules, model locks and provider availability
+  remain active; API, playground, images and agents retain existing rules.
+
+### Security and reliability
+
+- Sign-in, password changes and account/chat deletion recheck credentials and
+  session revocation inside the database transaction. A concurrent password
+  reset cannot be overwritten by automatic password rehashing.
+- Invalid CSRF and bot tokens return controlled errors. JSON documents have a
+  nesting bound and reject non-finite numbers; malformed preferences use safe
+  defaults instead of causing server errors.
+- Queued and fallback completions recheck the current model, access, reasoning
+  effort, quotas and request rates. They use current prompts and generation
+  options; interrupted fallbacks account for the model that actually ran.
+- Stale inference leases cannot stop newer runs. Losing a lease prevents
+  backend contact, and backend cleanup failures preserve already-saved answers.
+  Terminal backend records retain their answer and reasoning content.
+- Dependency audits now run in CI. Local bootstrap paths use a patched package
+  installer and install runtime dependencies from wheels.
+- Compute and checkpoint HTTP requests have hard header and upload deadlines,
+  preventing trickled bytes from holding every connection slot indefinitely.
+  Model loading, response streaming and completed checkpoint processing keep
+  their existing time limits. Checkpoint shutdown retains directory descriptors
+  until a blocked download has saved its restart state; cleanup is idempotent.
+- Managed backups preserve required SSH commit signers. A failed restore rolls
+  back its repository URL, credentials and signer trust together with the data.
+- Signing out or revoking a session also retires previous-release login cookies,
+  preventing a copied old cookie from creating another session. Other current
+  browser sessions remain signed in; unconverted old cookies require sign-in again.
+- API and playground completions report a controlled storage error when usage
+  accounting cannot commit. Backend cleanup failures preserve the completed
+  response or original error, and interrupted requests avoid duplicate accounting.
+- Markdown delimiter and block parsing uses bounded scans so malformed messages
+  cannot freeze the browser through excessive regular-expression backtracking.
+- Sandbox cleanup keeps capacity reserved until containers are removed and
+  coordinates deletion with reconciliation to preserve newly created sandboxes.
+  Shutdown rejects new sandboxes, waits for pending creation and retries failed
+  removals; the example systemd unit allows time for this cleanup.
+
 ### Interface refresh
 
+- Model and reasoning selectors have a dedicated module, with explicit inputs
+  from the chat controller. Model capabilities use a plain metadata line;
+  message corners and picker headings follow the shared visual conventions.
+- Collapsed settings share fragment lookup and ancestor-opening helpers,
+  keeping deep links and native validation consistent across pages.
+- Initial phone deep links keep the requested setting in view after the
+  browser's fragment adjustment. Admin fields stay clear of the sticky header;
+  the correction stops when the user scrolls or interacts.
+- Chat shows named Attach, Options, Share and Send actions on desktop, and
+  labels the selected reasoning setting. The default personality uses a plain
+  user icon. Phones retain compact controls and touch targets.
+- Customize shows common preferences and the preview before expandable colour,
+  highlighting and background controls. Optional API limit explanations and
+  administrative settings open on request; deep links reveal their section.
+- Account navigation uses short section names and a compact profile form.
+  Administrative monitoring and quota details no longer dominate their pages.
 - A more compact visual system across chat, personalities, images, agents,
   account, customization, API, music and administration: quieter surfaces,
   smaller radii, lighter cards, consistent typography and subtle borders.
-- Primary tools stay visible in the header; API, free quota, community and
-  administration live in a native More menu (Altro in Italian). The mobile
-  menu closes on outside clicks and Escape returns focus to the relevant control.
+- Enabled tools are direct links in the header. Navigation switches to one
+  menu only when the labels run out of room, including with larger text or
+  another language. It closes on outside clicks and Escape returns focus.
 - Account and customization settings use separated sections instead of stacked
   boxes. The account navigator tracks the section being read.
+- Ordinary pages share one 1120 px frame. Account and customization settings
+  span the page, with section links above them and the preview below. API and
+  administration use the same frame and shared form controls;
+  personalities use readable rows, with distinct work areas for images and agents.
+- Customize has a labeled header shortcut on desktop and a compact icon on
+  phones. Account menus indicate the current page. Administration links are
+  grouped by purpose, with a compact section switcher on phones.
+- Chat uses a flat composer without a glowing focus border, aligned message
+  metadata and actions, wrapping tools on small screens, and a 250 px default
+  history column. Saved custom widths
+  are retained. Shared controls have consistent sizes and larger touch targets;
+  chat notifications stay clear of the composer.
+- Customization has section shortcuts and aligned reading and color controls.
+  Personality templates use compact rows with clear selection controls.
 - API quickstart examples expand individually, with the first example open.
+  Playground sampling parameters collapse separately and reopen to focus
+  invalid values before a request is sent.
+- Preference saves, resets and background changes run in order, so delayed
+  requests cannot overwrite newer changes. Native validation opens collapsed
+  settings before focusing an invalid field.
 - Site palettes, light and dark themes, text scaling, contrast controls,
   reduced motion, security policies and existing form actions are preserved.
+- Server notices use short explanations and a plain status line without pulse
+  effects. Cloud account forms use labeled controls and confirm account removal.
 
 ## 1.6.0
 
@@ -28,9 +264,9 @@ previous release's updater backs up the installation, starts the new version
 and checks its health before letting users in; if anything fails it restores
 the old code and database together.
 
-On first start the database is upgraded in place (schema version 14). The
-upgrade only adds: accounts, chats, attachments, API tokens, quotas, access
-policies, models, settings and sign-ins all carry over, and no configuration
+On first start the database is upgraded in place (schema version 20). The
+upgrade keeps accounts, chats, attachments, API tokens, quotas, access
+policies, models, settings and sign-ins; no configuration
 change is required.
 
 - **The former product name is gone.** Sites installed while the project was
@@ -80,6 +316,10 @@ server lacks published models. Nothing stays pending forever. The compute-side
 
 ### Limits
 
+These notes describe the limits introduced in 1.6.0. The current release's
+[single token allowance](#single-token-allowance) replaces its slow-token
+spillover.
+
 The daily-quota system is now a full limit system counted in **tokens**
 (prompt plus answer; amounts can be typed as `50k` or `1.5M`). Chat, the API
 and agents each have an administrator-editable policy:
@@ -103,7 +343,7 @@ for one account; light, standard and heavy presets set them up quickly, and a
 model can be kept out of the shared service limits. When a service's tokens
 are used up, `auto` moves to a model that does not count toward them.
 
-**Reasoning effort tiers** for reasoning models (off, low, medium, high, max):
+**Reasoning effort tiers** for reasoning models (off, low, medium, high, extra, max):
 everyone gets up to medium; higher levels are unlocked by an administrator, by
 a request from the account page or automatically after sustained use, and
 unlocking a level unlocks every level below it. The chat composer shows locked
@@ -158,15 +398,16 @@ more generous than before, so administrators may want to lower it.
 
 ### Models
 
-**Claude subscription pool.** Claude models are now actually served through the
-pooled subscription accounts (they previously went to Ollama). The pool's quota
-is the sum of its active accounts, so one exhausted subscription no longer
-blocks the others; windows that ended count as empty; the highest-priority
-account with quota left answers, and an account the Claude site reports out of
-quota rests while the next one answers. With no account able to answer, Claude
-models count as used up and the chat falls back to local models. Claude
-models never run on worker PCs or as agents. Claude Fable 5.1, Opus 5.5 and
-Sonnet 5.5 join the curated list (Fable with the strictest limits).
+**Claude provider pool.** The scheduler and extension boundary route Claude
+models through an operator-installed, authorized provider adapter instead of
+Ollama. Without that adapter and verified discovery they remain unavailable.
+The pool aggregates configured active account capacity and rests accounts after
+upstream quota errors; exclusive leases prevent simultaneous account use.
+Unavailable Claude models can fall back to eligible local models. Claude models
+never run on worker PCs or as agents. Claude Fable 5.1, Opus 5.5 and Sonnet 5.5
+are curated references only until actual discovery confirms access, with Fable
+receiving the strictest preset. Subscription transport needs provider approval
+and live verification; it is not included or connected by this release.
 
 - **Detection**: each new or updated model's capabilities, context length,
   family, size, quantisation and reasoning levels are read; a failed or empty

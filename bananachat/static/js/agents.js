@@ -1,4 +1,4 @@
-// Agents: the task list and the "New task" form.
+// Cloud sessions: history and the new-session form.
 import { api, ApiError, checkStatusSoon, onStatusChange, setBusy, t, toast } from "./core.js";
 
 const form = document.getElementById("new-task-form");

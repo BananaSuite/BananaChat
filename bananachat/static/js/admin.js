@@ -1,6 +1,9 @@
 // Administrator pages (English-only by design). Progressive enhancement:
 // every action also works as a plain form; scripts add live status and polish.
-import { api, confirmDialog, el, pageData, setBusy, toast } from "./core.js";
+import {
+  api, confirmDialog, el, fragmentTarget, keepInitialFragmentVisible, pageData,
+  revealDisclosures, setBusy, toast,
+} from "./core.js";
 
 const data = pageData();
 
@@ -220,6 +223,19 @@ function initCounters() {
   }
 }
 
+// Section links reveal optional settings; core handles native form validation.
+function initSettingsDisclosures() {
+  const followHash = () => {
+    const target = fragmentTarget();
+    if (!target) return;
+    revealDisclosures(target);
+    target.scrollIntoView({ block: "start" });
+    return target;
+  };
+  window.addEventListener("hashchange", followHash);
+  keepInitialFragmentVisible(followHash());
+}
+
 initInferenceStatus();
 initRunningModels();
 initDownloads();
@@ -227,3 +243,4 @@ initPalettes();
 initToggles();
 initCounters();
 initPreviews();
+initSettingsDisclosures();

@@ -4,7 +4,7 @@
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/music.css') }}">{% endblock %}
 {% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
 {% block content %}
-<div class="page page-narrow">
+<div class="page music-page">
   <header class="page-header">
     <div>
       <h1>{{ t("music.title") }}</h1>
@@ -13,16 +13,15 @@
     {% if opted_in %}<span class="badge badge-success">{{ t("music.status_in") }}</span>{% else %}<span class="badge">{{ t("music.status_out") }}</span>{% endif %}
   </header>
 
-  <div class="stack-lg">
-    <section class="card" aria-labelledby="bonus-title">
+  <div class="section-stack">
+    <section class="settings-section" aria-labelledby="bonus-title">
       <h2 id="bonus-title">{{ t("music.bonus_title") }}</h2>
       <p class="bonus-figure mb-1">
-        {% if bonus_mode == "multiplier" %}×{{ bonus_regular | credits }}{% else %}+{{ bonus_regular | tokens }}{% endif %}
+        {% if bonus_mode == "multiplier" %}×{{ bonus_tokens | credits }}{% else %}+{{ bonus_tokens | tokens }}{% endif %}
       </p>
       <p>
-        {% if bonus_mode == "multiplier" %}{{ t("music.bonus_multiplier", factor=(bonus_regular | credits)) }}
-        {% elif slow_enabled %}{{ t("music.bonus_fixed", tokens=(bonus_regular | tokens), slow=(bonus_slow | tokens)) }}
-        {% else %}{{ t("music.bonus_fixed_no_slow", tokens=(bonus_regular | tokens)) }}{% endif %}
+        {% if bonus_mode == "multiplier" %}{{ t("music.bonus_multiplier", factor=(bonus_tokens | credits)) }}
+        {% else %}{{ t("music.bonus_fixed_weekly" if bonus_weekly else "music.bonus_fixed", tokens=(bonus_tokens | tokens), weekly=(bonus_weekly | tokens)) }}{% endif %}
       </p>
       {% if is_admin_user %}
       <p class="hint mb-0">{{ t("music.admin_note") }}</p>
@@ -33,19 +32,16 @@
           <thead><tr><th scope="col">{{ t("music.allowance") }}</th><th scope="col">{{ t("music.without") }}</th><th scope="col">{{ t("music.with") }}</th></tr></thead>
           <tbody>
             {% for pool in limits %}
-            <tr><th scope="row">{{ t("music.pool_" ~ pool.pool) }}</th><td>{{ pool.regular | tokens }}</td><td><strong>{{ pool.regular_with_bonus | tokens }}</strong></td></tr>
-            {% if pool.slow is not none %}
-            <tr><th scope="row">{{ t("music.pool_" ~ pool.pool ~ "_slow") }}</th><td>{{ pool.slow | tokens }}</td><td><strong>{{ pool.slow_with_bonus | tokens }}</strong></td></tr>
-            {% endif %}
+            <tr><th scope="row">{{ t("account.pool_" ~ pool.pool) }}<div class="hint">{{ t("music.period_" ~ pool.period) }}</div></th><td>{{ pool.tokens | tokens }}</td><td><strong>{{ pool.tokens_with_bonus | tokens }}</strong></td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-      <p class="hint mt-1 mb-0">{{ t("music.per_day") }}</p>
+      <p class="hint mt-1 mb-0">{{ t("music.compare_hint") }}</p>
       {% endif %}
     </section>
 
-    <section class="card" aria-labelledby="terms-title">
+    <section class="settings-section" aria-labelledby="terms-title">
       <h2 id="terms-title">{{ t("music.terms_title") }}</h2>
       <ul class="terms">
         <li>{{ t("music.term_player") }}</li>
@@ -57,7 +53,7 @@
       {% if not track_count %}<p class="hint mb-0">{{ t("music.no_tracks") }}</p>{% endif %}
     </section>
 
-    <section class="card" aria-labelledby="participation-title">
+    <section class="settings-section" aria-labelledby="participation-title">
       <h2 id="participation-title">{{ t("music.participation") }}</h2>
       {% if opted_in %}
       <p>{{ t("music.you_are_in") }}</p>

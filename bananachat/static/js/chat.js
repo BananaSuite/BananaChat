@@ -1,4 +1,5 @@
-// Chat page: conversation, composer, streaming, sidebar and model picker.
+// Chat page: conversation, composer, streaming and history. Composer selectors
+// and personalities are initialized in their own modules.
 //
 // The streaming protocol is documented in bananachat/services/chat.py. The
 // answer keeps being generated and saved on the server when this page goes
@@ -8,6 +9,7 @@ import {
   promptDialog, readEventStream, safeStorage, secretDialog, t, toast,
 } from "./core.js";
 import { initPersonas } from "./chat-personas.js";
+import { initChatPickers } from "./chat-pickers.js";
 import { enhanceMarkdown, renderMessage, speakableText, splitReasoning } from "./markdown.js";
 
 const data = pageData();
@@ -15,7 +17,6 @@ const session = data.session;
 const limits = data.limits;
 const storage = safeStorage();
 const $ = (id) => document.getElementById(id);
-const MODEL_KEY = "bc-chat-model";
 const PARAMS_KEY = "bc-chat-params";
 const SIDEBAR_KEY = "bc-chat-sidebar-collapsed";
 const POLL_INTERVAL = 1500;
@@ -195,7 +196,8 @@ function buildMessage(message) {
   const note = message.role === "assistant" ? stateNote(message.state) : null;
   if (note) body.append(note);
   const article = el("article", { class: `message message-${message.role}`, dataset: message.id ? { id: String(message.id) } : {} },
-    body, el("p", { class: "message-meta", text: metaText(message) }), messageActions(message, content));
+    body, el("div", { class: "message-footer" },
+      el("p", { class: "message-meta", text: metaText(message) }), messageActions(message, content)));
   article.setAttribute("aria-label", message.role === "user" ? t("chat_you") : (message.model_name || t("chat_assistant")));
   return article;
 }
@@ -287,7 +289,8 @@ class PendingAnswer {
     this.content = el("div", { class: "prose message-content" });
     this.body = el("div", { class: "message-body" }, this.notice, this.content, this.status);
     this.meta = el("p", { class: "message-meta", text: t("chat_assistant") });
-    this.node = el("article", { class: "message message-assistant is-pending", "aria-busy": "true", "aria-label": t("chat_assistant") }, this.body, this.meta);
+    this.node = el("article", { class: "message message-assistant is-pending", "aria-busy": "true", "aria-label": t("chat_assistant") },
+      this.body, el("div", { class: "message-footer" }, this.meta));
     this.frame = 0;
     this.lastRender = 0;
     ui.messages.append(this.node);
@@ -674,257 +677,10 @@ ui.input.addEventListener("paste", (event) => {
   });
 }
 
-// ----- model picker -----------------------------------------------------------------------
-
-const picker = {
-  button: $("model-button"),
-  label: $("model-button-label"),
-  popover: $("model-popover"),
-  search: $("model-search"),
-  list: $("model-list"),
-  models: [{ name: "auto", label: t("chat_model_auto"), description: t("chat_model_auto_hint"), categories: [], reasoning: false, vision: false },
-    ...data.models],
-  selected: "auto",
-  visible: [],
-  active: 0,
-
-  init() {
-    const known = (name) => name && this.models.some((model) => model.name === name);
-    const remembered = storage.getItem(MODEL_KEY);
-    this.selected = known(remembered) ? remembered : known(session.last_model) ? session.last_model : "auto";
-    this.updateButton();
-    this.button.addEventListener("click", () => (this.popover.hidden ? this.open() : this.close(true)));
-    this.search.addEventListener("input", () => { this.active = 0; this.render(); });
-    this.search.addEventListener("keydown", (event) => this.onKey(event));
-    document.addEventListener("pointerdown", (event) => {
-      if (!this.popover.hidden && !event.target.closest("#model-picker")) this.close(false);
-    });
-  },
-
-  updateButton() {
-    const model = this.models.find((item) => item.name === this.selected) || this.models[0];
-    this.label.textContent = model.label;
-    if (this.onChange) this.onChange(model);
-  },
-  onChange: null,
-
-  open() {
-    this.popover.hidden = false;
-    this.button.setAttribute("aria-expanded", "true");
-    this.search.value = "";
-    this.active = Math.max(0, this.models.findIndex((model) => model.name === this.selected));
-    this.render();
-    this.search.focus();
-  },
-
-  close(focusButton) {
-    this.popover.hidden = true;
-    this.button.setAttribute("aria-expanded", "false");
-    if (focusButton) this.button.focus();
-  },
-
-  render() {
-    const query = this.search.value.trim().toLowerCase();
-    this.visible = this.models.filter((model) => !query || [model.label, model.name, model.description, ...model.categories]
-      .some((text) => (text || "").toLowerCase().includes(query)));
-    this.active = Math.min(this.active, Math.max(0, this.visible.length - 1));
-    if (!this.visible.length) {
-      this.list.replaceChildren(el("li", { class: "model-empty", role: "presentation", text: t("chat_model_none") }));
-      this.search.removeAttribute("aria-activedescendant");
-      return;
-    }
-    this.list.replaceChildren(...this.visible.map((model, index) => {
-      const badges = el("span", { class: "model-badges" },
-        ...model.categories.map((name) => el("span", { class: "badge", text: name })),
-        model.reasoning ? el("span", { class: "badge badge-info", text: t("chat_badge_reasoning") }) : null,
-        model.vision ? el("span", { class: "badge badge-success", text: t("chat_badge_vision") }) : null,
-        model.weight && model.weight !== 1
-          ? el("span", { class: `badge${model.weight > 1 ? " badge-warning" : ""}`, text: t("chat_badge_weight", { factor: model.weight.toLocaleString(document.documentElement.lang || undefined) }) })
-          : null);
-      const option = el("li", {
-        id: `model-option-${index}`, role: "option", class: `model-option${index === this.active ? " is-active" : ""}`,
-        "aria-selected": model.name === this.selected ? "true" : "false",
-      }, el("span", { class: "model-option-head" }, el("span", { class: "model-option-name", text: model.label }), badges),
-      model.description ? el("span", { class: "model-option-description", text: model.description }) : null);
-      option.addEventListener("pointerdown", (event) => event.preventDefault());
-      option.addEventListener("click", () => this.choose(model));
-      return option;
-    }));
-    this.search.setAttribute("aria-activedescendant", `model-option-${this.active}`);
-    this.list.children[this.active]?.scrollIntoView({ block: "nearest" });
-  },
-
-  onKey(event) {
-    const count = this.visible.length;
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!count) return;
-      this.active = (this.active + (event.key === "ArrowDown" ? 1 : count - 1)) % count;
-      this.render();
-    } else if (event.key === "Home" || event.key === "End") {
-      event.preventDefault();
-      this.active = event.key === "Home" ? 0 : Math.max(0, count - 1);
-      this.render();
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      if (this.visible[this.active]) this.choose(this.visible[this.active]);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      this.close(true);
-    } else if (event.key === "Tab") {
-      this.close(false);
-    }
-  },
-
-  choose(model) {
-    this.selected = model.name;
-    storage.setItem(MODEL_KEY, model.name);
-    this.updateButton();
-    this.close(false);
-    announce(t("chat_model_selected", { name: model.label }));
-    ui.input.focus();
-  },
-
-  // Used by the personality picker: select a model for this chat without remembering it for others.
-  has(name) { return this.models.some((model) => model.name === name); },
-  labelOf(name) { return (this.models.find((model) => model.name === name) || {}).label || name; },
-  use(name) {
-    if (!this.has(name)) return;
-    this.selected = name;
-    this.updateButton();
-  },
-};
-picker.init();
-
-// ----- reasoning effort -----------------------------------------------------------------------
-// The chosen model's levels (lowest first). Locked levels show a lock; choosing one opens the
-// account page's request form, pre-filled. The choice is remembered per model.
-
-const EFFORT_KEY = "bc-chat-effort";
-const effortPicker = {
-  root: $("effort-picker"),
-  button: $("effort-button"),
-  label: $("effort-button-label"),
-  popover: $("effort-popover"),
-  list: $("effort-list"),
-  effort: null,
-  model: null,
-  selected: null,
-  active: 0,
-
-  init() {
-    if (!this.root) return;
-    this.button.addEventListener("click", () => (this.popover.hidden ? this.open() : this.close(true)));
-    this.list.addEventListener("keydown", (event) => this.onKey(event));
-    document.addEventListener("pointerdown", (event) => {
-      if (!this.popover.hidden && !event.target.closest("#effort-picker")) this.close(false);
-    });
-    this.update(picker.models.find((item) => item.name === picker.selected));
-  },
-
-  remembered() {
-    try { return JSON.parse(storage.getItem(EFFORT_KEY) || "{}") || {}; } catch { return {}; }
-  },
-
-  /** The model changed: offer its levels (hidden for "auto" and models that do not reason). */
-  update(model) {
-    if (!this.root) return;
-    this.close(false);
-    this.model = model || null;
-    this.effort = model?.effort || null;
-    this.root.hidden = !this.effort;
-    if (!this.effort) {
-      this.selected = null;
-      return;
-    }
-    const allowed = this.effort.levels.filter((level) => level.allowed).map((level) => level.value);
-    const saved = this.remembered()[model.name];
-    this.selected = allowed.includes(saved) ? saved : this.effort.default;
-    this.updateButton();
-  },
-
-  levelOf(value) { return this.effort?.levels.find((level) => level.value === value); },
-
-  updateButton() {
-    const level = this.levelOf(this.selected);
-    this.label.textContent = level ? level.label : "";
-    this.button.setAttribute("aria-label", t("chat_effort_button", { level: level ? level.label : "" }));
-    this.button.title = t("chat_effort_button", { level: level ? level.label : "" });
-  },
-
-  open() {
-    this.popover.hidden = false;
-    this.button.setAttribute("aria-expanded", "true");
-    this.active = Math.max(0, this.effort.levels.findIndex((level) => level.value === this.selected));
-    this.render();
-    this.list.focus();
-  },
-
-  close(focusButton) {
-    if (!this.popover || this.popover.hidden) return;
-    this.popover.hidden = true;
-    this.button.setAttribute("aria-expanded", "false");
-    if (focusButton) this.button.focus();
-  },
-
-  render() {
-    this.list.replaceChildren(...this.effort.levels.map((level, index) => {
-      const locked = !level.allowed;
-      const option = el("li", {
-        id: `effort-option-${index}`, role: "option",
-        class: `model-option effort-option${index === this.active ? " is-active" : ""}${locked ? " is-locked" : ""}`,
-        // A locked level stays operable: choosing it opens the request form.
-        "aria-selected": level.value === this.selected ? "true" : "false",
-      }, el("span", { class: "model-option-name", text: level.label }),
-      locked ? el("span", { class: "effort-lock" }, icon("lock"), el("span", { text: t("chat_effort_request") })) : null);
-      option.addEventListener("pointerdown", (event) => event.preventDefault());
-      option.addEventListener("click", () => this.choose(level));
-      return option;
-    }));
-    this.list.setAttribute("aria-activedescendant", `effort-option-${this.active}`);
-  },
-
-  onKey(event) {
-    const count = this.effort ? this.effort.levels.length : 0;
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!count) return;
-      this.active = (this.active + (event.key === "ArrowDown" ? 1 : count - 1)) % count;
-      this.render();
-    } else if (event.key === "Home" || event.key === "End") {
-      event.preventDefault();
-      this.active = event.key === "Home" ? 0 : Math.max(0, count - 1);
-      this.render();
-    } else if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      if (this.effort.levels[this.active]) this.choose(this.effort.levels[this.active]);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      this.close(true);
-    } else if (event.key === "Tab") {
-      this.close(false);
-    }
-  },
-
-  choose(level) {
-    if (!level.allowed) {
-      // A locked level: ask for it on the account page (the form opens pre-filled).
-      window.location.href = level.request_url;
-      return;
-    }
-    this.selected = level.value;
-    const saved = this.remembered();
-    saved[this.model.name] = level.value;
-    storage.setItem(EFFORT_KEY, JSON.stringify(saved));
-    this.updateButton();
-    this.close(true);
-    announce(t("chat_effort_selected", { level: level.label }));
-  },
-};
-picker.onChange = (model) => effortPicker.update(model);
-effortPicker.init();
+// Selectors own their preferences and keyboard behavior separately from the conversation.
+const { model: picker, effort: effortPicker } = initChatPickers({
+  models: data.models, lastModel: session.last_model, storage, input: ui.input, announce,
+});
 
 // ----- parameters and personality ------------------------------------------------------------
 

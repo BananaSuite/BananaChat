@@ -10,9 +10,9 @@
 <p class="breadcrumb"><a href="{{ url_for('admin.models') }}">{{ icon("chevron-left") }}All models</a></p>
 {{ header("Edit " ~ model.display_name, model.ollama_name) }}
 
-<form method="post" action="{{ url_for('admin.model_edit', model_id=model.id) }}" class="stack-lg" novalidate>
+<form method="post" action="{{ url_for('admin.model_edit', model_id=model.id) }}" class="section-stack" novalidate>
   {{ csrf() }}
-  <section class="card stack" aria-labelledby="general-title">
+  <section class="settings-section stack" aria-labelledby="general-title">
     <h2 id="general-title">What users see</h2>
     <div class="field">
       <label for="display-name" class="required">Display name</label>
@@ -23,7 +23,7 @@
       <textarea id="description" name="description" maxlength="1000" rows="3" aria-describedby="description-hint">{{ value('description') }}</textarea>
       <span class="hint" id="description-hint">Shown in the model picker. Up to 1,000 characters.</span>
     </div>
-    <fieldset>
+    <fieldset class="admin-fieldset">
       <legend>Categories</legend>
       {% if all_categories %}
       <div class="check-list">
@@ -35,7 +35,7 @@
       <p class="muted small">No categories yet. <a href="{{ url_for('admin.categories') }}">Create categories</a> to group models and control access to them.</p>
       {% endif %}
     </fieldset>
-    <fieldset>
+    <fieldset class="admin-fieldset">
       <legend>Capabilities</legend>
       {% if text_model %}
       <label class="check"><input type="checkbox" name="supports_vision" value="1"{{ checked('supports_vision') }}><span>Understands images<small>Users can attach pictures when chatting with this model.</small></span></label>
@@ -46,7 +46,7 @@
   </section>
 
   {% if text_model %}
-  <section class="card stack" aria-labelledby="behaviour-title">
+  <section class="settings-section stack" aria-labelledby="behaviour-title">
     <h2 id="behaviour-title">Behaviour</h2>
     <div class="field">
       <label for="system-prompt">System prompt</label>
@@ -91,8 +91,8 @@
   </div>
 </form>
 
-<section class="card stack mt-3" id="lifecycle" aria-labelledby="lifecycle-title">
-  <div class="card-header">
+<section class="settings-section stack mt-3" id="lifecycle" aria-labelledby="lifecycle-title">
+  <div class="section-header">
     <h2 id="lifecycle-title">Lifecycle</h2>
     <div class="badge-row">{% for badge in badges %}<span class="badge{% if badge.tone %} badge-{{ badge.tone }}{% endif %}"{% if badge.title %} title="{{ badge.title }}"{% endif %}>{{ badge.label }}</span>{% else %}<span class="badge badge-success">Active</span>{% endfor %}</div>
   </div>

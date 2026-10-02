@@ -222,9 +222,9 @@ def test_quota_uses_the_site_defaults(app, admin, make_user):
     frank = make_user("frank")
     admin.post("/admin/quotas/policy/api", {**_POLICY_FORM, "window_tokens": "40k", "window_slow_tokens": "20k"})
     html = admin.get("/admin/users").get_data(as_text=True)
-    assert "Default (40k + 20k slow)" in html
+    assert "Default (40k)" in html
     html = admin.get(f"/admin/users/{frank['id']}").get_data(as_text=True)
-    assert "40k tokens + 20k tokens slow per 5 hours" in html
+    assert "40k tokens per 5 hours" in html
     limits_page = f"/admin/users/{frank['id']}/limits"
     response = admin.post(limits_page + "/custom", {"pool": "api", "window_tokens": "-5", "window_slow_tokens": "1"},
                           follow_redirects=True)
@@ -232,11 +232,11 @@ def test_quota_uses_the_site_defaults(app, admin, make_user):
     admin.post(limits_page + "/custom", {"pool": "api", "window_tokens": "90k", "window_slow_tokens": "9000"})
     row = _one(app, "SELECT window_tokens, window_slow_tokens, updated_by FROM user_limit_overrides "
                     "WHERE user_id=? AND pool='api'", (frank["id"],))
-    assert (row["window_tokens"], row["window_slow_tokens"]) == (90_000, 9000) and row["updated_by"]
-    assert "90k + 9k slow" in admin.get("/admin/users").get_data(as_text=True)
+    assert (row["window_tokens"], row["window_slow_tokens"]) == (90_000, 0) and row["updated_by"]
+    assert "90k" in admin.get("/admin/users").get_data(as_text=True)
     admin.post(limits_page + "/restore")
     assert _one(app, "SELECT 1 FROM user_limit_overrides WHERE user_id=?", (frank["id"],)) is None
-    assert "40k tokens + 20k tokens slow per 5 hours" in admin.get(f"/admin/users/{frank['id']}").get_data(as_text=True)
+    assert "40k tokens per 5 hours" in admin.get(f"/admin/users/{frank['id']}").get_data(as_text=True)
 
 
 def test_sessions_are_listed_and_revoked(app, admin, make_user):
@@ -343,12 +343,13 @@ def test_settings_validate_colours_and_reset_palettes(app, admin):
 
 def test_quota_settings_are_validated(app, admin):
     base = {"quota_auto_approve_max_tokens": "0", "quota_auto_approve_max_slow_tokens": "0"}
-    for field, value in (("quota_auto_approve_max_tokens", "100000001"), ("quota_auto_approve_max_weekly_tokens", "-1"),
-                         ("quota_auto_approve_max_slow_tokens", "abc")):
+    for field, value in (("quota_auto_approve_max_tokens", "2000000001"), ("quota_auto_approve_max_weekly_tokens", "-1")):
         response = admin.post("/admin/quotas", {**base, field: value}, follow_redirects=True)
         text = response.get_data(as_text=True)
         assert "must be" in text or "write a number of tokens" in text, field
-    for field, value in (("window_tokens", "2000000000"), ("rule_requests_0", "-1"), ("rule_burst_0", "abc"),
+    # A cached form's retired setting is ignored, even if it is malformed.
+    assert admin.post("/admin/quotas", {**base, "quota_auto_approve_max_slow_tokens": "abc"}).status_code == 302
+    for field, value in (("window_tokens", "2000000001"), ("rule_requests_0", "-1"), ("rule_burst_0", "abc"),
                          ("rule_burst_0", "0")):
         response = admin.post("/admin/quotas/policy/api", {**_POLICY_FORM, field: value}, follow_redirects=True)
         assert "must be" in response.get_data(as_text=True), field

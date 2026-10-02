@@ -213,12 +213,13 @@ class Response:
 
 def open_request(method: str, base_url: str, path: str, *, body=None, headers=None, connect_timeout: float = 10,
                  first_byte_timeout: float = 30, read_timeout: float = 30, total_timeout: float | None = None,
-                 max_bytes: int = 64 * 1024 * 1024, cancel: CancelToken | None = None) -> Response:
+                 max_bytes: int = 64 * 1024 * 1024, cancel: CancelToken | None = None,
+                 connection_factory=None) -> Response:
     """Send a request and return the open response (raises :class:`UpstreamError` for non-2xx)."""
     if cancel is not None:
         cancel.check()
     deadline = time.monotonic() + total_timeout if total_timeout else None
-    connection, parts = _connection(base_url, connect_timeout)
+    connection, parts = (connection_factory or _connection)(base_url, connect_timeout)
     payload = None
     send_headers = {"Accept": "application/json", "Connection": "close", "User-Agent": "BananaChat"}
     if body is not None:
@@ -237,6 +238,8 @@ def open_request(method: str, base_url: str, path: str, *, body=None, headers=No
         cancel.on_cancel(aborter)
     try:
         try:
+            if cancel is not None:
+                cancel.check()
             connection.request(method, _target(parts, path), body=payload, headers=send_headers)
             if connection.sock is not None:
                 wait = first_byte_timeout

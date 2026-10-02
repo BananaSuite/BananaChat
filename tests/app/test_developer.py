@@ -127,7 +127,7 @@ def test_overview_page(app, dev):
         credits.charge(dev.user["id"], 5000, 5000, request_type="api")
     html = dev.get("/developer").get_data(as_text=True)
     assert 'style="' not in html
-    assert '<progress class="meter' in html and 'value="16.7"' in html  # 10k of 60k (30k x 2 bonus)
+    assert '<progress class="meter' in html and 'value="11.1"' in html  # 10k of 90k (45k x 2 bonus)
     assert 'value="http://localhost/v1"' in html and "OpenAI(base_url=&#34;http://localhost/v1&#34;" in html
     assert "llama3.2:3b" in html and "qwen3:4b" in html
     assert "developer.js" in html

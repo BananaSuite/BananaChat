@@ -13,7 +13,7 @@
 {% endif %}
 
 <div class="grid grid-2">
-  <section class="card" aria-labelledby="summary-title">
+  <section class="settings-section" aria-labelledby="summary-title">
     <h2 id="summary-title">Summary</h2>
     <dl class="details">
       <dt>User id</dt><dd><code>{{ user.id }}</code></dd>
@@ -21,17 +21,17 @@
       <dt>Invitation</dt><dd>{{ user.invite_code or "—" }}</dd>
       <dt>Chats</dt><dd>{{ chats | number }}</dd>
       <dt>Active API keys</dt><dd>{{ api_tokens }}</dd>
-      <dt>Tokens today</dt><dd>API {{ usage.api[0] | tokens }}{% if usage.api[1] %} + {{ usage.api[1] | tokens }} slow{% endif %} · chat {{ usage.chat[0] | tokens }}{% if usage.chat[1] %} + {{ usage.chat[1] | tokens }} slow{% endif %} · agents {{ usage.agent[0] | tokens }}
+      <dt>Tokens today</dt><dd>API {{ usage.api[0] | tokens }} · chat {{ usage.chat[0] | tokens }} · agents {{ usage.agent[0] | tokens }}
         <div class="hint">Counted against the services' limits (× each model's weight), since midnight UTC.</div></dd>
     </dl>
-    <div class="card-footer row">
+    <div class="section-footer row">
       <a class="btn btn-sm" href="{{ url_for('admin.user_export', user_id=user.id, kind='gdpr') }}">{{ icon("download") }}Export personal data</a>
       <a class="btn btn-sm" href="{{ url_for('admin.user_export', user_id=user.id, kind='chats') }}">{{ icon("download") }}Export chats</a>
     </div>
   </section>
 
-  <section class="card" aria-labelledby="quota-title">
-    <div class="card-header">
+  <section class="settings-section" aria-labelledby="quota-title">
+    <div class="section-header">
       <h2 id="quota-title">Limits</h2>
       <a class="btn btn-sm" href="{{ url_for('admin.user_limits', user_id=user.id) }}">{{ icon("sliders") }}Manage limits</a>
     </div>
@@ -41,7 +41,7 @@
     <dl class="details">
       {% for item in limit_summary %}
       <dt>{{ item.label }}</dt>
-      <dd>{% if item.window.limited %}{{ item.window.tokens | tokens }}{% if item.window.slow_tokens %} + {{ item.window.slow_tokens | tokens }} slow{% endif %} per 5 hours{% else %}no 5-hour limit{% endif %}{% if item.weekly.limited %}, {{ item.weekly.tokens | tokens }} per week{% endif %}{% if item.custom %} <span class="badge">custom</span>{% endif %}
+      <dd>{% if item.window.limited %}{{ item.window.tokens | tokens }} per 5 hours{% else %}no 5-hour limit{% endif %}{% if item.weekly.limited %}, {{ item.weekly.tokens | tokens }} per week{% endif %}{% if item.custom %} <span class="badge">custom</span>{% endif %}
         <div class="hint">{{ item.rate }}</div></dd>
       {% endfor %}
       <dt>Speed</dt><dd>{{ {"slow": "Slowed down", "fast": "Sped up"}.get(limit_settings.speed, "Normal") }}</dd>
@@ -51,11 +51,11 @@
   </section>
 
   {% if not is_self %}
-  <section class="card" aria-labelledby="role-title">
+  <section class="settings-section" aria-labelledby="role-title">
     <h2 id="role-title">Role</h2>
     <form method="post" action="{{ url_for('admin.user_role', user_id=user.id) }}" class="stack" data-confirm="Change the role of {{ user.username }}?">
       {{ csrf() }}
-      <fieldset>
+      <fieldset class="admin-fieldset">
         <legend>Account role</legend>
         <label class="check"><input type="radio" name="role" value="user"{% if user.role == "user" %} checked{% endif %}><span>User<small>Uses chat and the API within quotas and access rules.</small></span></label>
         <label class="check"><input type="radio" name="role" value="admin"{% if user.role == "admin" %} checked{% endif %}><span>Administrator<small>Full control of the site, unlimited usage.</small></span></label>
@@ -64,7 +64,7 @@
     </form>
   </section>
 
-  <section class="card" aria-labelledby="suspend-title">
+  <section class="settings-section" aria-labelledby="suspend-title">
     <h2 id="suspend-title">Suspension</h2>
     {% if suspended_now %}
     <p>{{ user.username }} cannot sign in{% if user.suspended_until %} until {{ user.suspended_until | datetime }}{% endif %}.</p>
@@ -82,7 +82,7 @@
     {% endif %}
   </section>
 
-  <section class="card" aria-labelledby="password-title">
+  <section class="settings-section" aria-labelledby="password-title">
     <h2 id="password-title">Reset password</h2>
     <p class="muted small">Sets a new password and signs {{ user.username }} out of every device. Tell them the new password through a safe channel.</p>
     <form method="post" action="{{ url_for('admin.user_password', user_id=user.id) }}" class="stack" data-confirm="Set a new password for {{ user.username }}?">
@@ -104,8 +104,8 @@
   {% endif %}
 </div>
 
-<section class="card flush mt-3" aria-labelledby="sessions-title">
-  <div class="card-header">
+<section class="settings-section mt-3" aria-labelledby="sessions-title">
+  <div class="section-header">
     <h2 id="sessions-title">Signed-in sessions</h2>
     {% if sessions %}
     <form method="post" action="{{ url_for('admin.user_sessions_revoke_all', user_id=user.id) }}" data-confirm="Sign {{ user.username }} out of {{ 'every other session' if is_self else 'every session' }}?">
@@ -140,12 +140,12 @@
     </table>
   </div>
   {% else %}
-  <p class="muted card-body-pad">No active sessions.</p>
+  <p class="muted section-body">No active sessions.</p>
   {% endif %}
 </section>
 
 {% if not is_self %}
-<section class="card card-danger mt-3" aria-labelledby="delete-title">
+<section class="settings-section settings-section-danger mt-3" aria-labelledby="delete-title">
   <h2 id="delete-title">Delete account</h2>
   <p>Deletes {{ user.username }} with all chats, personalities, API keys and usage history. This cannot be undone. Export their data first if it must be kept.</p>
   <form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" class="stack" data-confirm="Permanently delete {{ user.username }} and all of their data?" data-confirm-danger>

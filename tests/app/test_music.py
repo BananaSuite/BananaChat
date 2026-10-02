@@ -52,7 +52,7 @@ def test_page_and_nav_follow_the_program_state(app, make_user):
     assert "/free-quota" not in browser.get("/account").get_data(as_text=True)
     _program(app, music_bonus_mode="fixed", music_bonus_fixed_tokens=25_000, music_bonus_fixed_slow_tokens=5000)
     html = browser.get("/free-quota").get_data(as_text=True)
-    assert "+25k" in html and "55k" in html  # 30k tokens + 25k
+    assert "+25k" in html and "70k" in html  # 45k tokens + 25k
     assert 'href="/free-quota"' in browser.get("/account").get_data(as_text=True)
 
 
@@ -60,7 +60,7 @@ def test_multiplier_bonus_is_explained(app, make_user):
     make_user("bo")
     _program(app, music_bonus_mode="multiplier", music_credit_multiplier=3)
     html = _signed_in(app, "bo").get("/free-quota").get_data(as_text=True)
-    assert "×3" in html and "90" in html and "45" in html
+    assert "×3" in html and "135k" in html and "45k" in html
 
 
 def test_join_and_leave_respect_the_rules(app, make_user):

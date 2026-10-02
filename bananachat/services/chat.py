@@ -5,7 +5,7 @@ Sending (``POST /chat/<sid>/send``)
 :func:`prepare` checks a request in this order, cheapest first: the message
 (size, no files in no-history chats), the chat pool's request rate
 (``services.limits``, administrators exempt), the chat's 5-hour and weekly
-tokens, whether a run is already active, and only then the uploaded files
+tokens for models that consume them, whether a run is already active, and only then the uploaded files
 (images are decoded and PDFs parsed only for requests that may run). It then
 selects the model (vision when the chat holds images), the reasoning effort
 (``effort``: a level the account has unlocked for the model, else 403
@@ -216,11 +216,12 @@ def _prepare(user, session, form, files, *, lang: str) -> Prepared:
     budget = credits.budget(user, "chat")
     # A model that does not count toward the chat limits can still be asked for by name, and ``auto`` moves to
     # one when there is one (limits.prefer_usable). Otherwise refuse before any upload is parsed.
-    # A local model chosen by name may also switch to a cloud model outside the used-up tokens
-    # (limits.quota_fallback), when the administrator allows it.
-    if not budget.available and not (limits.any_outside_pool() if requested == "auto" else
-                                     limits.outside_pool(requested) or
-                                     (limits.fallback_directions()[1] and limits.any_outside_pool())):
+    # A chosen model can switch to an unmetered or outside-pool model when the
+    # administrator allows that fallback direction. Final admission still
+    # enforces access, model locks, provider capacity and request rates.
+    if not budget.available and not (limits.any_outside_pool(pool="chat") if requested == "auto" else
+                                     limits.outside_pool(requested, pool="chat") or
+                                     limits.any_outside_pool(pool="chat", from_model=catalog.get_by_name(requested))):
         raise SendError(quota_message(budget, lang), 429, "quota_exhausted", retry_after=budget.seconds_until_reset())
     if runs.session_busy(session["id"]) or (not is_admin and runs.user_busy(user["id"])):
         raise SendError(t("chat.error_busy"), 409, "busy", retry_after=5)
@@ -276,7 +277,7 @@ def _prepare(user, session, form, files, *, lang: str) -> Prepared:
     return Prepared(
         user=dict(user), session=dict(session), content=content, attachments=stored, selection=selection,
         options=options_for(model, overrides, creativity, config),
-        priority=queue.priority_for(user, slow=admission.slow), lang=lang, think=think, effort=effort, notice=notice,
+        priority=queue.priority_for(user), lang=lang, think=think, effort=effort, notice=notice,
         personality=personality_service.prompt_text(personality) if personality else None,
         overrides=overrides, creativity=creativity)
 
@@ -468,13 +469,26 @@ class Run:
         prompt = system_prompt(model or self.model, self.prepared.personality)
         return ([{"role": "system", "content": prompt}] if prompt else []) + messages
 
-    def _authorize(self) -> str | None:
-        """Checked once admitted: the account may still chat."""
+    def _authorize(self, model) -> str | None:
+        """Before each model attempt, recheck access and limits after the wait."""
+        self._refusal = ""
         user = users.get(self.prepared.user["id"])
         if user is None or users.is_suspended(user):
             self._refusal = self.t("chat.error_account")
-        elif not (admission := limits.admit(user, "chat", self.model, take_rate=False)).allowed:
-            self._refusal = admission.refusal.message(self.prepared.lang)
+        elif not AccessContext.load(user).can_use(model, "chat"):
+            self._refusal = self.t("chat.error_model_forbidden")
+        else:
+            with limits.snapshot(fresh=True):
+                try:
+                    limits.resolve_effort(user, model, self.prepared.effort or (
+                        limits.EFFORT_DEFAULT if limits.supported_efforts(model) else None))
+                except limits.EffortLocked as error:
+                    self._refusal = self.t("chat.error_effort_locked", model=model["display_name"],
+                                           level=limits.effort_label(error.allowed, self.prepared.lang))
+                if not self._refusal:
+                    admission = limits.admit(user, "chat", model, take_rate=self._started_models > 0)
+                    if not admission.allowed:
+                        self._refusal = admission.refusal.message(self.prepared.lang)
         return self._refusal or None
 
     # events -------------------------------------------------------------------
@@ -489,7 +503,9 @@ class Run:
             else:
                 notice = self.t("chat.notice_fallback", model=event.model["display_name"])
             self.model = event.model
-            runs.mark_running(self.session_id, self.begun.token, self.model["id"])
+            if not runs.mark_running(self.session_id, self.begun.token, self.model["id"]):
+                self.cancel.cancel("lease lost")
+                return
             self.channel.send({"type": "start", "model": self.model["ollama_name"],
                                "display_name": self.model["display_name"], "notice": notice,
                                "via_worker": event.via_worker, "reasoning": bool(self.model["is_reasoning"])})

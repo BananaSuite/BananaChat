@@ -1,11 +1,14 @@
-<img src="bananachat/static/img/logo.svg" alt="BananaChat logo" width="72">
+<img src="bananachat/static/img/favicon.png" alt="BananaChat logo" width="72">
 
 # BananaChat
 
-**BananaChat** is a self-hosted chat application for [Ollama](https://ollama.com/). Run open models on your own hardware and give a group of people a private, polished chat interface with accounts, quotas and administration — no conversation leaves the servers you control.
+**BananaChat** is a self-hosted chat application for [Ollama](https://ollama.com/). Run open models on your own hardware and give a group of people a private chat interface with accounts, quotas and administration.
 
 - **Chat** with streaming answers, reasoning display, Markdown and code rendering, file attachments (images, PDFs, text and code), model picker, sampling options, personalities (emoji avatar, greeting, conversation starters, preferred model and response style; a default for new chats, templates, share links and JSON import/export), sharing links, search, exports and no-history chats.
-- **OpenAI-compatible API** (`/v1/chat/completions`, `/v1/models`, `/v1/images/generations`) with personal keys, a playground and per-account token limits (5-hour and weekly windows, per-model limits and reasoning-effort levels).
+- **OpenAI-compatible API** (`/v1/chat/completions`, `/v1/models`, `/v1/images/generations`) with personal keys, a playground and per-account token limits (a single five-hour allowance, optional weekly limits, per-model limits and reasoning-effort levels).
+- **External API providers** for OpenAI-compatible services (including OpenAI and Grok) and native Anthropic Messages. Admins manage base URLs, private keys, model selection and routing alongside Ollama; see [setup](docs/external-providers.md).
+- **Claude Code connector** with one or multiple subscription profiles, automatic model and subscription-usage discovery, conservative account pooling and strict model limits. Disabled by default; administrators select privately authenticated server profiles. See [connector setup](docs/claude-code.md) for provider-approved deployment.
+- **Cloud sessions** for coding work in isolated sandboxes, with live logs, files, follow-ups and downloadable patches. Disabled by default; admins choose administrators only, everyone signed in, or existing access lists. See [setup and limits](docs/agents.md).
 - **Administration**: users and invitations, model catalog and downloads, fine-grained access policies (per model, per category, uncensored models, image generation, personalities) with user requests, featured personalities published for everyone and personality moderation, quotas, metrics, audit log, maintenance mode and theming.
 - **Scales out**: split the web server from a GPU compute node, add volunteer worker PCs, and generate images with [ComfyUI](docs/comfyui.md).
 - **Operations**: one command installs, updates (with automatic rollback), backs up (optionally encrypted to a private Git repository) and restores a server.
@@ -45,6 +48,12 @@ sudo bananachat proxy --install
 ### Upgrading from the previous release
 
 Run `sudo bananachat update` as usual. This release is a complete rewrite that keeps your database, settings, accounts, chats, API tokens and sign-ins; the database is upgraded in place on first start (and restored with the code if anything fails). Read the [changelog](CHANGELOG.md) for what changed.
+
+Token limits now use one five-hour allowance. Upgrades combine the old regular
+and slow allocations when slow tokens were enabled; sites that had them disabled
+keep their regular allocation. Existing usage counts toward the combined allowance
+without a reset. Weekly limits and the other quota and appearance settings remain
+available; an administrator can still set an account's queue priority to slow.
 
 ## Documentation
 

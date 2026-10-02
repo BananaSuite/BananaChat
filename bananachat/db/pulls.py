@@ -18,10 +18,24 @@ import secrets
 import sqlite3
 
 from bananachat import db
+from bananachat.db import settings as site_settings
 
 ACTIVE = ("queued", "pulling")
 FINISHED = ("done", "failed", "cancelled")
 RECIPE_FIELDS = ("repo_id", "source_filename", "revision", "target_name", "expected_sha256", "expected_size")
+CANCELLED_DISCOVERY_KEY = "cancelled_model_downloads"
+
+
+def canonical_ollama_name(name: str) -> str:
+    """Ollama treats an omitted tag as ``:latest`` (including namespaced models)."""
+    return name if ":" in name.rsplit("/", 1)[-1] else f"{name}:latest"
+
+
+def _names(name: str, backend: str) -> tuple[str, str]:
+    if backend != "ollama":
+        return name, name
+    name = canonical_ollama_name(name)
+    return name, name.removesuffix(":latest") if name.endswith(":latest") else name
 
 
 def get(job_id):
@@ -42,8 +56,63 @@ def active_jobs():
 
 
 def active_for(name: str, backend: str = "ollama"):
-    return db.one("SELECT * FROM model_pull_jobs WHERE backend=? AND ollama_name=? AND status IN ('queued', 'pulling')",
-                  (backend, name))
+    return db.one("SELECT * FROM model_pull_jobs WHERE backend=? AND ollama_name IN (?,?) "
+                  "AND status IN ('queued', 'pulling') ORDER BY id DESC LIMIT 1", (backend, *_names(name, backend)))
+
+
+def blocked_discovery_names() -> set[str]:
+    """New Ollama models must not enroll before verification or after a cancelled pull.
+
+    A successful retry releases the name. Existing catalog models remain
+    discoverable, so cancelling an update does not withdraw an installed model.
+    """
+    latest = _latest_ollama_statuses()
+    recorded = _discovery_records()
+    return {name for name, cancelled in recorded.items() if cancelled} | {
+        name for name, status in latest.items()
+        if status in ACTIVE or (status == "cancelled" and recorded.get(name) is not False)
+    }
+
+
+def _latest_ollama_statuses() -> dict[str, str]:
+    latest = {}
+    for row in db.query("SELECT ollama_name, status FROM model_pull_jobs WHERE backend='ollama' ORDER BY id"):
+        latest[canonical_ollama_name(row["ollama_name"])] = row["status"]
+    return latest
+
+
+def _preserve_cancelled_history() -> None:
+    """Keep cancellation barriers written by older releases when their history is cleared."""
+    recorded = _discovery_records()
+    for name, status in _latest_ollama_statuses().items():
+        if status == "cancelled" and name not in recorded:
+            recorded[name] = True
+    if recorded:
+        site_settings.state_set(CANCELLED_DISCOVERY_KEY, recorded)
+
+
+def _discovery_records() -> dict[str, bool]:
+    """Persist both cancellations and their verified replacements independently of history cleanup."""
+    stored = site_settings.state_get(CANCELLED_DISCOVERY_KEY, {})
+    if isinstance(stored, list):
+        return {canonical_ollama_name(name): True for name in stored if isinstance(name, str)}
+    if isinstance(stored, dict):
+        return {canonical_ollama_name(name): cancelled for name, cancelled in stored.items()
+                if isinstance(name, str) and isinstance(cancelled, bool)}
+    return {}
+
+
+def _discovery_outcome(job_id: int, outcome: str) -> None:
+    job = get(job_id)
+    if job is None or job["backend"] != "ollama":
+        return
+    recorded = _discovery_records()
+    name = canonical_ollama_name(job["ollama_name"])
+    if outcome == "cancelled":
+        recorded[name] = True
+    elif outcome == "done":
+        recorded[name] = False
+    site_settings.state_set(CANCELLED_DISCOVERY_KEY, recorded)
 
 
 def active_count() -> int:
@@ -64,6 +133,8 @@ def enqueue(name: str, requested_by: str | None, *, backend: str = "ollama", sou
     if unknown:
         raise ValueError(f"Unknown download fields: {', '.join(sorted(unknown))}")
     values = {key: recipe.get(key) for key in RECIPE_FIELDS}
+    if backend == "ollama":
+        name = canonical_ollama_name(name)
     try:
         with db.transaction():
             existing = active_for(name, backend)
@@ -95,7 +166,8 @@ def claim_next(limit: int = 1, *, skip_backend: str | None = None):
             return None
         db.execute("UPDATE model_pull_jobs SET status='pulling', started_at=?, error_message=NULL, progress_at=?, "
                    "claim_token=? WHERE id=?", (db.now(), db.now(), secrets.token_hex(16), job["id"]))
-    return get(job["id"])
+        claimed = get(job["id"])
+    return claimed
 
 
 _OWNED = " AND (? IS NULL OR claim_token=?)"
@@ -158,6 +230,12 @@ def status(job_id: int) -> str | None:
     return db.scalar("SELECT status FROM model_pull_jobs WHERE id=?", (job_id,))
 
 
+def finished_detail(job_id: int, detail: str, *, owner: str | None = None) -> None:
+    """Update a verified job's display without touching a later claim or a cancellation."""
+    db.execute("UPDATE model_pull_jobs SET progress_detail=? WHERE id=? AND status='done'" + _OWNED,
+               (detail[:500], job_id, owner, owner))
+
+
 def finish(job_id: int, outcome: str, error: str | None = None, *, digest: str | None = None,
            owner: str | None = None) -> bool:
     """End a running job as done/failed/cancelled. False when it was no longer running (or claimed by another run
@@ -165,10 +243,14 @@ def finish(job_id: int, outcome: str, error: str | None = None, *, digest: str |
     if outcome not in FINISHED:
         raise ValueError("Unknown outcome.")
     progress = ", progress_pct=100" if outcome == "done" else ""
-    return db.execute(
-        f"UPDATE model_pull_jobs SET status=?, error_message=?, finished_at=?, next_attempt_at=NULL, "
-        f"digest=COALESCE(?, digest){progress} WHERE id=? AND status IN ('queued', 'pulling')" + _OWNED,
-        (outcome, (error or None) and str(error)[:500], db.now(), digest, job_id, owner, owner)).rowcount == 1
+    with db.transaction():
+        done = db.execute(
+            f"UPDATE model_pull_jobs SET status=?, error_message=?, finished_at=?, next_attempt_at=NULL, "
+            f"digest=COALESCE(?, digest){progress} WHERE id=? AND status IN ('queued', 'pulling')" + _OWNED,
+            (outcome, (error or None) and str(error)[:500], db.now(), digest, job_id, owner, owner)).rowcount == 1
+        if done and outcome in ("done", "cancelled"):
+            _discovery_outcome(job_id, outcome)
+    return done
 
 
 def requeue(job_id: int, note: str = "Interrupted by a server restart; it will resume.", *,
@@ -178,10 +260,14 @@ def requeue(job_id: int, note: str = "Interrupted by a server restart; it will r
                       "WHERE id=? AND status='pulling'" + _OWNED, (note[:500], job_id, owner, owner)).rowcount == 1
 
 
-def cancel(job_id: int, error: str | None = None) -> bool:
-    return db.execute("UPDATE model_pull_jobs SET status='cancelled', error_message=?, finished_at=?, "
-                      "next_attempt_at=NULL WHERE id=? AND status IN ('queued', 'pulling')",
-                      (error, db.now(), job_id)).rowcount == 1
+def cancel(job_id: int, error: str | None = None, *, owner: str | None = None) -> bool:
+    with db.transaction():
+        cancelled = db.execute("UPDATE model_pull_jobs SET status='cancelled', error_message=?, finished_at=?, "
+                               "next_attempt_at=NULL WHERE id=? AND status IN ('queued', 'pulling')" + _OWNED,
+                               (error, db.now(), job_id, owner, owner)).rowcount == 1
+        if cancelled:
+            _discovery_outcome(job_id, "cancelled")
+    return cancelled
 
 
 def summary() -> dict:
@@ -206,8 +292,10 @@ def reset_stuck() -> int:
 
 
 def delete_finished(job_id: int) -> bool:
-    return db.execute("DELETE FROM model_pull_jobs WHERE id=? AND status IN ('done', 'failed', 'cancelled')",
-                      (job_id,)).rowcount == 1
+    with db.transaction():
+        _preserve_cancelled_history()
+        return db.execute("DELETE FROM model_pull_jobs WHERE id=? AND status IN ('done', 'failed', 'cancelled')",
+                          (job_id,)).rowcount == 1
 
 
 def clear_finished() -> int:
@@ -216,5 +304,7 @@ def clear_finished() -> int:
     Completed checkpoint jobs are the download recipes (repository, revision,
     SHA-256) that backups save for weight-free disaster recovery.
     """
-    return db.execute("DELETE FROM model_pull_jobs WHERE status IN ('done', 'failed', 'cancelled') "
-                      "AND NOT (backend='comfyui' AND status='done')").rowcount
+    with db.transaction():
+        _preserve_cancelled_history()
+        return db.execute("DELETE FROM model_pull_jobs WHERE status IN ('done', 'failed', 'cancelled') "
+                          "AND NOT (backend='comfyui' AND status='done')").rowcount

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
+import math
 import secrets
 import sqlite3
 from datetime import timedelta
 
 from flask import Flask, g, render_template, request, session
+from flask.json.provider import DefaultJSONProvider
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from bananachat import PRODUCT_NAME, __version__, db
+from bananachat import PRODUCT_NAME, __version__, assets, db
 from bananachat.config import Config, load_config, log_warnings
 from bananachat.db import settings as site_settings
 from bananachat.db import users
@@ -24,12 +26,59 @@ DEFAULT_BODY_LIMIT = 2 * 1024 * 1024
 log = logging.getLogger("bananachat")
 
 
+class _RequestJSONProvider(DefaultJSONProvider):
+    """Reject non-finite numbers and documents too deep for request handlers."""
+
+    @staticmethod
+    def _invalid_constant(value):
+        raise ValueError(f"Invalid JSON number: {value}")
+
+    @staticmethod
+    def _finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("JSON number is outside the supported range")
+        return number
+
+    def loads(self, value, **kwargs):
+        kwargs.setdefault("parse_constant", self._invalid_constant)
+        kwargs.setdefault("parse_float", self._finite_float)
+        try:
+            result = super().loads(value, **kwargs)
+        except RecursionError as error:
+            raise ValueError("JSON is nested too deeply") from error
+        # Iterator frames bound traversal memory independently of array length.
+        # Flask catches ValueError and returns its normal malformed-JSON error.
+        frames = [iter((result,))]
+        marker = object()
+        while frames:
+            item = next(frames[-1], marker)
+            if item is marker:
+                frames.pop()
+            elif isinstance(item, (dict, list)):
+                if len(frames) > 64:
+                    raise ValueError("JSON is nested too deeply")
+                frames.append(iter(item.values() if isinstance(item, dict) else item))
+        return result
+
+
 def create_app(config: Config | None = None, *, testing: bool = False) -> Flask:
     config = config or load_config()
     configure_logging(config)
     log_warnings(config)
 
-    app = Flask(__name__, template_folder="templates", static_folder="static")
+    app = Flask(__name__, template_folder="templates", static_folder="static",
+                static_url_path=f"/static/v{assets.revision()}")
+
+    @app.get("/static/<path:filename>", endpoint="static_legacy")
+    def legacy_static(filename):
+        # Keep older asset links usable; current pages use the versioned tree.
+        response = app.send_static_file(filename)
+        response.headers["Cache-Control"] = "no-cache, max-age=0"
+        response.headers.pop("Expires", None)
+        return response
+    app.json_provider_class = _RequestJSONProvider
+    app.json = app.json_provider_class(app)
     app.config.update(
         BC=config,
         TESTING=testing,
@@ -61,7 +110,8 @@ def create_app(config: Config | None = None, *, testing: bool = False) -> Flask:
     from bananachat.services import housekeeping  # noqa: F401  (registers core background jobs)
     from bananachat.services import limits  # noqa: F401  (registers the limit jobs)
     from bananachat.services import community  # noqa: F401  (registers the community-consent job)
-    from bananachat.services import claude_pool
+    from bananachat.services import claude_extension, claude_pool
+    claude_extension.configure(app)
     claude_pool.ensure_registered()
     register_blueprints(app)
     # Never hand a connection opened here to forked worker processes.
@@ -101,7 +151,7 @@ def _install_hooks(app: Flask) -> None:
             request.max_content_length = limit
             request.max_form_memory_size = limit
 
-        if request.endpoint == "static":
+        if request.endpoint in ("static", "static_legacy"):
             return None
         g.settings = site_settings.get()
         security.load_current_user()
@@ -163,7 +213,7 @@ def _security_headers(response) -> None:
     headers.setdefault("Permissions-Policy", f"camera=(), microphone={microphone}, geolocation=(), payment=()")
     if request.is_secure:
         headers.setdefault("Strict-Transport-Security", "max-age=31536000")
-    if response.mimetype == "text/html" and getattr(g, "user", None) is not None:
+    if response.mimetype == "text/html":
         headers.setdefault("Cache-Control", "private, no-store")
 
 
@@ -190,6 +240,7 @@ def _install_template_helpers(app: Flask) -> None:
         time_text=formatting.time_text,
         time_left=formatting.time_left,
         filesize=formatting.filesize,
+        primary_foreground=formatting.primary_foreground,
     )
 
     @app.context_processor

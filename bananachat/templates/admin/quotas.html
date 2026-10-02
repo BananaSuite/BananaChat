@@ -4,146 +4,171 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Limits{% endblock %}
 {% block admin_content %}
-{{ header("Limits", "Everything is counted in tokens (prompt and answer together). Administrators are never limited.") }}
+{{ header("Limits", "Manage request rates and token allowances for each service. Administrators are exempt.") }}
 {% include "admin/_limits_tabs.html" %}
 
 {% if pending_count %}
-<div class="alert alert-warning mb-3">{{ icon("alert") }}<p>{{ pending_count }} request{{ "s" if pending_count != 1 }} waiting for you. <a href="{{ url_for('admin.quota_requests') }}">Review requests</a></p></div>
+<div class="alert alert-warning mb-3">{{ icon("alert") }}<p>{{ pending_count }} pending request{{ "s" if pending_count != 1 }}. <a href="{{ url_for('admin.quota_requests') }}">Review requests</a></p></div>
 {% endif %}
 
-<section class="card stack mb-3" aria-labelledby="how-title">
-  <h2 id="how-title">How limits work</h2>
+<details class="settings-section admin-help mb-3">
+  <summary>{{ icon("chevron-down") }}<span id="how-title">How limits work</span></summary>
+  <div class="stack">
   <ul class="plain-list small">
-    <li><strong>Request rate</strong> – how often an account may send requests, e.g. “60 per minute” and “1,000 per day”. Every API key, the playground, chat and agents of one account share it.</li>
-    <li><strong>5-hour tokens</strong> – a window opens with an account's first request and lasts 5 hours; when it ends, the allowance is full again. Optional <strong>slow tokens</strong> keep people going afterwards, behind everyone else in the queue.</li>
-    <li><strong>Weekly tokens</strong> (off by default) – a rolling week that starts with the first request after the previous week ended. When used up, requests wait until the week ends.</li>
-    <li><strong>Models</strong> count by their weight (a heavy model ×3 uses the allowance three times as fast) and can have their own limits: see the <a href="{{ url_for('admin.limit_models') }}">Models</a> tab.</li>
+    <li><strong>Request rates</strong> apply per account within each service. All API keys and the playground share the API allowance; chat and agents have separate allowances. All configured rate rules apply together.</li>
+    <li><strong>5-hour tokens</strong> cover prompt and response usage. The first request opens a 5-hour window; the allowance resets when it ends.</li>
+    <li><strong>Weekly tokens</strong> are off by default. When enabled, the first request opens a 7-day window. Exhausted allowances become available at reset.</li>
+    <li><strong>Model rules</strong> can add separate limits and multiply service token usage by a model's weight. Configure them under <a href="{{ url_for('admin.limit_models') }}">Models</a>.</li>
   </ul>
-  <p class="muted small mb-0">An account's limit is, in order: its <strong>custom limit</strong> (set on its page or by an approved request), else the <strong>policy</strong> below (times its tier when tiers are on) → the <strong>dynamic</strong> adjustment → the music bonus → <strong>grants</strong>. {{ custom_count }} account(s) have custom limits; {{ grant_count }} grant(s) are active.</p>
-</section>
+  <p class="muted small mb-0">Account overrides replace service defaults. Otherwise, tier and demand adjustments apply before music bonuses and grants. Custom limits are never reduced by demand. {{ custom_count }} account(s) have custom limits, exemptions or queue settings; {{ grant_count }} grant(s) are active.</p>
+</div>
+</details>
 
-<div class="stack-lg">
+<div class="section-stack">
+  <form method="post" action="{{ url_for('admin.quotas_chat_consumption') }}" class="settings-section stack" id="chat-consumption" aria-labelledby="chat-consumption-title">
+    {{ csrf() }}
+    <div>
+      <h2 id="chat-consumption-title">Which chats count</h2>
+      <p class="muted small mb-0">Choose which chats use the chat token allowance.</p>
+    </div>
+    {{ toggle("chat_local_token_consumption", "Apply token limits to local chats", s.chat_local_token_consumption, "Off by default. Includes models on your compute servers.") }}
+    {{ toggle("chat_cloud_token_consumption", "Apply token limits to cloud chats", s.chat_cloud_token_consumption, "On by default. Models excluded from service tokens remain excluded.") }}
+    <p class="hint mb-0">Applies to regular and no-history chats from now on. Request rates, permissions and provider capacity still apply.</p>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Save chat settings</button></div>
+  </form>
+
   {% for pool, policy in policies.items() %}
   {#- A refused form shows again as typed. -#}
   {% if refused.pool == pool %}{% set policy = refused.policy %}{% endif %}
-  <form method="post" action="{{ url_for('admin.quotas_policy', pool=pool) }}" class="card stack" id="policy-{{ pool }}" aria-labelledby="policy-{{ pool }}-title">
+  <form method="post" action="{{ url_for('admin.quotas_policy', pool=pool) }}" class="settings-section stack" id="policy-{{ pool }}" aria-labelledby="policy-{{ pool }}-title">
     {{ csrf() }}
     <div>
       <h2 id="policy-{{ pool }}-title">{{ pool_labels[pool] }}</h2>
-      <p class="limit-summary">Now: {{ summaries[pool] }}</p>
+      <p class="limit-summary">{{ summaries[pool] }}</p>
     </div>
-    <fieldset class="stack">
+    <fieldset class="admin-fieldset stack">
       <legend>Request rate</legend>
-      {{ toggle("rate_enabled", "Limit how often", policy.rate.enabled, "Each account has one bucket per rule; bursts use what is saved up.") }}
+      {{ toggle("rate_enabled", "Limit requests per account", policy.rate.enabled) }}
       {{ rules_editor(policy.rate.rules, "rules-" ~ pool, units, rule_rows) }}
-      {{ toggle("rate_dynamic", "Slow down when busy", policy.rate.dynamic, "Lowers the rate while the server is overloaded. Never raises it; custom rates are not changed.") }}
     </fieldset>
     <div class="grid grid-2">
-      <fieldset class="stack">
+      <fieldset class="admin-fieldset stack">
         <legend>Tokens per 5 hours</legend>
-        {{ toggle("window_enabled", "Limit usage per 5 hours", policy.window.enabled, "Off: unlimited, except accounts with a custom 5-hour limit.") }}
-        <div class="form-grid">
-          {{ token_field("window_tokens", "Tokens", policy.window.tokens, "window-" ~ pool, "Per 5-hour window, e.g. 50k.") }}
-          {{ token_field("window_slow_tokens", "Slow tokens", policy.window.slow_tokens, "slow-" ~ pool, "Used after the tokens run out; slow requests wait behind others. 0 for none.", false) }}
-        </div>
-        {{ toggle("window_dynamic", "Adjust to demand", policy.window.dynamic, "More when the server is quiet and for off-peak, regular users; less under heavy load (0.5×–2×).") }}
-        {{ toggle("window_auto_tiers", "Raise with tier levels", policy.window.auto_tiers, "Multiply by the account's tier; accounts move up automatically.") }}
+        {{ toggle("window_enabled", "Limit usage per 5 hours", policy.window.enabled, "Account overrides still apply when disabled.") }}
+        {{ token_field("window_tokens", "Tokens", policy.window.tokens, "window-" ~ pool, "Prompt and response tokens, e.g. 50k.") }}
       </fieldset>
-      <fieldset class="stack">
+      <fieldset class="admin-fieldset stack">
         <legend>Tokens per week</legend>
-        {{ toggle("weekly_enabled", "Limit weekly usage", policy.weekly.enabled, "A rolling week from the first request after the previous one ended. When used up, requests wait (no slow lane).") }}
-        {{ token_field("weekly_tokens", "Tokens", policy.weekly.tokens, "weekly-" ~ pool, "Per week, e.g. 500k. Usually a few times the 5-hour amount.") }}
-        {{ toggle("weekly_dynamic", "Adjust to demand", policy.weekly.dynamic) }}
-        {{ toggle("weekly_auto_tiers", "Raise with tier levels", policy.weekly.auto_tiers) }}
+        {{ toggle("weekly_enabled", "Limit weekly usage", policy.weekly.enabled, "A 7-day window starting with the first request. Off by default.") }}
+        {{ token_field("weekly_tokens", "Tokens", policy.weekly.tokens, "weekly-" ~ pool, "Prompt and response tokens, e.g. 500k.") }}
       </fieldset>
     </div>
+    <details class="admin-help admin-options">
+      <summary>{{ icon("chevron-down") }}Demand and tier adjustments</summary>
+      <div class="stack">
+        {{ toggle("rate_dynamic", "Reduce request rates under load", policy.rate.dynamic, "Only reduces rates. Custom account rates are unchanged.") }}
+        {{ toggle("window_dynamic", "Adjust 5-hour tokens to demand", policy.window.dynamic, "Uses demand and account activity, between 0.5× and 2×.") }}
+        {{ toggle("window_auto_tiers", "Apply account tiers to 5-hour tokens", policy.window.auto_tiers, "Multiply by the account tier. Eligible accounts advance automatically.") }}
+        {{ toggle("weekly_dynamic", "Adjust weekly tokens to demand", policy.weekly.dynamic) }}
+        {{ toggle("weekly_auto_tiers", "Apply account tiers to weekly tokens", policy.weekly.auto_tiers) }}
+      </div>
+    </details>
     <div class="form-actions"><button type="submit" class="btn btn-primary">Save limits</button></div>
   </form>
   {% endfor %}
 
-  <div class="grid grid-2">
+  <div class="section-stack">
     {% if refused.options %}{% set s = refused.options %}{% endif %}
-    <form method="post" action="{{ url_for('admin.quotas_save') }}" class="card stack" id="options" aria-labelledby="options-title">
-      {{ csrf() }}
-      <h2 id="options-title">Slow tokens and automatic approval</h2>
-      {{ toggle("slow_credits_enabled", "Offer slow tokens", s.slow_credits_enabled, "When off, people stop at their regular tokens in every service.") }}
-      <p class="muted small mb-0">Requests for more 5-hour (or weekly) tokens up to these amounts are approved at once. Rate, temporary and reasoning-effort requests always wait for you.</p>
-      {{ toggle("quota_auto_approve_enabled", "Approve small requests automatically", s.quota_auto_approve_enabled) }}
-      <div class="form-grid">
-        {{ token_field("quota_auto_approve_max_tokens", "5-hour tokens up to", s.quota_auto_approve_max_tokens or 0, "auto-tokens", "0: always wait for you.") }}
-        {{ token_field("quota_auto_approve_max_slow_tokens", "Slow tokens up to", s.quota_auto_approve_max_slow_tokens or 0, "auto-slow", "0: always wait for you.") }}
-        {{ token_field("quota_auto_approve_max_weekly_tokens", "Weekly tokens up to", s.quota_auto_approve_max_weekly_tokens or 0, "auto-weekly", "0: weekly requests always wait for you.") }}
-      </div>
-      <div class="form-actions"><button type="submit" class="btn btn-primary">Save options</button></div>
-    </form>
-
-    <form method="post" action="{{ url_for('admin.quotas_community') }}" class="card stack" id="community" aria-labelledby="community-title">
-      {{ csrf() }}
-      <h2 id="community-title">Community consent</h2>
-      <p class="muted small mb-0">People can offer a quota request to the community. Others support it (renouncing part of their own limit in the same service or model) or object. With enough consent it is applied automatically as a time-limited increase, and the renounced tokens are taken off the supporters for the same time. You can still decide any request at once; after voting closes, requests wait for you until you decide or their author cancels them.{% if community_open %} {{ community_open }} request{{ "s" if community_open != 1 }} open for voting now.{% endif %}</p>
-      {{ toggle("community_quota_enabled", "Let the community approve requests", community.enabled, "On by default. Off: requests only wait for you (voting already under way stops counting).") }}
-      <fieldset class="stack-sm">
-        <legend class="label">Kinds the community can approve</legend>
-        {% for kind, label in kind_labels.items() %}
-        <label class="check"><input type="checkbox" name="community_kind_{{ kind }}" value="1"{% if kind in community.kinds %} checked{% endif %}><span>{{ label }}</span></label>
-        {% endfor %}
-      </fieldset>
-      <div class="form-grid">
-        {% for name, label, hint in [("min_supporters", "Supporters needed", "At least this many people."),
-                                     ("approval_percent", "Share in favour (%)", "Supporters among everyone who voted."),
-                                     ("coverage_percent", "Tokens covered (%)", "Of a token increase, renounced by supporters. 0: votes alone decide."),
-                                     ("hours", "Voting hours", "How long a request stays open for voting."),
-                                     ("boost_hours", "Increase lasts (hours)", "For approved non-temporary requests; temporary ones last their own hours."),
-                                     ("min_account_days", "Account age to vote (days)", "Newer accounts cannot vote."),
-                                     ("max_pledge_percent", "Most a person can renounce (%)", "Of their own limit, across every request at once.")] %}
-        <div class="field">
-          <label for="community-{{ name }}">{{ label }}</label>
-          <input type="number" id="community-{{ name }}" name="community_{{ name }}" min="{{ community_bounds[name][0] }}" max="{{ community_bounds[name][1] }}" step="1" required value="{{ community[name] }}" aria-describedby="community-{{ name }}-hint">
-          <span class="hint" id="community-{{ name }}-hint">{{ hint }}</span>
-        </div>
-        {% endfor %}
-      </div>
-      <div class="form-actions"><button type="submit" class="btn btn-primary">Save community consent</button></div>
-    </form>
-
-    <form method="post" action="{{ url_for('admin.quotas_fallback') }}" class="card stack" id="fallback" aria-labelledby="fallback-title">
-      {{ csrf() }}
-      <h2 id="fallback-title">Model fallback when quota runs out</h2>
-      <p class="muted small mb-0">When someone picks a model in the chat whose quota is used up for them (its own limits, the provider's pooled quota, or the service tokens it counts toward), the chat answers with another model they can still use and says so. Models of the same kind are tried first. These switches allow crossing between local models (this site's servers) and cloud models (such as the Claude pool); they also give a chosen model fallbacks of the other kind when it fails before answering.</p>
-      {{ toggle("quota_fallback_to_local", "Cloud → local", s.quota_fallback_to_local if s.quota_fallback_to_local is not none else 1, "When a cloud model's quota runs out, answer with a local model.") }}
-      {{ toggle("quota_fallback_to_cloud", "Local → cloud", s.quota_fallback_to_cloud if s.quota_fallback_to_cloud is not none else 1, "When the service tokens of local models run out, answer with a cloud model that does not count toward them.") }}
-      <div class="form-actions"><button type="submit" class="btn btn-primary">Save fallback</button></div>
-    </form>
-
-    <section class="card stack" id="global" aria-labelledby="global-title">
-      <h2 id="global-title">Everyone</h2>
-      <p class="muted small mb-0">Resetting usage ends everyone's open windows: the next request starts a fresh one. The usage history is kept.</p>
-      <div class="row">
-        <form method="post" action="{{ url_for('admin.quotas_reset_usage') }}" data-confirm="Reset the 5-hour usage of every account? Everyone gets their full 5-hour tokens back.">
-          {{ csrf() }}<input type="hidden" name="period" value="window">
-          <button type="submit" class="btn">Reset 5-hour usage</button>
-        </form>
-        <form method="post" action="{{ url_for('admin.quotas_reset_usage') }}" data-confirm="Reset the weekly usage of every account? Everyone gets their full 5-hour and weekly tokens back.">
-          {{ csrf() }}<input type="hidden" name="period" value="week">
-          <button type="submit" class="btn">Reset weekly usage</button>
-        </form>
-      </div>
-      <p class="muted small mb-0">Restoring defaults removes every custom limit (per service and per model, including approved requests and model locks) and every slow-down or speed-up. Tiers, grants and reasoning-effort unlocks are kept.</p>
-      <form method="post" action="{{ url_for('admin.quotas_restore_defaults') }}" data-confirm="Remove the custom limits and speed settings of {{ custom_count }} account(s) and apply the policies to everyone?" data-confirm-danger>
+    <details class="settings-section admin-disclosure"{% if refused.options %} open{% endif %}>
+      <summary><span id="options-title">Automatic approval</span>{{ icon("chevron-down") }}</summary>
+      <form method="post" action="{{ url_for('admin.quotas_save') }}" class="stack" id="options" aria-labelledby="options-title">
         {{ csrf() }}
-        <button type="submit" class="btn btn-danger">Restore everyone's default limits</button>
+        <p class="muted small mb-0">Approve token requests up to these totals without review. Rate, temporary and reasoning requests always require an administrator.</p>
+        {{ toggle("quota_auto_approve_enabled", "Approve small requests automatically", s.quota_auto_approve_enabled) }}
+        <div class="form-grid">
+          {{ token_field("quota_auto_approve_max_tokens", "Maximum 5-hour allowance", s.quota_auto_approve_max_tokens or 0, "auto-tokens", "0: require administrator review.") }}
+          {{ token_field("quota_auto_approve_max_weekly_tokens", "Maximum weekly allowance", s.quota_auto_approve_max_weekly_tokens or 0, "auto-weekly", "0: require administrator review.") }}
+        </div>
+        <div class="form-actions"><button type="submit" class="btn btn-primary">Save automatic approval</button></div>
       </form>
-    </section>
+    </details>
+
+    <details class="settings-section admin-disclosure">
+      <summary><span id="community-title">Community consent{% if community_open %} <span class="badge">{{ community_open }} open</span>{% endif %}</span>{{ icon("chevron-down") }}</summary>
+      <form method="post" action="{{ url_for('admin.quotas_community') }}" class="stack" id="community" aria-labelledby="community-title">
+        {{ csrf() }}
+        <p class="muted small mb-0">Users may submit requests for a community vote. Supporters contribute part of their own allowance in the same service or model; approved increases and contributions last for the same period. Administrators may decide any request, including those left pending after voting closes.{% if community_open %} {{ community_open }} request{{ "s" if community_open != 1 }} open for voting now.{% endif %}</p>
+        {{ toggle("community_quota_enabled", "Let the community approve requests", community.enabled, "Off requires administrator approval and stops counting existing votes.") }}
+        <fieldset class="admin-fieldset stack-sm">
+          <legend class="label">Eligible request types</legend>
+          {% for kind, label in kind_labels.items() %}
+          <label class="check"><input type="checkbox" name="community_kind_{{ kind }}" value="1"{% if kind in community.kinds %} checked{% endif %}><span>{{ label }}</span></label>
+          {% endfor %}
+        </fieldset>
+        <div class="form-grid">
+          {% for name, label, hint in [("min_supporters", "Supporters needed", "At least this many people."),
+                                       ("approval_percent", "Approval threshold (%)", "Supporters among everyone who voted."),
+                                       ("coverage_percent", "Contribution required (%)", "Share of a token increase covered by supporters. 0: votes alone decide."),
+                                       ("hours", "Voting hours", "How long a request stays open for voting."),
+                                       ("boost_hours", "Increase duration (hours)", "For approved non-temporary requests; temporary ones last their own hours."),
+                                       ("min_account_days", "Account age to vote (days)", "Newer accounts cannot vote."),
+                                       ("max_pledge_percent", "Maximum contribution per person (%)", "Share of their allowance across all active requests.")] %}
+          <div class="field">
+            <label for="community-{{ name }}">{{ label }}</label>
+            <input type="number" id="community-{{ name }}" name="community_{{ name }}" min="{{ community_bounds[name][0] }}" max="{{ community_bounds[name][1] }}" step="1" required value="{{ community[name] }}" aria-describedby="community-{{ name }}-hint">
+            <span class="hint" id="community-{{ name }}-hint">{{ hint }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="form-actions"><button type="submit" class="btn btn-primary">Save community consent</button></div>
+      </form>
+    </details>
+
+    <details class="settings-section admin-disclosure">
+      <summary><span id="fallback-title">Model fallback</span>{{ icon("chevron-down") }}</summary>
+      <form method="post" action="{{ url_for('admin.quotas_fallback') }}" class="stack" id="fallback" aria-labelledby="fallback-title">
+        {{ csrf() }}
+        <p class="muted small mb-0">If a model reaches its token limit or fails before answering, try another available model. Similar models are tried first; these options allow switching between local and cloud models. Chat identifies the model that answered.</p>
+        {{ toggle("quota_fallback_to_local", "Use local models when cloud models are unavailable", s.quota_fallback_to_local if s.quota_fallback_to_local is not none else 1, "When a cloud model's quota runs out, answer with a local model.") }}
+        {{ toggle("quota_fallback_to_cloud", "Use cloud models when local models are unavailable", s.quota_fallback_to_cloud if s.quota_fallback_to_cloud is not none else 1, "When the service tokens of local models run out, answer with a cloud model that does not count toward them.") }}
+        <div class="form-actions"><button type="submit" class="btn btn-primary">Save model fallback</button></div>
+      </form>
+    </details>
+
+    <details class="settings-section admin-disclosure">
+      <summary><span id="global-title">Reset usage and custom limits</span>{{ icon("chevron-down") }}</summary>
+      <section class="stack" id="global" aria-labelledby="global-title">
+        <p class="muted small mb-0">Resetting usage ends everyone's open windows: the next request starts a fresh one. The usage history is kept.</p>
+        <div class="row">
+          <form method="post" action="{{ url_for('admin.quotas_reset_usage') }}" data-confirm="Reset the 5-hour usage of every account? Everyone gets their full 5-hour tokens back.">
+            {{ csrf() }}<input type="hidden" name="period" value="window">
+            <button type="submit" class="btn">Reset 5-hour usage</button>
+          </form>
+          <form method="post" action="{{ url_for('admin.quotas_reset_usage') }}" data-confirm="Reset the weekly usage of every account? Everyone gets their full 5-hour and weekly tokens back.">
+            {{ csrf() }}<input type="hidden" name="period" value="week">
+            <button type="submit" class="btn">Reset weekly usage</button>
+          </form>
+        </div>
+        <p class="muted small mb-0">Restore defaults removes service and model overrides, model locks, token and rate exemptions, and queue settings. Tiers, grants and reasoning unlocks are kept.</p>
+        <form method="post" action="{{ url_for('admin.quotas_restore_defaults') }}" data-confirm="Remove custom limits, token/rate exemptions and speed settings from {{ custom_count }} account(s) and apply the policies to everyone?" data-confirm-danger>
+          {{ csrf() }}
+          <button type="submit" class="btn btn-danger">Restore default limits for all accounts</button>
+        </form>
+      </section>
+    </details>
   </div>
 
-  <section class="card" aria-labelledby="dynamic-title">
-    <h2 id="dynamic-title">Dynamic adjustment now</h2>
+  <details class="settings-section admin-disclosure">
+    <summary><span id="dynamic-title">Current demand adjustments</span>{{ icon("chevron-down") }}</summary>
     <dl class="details">
       <dt>Queue</dt><dd>{% if demand is none %}No recent sample (neutral){% else %}{{ "%.2f" | format(demand) }} requests per inference slot (15-minute average){% endif %}</dd>
       <dt>People using the site</dt><dd>{% if people is none %}No recent sample (neutral){% else %}{{ people }} in the last 15 minutes ({{ "%.1f" | format(people / slots) }} per inference slot){% endif %}</dd>
       <dt>Peak hours (UTC)</dt><dd>{% if peak_hours %}{% for hour in peak_hours %}{{ "%02d:00" | format(hour) }}{{ ", " if not loop.last }}{% endfor %}{% else %}Not enough usage yet{% endif %}</dd>
     </dl>
     <p class="hint mb-0">A quiet queue (below 0.2) gives +25 %, an overloaded one (2 or more) −30 %; up to one person per inference slot gives +10 %, twelve or more −20 %. Accounts that mostly use off-peak hours and come back regularly get up to +25 %, mostly peak-hour users up to −15 %. The result stays between 0.5× and 2× in 5 % steps; heavy models react more strongly (their sensitivity); custom limits are never reduced.</p>
-  </section>
+  </details>
 </div>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>
 {% endblock %}

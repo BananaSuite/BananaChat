@@ -6,7 +6,7 @@
 <div class="page agent-page" id="agent-page">
   <p class="agents-breadcrumb"><a href="{{ url_for('agents.index') }}">{{ icon("chevron-left") }}{{ t("agents.title") }}</a></p>
 
-  <header class="agent-header">
+  <header class="page-header agent-header">
     <div class="grow">
       <h1 id="task-title">{{ task.title }}</h1>
       <div class="agent-meta">
@@ -30,7 +30,7 @@
 
   <div class="agent-layout">
     <section class="agent-main" aria-labelledby="timeline-title">
-      <h2 id="timeline-title" class="visually-hidden">{{ t("agents.timeline") }}</h2>
+      <h2 id="timeline-title" class="agent-activity-title">{{ t("agents.timeline") }}</h2>
       <ol class="timeline" id="timeline"></ol>
       <div class="timeline-live" id="timeline-live" hidden>
         <span class="agent-spinner" aria-hidden="true"></span><span id="timeline-live-text">{{ t("agents.working") }}</span>
@@ -53,7 +53,7 @@
     </section>
 
     <aside class="agent-side" aria-labelledby="workspace-title">
-      <section class="card workspace" id="workspace">
+      <section class="workspace" id="workspace">
         <div class="workspace-head">
           <h2 id="workspace-title">{{ icon("file") }}{{ t("agents.workspace") }}</h2>
           <button type="button" class="icon-btn" id="workspace-refresh" aria-label="{{ t('agents.workspace_refresh') }}" title="{{ t('agents.workspace_refresh') }}">{{ icon("refresh") }}</button>
@@ -77,7 +77,7 @@
           {% endif %}
         </div>
       </section>
-      <section class="card agent-facts">
+      <section class="agent-facts">
         <h2>{{ t("agents.details") }}</h2>
         <dl class="details">
           <dt>{{ t("agents.created") }}</dt><dd>{{ task.created_at | datetime }}</dd>

@@ -6,12 +6,12 @@ unlocks) live in :mod:`bananachat.services.limits`; this module validates
 what it stores and answers queries. Every amount is in **tokens** (prompt +
 completion).
 
-Pool policies are JSON documents (``limit_policy.config``, format 2), one
+Pool policies are JSON documents (``limit_policy.config``, format 3), one
 per pool::
 
-    {"version": 2,
+    {"version": 3,
      "rate":   {"enabled": true, "rules": [{"requests": 60, "per": "minute", "burst": 10}], "dynamic": false},
-     "window": {"enabled": true, "tokens": 30000, "slow_tokens": 15000, "dynamic": false, "auto_tiers": false},
+     "window": {"enabled": true, "tokens": 45000, "dynamic": false, "auto_tiers": false},
      "weekly": {"enabled": false, "tokens": 150000, "dynamic": false, "auto_tiers": false}}
 
 ``window`` is the 5-hour window. A rate rule allows ``requests`` per
@@ -44,13 +44,13 @@ PERIODS = ("window", "weekly")
 SPEEDS = ("slow", "normal", "fast")
 GRANT_KINDS = ("unlimited", "multiplier", "extra")
 UNITS = {"second": 1, "minute": 60, "hour": 3600, "day": 86_400}
-EFFORT_LEVELS = ("off", "low", "medium", "high", "max")
+EFFORT_LEVELS = ("off", "low", "medium", "high", "extra", "max")
 EFFORT_SOURCES = ("admin", "request", "automatic")
 PRESETS = ("light", "standard", "heavy")
 
 WINDOW_SECONDS = 5 * 3600
 WEEK_SECONDS = 7 * 86_400
-TOKENS_MAX = 1_000_000_000
+TOKENS_MAX = 2_000_000_000
 REQUESTS_MAX = 1_000_000
 BURST_MAX = 1_000_000
 RULES_MAX = 4
@@ -58,23 +58,26 @@ WEIGHT_MIN, WEIGHT_MAX = 0.01, 100.0
 SENSITIVITY_MAX = 5.0
 MULTIPLIER_MAX = 100.0
 TIER_MULTIPLIER_MAX = 100.0
+# A migrated custom window can include an inherited allowance multiplied by
+# the account's tier. Keep such existing totals editable after consolidation.
+OVERRIDE_WINDOW_MAX = int(TOKENS_MAX * TIER_MULTIPLIER_MAX)
 TIERS_MAX = 20
 TIER_NAME_MAX = 40
 REASON_MAX = 1000
 
 DEFAULT_POLICIES = {
-    "api": {"version": 2,
+    "api": {"version": 3,
             "rate": {"enabled": True, "rules": [{"requests": 1, "per": "second", "burst": 10}], "dynamic": False},
-            "window": {"enabled": True, "tokens": 30_000, "slow_tokens": 15_000, "dynamic": False,
+            "window": {"enabled": True, "tokens": 45_000, "dynamic": False,
                        "auto_tiers": False},
             "weekly": {"enabled": False, "tokens": 150_000, "dynamic": False, "auto_tiers": False}},
-    "chat": {"version": 2,
+    "chat": {"version": 3,
              "rate": {"enabled": True, "rules": [{"requests": 1, "per": "second", "burst": 5}], "dynamic": False},
-             "window": {"enabled": False, "tokens": 100_000, "slow_tokens": 0, "dynamic": False, "auto_tiers": False},
+             "window": {"enabled": False, "tokens": 100_000, "dynamic": False, "auto_tiers": False},
              "weekly": {"enabled": False, "tokens": 500_000, "dynamic": False, "auto_tiers": False}},
-    "agent": {"version": 2,
+    "agent": {"version": 3,
               "rate": {"enabled": True, "rules": [{"requests": 1, "per": "second", "burst": 10}], "dynamic": False},
-              "window": {"enabled": False, "tokens": 100_000, "slow_tokens": 0, "dynamic": False,
+              "window": {"enabled": False, "tokens": 100_000, "dynamic": False,
                          "auto_tiers": False},
               "weekly": {"enabled": False, "tokens": 500_000, "dynamic": False, "auto_tiers": False}},
 }
@@ -92,7 +95,9 @@ PRESET_VALUES = {
 }
 DEFAULT_MODEL_POLICY = {"preset": "standard", "enabled": False, "weight": 1.0, "counts_toward_pool": None,
                         "rate_rules": [], "window_tokens": None, "weekly_tokens": None, "dynamic": False,
-                        "sensitivity": 1.0, "auto_tiers": False, "effort_default": None}
+                        "sensitivity": 1.0, "auto_tiers": False, "effort_default": None,
+                        "tokens_enabled": True, "rate_enabled": True, "effort_gating_off": False,
+                        "effort_auto_unlock_off": False}
 
 
 def _check_pool(pool: str) -> None:
@@ -104,6 +109,8 @@ def effort_rank(level) -> int:
     """Position of a reasoning effort level (``on`` counts as ``medium``); -1 for unknown ones."""
     if level == "on":
         level = "medium"
+    elif level == "xhigh":
+        level = "extra"
     return EFFORT_LEVELS.index(level) if level in EFFORT_LEVELS else -1
 
 
@@ -174,11 +181,10 @@ def validate_policy(config: dict) -> dict:
     if enabled and not rules:
         raise ValueError("Add at least one request-rate rule, or switch the request rate off.")
     return {
-        "version": 2,
+        "version": 3,
         "rate": {"enabled": enabled, "rules": rules, "dynamic": bool(rate.get("dynamic", False))},
         "window": {"enabled": bool(window.get("enabled", False)),
                    "tokens": _tokens(window.get("tokens"), "Tokens per 5 hours"),
-                   "slow_tokens": _tokens(window.get("slow_tokens", 0), "Slow tokens per 5 hours"),
                    "dynamic": bool(window.get("dynamic", False)),
                    "auto_tiers": bool(window.get("auto_tiers", False))},
         "weekly": {"enabled": bool(weekly.get("enabled", False)),
@@ -189,8 +195,12 @@ def validate_policy(config: dict) -> dict:
 
 
 def upgrade_policy(pool: str, stored) -> dict | None:
-    """A stored policy in format 2 (older documents are converted like migration 9 did)."""
-    if isinstance(stored, dict) and stored.get("version") == 2:
+    """Read older policy formats; only the single token amount is active.
+
+    Migration 16 combines existing allowances once. A deprecated field in a
+    later write must not create another allowance or increase this one.
+    """
+    if isinstance(stored, dict) and stored.get("version") in (2, 3):
         return stored
     if not isinstance(stored, dict):
         return None
@@ -258,6 +268,10 @@ def validate_model_policy(config: dict) -> dict:
     return {
         "preset": preset if preset in (*PRESETS, "custom") else "custom",
         "enabled": bool(merged.get("enabled")),
+        "tokens_enabled": bool(merged.get("tokens_enabled")),
+        "rate_enabled": bool(merged.get("rate_enabled")),
+        "effort_gating_off": bool(merged.get("effort_gating_off")),
+        "effort_auto_unlock_off": bool(merged.get("effort_auto_unlock_off")),
         "weight": round(_number(merged.get("weight"), "Weight", WEIGHT_MIN, WEIGHT_MAX), 2),
         "counts_toward_pool": None if counts is None else bool(counts),
         "rate_rules": validate_rules(merged.get("rate_rules")),
@@ -341,19 +355,37 @@ class UserSettings:
     usage_reset_at: str | None = None
     weekly_reset_at: str | None = None
     effort_gating_off: bool = False
+    effort_auto_unlock_off: bool = False
+    token_exempt: bool = False
+    rate_exempt: bool = False
 
 
 _USER_FIELDS = ("tier_id", "tier_locked", "tier_changed_at", "dynamic_exempt", "speed", "usage_reset_at",
-                "weekly_reset_at", "effort_gating_off")
+                "weekly_reset_at", "effort_gating_off", "effort_auto_unlock_off", "token_exempt", "rate_exempt")
 
 
 def user_settings(user_id: str) -> UserSettings:
     row = db.one(f"SELECT {', '.join(_USER_FIELDS)} FROM user_limits WHERE user_id=?", (user_id,))
+    return _user_settings(row)
+
+
+def _user_settings(row) -> UserSettings:
     if row is None:
         return UserSettings()
     return UserSettings(row["tier_id"], bool(row["tier_locked"]), row["tier_changed_at"], bool(row["dynamic_exempt"]),
                         row["speed"] if row["speed"] in SPEEDS else "normal", row["usage_reset_at"],
-                        row["weekly_reset_at"], bool(row["effort_gating_off"]))
+                        row["weekly_reset_at"], bool(row["effort_gating_off"]), bool(row["effort_auto_unlock_off"]),
+                        bool(row["token_exempt"]), bool(row["rate_exempt"]))
+
+
+def user_settings_of(user_ids) -> dict[str, UserSettings]:
+    """Limit preferences for several accounts, with one query for request summaries."""
+    user_ids = list(user_ids)
+    if not user_ids:
+        return {}
+    return {row["user_id"]: _user_settings(row) for row in db.query(
+        f"SELECT user_id, {', '.join(_USER_FIELDS)} FROM user_limits "
+        f"WHERE user_id IN ({','.join('?' for _ in user_ids)})", user_ids)}
 
 
 def update_user_settings(user_id: str, updated_by: str | None, **values) -> None:
@@ -364,7 +396,8 @@ def update_user_settings(user_id: str, updated_by: str | None, **values) -> None
         raise ValueError("Choose a valid speed.")
     if "tier_id" in values and values["tier_id"] is not None and get_tier(values["tier_id"]) is None:
         raise ValueError("That tier does not exist.")
-    for key in ("tier_locked", "dynamic_exempt", "effort_gating_off"):
+    for key in ("tier_locked", "dynamic_exempt", "effort_gating_off", "effort_auto_unlock_off", "token_exempt",
+                "rate_exempt"):
         if key in values:
             values[key] = int(bool(values[key]))
     columns = ["user_id", *values, "updated_at", "updated_by"]
@@ -385,7 +418,6 @@ class Override:
     pool: str
     rate_rules: tuple | None = None
     window_tokens: int | None = None
-    window_slow_tokens: int | None = None
     weekly_tokens: int | None = None
     updated_at: str | None = None
     updated_by: str | None = None
@@ -398,7 +430,7 @@ class Override:
 
     @property
     def has_window(self) -> bool:
-        return self.window_tokens is not None or self.window_slow_tokens is not None
+        return self.window_tokens is not None
 
     @property
     def has_weekly(self) -> bool:
@@ -409,7 +441,7 @@ class Override:
         return not (self.has_rate or self.has_window or self.has_weekly)
 
 
-_OVERRIDE_FIELDS = ("rate_rules", "window_tokens", "window_slow_tokens", "weekly_tokens")
+_OVERRIDE_FIELDS = ("rate_rules", "window_tokens", "weekly_tokens")
 
 
 def _rules_column(raw) -> tuple | None:
@@ -427,11 +459,11 @@ def _automatic(raw) -> frozenset:
 
 
 def _override(row) -> Override:
-    return Override(row["pool"], _rules_column(row["rate_rules"]), row["window_tokens"], row["window_slow_tokens"],
+    return Override(row["pool"], _rules_column(row["rate_rules"]), row["window_tokens"],
                     row["weekly_tokens"], row["updated_at"], row["updated_by"], _automatic(row["automatic"]))
 
 
-_OVERRIDE_SELECT = ("SELECT user_id, pool, rate_rules, window_tokens, window_slow_tokens, weekly_tokens, updated_at, "
+_OVERRIDE_SELECT = ("SELECT user_id, pool, rate_rules, window_tokens, weekly_tokens, updated_at, "
                     "updated_by, automatic FROM user_limit_overrides")
 
 
@@ -464,15 +496,18 @@ def tier_ids_of(user_ids) -> dict[str, int | None]:
 def validate_override(values: dict) -> dict:
     """Check custom limit values (None clears one; an empty rule list clears the rate)."""
     clean = {}
-    labels = {"window_tokens": "Tokens per 5 hours", "window_slow_tokens": "Slow tokens per 5 hours",
-              "weekly_tokens": "Tokens per week"}
+    labels = {"window_tokens": "Tokens per 5 hours", "weekly_tokens": "Tokens per week"}
     for name, value in values.items():
+        if name == "window_slow_tokens":
+            continue  # accepted for older callers, never creates an allowance
         if name not in _OVERRIDE_FIELDS:
             raise ValueError(f"Unknown limit: {name}")
         if name == "rate_rules":
             clean[name] = tuple(validate_rules(value)) or None if value is not None else None
         else:
-            clean[name] = _tokens(value, labels[name], optional=True)
+            clean[name] = (None if value is None else
+                           _number(value, labels[name], 0,
+                                   OVERRIDE_WINDOW_MAX if name == "window_tokens" else TOKENS_MAX, whole=True))
     return clean
 
 
@@ -489,6 +524,8 @@ def set_override(user_id: str, pool: str, updated_by: str | None, *, automatic: 
     clean = validate_override(values)
     with db.transaction():
         current = get_override(user_id, pool) or Override(pool)
+        if not clean and not current.empty:
+            return current
         merged = {name: clean.get(name, getattr(current, name)) for name in _OVERRIDE_FIELDS}
         if all(value is None for value in merged.values()):
             db.execute("DELETE FROM user_limit_overrides WHERE user_id=? AND pool=?", (user_id, pool))
@@ -502,12 +539,12 @@ def set_override(user_id: str, pool: str, updated_by: str | None, *, automatic: 
         rules = json.dumps(list(merged["rate_rules"])) if merged["rate_rules"] else None
         db.execute(
             "INSERT INTO user_limit_overrides (user_id, pool, rate_rules, window_tokens, window_slow_tokens, "
-            "weekly_tokens, updated_at, updated_by, automatic) VALUES (?,?,?,?,?,?,?,?,?) "
+            "weekly_tokens, updated_at, updated_by, automatic, daily_slow_credits) VALUES (?,?,?,?,0,?,?,?,?,0) "
             "ON CONFLICT(user_id, pool) DO UPDATE SET rate_rules=excluded.rate_rules, "
             "window_tokens=excluded.window_tokens, window_slow_tokens=excluded.window_slow_tokens, "
             "weekly_tokens=excluded.weekly_tokens, updated_at=excluded.updated_at, updated_by=excluded.updated_by, "
-            "automatic=excluded.automatic",
-            (user_id, pool, rules, merged["window_tokens"], merged["window_slow_tokens"], merged["weekly_tokens"],
+            "automatic=excluded.automatic, daily_slow_credits=0",
+            (user_id, pool, rules, merged["window_tokens"], merged["weekly_tokens"],
              db.now(), updated_by, ",".join(sorted(floors)) or None))
     return get_override(user_id, pool)
 
@@ -517,7 +554,8 @@ def clear_overrides(user_id: str) -> int:
 
 
 def restore_defaults(user_id: str | None, updated_by: str | None) -> int:
-    """Remove custom limits (per pool and per model, locks included) and speed settings of one account
+    """Remove custom limits (per pool and per model, locks included), token/rate exemptions and speed settings
+    of one account
     (or everyone when None).
 
     Tiers, tier locks, dynamic exemptions and reasoning-effort unlocks are
@@ -528,22 +566,26 @@ def restore_defaults(user_id: str | None, updated_by: str | None) -> int:
         if user_id is None:
             users = {row[0] for row in db.query(
                 "SELECT user_id FROM user_limit_overrides UNION SELECT user_id FROM user_model_limits "
-                "UNION SELECT user_id FROM user_limits WHERE speed!='normal'")}
+                "UNION SELECT user_id FROM user_limits WHERE speed!='normal' OR token_exempt=1 OR rate_exempt=1")}
             db.execute("DELETE FROM user_limit_overrides")
             db.execute("DELETE FROM user_model_limits")
-            db.execute("UPDATE user_limits SET speed='normal', updated_at=?, updated_by=? WHERE speed!='normal'",
+            db.execute("UPDATE user_limits SET speed='normal', token_exempt=0, rate_exempt=0, updated_at=?, updated_by=? "
+                       "WHERE speed!='normal' OR token_exempt=1 OR rate_exempt=1",
                        (db.now(), updated_by))
             return len(users)
         changed = clear_overrides(user_id)
         changed += db.execute("DELETE FROM user_model_limits WHERE user_id=?", (user_id,)).rowcount
-        changed += db.execute("UPDATE user_limits SET speed='normal', updated_at=?, updated_by=? "
-                              "WHERE user_id=? AND speed!='normal'", (db.now(), updated_by, user_id)).rowcount
+        changed += db.execute("UPDATE user_limits SET speed='normal', token_exempt=0, rate_exempt=0, "
+                              "updated_at=?, updated_by=? WHERE user_id=? AND "
+                              "(speed!='normal' OR token_exempt=1 OR rate_exempt=1)",
+                              (db.now(), updated_by, user_id)).rowcount
         return 1 if changed else 0
 
 
 def count_custom() -> int:
     return db.scalar("SELECT COUNT(*) FROM (SELECT user_id FROM user_limit_overrides "
-                     "UNION SELECT user_id FROM user_model_limits)", default=0)
+                     "UNION SELECT user_id FROM user_model_limits UNION SELECT user_id FROM user_limits "
+                     "WHERE speed!='normal' OR token_exempt=1 OR rate_exempt=1)", default=0)
 
 
 # ----- custom limits of one account (per model) ---------------------------------------------------
@@ -556,16 +598,19 @@ class ModelOverride:
     weekly_tokens: int | None = None
     locked: bool = False
     updated_at: str | None = None
+    token_exempt: bool = False
+    rate_exempt: bool = False
 
     @property
     def empty(self) -> bool:
         return self.rate_rules is None and self.window_tokens is None and self.weekly_tokens is None and \
-            not self.locked
+            not (self.locked or self.token_exempt or self.rate_exempt)
 
 
 def _model_override(row) -> ModelOverride:
     return ModelOverride(row["model_id"], _rules_column(row["rate_rules"]), row["window_tokens"],
-                         row["weekly_tokens"], bool(row["locked"]), row["updated_at"])
+                         row["weekly_tokens"], bool(row["locked"]), row["updated_at"], bool(row["token_exempt"]),
+                         bool(row["rate_exempt"]))
 
 
 def get_model_override(user_id: str, model_id: int) -> ModelOverride | None:
@@ -585,8 +630,8 @@ def locked_model_ids(user_id: str) -> set[int]:
 
 def set_model_override(user_id: str, model_id: int, updated_by: str | None, **values) -> ModelOverride | None:
     """Set (None clears) a per-model limit of one account: ``rate_rules``, ``window_tokens``, ``weekly_tokens``,
-    ``locked``. Other values are kept."""
-    allowed = {"rate_rules", "window_tokens", "weekly_tokens", "locked"}
+    ``locked``, ``token_exempt``, ``rate_exempt``. Other values are kept."""
+    allowed = {"rate_rules", "window_tokens", "weekly_tokens", "locked", "token_exempt", "rate_exempt"}
     unknown = set(values) - allowed
     if unknown:
         raise ValueError(f"Unknown limit: {', '.join(sorted(unknown))}")
@@ -594,7 +639,7 @@ def set_model_override(user_id: str, model_id: int, updated_by: str | None, **va
     for name, value in values.items():
         if name == "rate_rules":
             clean[name] = (tuple(validate_rules(value)) or None) if value is not None else None
-        elif name == "locked":
+        elif name in ("locked", "token_exempt", "rate_exempt"):
             clean[name] = bool(value)
         else:
             clean[name] = _tokens(value, "Tokens per 5 hours" if name == "window_tokens" else "Tokens per week",
@@ -604,19 +649,23 @@ def set_model_override(user_id: str, model_id: int, updated_by: str | None, **va
             raise ValueError("That model does not exist.")
         current = get_model_override(user_id, model_id) or ModelOverride(model_id)
         merged = {name: clean.get(name, getattr(current, name)) for name in ("rate_rules", "window_tokens",
-                                                                               "weekly_tokens", "locked")}
+                                                                               "weekly_tokens", "locked",
+                                                                               "token_exempt", "rate_exempt")}
         if merged["rate_rules"] is None and merged["window_tokens"] is None and merged["weekly_tokens"] is None \
-                and not merged["locked"]:
+                and not any(merged[name] for name in ("locked", "token_exempt", "rate_exempt")):
             db.execute("DELETE FROM user_model_limits WHERE user_id=? AND model_id=?", (user_id, model_id))
             return None
         db.execute(
             "INSERT INTO user_model_limits (user_id, model_id, rate_rules, window_tokens, weekly_tokens, locked, "
-            "updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(user_id, model_id) DO UPDATE SET "
+            "token_exempt, rate_exempt, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(user_id, model_id) DO UPDATE SET "
             "rate_rules=excluded.rate_rules, window_tokens=excluded.window_tokens, "
-            "weekly_tokens=excluded.weekly_tokens, locked=excluded.locked, updated_at=excluded.updated_at, "
+            "weekly_tokens=excluded.weekly_tokens, locked=excluded.locked, token_exempt=excluded.token_exempt, "
+            "rate_exempt=excluded.rate_exempt, updated_at=excluded.updated_at, "
             "updated_by=excluded.updated_by",
             (user_id, model_id, json.dumps(list(merged["rate_rules"])) if merged["rate_rules"] else None,
-             merged["window_tokens"], merged["weekly_tokens"], int(merged["locked"]), db.now(), updated_by))
+             merged["window_tokens"], merged["weekly_tokens"], int(merged["locked"]), int(merged["token_exempt"]),
+             int(merged["rate_exempt"]), db.now(), updated_by))
     return get_model_override(user_id, model_id)
 
 
@@ -636,7 +685,7 @@ def effort_levels(user_id: str) -> dict[int | None, EffortLevel]:
     return {row["model_id"]: EffortLevel(row["model_id"], row["level"], bool(row["pinned"]), row["source"],
                                          row["updated_at"])
             for row in db.query("SELECT model_id, level, pinned, source, updated_at FROM user_effort_levels "
-                                "WHERE user_id=? AND level IN ('off','low','medium','high','max')", (user_id,))}
+                                "WHERE user_id=? AND level IN ('off','low','medium','high','extra','max')", (user_id,))}
 
 
 def set_effort_level(user_id: str, model_id: int | None, level: str | None, *, pinned: bool = False,
@@ -1020,7 +1069,7 @@ def _types(pool: str) -> tuple[str, ...]:
 
 
 def usage(user_id: str, pool: str, window_since: str | None, weekly_since: str | None) -> tuple[float, float, float]:
-    """``(5-hour regular, 5-hour slow, weekly total)`` tokens counted against *pool* since the given times
+    """``(5-hour total, deprecated zero, weekly total)`` counted tokens since the given times
     (None: the window is not open, nothing counts).
 
     The ledger's ``credits_used`` holds counted tokens / 1,000 (tokens × the
@@ -1033,24 +1082,25 @@ def usage(user_id: str, pool: str, window_since: str | None, weekly_since: str |
         return 0.0, 0.0, 0.0
     never = "9999-12-31 23:59:59"
     # One query: the ledger since the windows opened, and (API pool) the pending image reservations.
-    reserved = ("(SELECT SUM(CASE WHEN is_slow=0 THEN credits_reserved ELSE 0 END), "
-                "SUM(CASE WHEN is_slow=1 THEN credits_reserved ELSE 0 END) FROM image_credit_reservations "
-                "WHERE user_id=?)" if pool == "api" else "(SELECT 0, 0)")
+    reserved = ("(SELECT SUM(credits_reserved) FROM image_credit_reservations "
+                "WHERE user_id=?)" if pool == "api" else "(SELECT 0)")
     row = db.one(
-        "SELECT l.*, r.* FROM (SELECT SUM(CASE WHEN created_at>=? AND is_slow=0 THEN credits_used ELSE 0 END), "
-        "SUM(CASE WHEN created_at>=? AND is_slow=1 THEN credits_used ELSE 0 END), "
+        "SELECT l.*, r.* FROM (SELECT SUM(CASE WHEN created_at>=? THEN credits_used ELSE 0 END), "
         "SUM(CASE WHEN created_at>=? THEN credits_used ELSE 0 END) "
         f"FROM credit_ledger WHERE user_id=? AND created_at>=? AND request_type IN ({placeholders})) l, {reserved} r",
-        (window_since or never, window_since or never, weekly_since or never, user_id, min(starts, default=never),
+        (window_since or never, weekly_since or never, user_id, min(starts, default=never),
          *types, *((user_id,) if pool == "api" else ())))
-    regular, slow, weekly, reserved_regular, reserved_slow = (float(value or 0) * 1000 for value in row)
-    return regular + reserved_regular, slow + reserved_slow, weekly + reserved_regular + reserved_slow
+    total, weekly, reserved_total = (float(value or 0) * 1000 for value in row)
+    return total + reserved_total, 0.0, weekly + reserved_total
 
 
 def model_usage(user_id: str, model_id: int, window_since: str | None,
                 weekly_since: str | None) -> tuple[float, float]:
     """``(5-hour, weekly)`` tokens (prompt + completion, not weighted) of one account with one model, in every
-    service, since the given times (None: that window is not open)."""
+    metered service, since the given times (None: that window is not open).
+    Unmetered chat rows remain visible in usage reports but cannot spend a
+    shared model quota when metering is later enabled.
+    """
     starts = [value for value in (window_since, weekly_since) if value]
     never = "9999-12-31 23:59:59"
     # One query: the ledger since the windows opened, and the model's pending image reservations.
@@ -1058,7 +1108,7 @@ def model_usage(user_id: str, model_id: int, window_since: str | None,
         "SELECT SUM(CASE WHEN created_at>=? THEN tokens_in + tokens_out ELSE 0 END), "
         "SUM(CASE WHEN created_at>=? THEN tokens_in + tokens_out ELSE 0 END), "
         "(SELECT SUM(credits_reserved) FROM image_credit_reservations WHERE user_id=? AND model_id=?) "
-        "FROM credit_ledger WHERE user_id=? AND model_id=? AND created_at>=?",
+        "FROM credit_ledger WHERE user_id=? AND model_id=? AND created_at>=? AND consumes_limits=1",
         (window_since or never, weekly_since or never, user_id, model_id, user_id, model_id,
          min(starts, default=never)))
     window, weekly, reserved = (float(value or 0) for value in row)

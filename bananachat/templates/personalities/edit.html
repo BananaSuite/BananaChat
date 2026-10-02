@@ -30,7 +30,7 @@
     <form method="post" action="{{ url_for('personalities.update', personality_id=row.id) if row else url_for('personalities.create') }}" class="stack persona-form" id="persona-form" data-busy>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-      <fieldset class="card">
+      <fieldset class="settings-section">
         <legend>{{ t("personality.section_identity") }}</legend>
         <div class="stack">
           <div class="identity-row">
@@ -43,10 +43,13 @@
               <input type="text" id="name" name="name" required maxlength="{{ limits.name }}" value="{{ values.name or '' }}" autocomplete="off" data-counter>
             </div>
           </div>
-          <div class="emoji-picks" role="group" aria-label="{{ t('personality.avatar_picks') }}" hidden>
-            {% for emoji in avatar_choices %}<button type="button" class="emoji-pick" data-emoji="{{ emoji }}" aria-label="{{ t('personality.avatar_use', emoji=emoji) }}">{{ emoji }}</button>{% endfor %}
-            <button type="button" class="emoji-pick emoji-clear" data-emoji="" aria-label="{{ t('personality.avatar_clear') }}">{{ icon("close") }}</button>
-          </div>
+          <details class="persona-avatar-options">
+            <summary>{{ t("personality.avatar_picks") }}</summary>
+            <div class="emoji-picks" role="group" aria-label="{{ t('personality.avatar_picks') }}" hidden>
+              {% for emoji in avatar_choices %}<button type="button" class="emoji-pick" data-emoji="{{ emoji }}" aria-label="{{ t('personality.avatar_use', emoji=emoji) }}">{{ emoji }}</button>{% endfor %}
+              <button type="button" class="emoji-pick emoji-clear" data-emoji="" aria-label="{{ t('personality.avatar_clear') }}">{{ icon("close") }}</button>
+            </div>
+          </details>
           <span class="hint" id="avatar-hint">{{ t("personality.avatar_hint") }}</span>
           <div class="field">
             <span class="label" id="color-label">{{ t("personality.color") }}</span>
@@ -71,7 +74,7 @@
         </div>
       </fieldset>
 
-      <fieldset class="card">
+      <fieldset class="settings-section">
         <legend>{{ t("personality.instructions") }}</legend>
         <div class="field">
           <label for="instructions" class="required">{{ t("personality.instructions_label") }}</label>
@@ -80,7 +83,7 @@
         </div>
       </fieldset>
 
-      <fieldset class="card">
+      <fieldset class="settings-section">
         <legend>{{ t("personality.section_start") }}</legend>
         <div class="stack">
           <div class="field">
@@ -100,7 +103,7 @@
         </div>
       </fieldset>
 
-      <fieldset class="card">
+      <fieldset class="settings-section">
         <legend>{{ t("personality.section_style") }}</legend>
         <div class="stack">
           <div class="field">
@@ -144,7 +147,7 @@
     <aside class="persona-preview" aria-labelledby="preview-title">
       <div class="persona-preview-inner">
         <h2 class="label" id="preview-title">{{ t("personality.preview") }}</h2>
-        <div class="card persona-card accent-{{ values.color or 'default' }}" data-preview-card>
+        <div class="persona-card accent-{{ values.color or 'default' }}" data-preview-card>
           <div class="persona-head">
             <span data-preview-avatar>{{ avatar({"avatar": values.avatar, "color": values.color, "name": values.name or t("personality.preview_name")}) }}</span>
             <div class="grow">

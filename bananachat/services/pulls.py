@@ -34,6 +34,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from flask import current_app
+from filelock import Timeout
 
 from bananachat import db
 from bananachat.db import catalog
@@ -73,7 +74,7 @@ def validate_ollama_name(name: str) -> str:
         raise ValueError("Only the Ollama library and Hugging Face (hf.co/…) can be downloaded from here.")
     if first.lower() in ("hf.co", "huggingface.co") and len(rest.split("/")) < 2:
         raise ValueError("Hugging Face models are named hf.co/owner/repository[:quantization].")
-    return name
+    return pulls_db.canonical_ollama_name(name)
 
 
 def _checkpoint_path(value, label: str) -> str:
@@ -162,18 +163,21 @@ DELETING = "being deleted from the model server; choose “Keep it” on its pag
 
 def _being_deleted(name: str) -> bool:
     """Whether the catalog waits to delete *name* (a download would be deleted right after it finishes)."""
+    name = pulls_db.canonical_ollama_name(name)
+    alias = name.removesuffix(":latest") if name.endswith(":latest") else name
     return bool(db.scalar("SELECT 1 FROM ai_models WHERE backend='ollama' AND delete_requested_at IS NOT NULL AND "
-                          "(ollama_name=? OR backend_model_name=?)", (name, name)))
+                          "(ollama_name IN (?,?) OR backend_model_name IN (?,?))", (name, alias, name, alias)))
 
 
 def enqueue_ollama(name: str, user_id: str | None, config=None, *, source: str = "") -> int:
     name = validate_ollama_name(name)
-    if _being_deleted(name):
-        raise ValueError(f"{name} is {DELETING}.")
     space = disk_space(config)
     if space["checked"] and not space["ok"]:
         raise ValueError(space["message"])
-    return pulls_db.enqueue(name, user_id, backend="ollama", source=source)
+    with db.transaction():
+        if _being_deleted(name):
+            raise ValueError(f"{name} is {DELETING}.")
+        return pulls_db.enqueue(name, user_id, backend="ollama", source=source)
 
 
 def enqueue_many(names, user_id: str | None, config=None) -> dict:
@@ -207,14 +211,15 @@ def enqueue_many(names, user_id: str | None, config=None) -> dict:
         raise ValueError(space["message"])
     installed = _installed_set(config)
     for name in wanted:
-        if _being_deleted(name):
-            result["skipped"].append((name, DELETING))
-            continue
-        if installed is not None and _is_installed(name, installed):
-            result["skipped"].append((name, "already installed"))
-            continue
         try:
-            job_id = pulls_db.enqueue(name, user_id, backend="ollama", source="bulk")
+            with db.transaction():
+                if _being_deleted(name):
+                    result["skipped"].append((name, DELETING))
+                    continue
+                if installed is not None and _is_installed(name, installed):
+                    result["skipped"].append((name, "already installed"))
+                    continue
+                job_id = pulls_db.enqueue(name, user_id, backend="ollama", source="bulk")
         except pulls_db.AlreadyActive as error:
             result["skipped"].append((name, str(error).removeprefix(f"A download of {name} is ")
                                       .rstrip(".")))
@@ -359,11 +364,14 @@ def cancel(job_id: int, *, cleanup: bool = True) -> bool:
     With *cleanup*, the partial download of a model that was not installed
     before is removed; without it, a later download resumes where this stopped.
     """
-    pulls_db.set_cleanup(job_id, cleanup)
-    before = pulls_db.get(job_id)
-    cancelled = pulls_db.cancel(job_id, "Cancelled by an administrator.")
+    with db.transaction():
+        before = pulls_db.get(job_id)
+        if before is None or before["status"] not in pulls_db.ACTIVE:
+            return False
+        pulls_db.set_cleanup(job_id, cleanup)
+        cancelled = pulls_db.cancel(job_id, "Cancelled by an administrator.")
     token = _local_token(job_id)
-    if token is not None:
+    if cancelled and token is not None:
         token.cancel(USER)
     elif cancelled and cleanup and before is not None and before["status"] == "queued":
         _cancel_on_agent(before)
@@ -496,6 +504,8 @@ def process_next(config=None, *, stopping=None) -> bool:
 
 
 def _execute(job, config, stopping) -> None:
+    from bananachat.services import model_lifecycle
+
     token, finished = CancelToken(), threading.Event()
     progress = {"at": time.monotonic()}
     with _lock:
@@ -503,15 +513,30 @@ def _execute(job, config, stopping) -> None:
     watcher = threading.Thread(target=_watch, args=(job, token, finished, stopping, progress),
                                name=f"bananachat-pull-watch-{job['id']}", daemon=True)
     watcher.start()
+    operation = None
     try:
+        operation = model_lifecycle.operation_lock(job["ollama_name"], config, backend=job["backend"])
+        while True:
+            _check_claim(job, token)
+            try:
+                operation.acquire(timeout=0)
+                break
+            except Timeout:
+                progress["at"] = time.monotonic()  # waiting for an older operation is not a stalled download
+                token.wait(0.25)
+        _check_claim(job, token)
         if job["backend"] == "comfyui":
             _run_checkpoint(job, token, config, progress)
         else:
             _run_ollama(job, token, config, progress)
+    except Cancelled:
+        _interrupted(job, token)
     except Exception as error:  # noqa: BLE001 - never leave a job running on an unexpected error
         log.exception("Download job %s failed unexpectedly", job["id"])
         pulls_db.finish(job["id"], "failed", f"Unexpected error: {type(error).__name__}", owner=_owner(job))
     finally:
+        if operation is not None:
+            operation.release()
         finished.set()
         with _lock:
             _running.pop(job["id"], None)
@@ -542,13 +567,30 @@ def _retry_or_fail(job, problem: DownloadProblem) -> None:
     log.warning("Download of %s failed: %s", job["ollama_name"], message)
 
 
+def _check_claim(job, token: CancelToken) -> None:
+    """Check ownership at backend boundaries, where the watcher may not have run yet."""
+    row = pulls_db.state(job["id"])
+    if row is None or (_owner(job) and row["claim_token"] != _owner(job)):
+        token.cancel(GONE)
+    elif row["status"] == "cancelled":
+        token.cancel(USER)
+    elif row["status"] != "pulling":
+        token.cancel(GONE)
+    elif row["paused"]:
+        token.cancel(PAUSE)
+    token.check()
+
+
 def _interrupted(job, token: CancelToken, *, cleanup=None) -> None:
     """Handle a cancelled token: re-queue after a shutdown or pause, clean up after a user cancel, retry a stall."""
     if token.reason == USER:
-        pulls_db.cancel(job["id"], "Cancelled by an administrator.")
+        pulls_db.cancel(job["id"], "Cancelled by an administrator.", owner=_owner(job))
         log.info("Download of %s cancelled by an administrator", job["ollama_name"])
         row = pulls_db.state(job["id"])
-        if cleanup is not None and (row is None or row["cleanup_partial"]):
+        active = pulls_db.active_for(job["ollama_name"], job["backend"])
+        owns_cancel = row is not None and row["status"] == "cancelled" and (
+            not _owner(job) or row["claim_token"] == _owner(job))
+        if cleanup is not None and owns_cancel and row["cleanup_partial"] and active is None:
             try:
                 cleanup()
             except Exception as error:  # noqa: BLE001 - best effort
@@ -606,6 +648,7 @@ def _run_ollama(job, token: CancelToken, config, progress: dict | None = None) -
     last_seen: tuple = ("", -1)
     disk_checked = time.monotonic()
     try:
+        _check_claim(job, token)
         for record in ollama.pull(name, cancel=token, config=config):
             token.check()
             status = str(record.get("status") or "")[:120]
@@ -636,6 +679,7 @@ def _run_ollama(job, token: CancelToken, config, progress: dict | None = None) -
         if not success:
             raise DownloadProblem("The download ended before it was complete.", transient=True)
         digest = _verify(name, config)
+        _check_claim(job, token)
     except Cancelled:
         _interrupted(job, token, cleanup=cleanup)
         return
@@ -646,7 +690,11 @@ def _run_ollama(job, token: CancelToken, config, progress: dict | None = None) -
         _retry_or_fail(job, classify(error))
         return
     if not pulls_db.finish(job["id"], "done", digest=digest, owner=_owner(job)):
-        return  # cancelled at the last moment
+        try:
+            _check_claim(job, token)
+        except Cancelled:
+            _interrupted(job, token, cleanup=cleanup)
+        return
     log.info("Downloaded %s (%s)", name, digest[:19])
     try:
         ollama.sync_catalog(config, source="download")
@@ -679,6 +727,7 @@ def _run_checkpoint(job, token: CancelToken, config, progress: dict | None = Non
             agent.cancel_download(remote_id)
 
     try:
+        _check_claim(job, token)
         if not config.images_enabled:
             raise CheckpointAgentError("Image generation is disabled (BC_IMAGE_BACKEND).")
         agent = checkpoint_agent.client(config)
@@ -689,11 +738,13 @@ def _run_checkpoint(job, token: CancelToken, config, progress: dict | None = Non
                 idempotency_key=job["idempotency_key"])
             remote_id = remote["id"]
             pulls_db.set_remote_id(job["id"], remote_id, owner=_owner(job))
+            _check_claim(job, token)
         while True:
             if token.cancelled:
                 _interrupted(job, token, cleanup=cancel_remote)
                 return
             remote = agent.get_download(remote_id)
+            _check_claim(job, token)
             status = remote.get("status")
             if status not in checkpoint_agent.REMOTE_STATUSES:
                 raise CheckpointAgentError("The checkpoint agent returned an unknown status.")
@@ -710,13 +761,15 @@ def _run_checkpoint(job, token: CancelToken, config, progress: dict | None = Non
                 progress.update(at=time.monotonic(), seen=(status, received))
             pulls_db.update_progress(job["id"], percent, detail, completed=received, total=total, owner=_owner(job))
             if status == "completed":
+                if not pulls_db.finish(job["id"], "done", owner=_owner(job)):
+                    _check_claim(job, token)
+                    return
                 problem = _sync_comfyui()
                 model = catalog.get_by_name(f"comfyui:{target}")
                 if problem or model is None or not model["backend_available"]:
-                    pulls_db.update_progress(job["id"], 100, "Downloaded and verified. ComfyUI has not listed it "
-                                                              "yet; use Sync now once ComfyUI sees the file.",
+                    pulls_db.finished_detail(job["id"], "Downloaded and verified. ComfyUI has not listed it "
+                                                       "yet; use Sync now once ComfyUI sees the file.",
                                              owner=_owner(job))
-                pulls_db.finish(job["id"], "done", owner=_owner(job))
                 log.info("Checkpoint %s downloaded", target)
                 return
             if status == "failed":
@@ -725,6 +778,8 @@ def _run_checkpoint(job, token: CancelToken, config, progress: dict | None = Non
                 pulls_db.finish(job["id"], "cancelled", "Cancelled on the compute server.", owner=_owner(job))
                 return
             token.wait(2.0)
+    except Cancelled:
+        _interrupted(job, token, cleanup=cancel_remote)
     except (CheckpointAgentError, UpstreamError, OSError) as error:
         if token.cancelled:
             _interrupted(job, token, cleanup=cancel_remote)

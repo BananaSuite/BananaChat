@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 
 from flask import abort, current_app, flash, jsonify, render_template, request, url_for
+from filelock import Timeout
 
 from bananachat import db, security
 from bananachat.db import access as access_db
@@ -157,9 +158,19 @@ def rollout(model_id):
     if enabled and model["enrollment"] == "ignored":
         flash(IGNORED_MESSAGE.format(name=model["ollama_name"]), "error")
         return back("admin.model_settings", _anchor="ignored")
-    catalog.set_rollout(model_id, enabled)
-    if enabled and model["enrollment"] == "new":
-        lifecycle_db.add_event(model_id, model["ollama_name"], "enabled", "Published by an administrator.", me())
+    try:
+        with db.transaction():
+            fresh = _model_or_404(model_id)
+            if enabled and fresh["enrollment"] == "new":
+                model_lifecycle.enable(fresh, me())
+            else:
+                if enabled and (fresh["retired_at"] or fresh["delete_requested_at"] or
+                                fresh["enrollment"] == "ignored"):
+                    raise ValueError("This model is retired, ignored or being deleted; restore it before publishing it.")
+                catalog.set_rollout(model_id, enabled)
+    except ValueError as error:
+        flash(str(error), "error")
+        return back("admin.models", _anchor=f"model-{model_id}")
     audit("model_rollout", model["ollama_name"], {"rolled_out": enabled})
     flash(f"{model['display_name']} is {'now visible to users' if enabled else 'hidden from users'}.", "success")
     return back("admin.models", _anchor=f"model-{model_id}")
@@ -268,13 +279,19 @@ def _edit_form(model, known_categories: set[int]):
 @admin_required
 def remove(model_id):
     model = _model_or_404(model_id)
-    count = model_lifecycle.in_use(model) if model["backend"] == "ollama" else 0
-    if count:
-        # A running answer still records its model; removing the row under it would break the chat.
-        flash(f"{model['display_name']} was not removed: {model_lifecycle.ModelInUse(count)} Hide it or try again "
-              "when they finish.", "error")
+    try:
+        with model_lifecycle.operation_lock(model["backend_model_name"] or model["ollama_name"],
+                                            backend=model["backend"]):
+            with db.transaction():
+                model = _model_or_404(model_id)
+                count = model_lifecycle.in_use(model) if model["backend"] == "ollama" else 0
+                if count:
+                    raise model_lifecycle.ModelInUse(count)
+                catalog.delete(model_id)
+    except (model_lifecycle.ModelInUse, Timeout) as error:
+        reason = str(error) if isinstance(error, model_lifecycle.ModelInUse) else "A model operation is still finishing."
+        flash(f"{model['display_name']} was not removed: {reason} Hide it or try again when they finish.", "error")
         return back("admin.models", _anchor=f"model-{model_id}")
-    catalog.delete(model_id)
     audit("model_remove", model["ollama_name"])
     flash(f"{model['display_name']} was removed from the catalog. If the model is still installed, the next sync adds "
           "it back as a new entry waiting for review.", "success")
@@ -344,12 +361,16 @@ def enable(model_id):
         except FormError as error:
             flash(str(error), "error")
             return _render("admin/model_enable.html", form=request.form, selected=_form_categories(), **context), 400
-        with db.transaction():
-            catalog.update(model_id, **fields)
-            catalog.set_model_categories(model_id, categories)
-            if mode != policy["mode"] or not policy["persisted"]:
-                access_db.set_policy("model", model_id, mode, bool(policy["requests_enabled"]), me()["id"])
-        model_lifecycle.enable(catalog.get(model_id), me(), preset=preset)
+        try:
+            with db.transaction():
+                catalog.update(model_id, **fields)
+                catalog.set_model_categories(model_id, categories)
+                if mode != policy["mode"] or not policy["persisted"]:
+                    access_db.set_policy("model", model_id, mode, bool(policy["requests_enabled"]), me()["id"])
+                model_lifecycle.enable(catalog.get(model_id), me(), preset=preset)
+        except ValueError as error:
+            flash(str(error), "error")
+            return _render("admin/model_enable.html", form=request.form, selected=categories, **context), 400
         audit("model_enable", model["ollama_name"], {"access": mode, "preset": preset, "categories": categories,
                                                      **{key: value for key, value in fields.items()}})
         flash(f"{fields['display_name']} is enabled and visible to the people its access rule allows.", "success")

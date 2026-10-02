@@ -42,11 +42,11 @@
   Every hour, accounts move up to the highest tier whose requirements they all meet. They never move down by themselves; set or lock a tier on an account's limits page.</p>
 </div>
 
-<div class="stack">
+<div class="section-stack">
   {% for tier in tiers %}
-  <form method="post" action="{{ url_for('admin.limit_tier_update', tier_id=tier.id) }}" class="card stack" aria-labelledby="tier-{{ tier.id }}-title">
+  <form method="post" action="{{ url_for('admin.limit_tier_update', tier_id=tier.id) }}" class="settings-section stack" aria-labelledby="tier-{{ tier.id }}-title">
     {{ csrf() }}
-    <div class="card-header">
+    <div class="section-header">
       <h2 id="tier-{{ tier.id }}-title">{{ loop.index }}. {{ tier.name }} <span class="badge">×{{ "%g" | format(tier.multiplier) }}</span>
         <span class="badge badge-info">{{ (counts.get(tier.id, 0) + (counts.get(none, 0) if loop.first else 0)) | number }} account(s)</span>
         {% if loop.first %}<span class="badge">entry tier</span>{% endif %}</h2>
@@ -69,7 +69,7 @@
   {% endif %}
   {% endfor %}
 
-  <form method="post" action="{{ url_for('admin.limit_tier_create') }}" class="card stack" aria-labelledby="tier-new-title">
+  <form method="post" action="{{ url_for('admin.limit_tier_create') }}" class="settings-section stack" aria-labelledby="tier-new-title">
     {{ csrf() }}
     <h2 id="tier-new-title">Add a tier</h2>
     <p class="muted small mb-0">New tiers are added at the top of the ladder.</p>

@@ -6,13 +6,13 @@ LiteLLM, curl…) work without changes.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /v1/models` | Models your token may use |
+| `GET /v1/models` | Models your account may use |
 | `GET /v1/models/{id}` | One model |
 | `POST /v1/chat/completions` | Chat completions, streamed or not |
 | `POST /v1/images/generations` | One image from a text prompt (only when image generation is enabled) |
 
 The web interface has a matching developer area at **/developer** (the
-**API** link in the navigation): token management, the account's token limits, quick-start
+**API** link in the navigation): API key management, the account's token limits, quick-start
 snippets, the usage history (`/developer/usage`) and a playground
 (`/developer/playground`). The addresses of the previous release (`/api`,
 `/api/usage`, `/api/playground`) redirect there permanently.
@@ -21,23 +21,27 @@ snippets, the usage history (`/developer/usage`) and a playground
 
 ## Authentication
 
-Send a personal token as a bearer token:
+Send a personal API key as a bearer token:
 
 ```
 Authorization: Bearer bc-xxxxxxxxxxxxxxxx
 ```
 
-Create tokens on the developer page. A token is shown **once**, when it is
-created or rotated; the server stores only its SHA-256 hash, so a lost token
-cannot be recovered - rotate it instead. Each account can have up to 10 active
-tokens. A token acts on behalf of its owner: it sees the models the owner may
+Create API keys on the developer page. A key is shown **once**, when it is
+created or rotated; the server stores only its SHA-256 hash, so a lost key
+cannot be recovered. Rotate it instead. Each account can have up to 10 active
+keys. A key acts on behalf of its owner: it sees the models the owner may
 use and spends the owner's allowance. Rotating replaces the value and keeps the
-name; revoking disables the token immediately. Creating, rotating and revoking
-tokens is recorded in the audit log.
+name; revoking disables the key immediately. Creating, rotating and revoking
+keys is recorded in the audit log.
+
+API keys authenticate requests. Model tokens measure text consumption and
+are counted against the account's quota; creating another key does not increase
+that quota.
 
 | Situation | Status | `type` | `code` |
 |---|---|---|---|
-| Missing, malformed, unknown or revoked token | 401 | `authentication_error` | `invalid_api_key` |
+| Missing, malformed, unknown or revoked key | 401 | `authentication_error` | `invalid_api_key` |
 | Owner's account is suspended | 403 | `permission_error` | `account_suspended` |
 | More than 30 failed authentications from one address in a minute | 429 | `rate_limit_error` | `rate_limit_exceeded` |
 
@@ -55,7 +59,7 @@ Use your site's address followed by `/v1`, for example
 * **Request rate:** every `/v1` request takes one request from the account's
   bucket for the API service. The bucket holds *burst* requests and refills at
   *requests per second* (default 1 per second, bursts of 10; set by the
-  administrator per service, and per account for custom limits). All tokens of
+  administrator per service, and per account for custom limits). All API keys of
   an account, and the playground, share it. Administrators are exempt. See
   [rate-limit headers](#rate-limit-headers).
 * **Body size:** 4 MB per request; larger bodies get 413.
@@ -75,7 +79,8 @@ Use your site's address followed by `/v1`, for example
 
 The request rate is a set of rules such as “60 requests per minute” and
 “1,000 per day”; every rule must pass. The account's buckets are shared by all
-of its API keys, the playground, the chat and its agents. Every authenticated
+of its API keys and the playground. Chat and agents use separate account
+buckets for their respective services. Every authenticated
 response (successful or not) of an account with a request rate carries
 OpenAI-style headers for the tightest rule (the one with the fewest requests
 left):
@@ -85,8 +90,8 @@ left):
 | `x-ratelimit-limit-requests` | The rule's bucket size (requests allowed in a row). |
 | `x-ratelimit-remaining-requests` | Whole requests left in that bucket after this one. |
 | `x-ratelimit-reset-requests` | Time until that bucket is full again, e.g. `2s`, `0.5s`, `1m30s`, `4h59m30s`. |
-| `x-ratelimit-limit-tokens` | Regular tokens of the account's 5-hour window (only when the API has a 5-hour limit). |
-| `x-ratelimit-remaining-tokens` | Regular tokens left in the window. |
+| `x-ratelimit-limit-tokens` | The account's single 5-hour token allowance (only when the API has a 5-hour limit). |
+| `x-ratelimit-remaining-tokens` | Tokens left in that allowance. |
 | `x-ratelimit-reset-tokens` | Time until the window ends; `0s` while no window is open (the next request opens one). |
 
 Administrators, and accounts whose rate is not limited (for example during an
@@ -111,22 +116,30 @@ API calls, the playground and image generation draw from the account's **API
 allowance**, counted in tokens (prompt plus completion).
 
 * **5-hour window:** a window opens with the account's first counted request
-  and lasts 5 hours; when it ends, the allowance is full again. Regular tokens
-  are used first; requests run at API priority (behind administrators and
-  sped-up accounts, ahead of chat messages). **Slow tokens** are used when the
-  regular ones are spent, if the site enables them; slow requests wait behind
-  all others.
+  and lasts 5 hours; when it ends, the single allowance is full again.
+  When it is spent, further counted requests are refused until the reset or
+  an approved increase. There is no separate slow-token allowance or
+  spillover. Normal accounts run at API priority (behind administrators and
+  sped-up accounts, ahead of chat messages); an administrator can still set
+  an account's queue priority to slow independently of token consumption.
 * **Weekly tokens** (only when the site enables them) count everything used in
   the account's rolling week, which starts with the first request after the
   previous week ended and lasts 7 days. When they run out, requests are
-  refused until the week ends: there is no slow lane for weekly tokens.
+  refused until the week ends, even if the five-hour allowance has tokens left.
 * **Model weight:** a request counts its tokens × the model's weight (a heavy
   model ×3 spends the allowance three times as fast). Some models do not count
   toward the allowance at all and have limits of their own instead; model
   limits count the model's tokens in every service (API, chat and agents).
 * The numbers can grow with the account's tier, a dynamic adjustment to demand,
   the music-program bonus and grants from an administrator; the developer page
-  shows the current figures and why. Administrators are not limited.
+  shows the current figures and why. Fixed music bonuses can be configured
+  independently for five-hour and weekly allowances. Administrators are not
+  limited.
+
+Upgrades combine previous regular and slow allocations when slow tokens were
+enabled; otherwise the regular allocation is kept. Historical usage from
+both allocations counts toward the single allowance without resetting its
+window. Header names and quota error codes remain the same.
 
 A request is refused before it starts when no tokens remain, and again when it
 leaves the queue if the tokens ran out (or the account was suspended, or the
@@ -166,7 +179,7 @@ new generations** is refused, with status 503 and `Retry-After: 60`:
 
 `code` is `maintenance` (an administrator switched on maintenance mode; the
 administrator's message is appended) or `outage` (the AI server is
-unreachable). Administrators' tokens keep working during maintenance so they
+unreachable). Administrators' API keys keep working during maintenance so they
 can test.
 
 Monitors can poll the public `GET /status`, which always answers HTTP 200
@@ -243,7 +256,7 @@ The body must be a JSON object sent with `Content-Type: application/json`
 | `seed` | integer | Reduced modulo 2³¹. |
 | `stop` | string or array of ≤ 4 strings | Each 1-200 characters. |
 | `n` | integer | Only `1`. |
-| `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `max` | For reasoning models only (ignored for others); see [Reasoning effort](#reasoning-effort). |
+| `reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `extra`, `xhigh`, `max` | `xhigh` aliases `extra`. For reasoning models only (ignored for others); see [Reasoning effort](#reasoning-effort). |
 | `response_format` | object | Only `{"type": "text"}`. |
 
 Parameters you leave out use the administrator's settings for the model.
@@ -358,6 +371,7 @@ locked ones marked and a link to request them.
 | The model's own request rate or tokens are used up | 429 | `rate_limit_exceeded`, `insufficient_quota` |
 | The model failed before answering | 502 | `upstream_error` |
 | The inference server is unreachable | 503 | `backend_unavailable` |
+| Claude subscription capacity is exhausted, busy or cannot be verified | 503 (`Retry-After: 30`) | `provider_capacity_unavailable` |
 | The answer exceeded `BC_GENERATION_TIMEOUT` | 504 | `timeout` |
 
 Backend messages are passed on with addresses and URLs removed.
@@ -505,3 +519,12 @@ same validation, model choice, queue and token limits as the API (charged as
 `playground` requests, sharing the account's request rate), offers only the
 reasoning levels the account may use, and can show each
 conversation as the equivalent `curl` request.
+
+## Hosted API models
+
+Administrators may publish hosted models alongside Ollama and Claude subscription
+models. Obtain their provider-scoped IDs from `/v1/models`, for example
+`external:1:gpt-model-id`, and use them in ordinary `/v1/chat/completions` requests.
+Your BananaChat API key is unchanged; all of your keys still share your account's
+API quotas. Hosted-provider credentials stay on the server. See
+[provider configuration](external-providers.md) for supported formats and capabilities.

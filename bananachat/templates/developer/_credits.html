@@ -1,11 +1,10 @@
 {# The API pool's token limits and request rate. Expects `summary` from web.developer.credit_summary(). #}
 {% from "partials/icons.html" import icon %}
-<section class="card" aria-labelledby="credits-title">
-  <div class="card-header">
+<section class="settings-section" aria-labelledby="credits-title">
+  <div class="section-header">
     <h2 id="credits-title">{{ t("developer.credits_title") }}</h2>
     {% if summary.unlimited %}<span class="badge badge-success">{{ t("common.unlimited") }}</span>
-    {% elif not summary.available %}<span class="badge badge-danger">{{ t("developer.credits_exhausted_badge") }}</span>
-    {% elif summary.slow_next %}<span class="badge badge-warning">{{ t("developer.credits_slow_badge") }}</span>{% endif %}
+    {% elif not summary.available %}<span class="badge badge-danger">{{ t("developer.credits_exhausted_badge") }}</span>{% endif %}
   </div>
   {% if summary.unlimited %}
   <p class="muted mb-0">{{ t("developer.credits_unlimited") if summary.admin else t("developer.credits_unlimited_user") }}</p>
@@ -25,9 +24,15 @@
   </div>
   {% if summary.window_note %}<p class="hint mt-2 mb-0">{{ summary.window_note }}</p>{% endif %}
   {% if summary.weekly_exhausted %}<p class="hint mt-1 mb-0">{{ t("developer.credits_weekly_exhausted", date=summary.weekly_resets_at | time_text, left=summary.weekly_resets_at | time_left) }}</p>{% endif %}
-  {% if summary.bonus %}<p class="hint dev-note mt-2 mb-0">{{ icon("music") }} {{ summary.bonus }}</p>{% endif %}
-  {% for note in summary.notes %}<p class="hint dev-note mt-1 mb-0">{{ icon("info") }} {{ note }}</p>{% endfor %}
-  <p class="hint mt-1 mb-0">{{ t("developer.credits_explained") }}{% if summary.weekly_limited %} {{ t("developer.credits_weekly_explained") }}{% endif %}</p>
+  <details class="dev-limit-details">
+    <summary>{{ t("developer.limits_help") }}{{ icon("chevron-down") }}</summary>
+    <div class="stack-sm">
+      <p class="hint mb-0">{{ t("developer.credits_explained") }}</p>
+      {% if summary.weekly_limited %}<p class="hint mb-0">{{ t("developer.credits_weekly_explained") }}</p>{% endif %}
+      {% if summary.bonus %}<p class="hint dev-note mb-0">{{ icon("music") }} {{ summary.bonus }}</p>{% endif %}
+      {% for note in summary.notes %}<p class="hint dev-note mb-0">{{ icon("info") }} {{ note }}</p>{% endfor %}
+    </div>
+  </details>
   {% endif %}
   {% if not summary.admin %}<p class="hint mt-1 mb-0">{{ t("developer.rate_limit_note", rate=summary.rate) if summary.rate else t("developer.rate_limit_none") }}</p>
   <p class="hint mt-1 mb-0"><a href="{{ url_for('account.index', _anchor='usage') }}">{{ t("developer.models_link") }}</a></p>{% endif %}

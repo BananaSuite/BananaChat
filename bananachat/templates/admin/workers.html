@@ -79,15 +79,15 @@
 </div>
 
 {% if new_token %}
-<section class="card" aria-labelledby="new-token-title">
+<section class="settings-section" aria-labelledby="new-token-title">
   <h2 id="new-token-title">Token for “{{ new_name }}”</h2>
   <p class="muted">Copy it now: it is shown only once. Put it in <code>BC_WORKER_TOKEN</code> in the worker’s settings file.</p>
   <div class="secret-box"><input type="text" readonly value="{{ new_token }}" aria-label="Worker token"><button type="button" class="btn" data-copy="{{ new_token }}">Copy</button></div>
 </section>
 {% endif %}
 
-<section class="card" aria-labelledby="register-title">
-  <div class="card-header"><h2 id="register-title">Register a worker</h2></div>
+<section class="settings-section" aria-labelledby="register-title">
+  <div class="section-header"><h2 id="register-title">Register a worker</h2></div>
   <form method="post" action="{{ url_for('admin.workers_register') }}" id="register-form" class="row">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="field grow">
@@ -98,8 +98,8 @@
   </form>
 </section>
 
-<section class="card flush" aria-labelledby="list-title">
-  <div class="card-header">
+<section class="settings-section" aria-labelledby="list-title">
+  <div class="section-header">
     <h2 id="list-title">Registered workers</h2>
     <span class="small muted" id="workers-updated">Refreshes every 15 seconds{% if job_counts %} · jobs: {% for status, count in job_counts.items() %}{{ count }} {{ status }}{{ ", " if not loop.last }}{% endfor %}{% endif %}</span>
   </div>
@@ -114,7 +114,7 @@
   <p class="empty" id="workers-empty"{% if workers %} hidden{% endif %}>No workers yet. Register one above.</p>
 </section>
 
-<section class="card" aria-labelledby="setup-title">
+<section class="settings-section" aria-labelledby="setup-title">
   <h2 id="setup-title">Set up a worker PC</h2>
   <ol class="stack-sm">
     <li>Register the worker above and copy its token.</li>

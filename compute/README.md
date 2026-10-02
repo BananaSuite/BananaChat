@@ -38,7 +38,9 @@ hand. Settings (environment variables):
   `DELETE /api/delete`. Other paths get 404, other methods 405.
 - Request bodies need `Content-Length` and may be up to 32 MB; chunked uploads
   get 411. Responses stream through; every response closes its connection.
-  Clients that stall for 30 seconds are disconnected.
+  Clients that stall for 30 seconds are disconnected. Headers must finish in
+  30 seconds and request bodies in five minutes, even when bytes keep arriving.
+  These upload deadlines do not limit model loading or response streaming.
 - The token never reaches Ollama.
 
 ## Checkpoint agent
@@ -111,12 +113,20 @@ Face token is sent only to `huggingface.co` and dropped on redirects.
   them, so the file stays well below its 8 MB limit; an idempotency key is
   remembered only while its job is kept. Records of installed checkpoints are
   never pruned.
+- **Shutdown.** An interrupted download returns to the queue on restart.
+  If its remote read outlasts the shutdown grace period, the worker retains
+  its directory descriptors until it finishes saving that state. Repeated
+  cleanup does not close descriptors that another operation has since reused.
 - **Deletion** removes only checkpoints the agent installed, and only when
   `If-Match` and the file's content both match. The file is hashed without
   blocking the rest of the API, and deletion is refused (409) if the file
   changed meanwhile.
-- **HTTP.** Every connection has a socket timeout
-  (`BC_CHECKPOINT_AGENT_REQUEST_TIMEOUT`), at most 16 requests are handled at
+- **HTTP.** Every connection has a socket timeout and a hard header deadline
+  (`BC_CHECKPOINT_AGENT_REQUEST_TIMEOUT`).
+  JSON uploads have a hard body deadline too, so trickling bytes cannot retain
+  a connection indefinitely. These deadlines end before authenticated
+  checkpoint processing; background downloads keep their separate limits.
+  At most 16 requests are handled at
   once (others get 503), and tokens are compared in constant time (a
   malformed header is a 401).
 - A crash after installing a file but before saving the state leaves a valid

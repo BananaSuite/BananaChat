@@ -20,7 +20,8 @@ help:
 
 .venv/bin/python:
 	$(PYTHON) -m venv .venv
-	.venv/bin/python -m pip install -q -r requirements.txt
+	.venv/bin/python -m pip install -q --only-binary=:all: --no-deps --upgrade 'pip>=26.2.1'
+	.venv/bin/python -m pip install -q --only-binary=:all: -r requirements.txt
 
 dev:
 	@./dev.sh

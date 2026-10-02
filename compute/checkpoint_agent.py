@@ -38,6 +38,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, Mapping, Optional, Tuple
 
+from .http_limits import ConnectionDeadlines
+
 
 STATE_VERSION = 1
 CHUNK_SIZE = 1024 * 1024
@@ -392,6 +394,7 @@ class CheckpointAgent:
         self._stop = threading.Event()
         self._state_fd = self._open_directory(self.state_dir)
         self._root_fd = self._open_directory(self.root)
+        self._directories_closed = False
         self.jobs: Dict[str, Dict[str, Any]] = {}
         self.managed: Dict[str, Dict[str, Any]] = {}
         try:
@@ -423,8 +426,19 @@ class CheckpointAgent:
             self._wake.notify_all()
         if self._worker:
             self._worker.join(timeout=5)
-        os.close(self._root_fd)
-        os.close(self._state_fd)
+            if self._worker.is_alive():
+                # A remote read can outlast the shutdown grace period. Keep
+                # its directory descriptors owned until it has saved the
+                # restart state; the worker closes them when it exits.
+                return
+        self._close_directories()
+
+    def _close_directories(self) -> None:
+        with self._lock:
+            if not self._directories_closed:
+                self._directories_closed = True
+                os.close(self._root_fd)
+                os.close(self._state_fd)
 
     def _load_state(self) -> None:
         try:
@@ -805,17 +819,21 @@ class CheckpointAgent:
         return None
 
     def _worker_loop(self) -> None:
-        while True:
-            with self._lock:
-                job_id = None
-                while not self._stop.is_set():
-                    job_id = self._next_job_locked()
-                    if job_id is not None:
-                        break
-                    self._wake.wait(0.5)
-                if self._stop.is_set():
-                    return
-            self._run_job(job_id)
+        try:
+            while True:
+                with self._lock:
+                    job_id = None
+                    while not self._stop.is_set():
+                        job_id = self._next_job_locked()
+                        if job_id is not None:
+                            break
+                        self._wake.wait(0.5)
+                    if self._stop.is_set():
+                        return
+                self._run_job(job_id)
+        finally:
+            if self._stop.is_set():
+                self._close_directories()
 
     def _run_job(self, job_id: str) -> None:
         with self._lock:
@@ -1025,12 +1043,21 @@ class AgentHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
     request_queue_size = 32
 
-    def __init__(self, address, agent: CheckpointAgent, max_threads: int = MAX_HTTP_THREADS):
+    def __init__(self, address, agent: CheckpointAgent, max_threads: int = MAX_HTTP_THREADS,
+                 *, header_deadline=None, body_deadline=None):
         self.agent = agent
+        self.header_deadline = agent.config.request_timeout if header_deadline is None else header_deadline
+        self.body_deadline = agent.config.request_timeout if body_deadline is None else body_deadline
         self.slots = threading.BoundedSemaphore(max_threads)
         if ":" in str(address[0]):
             self.address_family = socket.AF_INET6
         super().__init__(address, CheckpointRequestHandler)
+        self.deadlines = ConnectionDeadlines()
+
+    def server_close(self):
+        if hasattr(self, "deadlines"):
+            self.deadlines.close()
+        super().server_close()
 
     def process_request(self, request, client_address):  # type: ignore[no-untyped-def]
         if not self.slots.acquire(blocking=False):
@@ -1075,11 +1102,19 @@ class CheckpointRequestHandler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
         self.connection.settimeout(self.agent.config.request_timeout)
+        self.server.deadlines.set(self.connection, self.server.header_deadline)
+
+    def finish(self) -> None:
+        self.server.deadlines.clear(self.connection)
+        try:
+            super().finish()
+        except OSError:
+            pass
 
     def handle_one_request(self) -> None:
         try:
             super().handle_one_request()
-        except (socket.timeout, TimeoutError, ConnectionError):
+        except (socket.timeout, TimeoutError, ConnectionError, OSError):
             self.close_connection = True
 
     def do_GET(self) -> None:
@@ -1092,6 +1127,7 @@ class CheckpointRequestHandler(BaseHTTPRequestHandler):
         self._dispatch("DELETE")
 
     def _dispatch(self, method: str) -> None:
+        self.server.deadlines.clear(self.connection)
         parsed = urllib.parse.urlsplit(self.path)
         try:
             if method == "GET" and parsed.path == "/healthz" and not parsed.query:
@@ -1152,7 +1188,11 @@ class CheckpointRequestHandler(BaseHTTPRequestHandler):
             raise AgentError(411, "length_required", "Content-Length is required")
         if length == 0 or length > self.agent.config.json_body_limit:
             raise AgentError(413, "body_too_large", "JSON body size is invalid")
-        raw = self.rfile.read(length)
+        self.server.deadlines.set(self.connection, self.server.body_deadline)
+        try:
+            raw = self.rfile.read(length)
+        finally:
+            self.server.deadlines.clear(self.connection)
         try:
             return json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:

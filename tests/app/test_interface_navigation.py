@@ -1,4 +1,4 @@
-"""The compact header keeps secondary destinations reachable and permission aware."""
+"""The header exposes enabled destinations directly and respects permissions."""
 import re
 
 import pytest
@@ -8,15 +8,16 @@ def navigation(html):
     return re.search(r'<nav class="nav".*?</nav>', html, re.S).group(0)
 
 
-@pytest.mark.parametrize('language,label', [('en', 'More'), ('it', 'Altro')])
-def test_secondary_destination_is_identified_in_the_header(admin, language, label):
+@pytest.mark.parametrize('language', ['en', 'it'])
+def test_destinations_are_direct_links_in_the_header(admin, language):
     response = admin.get('/developer', headers={'Accept-Language': language})
     assert response.status_code == 200
     nav = navigation(response.get_data(as_text=True))
-    assert f'<summary class="is-current">{label}' in nav
     assert 'href="/developer" aria-current="page"' in nav
-    # Native details makes secondary links available without a custom menu widget.
-    assert '<details class="menu nav-more" data-menu>' in nav
+    assert 'href="/chat"' in nav
+    assert 'href="/personalities"' in nav
+    assert '<details' not in nav
+    assert '<summary' not in nav
 
 
 def test_admin_destination_is_only_offered_to_administrators(client, admin, make_user):
@@ -27,4 +28,3 @@ def test_admin_destination_is_only_offered_to_administrators(client, admin, make
     nav = navigation(client.get('/account').get_data(as_text=True))
     assert 'href="/developer"' in nav
     assert not re.search(r'href="/admin/?"', nav)
-    assert 'class="is-current"' not in nav

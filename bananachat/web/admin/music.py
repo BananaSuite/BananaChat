@@ -13,6 +13,7 @@ from flask import current_app, flash, redirect, render_template, request, url_fo
 
 from bananachat import db, security
 from bananachat.db import credits
+from bananachat.db import limits as limits_db
 from bananachat.db import music as music_db
 from bananachat.db import settings as site_settings
 from bananachat.db import users
@@ -25,7 +26,8 @@ MAX_TRACK_BYTES = 50 * 1024 * 1024
 UPLOAD_LIMIT = MAX_TRACK_BYTES + 256 * 1024
 PAGE_SIZE = 50
 MULTIPLIER_RANGE = (1.0, 10.0)
-FIXED_MAX = 100_000_000  # tokens per 5-hour window
+FIXED_MAX = limits_db.TOKENS_MAX  # tokens per 5-hour window
+WEEKLY_FIXED_MAX = 7 * FIXED_MAX
 
 
 def _redirect(anchor: str | None = None, **params):
@@ -104,6 +106,7 @@ def music():
         max_track_mb=MAX_TRACK_BYTES // (1024 * 1024),
         allowed_types=", ".join(f".{ext}" for ext in music_db.AUDIO_TYPES),
         multiplier_range=MULTIPLIER_RANGE, fixed_max=FIXED_MAX, fixed=credits.music_fixed(settings),
+        weekly_fixed_max=WEEKLY_FIXED_MAX, weekly_fixed=credits.music_weekly_fixed(settings),
     )
 
 
@@ -120,13 +123,13 @@ def _number(name: str, low: float, high: float, *, integer: bool):
     return value
 
 
-def _tokens(name: str) -> int:
+def _tokens(name: str, *, maximum: int = FIXED_MAX) -> int:
     from bananachat.formatting import parse_amount
 
     value = parse_amount(request.form.get(name))
-    if value is None or not 0 <= value <= FIXED_MAX:
+    if value is None or not 0 <= value <= maximum:
         raise ValueError(f"{name.replace('_', ' ').capitalize()}: write a number of tokens up to "
-                         f"{FIXED_MAX:,}, such as 30000 or 30k.")
+                         f"{maximum:,}, such as 30000 or 30k.")
     return int(round(value))
 
 
@@ -150,7 +153,10 @@ def music_settings():
             "music_bonus_mode": bonus_mode,
             "music_credit_multiplier": _number("music_credit_multiplier", *MULTIPLIER_RANGE, integer=False),
             "music_bonus_fixed_tokens": _tokens("music_bonus_fixed_tokens"),
-            "music_bonus_fixed_slow_tokens": _tokens("music_bonus_fixed_slow_tokens"),
+            "music_bonus_fixed_weekly_tokens": (
+                _tokens("music_bonus_fixed_weekly_tokens", maximum=WEEKLY_FIXED_MAX)
+                if "music_bonus_fixed_weekly_tokens" in form else credits.music_weekly_fixed(site_settings.get())
+            ),
         }
     except ValueError as error:
         flash(str(error), "error")

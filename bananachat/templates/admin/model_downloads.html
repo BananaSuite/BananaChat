@@ -6,8 +6,8 @@
 {% call header("Models", "Download models to the inference server, one after another or several at once.") %}{% endcall %}
 {% include "admin/_models_tabs.html" %}
 
-<section class="card mb-3" id="queue" aria-labelledby="queue-title">
-  <div class="card-header">
+<section class="settings-section mb-3" id="queue" aria-labelledby="queue-title">
+  <div class="section-header">
     <h2 id="queue-title">Queue</h2>
     <div class="row">
       <form method="post" action="{{ url_for('admin.pulls_queue') }}">
@@ -57,7 +57,7 @@
       <span class="hint" id="bulk-names-hint">One per line (or separated by commas), up to {{ max_bulk }}. Installed and already queued models are skipped.</span>
     </div>
     {% if missing %}
-    <fieldset>
+    <fieldset class="admin-fieldset">
       <legend>Catalog models no longer on the server</legend>
       <div class="check-list">
         {% for item in missing %}
@@ -67,7 +67,7 @@
     </fieldset>
     {% endif %}
     {% if suggestions %}
-    <fieldset>
+    <fieldset class="admin-fieldset">
       <legend>Suggestions</legend>
       <div class="check-list">
         {% for item in suggestions %}
@@ -80,7 +80,7 @@
   </form>
 </div>
 
-<section class="card mb-3" aria-labelledby="checkpoint-title">
+<section class="settings-section mb-3" aria-labelledby="checkpoint-title">
   <h2 id="checkpoint-title">ComfyUI checkpoint</h2>
   {% if checkpoint.configured %}
   <form method="post" action="{{ url_for('admin.pull_checkpoint') }}" class="stack" data-busy>
@@ -155,8 +155,9 @@
                   {{ csrf() }}<button type="submit" class="danger">{{ icon("trash") }}Cancel and remove partial files</button>
                 </form>
                 <form method="post" action="{{ url_for('admin.pull_cancel', job_id=job.id) }}">
-                  {{ csrf() }}<input type="hidden" name="keep_partial" value="1"><button type="submit">{{ icon("close") }}Cancel, keep partial files</button>
+                  {{ csrf() }}<input type="hidden" name="keep_partial" value="1"><button type="submit">{{ icon("close") }}{% if job.backend == "comfyui" %}Stop tracking, keep remote download{% else %}Cancel, keep partial files{% endif %}</button>
                 </form>
+                {% if job.backend == "comfyui" %}<p class="small muted">Keeping files lets the checkpoint download continue on the compute server. Choose “Cancel and remove partial files” to stop it there too.</p>{% endif %}
               </div>
             </details>
             {% else %}

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from flask import abort, flash, redirect, request, url_for
 
 from bananachat import security
+from bananachat.db import limits as limits_db
 from bananachat.db import users
 
 
@@ -60,7 +61,7 @@ def number(name: str, *, minimum: float, maximum: float, label: str, optional: b
     return value
 
 
-def tokens(name: str, *, label: str, maximum: int = 1_000_000_000, optional: bool = False, default=None):
+def tokens(name: str, *, label: str, maximum: int = limits_db.TOKENS_MAX, optional: bool = False, default=None):
     """A token amount typed as ``30000``, ``30,000``, ``30k`` or ``1.5M`` (a whole number of tokens)."""
     from bananachat.formatting import parse_amount
 

@@ -6,8 +6,8 @@
 {% macro ms(value) -%}{% if value is none %}—{% elif value >= 10000 %}{{ (value / 1000) | number(0) }} s{% elif value >= 1000 %}{{ (value / 1000) | number(1) }} s{% else %}{{ value | number }} ms{% endif %}{%- endmacro %}
 {% macro mb(value) -%}{% if value is none %}—{% elif value >= 1024 %}{{ (value / 1024) | number(1) }} GB{% else %}{{ value | number }} MB{% endif %}{%- endmacro %}
 {% macro breakdown(title, rows, id) -%}
-<section class="card flush" aria-labelledby="{{ id }}">
-  <div class="card-header"><h2 id="{{ id }}">{{ title }}</h2></div>
+<section class="settings-section" aria-labelledby="{{ id }}">
+  <div class="section-header"><h2 id="{{ id }}">{{ title }}</h2></div>
   {% if rows %}
   {% set top = rows[0].requests %}
   <div class="table-wrap table-plain">
@@ -28,7 +28,7 @@
     </table>
   </div>
   {% else %}
-  <p class="muted card-body-pad">No requests in this period.</p>
+  <p class="muted section-body">No requests in this period.</p>
   {% endif %}
 </section>
 {%- endmacro %}
@@ -44,15 +44,15 @@
   <a class="btn" href="{{ url_for('admin.metrics_export', range=range_key) }}" download>{{ icon("download") }}Export CSV</a>
 {% endcall %}
 
-<section class="grid grid-4 mb-3" aria-label="Totals for {{ range_label | lower }}">
-  <div class="card stat"><span class="stat-label">Requests</span><span class="stat-value">{{ summary.requests | number }}</span><span class="small muted">{{ summary.errors | number }} failed or stopped</span></div>
-  <div class="card stat"><span class="stat-label">Tokens</span><span class="stat-value">{{ (summary.tokens_in + summary.tokens_out) | number }}</span><span class="small muted">{{ summary.tokens_in | number }} in · {{ summary.tokens_out | number }} out{% if summary.estimated %} · {{ summary.estimated }} estimated{% endif %}</span></div>
-  <div class="card stat"><span class="stat-label">Average response time</span><span class="stat-value">{{ ms(summary.avg_duration_ms) }}</span><span class="small muted">including the queue</span></div>
-  <div class="card stat"><span class="stat-label">Average queue wait</span><span class="stat-value">{{ ms(summary.avg_queue_wait_ms) }}</span><span class="small muted">before a slot was free</span></div>
+<section class="grid grid-4 admin-stats mb-3" aria-label="Totals for {{ range_label | lower }}">
+  <div class="stat"><span class="stat-label">Requests</span><span class="stat-value">{{ summary.requests | number }}</span><span class="small muted">{{ summary.errors | number }} failed or stopped</span></div>
+  <div class="stat"><span class="stat-label">Tokens</span><span class="stat-value">{{ (summary.tokens_in + summary.tokens_out) | number }}</span><span class="small muted">{{ summary.tokens_in | number }} in · {{ summary.tokens_out | number }} out{% if summary.estimated %} · {{ summary.estimated }} estimated{% endif %}</span></div>
+  <div class="stat"><span class="stat-label">Average response time</span><span class="stat-value">{{ ms(summary.avg_duration_ms) }}</span><span class="small muted">including the queue</span></div>
+  <div class="stat"><span class="stat-label">Average queue wait</span><span class="stat-value">{{ ms(summary.avg_queue_wait_ms) }}</span><span class="small muted">before a slot was free</span></div>
 </section>
 
-<section class="card mb-3" aria-labelledby="chart-title">
-  <div class="card-header">
+<section class="settings-section mb-3" aria-labelledby="chart-title">
+  <div class="section-header">
     <h2 id="chart-title">Requests per {{ "hour" if range_key == "24h" else "day" }}</h2>
     <span class="small muted">Peak {{ chart.peak | number }} · UTC</span>
   </div>
@@ -88,16 +88,16 @@
 </div>
 <div class="mb-3">{{ breakdown("By model", by_model, "by-model-title") }}</div>
 
-<section class="card flush" aria-labelledby="compute-title">
-  <div class="card-header">
+<section class="settings-section" aria-labelledby="compute-title">
+  <div class="section-header">
     <h2 id="compute-title">Inference server load</h2>
     <span class="small muted">A sample every {{ interval }} s{% if latest %} · latest {{ when(latest.recorded_at) }}{% endif %}</span>
   </div>
   {% if stale %}
-  <div class="alert alert-warning card-body-pad">{{ icon("alert") }}<p>{% if latest %}No recent samples: the background services may not be running.{% else %}No samples recorded yet. They are collected by the background services every {{ interval }} seconds.{% endif %}</p></div>
+  <div class="alert alert-warning section-body">{{ icon("alert") }}<p>{% if latest %}No recent samples: the background services may not be running.{% else %}No samples recorded yet. They are collected by the background services every {{ interval }} seconds.{% endif %}</p></div>
   {% endif %}
   {% if peaks.samples %}
-  <dl class="details card-body-pad">
+  <dl class="details section-body">
     <dt>Peak GPU memory</dt><dd>{{ mb(peaks.gpu_used) }}{% if peaks.gpu_total %} of {{ mb(peaks.gpu_total) }}{% endif %}</dd>
     <dt>Peak GPU utilisation</dt><dd>{{ (peaks.gpu_util | number) ~ " %" if peaks.gpu_util is not none else "—" }}</dd>
     <dt>Peak host memory</dt><dd>{{ mb(peaks.ram_used) }}{% if peaks.ram_total %} of {{ mb(peaks.ram_total) }}{% endif %}</dd>

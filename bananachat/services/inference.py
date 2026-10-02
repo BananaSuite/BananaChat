@@ -33,7 +33,7 @@ from flask import current_app
 
 from bananachat.db import catalog
 from bananachat.db.credits import estimate_tokens
-from bananachat.services import model_lifecycle, ollama, queue, remote, supervisor
+from bananachat.services import health, model_lifecycle, ollama, queue, remote, supervisor
 from bananachat.services.access import AccessContext, is_text_model, usable_models
 from bananachat.services.upstream import Cancelled, CancelToken, UpstreamError
 
@@ -95,6 +95,9 @@ class Finished:
     via_worker: bool = False
     truncated: bool = False
     tool_calls: list = field(default_factory=list)
+    error_status: int | None = None
+    error_code: str = ""
+    retry_after: int | None = None
 
 
 MAX_TOOL_CALLS = 32
@@ -115,8 +118,8 @@ class TextRequest:
     # directly (the Claude pool) rather than Ollama's think.
     effort: str | None = None
     max_response_bytes: int | None = None
-    # Called once admitted, before inference: return an error message to refuse
-    # (e.g. the user was suspended or ran out of credits while waiting).
+    # Called with the fresh model before each attempt: return an error message
+    # to refuse (e.g. access was revoked or limits were spent while waiting).
     authorize: object = None
     # Ollama function definitions (agents only); see the module docstring.
     tools: list | None = None
@@ -149,7 +152,7 @@ def running_models() -> set[str]:
 def _backend_name(model) -> str | None:
     if model is None:
         return None
-    return model["backend_model_name"] or model["ollama_name"]
+    return model["ollama_name"] if model["backend"] == "external" else model["backend_model_name"] or model["ollama_name"]
 
 
 @dataclass
@@ -166,6 +169,9 @@ def candidates(context: AccessContext, surface: str, *, vision: bool = False) ->
     """Usable text models, loaded ones first; deprecated models only after every other."""
     models = [model for model in usable_models(context, surface, kind="text")
               if (not vision or model["supports_vision"]) and not model["retired_at"]]
+    config = current_app.config["BC"]
+    if not config.ollama_is_local and config.inference_outage_mode == "shutdown" and health.inference_down():
+        models = [model for model in models if model["backend"] != "ollama"]
     loaded = running_models()
     return sorted(models, key=lambda model: (bool(model["deprecated_at"]),
                                              model["ollama_name"] not in loaded and
@@ -239,7 +245,7 @@ def select_model(context: AccessContext, requested: str | None, *, surface: str,
 # ----- reasoning effort ----------------------------------------------------------
 
 # Ollama's ``think`` takes true/false, or "low"/"medium"/"high" for models with named levels.
-_OLLAMA_LEVELS = {"low": "low", "medium": "medium", "high": "high", "max": "high"}
+_OLLAMA_LEVELS = {"low": "low", "medium": "medium", "high": "high", "extra": "high", "max": "high"}
 
 
 def think_for(model, level: str | None):
@@ -247,8 +253,9 @@ def think_for(model, level: str | None):
 
     The one place that maps levels: no level keeps the model's own default
     (thinking on for reasoning models), ``off`` is false, ``on`` true, and a
-    named level is passed as a name to models that take named levels (``max``
-    as ``high``) and as true to models that only switch thinking on.
+    named level is passed as a name to models that take named levels (``extra``
+    and ``max`` as ``high``) and as true to models that only switch thinking on.
+    Claude receives the resolved level separately without this Ollama mapping.
     """
     from bananachat.services import limits
 
@@ -318,30 +325,45 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
     started = time.monotonic()
     wait_ms = slot.wait_ms
     model = request.model
-    if request.authorize is not None:
-        problem = request.authorize()
-        if problem:
-            yield Finished("failed", model, error=problem, wait_ms=wait_ms)
-            return
-
     limit = request.max_response_bytes or config.chat_max_response_bytes
     attempts = [request.model, *request.fallbacks]
     last_error = ""
+    last_error_status = last_retry_after = None
+    last_error_code = ""
     tried = request.model
     for index, model in enumerate(attempts):
-        if index:
-            # Fallbacks were chosen when the request was made: skip one that became failing, missing, disabled
-            # or was removed while the request waited.
-            fresh = catalog.get(model["id"])
-            if fresh is None or not fresh["is_rolled_out"] or fresh["missing_at"] or not is_text_model(fresh):
-                log.info("Skipping fallback %s: no longer available", model["ollama_name"])
-                continue
-            model = fresh
-        if index and request.prepare is not None:
-            messages, options = request.prepare(model)
-            request = replace(request, messages=messages, options=options)
+        # Register a fallback before checking its fresh deletion marker. A
+        # concurrent delete then either sees this request or prevents it from
+        # starting; it cannot miss the switch between authorization and launch.
         if index:
             slot.set_model(_backend_name(model))
+        # Selection can predate a queue wait or another attempt. Never run a
+        # model that has since been removed, disabled or withdrawn.
+        fresh = catalog.get(model["id"])
+        if fresh is None or fresh["missing_at"] or not is_text_model(fresh):
+            if index:
+                log.info("Skipping fallback %s: no longer available", model["ollama_name"])
+                continue
+            yield Finished("failed", model, error=f"The model '{model['ollama_name']}' is no longer available "
+                           "on the model server.", wait_ms=wait_ms)
+            return
+        model = fresh
+        if index and not model["is_rolled_out"]:
+            continue
+        if request.authorize is not None:
+            problem = request.authorize(model)
+            if problem:
+                last_error = problem
+                last_error_status = last_retry_after = None
+                last_error_code = ""
+                tried = model
+                if index:
+                    continue
+                yield Finished("failed", model, error=problem, wait_ms=wait_ms)
+                return
+        if request.prepare is not None:
+            messages, options = request.prepare(model)
+            request = replace(request, messages=messages, options=options)
         via_worker = not request.tools and model["backend"] == "ollama" and remote.should_route(request.user, model,
                                                                 request_type=request.request_type,
                                                                 think=request.think)
@@ -355,24 +377,12 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
         truncated = False
         stream = None
         try:
+            cancel.check()
             stream = _open_stream(request, model, via_worker, cancel, config)
             for chunk in stream:
                 if request.tools and chunk.tool_calls:
                     tool_calls.extend(chunk.tool_calls[: max(0, MAX_TOOL_CALLS - len(tool_calls))])
                     produced += 1
-                if chunk.done:
-                    prompt, completion = chunk.prompt_tokens, chunk.completion_tokens
-                    estimated = prompt is None or completion is None
-                    if prompt is None:
-                        prompt = sum(estimate_tokens(str(m.get("content", ""))) for m in request.messages)
-                    if completion is None:
-                        completion = estimate_tokens("".join(text_parts))
-                    if not via_worker:
-                        model_lifecycle.record_success(model)
-                    yield Finished("completed", model, chunk.finish_reason or "stop", prompt, completion, estimated,
-                                   wait_ms=wait_ms, duration_ms=_elapsed(started), via_worker=via_worker,
-                                   tool_calls=tool_calls)
-                    return
                 for text, thinking in ((chunk.thinking, True), (chunk.content, False)):
                     if not text:
                         continue
@@ -389,20 +399,48 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
                 if truncated:
                     cancel.cancel("limit")
                     break
+                if chunk.done:
+                    prompt, completion = chunk.prompt_tokens, chunk.completion_tokens
+                    estimated = prompt is None or completion is None
+                    if prompt is None:
+                        prompt = sum(estimate_tokens(str(m.get("content", ""))) for m in request.messages)
+                    if completion is None:
+                        completion = estimate_tokens("".join(text_parts))
+                    if not via_worker:
+                        model_lifecycle.record_success(model)
+                    yield Finished("completed", model, chunk.finish_reason or "stop", prompt, completion, estimated,
+                                   wait_ms=wait_ms, duration_ms=_elapsed(started), via_worker=via_worker,
+                                   tool_calls=tool_calls)
+                    return
         except Cancelled:
             pass
         except (UpstreamError, OSError) as error:
             last_error = str(error) or "The model failed."
-            log.warning("Generation with %s failed: %s", model["ollama_name"], last_error)
-            if not via_worker and not cancel.cancelled:
+            capacity_unavailable = isinstance(error, UpstreamError) and error.kind == "capacity"
+            last_error_status = 503 if capacity_unavailable else None
+            last_error_code = (error.code or "provider_capacity_unavailable") if capacity_unavailable else ""
+            last_retry_after = 30 if capacity_unavailable else None
+            if capacity_unavailable:
+                log.info("Generation with %s is waiting for provider capacity", model["ollama_name"])
+            else:
+                log.warning("Generation with %s failed: %s", model["ollama_name"], last_error)
+            if not via_worker and not cancel.cancelled and not capacity_unavailable:
                 model_lifecycle.record_failure(model, error, config)
             if produced == 0 and not cancel.cancelled and index + 1 < len(attempts):
                 continue
-            yield _partial(request, model, text_parts, "failed", last_error, wait_ms, started, via_worker)
+            finished = _partial(request, model, text_parts, "failed", last_error, wait_ms, started, via_worker)
+            if capacity_unavailable and produced == 0:
+                finished.error_status = last_error_status
+                finished.error_code = last_error_code
+                finished.retry_after = last_retry_after
+            yield finished
             return
         finally:
             if stream is not None and hasattr(stream, "close"):
-                stream.close()
+                try:
+                    stream.close()
+                except Exception:  # noqa: BLE001 - cleanup cannot replace a committed outcome or backend error
+                    log.exception("Closing generation with %s failed", model["ollama_name"])
 
         if truncated:
             finished = _partial(request, model, text_parts, "stopped", "", wait_ms, started, via_worker)
@@ -423,17 +461,37 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
                            wait_ms, started, via_worker)
         return
     yield Finished("failed", tried, error=last_error or "No model could answer.", wait_ms=wait_ms,
-                   duration_ms=_elapsed(started))
+                   duration_ms=_elapsed(started), error_status=last_error_status, error_code=last_error_code,
+                   retry_after=last_retry_after)
+
+
+def _provider_effort(request, model):
+    from bananachat.db import users
+    from bananachat.services import limits
+
+    user = users.get(request.user["id"])
+    if user is None or users.is_suspended(user):
+        raise UpstreamError("This account cannot start a provider request.")
+    try:
+        return limits.resolve_effort(user, model, request.effort)
+    except limits.EffortLocked as error:
+        raise UpstreamError(str(error)) from None
 
 
 def _open_stream(request, model, via_worker, cancel, config):
     name = model["backend_model_name"] or model["ollama_name"]
+    if model["backend"] == "external":
+        from bananachat.services import external_providers
+
+        return external_providers.stream(model, request.messages, options=request.options,
+                                         effort=_provider_effort(request, model),
+                                         tools=request.tools, cancel=cancel)
     if model["backend"] == "claude":
         # Claude models are served by the pooled subscription accounts, never by Ollama or a worker PC.
         from bananachat.services import claude_pool
 
         return claude_pool.stream_chunks(name, request.messages, options=request.options, think=request.think,
-                                         effort=request.effort, cancel=cancel)
+                                         effort=_provider_effort(request, model), cancel=cancel)
     if via_worker:
         return remote.stream(name, request.messages, request.options, cancel=cancel, priority=request.priority,
                              think=request.think,

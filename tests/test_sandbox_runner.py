@@ -428,6 +428,54 @@ def test_failed_removals_keep_counting_against_capacity(manager, engine):
     manager.create({"session": "c"})
 
 
+def test_missing_and_already_removed_containers_release_capacity(manager, engine):
+    box = manager.create({"session": "a"})
+    engine.containers.pop(box.name)
+    real = engine.answer
+
+    def missing(args, stdin, timeout):
+        if args[0] == "rm":
+            return sr.RunResult(1, b"", b"Error response from daemon: No such container")
+        return real(args, stdin, timeout)
+
+    engine.answer = missing
+    manager.delete(box.id)
+    manager.delete(box.id)
+    manager.remove(box, "already removed")
+    assert len(engine.commands("rm")) == 1
+    engine.answer = real
+    assert manager.create({"session": "b"})
+    assert manager.create({"session": "c"})
+
+
+def test_a_container_being_removed_still_counts_against_capacity(engine):
+    manager = sr.SandboxManager(make_config(max_sandboxes=1), engine)
+    manager.preflight()
+    box = manager.create({"session": "a"})
+    entered, release = threading.Event(), threading.Event()
+    real = engine.answer
+
+    def slow_remove(args, stdin, timeout):
+        if args[0] == "rm":
+            entered.set()
+            assert release.wait(5)
+        return real(args, stdin, timeout)
+
+    engine.answer = slow_remove
+    worker = threading.Thread(target=manager.delete, args=(box.id,))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        with pytest.raises(sr.ApiError, match="All sandboxes"):
+            manager.create({"session": "b"})
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert engine.containers == {}
+    assert manager.create({"session": "b"})
+
+
 # ----- paths ------------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("value, expected", [
@@ -594,6 +642,65 @@ def test_a_sandbox_whose_main_process_was_killed_is_reported_gone(manager, engin
 
 # ----- reaper -----------------------------------------------------------------------------------------------------------
 
+@pytest.mark.parametrize("include_new_container", [False, True])
+def test_reconcile_does_not_remove_a_sandbox_created_during_its_listing(manager, engine, include_new_container):
+    listed, release = threading.Event(), threading.Event()
+    real = engine.answer
+
+    def slow_listing(args, stdin, timeout):
+        result = None if include_new_container else real(args, stdin, timeout)
+        if args[0] == "ps":
+            listed.set()
+            assert release.wait(5)
+        return real(args, stdin, timeout) if result is None else result
+
+    engine.answer = slow_listing
+    worker = threading.Thread(target=manager.reconcile)
+    worker.start()
+    try:
+        assert listed.wait(5)
+        box = manager.create({"session": "new"})
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert manager.get(box.id) is box
+    assert box.name in engine.containers
+    assert not engine.commands("rm")
+
+
+def test_reconcile_and_delete_do_not_remove_the_same_container_concurrently(manager, engine):
+    box = manager.create({"session": "s"})
+    entered, release, overlap = threading.Event(), threading.Event(), threading.Event()
+    real = engine.answer
+
+    def slow_remove(args, stdin, timeout):
+        if args[0] == "rm":
+            if entered.is_set() and not release.is_set():
+                overlap.set()
+                return sr.RunResult(1, b"", b"removal already in progress")
+            entered.set()
+            assert release.wait(5)
+        return real(args, stdin, timeout)
+
+    engine.answer = slow_remove
+    deleting = threading.Thread(target=manager.delete, args=(box.id,))
+    reconciling = threading.Thread(target=manager.reconcile)
+    deleting.start()
+    try:
+        assert entered.wait(5)
+        reconciling.start()
+        assert not overlap.wait(0.2)
+    finally:
+        release.set()
+        deleting.join(5)
+        if reconciling.ident is not None:
+            reconciling.join(5)
+    assert not deleting.is_alive() and not reconciling.is_alive()
+    assert engine.containers == {}
+    assert manager.list() == []
+
+
 def test_reaper_removes_idle_expired_and_unknown_containers(engine):
     now = [1000.0]
     manager = sr.SandboxManager(make_config(max_sandboxes=4), engine, clock=lambda: now[0])
@@ -633,6 +740,98 @@ def test_shutdown_removes_every_sandbox(manager, engine):
     manager.create({"session": "b"})
     manager.shutdown()
     assert engine.containers == {} and manager.list() == []
+
+
+def test_shutdown_retries_a_previously_failed_removal(manager, engine):
+    box = manager.create({"session": "s"})
+    real = engine.answer
+    engine.answer = lambda args, stdin, timeout: (
+        sr.RunResult(1, b"", b"device busy") if args[0] == "rm" else real(args, stdin, timeout))
+    manager.delete(box.id)
+    assert box.name in engine.containers
+    engine.answer = real
+    manager.shutdown()
+    assert engine.containers == {}
+
+
+def test_shutdown_waits_for_an_inflight_removal(manager, engine):
+    box = manager.create({"session": "s"})
+    entered, release, stopped = threading.Event(), threading.Event(), threading.Event()
+    real = engine.answer
+
+    def slow_remove(args, stdin, timeout):
+        if args[0] == "rm":
+            entered.set()
+            assert release.wait(5)
+        return real(args, stdin, timeout)
+
+    def shutdown():
+        manager.shutdown()
+        stopped.set()
+
+    engine.answer = slow_remove
+    deleting = threading.Thread(target=manager.delete, args=(box.id,))
+    stopping = threading.Thread(target=shutdown)
+    deleting.start()
+    try:
+        assert entered.wait(5)
+        stopping.start()
+        assert not stopped.wait(0.2)
+    finally:
+        release.set()
+        deleting.join(5)
+        if stopping.ident is not None:
+            stopping.join(5)
+    assert not deleting.is_alive() and not stopping.is_alive()
+    assert stopped.is_set() and engine.containers == {}
+
+
+@pytest.mark.parametrize("failed_creation", [False, True])
+def test_shutdown_waits_for_pending_creation_and_refuses_new_sandboxes(manager, engine, failed_creation):
+    entered, release = threading.Event(), threading.Event()
+    real = engine.answer
+    errors = []
+
+    def slow_create(args, stdin, timeout):
+        if args[0] == "run":
+            entered.set()
+            assert release.wait(5)
+        return real(args, stdin, timeout)
+
+    def create():
+        try:
+            manager.create({"session": "s"})
+        except sr.ApiError as error:
+            errors.append(error.status)
+
+    engine.answer = slow_create
+    engine.fail_create = failed_creation
+    creating = threading.Thread(target=create)
+    stopping = threading.Thread(target=manager.shutdown)
+    creating.start()
+    try:
+        assert entered.wait(5)
+        stopping.start()
+        assert manager._stop.wait(5)
+    finally:
+        release.set()
+        creating.join(5)
+        if stopping.ident is not None:
+            stopping.join(5)
+    assert not creating.is_alive() and not stopping.is_alive()
+    assert errors == [502 if failed_creation else 503]
+    assert engine.containers == {} and manager.list() == []
+    with pytest.raises(sr.ApiError) as caught:
+        manager.create({"session": "new"})
+    assert caught.value.status == 503
+    assert len(engine.commands("run")) == 1
+
+
+def test_shutdown_does_not_wait_forever_for_a_stuck_pending_creation(manager, monkeypatch, caplog):
+    manager._pending.add("bc-sandbox-stuck")
+    monkeypatch.setattr(sr, "CREATE_SHUTDOWN_TIMEOUT", 0)
+    manager.shutdown()
+    assert "Timed out waiting for 1 pending sandbox creations during shutdown" in caplog.text
 
 
 # ----- files --------------------------------------------------------------------------------------------------------------

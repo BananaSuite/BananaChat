@@ -369,6 +369,33 @@ class CheckpointAgentTests(unittest.TestCase):
         self.assertEqual(restored["digest"], completed["digest"])
         self.assertEqual(len(restarted.list_checkpoints()["checkpoints"]), 1)
 
+    def test_shutdown_keeps_directory_descriptors_until_a_blocked_worker_finishes(self):
+        from unittest.mock import patch
+
+        payload = safetensors(b"blocked-shutdown")
+        fetcher = BlockingFetcher(payload)
+        agent = self.agent(fetcher=fetcher)
+        job, _ = agent.submit(self.request(payload))
+        self.assertTrue(fetcher.entered.wait(2))
+        descriptors = (agent._root_fd, agent._state_fd)
+        try:
+            # Simulate expiry of the close grace period while the remote read
+            # is still blocked, without making this regression take five seconds.
+            with patch.object(agent._worker, "join", return_value=None):
+                agent.close()
+            for descriptor in descriptors:
+                os.fstat(descriptor)
+            self.assertTrue(agent._worker.is_alive())
+        finally:
+            fetcher.release.set()
+            agent._worker.join(2)
+        self.assertFalse(agent._worker.is_alive())
+        self.assertEqual(json.loads((self.state / "state.json").read_text())["jobs"][job["id"]]["status"], "queued")
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        agent.close()  # Repeated cleanup must not close a reused file descriptor.
+
     def test_queued_job_is_recovered_after_restart(self):
         payload = safetensors(b"recover")
         first = self.agent(payload=payload, start_worker=False)
@@ -726,6 +753,69 @@ class CheckpointAgentHTTPTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as oversized:
             urllib.request.urlopen(too_large, timeout=2)
         self.assertEqual(oversized.exception.code, 413)
+
+    def test_trickling_headers_and_bodies_release_http_slots(self):
+        import socket
+
+        for stage in ("headers", "body"):
+            with self.subTest(stage=stage):
+                server = AgentHTTPServer(("127.0.0.1", 0), self.http_agent, max_threads=1,
+                                         header_deadline=0.2, body_deadline=0.2)
+                serving = threading.Thread(target=server.serve_forever,
+                                           kwargs={"poll_interval": 0.05}, daemon=True)
+                serving.start()
+                stop = threading.Event()
+                try:
+                    with socket.create_connection(("127.0.0.1", server.server_port), timeout=2) as sock:
+                        request = b"GET /v1/status HTTP/1.1\r\nHost: "
+                        if stage == "body":
+                            request = (b"POST /v1/downloads HTTP/1.1\r\nHost: x\r\n"
+                                       b"Authorization: Bearer test-bearer-token\r\n"
+                                       b"Content-Type: application/json\r\nContent-Length: 4096\r\n\r\n{")
+                        sock.sendall(request)
+
+                        def drip(stop=stop, sock=sock):
+                            while not stop.wait(0.05):
+                                try:
+                                    sock.sendall(b" ")
+                                except OSError:
+                                    break
+
+                        dripper = threading.Thread(target=drip, daemon=True)
+                        dripper.start()
+                        started = time.monotonic()
+                        self.assertEqual(sock.recv(4096), b"")
+                        self.assertLess(time.monotonic() - started, 1)
+                        stop.set()
+                        dripper.join(1)
+                    # The capped slot must become available again after the disconnect.
+                    deadline = time.monotonic() + 1
+                    while time.monotonic() < deadline:
+                        with socket.create_connection(("127.0.0.1", server.server_port), timeout=2) as sock:
+                            sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+                            if sock.recv(4096).startswith(b"HTTP/1.1 200"):
+                                break
+                        time.sleep(0.01)
+                    else:
+                        self.fail("the slow client did not release its HTTP slot")
+                finally:
+                    stop.set()
+                    server.shutdown()
+                    server.server_close()
+                    serving.join(1)
+
+    def test_header_deadline_does_not_interrupt_checkpoint_processing(self):
+        from unittest.mock import patch
+
+        def slow_list():
+            time.sleep(0.3)
+            return {"checkpoints": []}
+
+        self.server.header_deadline = 0.1
+        with patch.object(self.http_agent, "list_checkpoints", side_effect=slow_list):
+            status, listed, _ = self.call("GET", "/v1/checkpoints")
+        self.assertEqual(status, 200)
+        self.assertEqual(listed, {"checkpoints": []})
 
 
 if __name__ == "__main__":

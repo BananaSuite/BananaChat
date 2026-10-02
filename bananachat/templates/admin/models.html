@@ -41,8 +41,8 @@
 </div>
 
 {% if recovery and recovery.open %}
-<section class="card card-attention mb-3" id="recovery" aria-labelledby="recovery-title">
-  <div class="card-header">
+<section class="settings-section card-attention mb-3" id="recovery" aria-labelledby="recovery-title">
+  <div class="section-header">
     <h2 id="recovery-title">{{ "Published models not installed" if recovery.origin == "catalog" else "Models to restore" }}</h2>
     {{ status_badge(recovery.state) }}
   </div>
@@ -59,7 +59,7 @@
   <form method="post" action="{{ url_for('admin.model_recovery') }}" class="stack">
     {{ csrf() }}
     {% if recovery.missing_choices %}
-    <fieldset>
+    <fieldset class="admin-fieldset">
       <legend>Missing models</legend>
       <div class="check-list">
       {% for item in recovery.missing_choices %}
@@ -94,8 +94,8 @@
 {% endif %}
 
 {% if new_models %}
-<section class="card card-attention mb-3" id="new-models" aria-labelledby="new-models-title">
-  <div class="card-header">
+<section class="settings-section card-attention mb-3" id="new-models" aria-labelledby="new-models-title">
+  <div class="section-header">
     <h2 id="new-models-title">{{ new_models | length }} new model{{ "s" if new_models | length != 1 }}</h2>
   </div>
   <p class="muted small">Detected on the model server and hidden from users until you enable them. Ignored models are never offered again (restore them in Settings).</p>
@@ -125,8 +125,8 @@
 {% endif %}
 
 {% if attention %}
-<section class="card mb-3" id="attention" aria-labelledby="attention-title">
-  <div class="card-header"><h2 id="attention-title">Needs attention</h2></div>
+<section class="settings-section mb-3" id="attention" aria-labelledby="attention-title">
+  <div class="section-header"><h2 id="attention-title">Needs attention</h2></div>
   <ul class="divider-list lifecycle-list">
     {% for model in attention %}
     <li class="lifecycle-item">
@@ -252,8 +252,8 @@
   {% endif %}
 </section>
 
-<section class="card mb-3" id="running" aria-labelledby="running-title">
-  <div class="card-header">
+<section class="settings-section mb-3" id="running" aria-labelledby="running-title">
+  <div class="section-header">
     <h2 id="running-title">Loaded in memory</h2>
     <div class="row">
       <button type="button" class="btn btn-sm" data-running-refresh>{{ icon("refresh") }}Refresh</button>

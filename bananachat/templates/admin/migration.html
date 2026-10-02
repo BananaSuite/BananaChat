@@ -6,7 +6,7 @@
 {{ header("Backup & migration", "Keep copies of your data and move the installation to another server.") }}
 
 <div class="grid grid-2">
-  <section class="card stack" aria-labelledby="backup-title">
+  <section class="settings-section stack" aria-labelledby="backup-title">
     <h2 id="backup-title">{{ icon("shield") }} Backups</h2>
     <p>Backups are made on the server with the management tool, which briefly pauses the site so the copy is consistent. Run these commands in a terminal on the server:</p>
     <dl class="command-list">
@@ -20,7 +20,7 @@
     <p class="muted small">Encrypted, scheduled backups to a private GitHub or Forgejo repository are also available (<code>sudo bananachat backups configure</code>, then <code>backups enable</code>); see <em>docs/backups.md</em>. Keep an offline copy of the recovery key. Backups without model files record which models were installed: after a restore, the <a href="{{ url_for('admin.models') }}#recovery">Models</a> page offers to download them again.</p>
   </section>
 
-  <section class="card stack" aria-labelledby="export-title">
+  <section class="settings-section stack" aria-labelledby="export-title">
     <h2 id="export-title">{{ icon("download") }} Database export</h2>
     <p>Downloads a consistent copy of the database ({{ database_size | filesize if database_size is not none else "size unknown" }}, schema version {{ schema_version }}) as a <code>.tar.gz</code> file. Use it to move the accounts, chats and settings of an older installation to a new managed server:</p>
     <pre><code>sudo bananachat restore --legacy-database /root/bananachat_export.tar.gz</code></pre>

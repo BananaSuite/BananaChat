@@ -11,7 +11,7 @@
     <input type="text" id="category-description" name="description" maxlength="500" value="{{ source.get('description') or '' }}">
   </div>
 </div>
-<fieldset>
+<fieldset class="admin-fieldset">
   <legend>Where the category's access rule applies</legend>
   <label class="check"><input type="radio" name="scope" value="both"{% if current_scope == "both" %} checked{% endif %}><span>Chat and API</span></label>
   <label class="check"><input type="radio" name="scope" value="chat"{% if current_scope == "chat" %} checked{% endif %}><span>Chat only<small>The API ignores this category.</small></span></label>

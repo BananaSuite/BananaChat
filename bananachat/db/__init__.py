@@ -51,13 +51,20 @@ class Row(sqlite3.Row):
 _path: Path | None = None
 _local = threading.local()
 _generation = 0
+_configuration_lock = threading.Lock()
 
 
 def configure(database_path) -> None:
     """Select the database used by :func:`conn` (called by the app factory)."""
     global _path, _generation
-    _path = Path(database_path).absolute()
-    _generation += 1
+    target = Path(database_path).absolute()
+    with _configuration_lock:
+        # Another app using this database must not invalidate connections in
+        # active requests or background transactions.
+        if target == _path:
+            return
+        _path = target
+        _generation += 1
 
 
 def path() -> Path:

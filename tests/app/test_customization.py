@@ -6,6 +6,8 @@ import io
 import os
 import time
 
+import pytest
+
 from tests.app.conftest import TEST_CSRF, Browser
 
 
@@ -59,7 +61,8 @@ def test_save_merges_validates_and_applies(app, make_user):
     assert response.status_code == 200
     saved = response.get_json()["preferences"]
     assert saved["theme_mode"] == "light" and saved["contrast"] == 3 and saved["font_scale"] == 1.2
-    assert saved["custom_primary"] == "#aabbcc" and saved["custom_bg"] == "" and saved["sidebar_width"] == 280
+    assert saved["custom_primary"] == "#aabbcc" and saved["custom_bg"] == ""
+    assert saved["sidebar_width"] == users.PREFERENCE_DEFAULTS["sidebar_width"]
     assert saved["background_image"] == "" and "unknown" not in saved
     # A partial update keeps the other values.
     browser.post_json("/api/preferences", {"reduce_motion": True})
@@ -79,6 +82,21 @@ def test_language_preference_switches_the_interface(app, make_user):
     response = browser.post_json("/api/preferences", {"interface_language": "en"})
     assert response.get_json()["reload"] is True
     assert 'lang="en"' in browser.get("/customize").get_data(as_text=True)
+
+
+@pytest.mark.parametrize(("theme", "primary", "foreground"), [
+    ("light", "#e6be32", "#000000"),
+    ("dark", "#112244", "#ffffff"),
+    ("light", "#ffffff", "#000000"),
+    ("dark", "#000000", "#ffffff"),
+])
+def test_primary_button_text_follows_custom_color(app, make_user, theme, primary, foreground):
+    make_user("palette-user")
+    browser = _signed_in(app, "palette-user")
+    assert browser.post_json("/api/preferences", {"theme_mode": theme, "custom_primary": primary}).status_code == 200
+    html = browser.get("/account").get_data(as_text=True)
+    assert f"--palette-primary: {primary};" in html
+    assert f"--palette-on-primary: {foreground};" in html
 
 
 def test_legacy_endpoints_still_work(app, make_user):

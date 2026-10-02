@@ -4,8 +4,8 @@
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/developer.css') }}">{% endblock %}
 {% block content %}
 {# Shown only to browsers without JavaScript; the token is in this response and nowhere else. #}
-<div class="page page-narrow">
-  <section class="card" aria-labelledby="created-title">
+<div class="page">
+  <section class="settings-section" aria-labelledby="created-title">
     <h1 id="created-title">{{ t("developer.token_rotated_title") if rotated else t("developer.token_created_title") }}</h1>
     <div class="alert alert-warning mb-2" role="alert">{{ icon("alert") }}<p>{{ t("developer.token_once") }}</p></div>
     <label for="new-token" class="label">{{ name or t("developer.token_unnamed") }}</label>

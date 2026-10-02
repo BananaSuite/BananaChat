@@ -780,6 +780,52 @@ def test_a_revision_signed_by_a_listed_key_is_deployed(tmp_path, checkout):
     assert not (manager.root / 'config/repo.allowed_signers').exists()
 
 
+@pytest.mark.parametrize('product,mode', [('BananaWiki', 'wiki'), ('BananaChat', 'single')])
+def test_migration_preserves_required_update_signers(tmp_path, checkout, product, mode):
+    manager, _ = installed(tmp_path, checkout, product, mode)
+    key, allowed = signing_key(tmp_path, 'maintainer')
+    signers = tmp_path / 'allowed_signers'
+    signers.write_text(allowed)
+    manager.configure_source(signers_file=signers)
+    archive = manager.backup()
+    restored = Manager(tmp_path / 'restored-signed', product=product, system=Services())
+    restored.restore(archive, new=True)
+    trust = restored.config_dir / 'repo.allowed_signers'
+    assert trust.read_text() == allowed
+    assert trust.stat().st_mode & 0o777 == 0o600
+    assert restored.source()['signing'] == 'ssh'
+    assert restored.policy()['enabled'] is False
+    expected = sign_revision(checkout, key)
+    assert restored.update()['revision'] == expected
+
+
+def test_failed_restore_rolls_back_repository_credentials_and_update_trust(tmp_path, checkout):
+    manager, services = installed(tmp_path, checkout)
+    key, allowed = signing_key(tmp_path, 'original')
+    signers = tmp_path / 'allowed_signers'
+    signers.write_text(allowed)
+    manager.configure_source(signers_file=signers)
+    archive = manager.backup()
+    previous = manager.settings()['revision']
+    live = sign_revision(checkout, key)
+    manager.update()
+    _, live_allowed = signing_key(tmp_path, 'live')
+    signers.write_text(live_allowed)
+    token = tmp_path / 'live.token'
+    token.write_text('fixture-live-repository-token')
+    manager.configure_source(url='https://example.invalid/live.git', branch='live',
+                             token_file=token, signers_file=signers)
+    configuration = manager.source()
+    services.fail_revision = previous
+    with pytest.raises(RuntimeError, match='readiness'):
+        manager.restore(archive)
+    assert manager.settings()['revision'] == live
+    assert manager.source() == configuration
+    assert (manager.config_dir / 'repo.token').read_text().strip() == token.read_text()
+    assert (manager.config_dir / 'repo.allowed_signers').read_text() == live_allowed
+    assert not (manager.config_dir / 'transaction.json').exists()
+
+
 def test_automatic_updates_also_require_a_signature(tmp_path, checkout):
     """The unattended path is the one that matters: it must not relax the check."""
     manager, _ = installed(tmp_path, checkout)
@@ -831,15 +877,20 @@ def test_an_openpgp_signature_does_not_satisfy_the_allowed_signers_file(tmp_path
     machine's GnuPG keyring trusts, which is not the file the operator
     configured. Only SSH signatures count here.
     """
-    home = tmp_path / 'gnupg'
-    home.mkdir(mode=0o700)
-    environment = {**os.environ, 'GNUPGHOME': str(home)}
+    # GPG's agent uses Unix sockets under its home, whose pathname is limited
+    # to about 100 bytes. A long pytest --basetemp must not prevent this real
+    # signature regression from creating its disposable key.
+    temporary = tempfile.TemporaryDirectory(prefix='banana-gpg-')
+    request.addfinalizer(temporary.cleanup)
+    home = Path(temporary.name)
+    environment = {**os.environ, 'GNUPGHOME': str(home),
+                   'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1'}
     # Generating a key starts a gpg-agent daemon that outlives the test and
     # holds a socket under tmp_path. Stop it however this test ends.
     request.addfinalizer(lambda: subprocess.run(
         ['gpgconf', '--homedir', str(home), '--kill', 'gpg-agent'],
         env=environment, capture_output=True, timeout=60, check=False))
-    subprocess.run(['gpg', '--batch', '--passphrase', '', '--quick-gen-key',
+    subprocess.run(['gpg', '--batch', '--pinentry-mode', 'loopback', '--passphrase', '', '--quick-gen-key',
                     'Fixture <fixture@example.invalid>', 'ed25519', 'sign', '0'],
                    env=environment, check=True, capture_output=True, timeout=120)
     fingerprint = subprocess.run(['gpg', '--list-secret-keys', '--with-colons'], env=environment,
@@ -855,7 +906,7 @@ def test_an_openpgp_signature_does_not_satisfy_the_allowed_signers_file(tmp_path
 
     (checkout / 'version.txt').write_text('openpgp\n')
     subprocess.run(['git', '-C', str(checkout), 'add', '.'], check=True, capture_output=True)
-    subprocess.run(['git', '-C', str(checkout), '-c', 'user.signingkey=' + key,
+    subprocess.run(['git', '-C', str(checkout), '-c', 'gpg.format=openpgp', '-c', 'user.signingkey=' + key,
                     'commit', '-S', '-m', 'OpenPGP signed'],
                    env=environment, check=True, capture_output=True, timeout=120)
 

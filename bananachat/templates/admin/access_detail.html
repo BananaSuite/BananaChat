@@ -1,18 +1,18 @@
 {% extends "admin/_layout.html" %}
 {% from "admin/_macros.html" import header, csrf, when, utc_input %}
 {% from "partials/icons.html" import icon %}
-{% block title %}Access · {{ resource.name }}{% endblock %}
+{% block title %}Permissions · {{ resource.name }}{% endblock %}
 {% block admin_content %}
 {% set scope_labels = {"uncensored": "Uncensored models", "image_generation": "Image generation", "custom_personality": "Custom personalities", "agents": "Agents", "category": "Category", "model": "Model"} %}
-<p class="breadcrumb"><a href="{{ url_for('admin.access') }}">{{ icon("chevron-left") }}Access</a></p>
+<p class="breadcrumb"><a href="{{ url_for('admin.access') }}">{{ icon("chevron-left") }}Permissions</a></p>
 {{ header(resource.kind ~ ": " ~ resource.name, resource.description) }}
 
 <div class="grid grid-2 mb-3">
-  <section class="card" aria-labelledby="rule-title">
+  <section class="settings-section" aria-labelledby="rule-title">
     <h2 id="rule-title">Who may use it</h2>
     <form method="post" action="{{ url_for('admin.access_policy', scope=resource.scope, resource_id=resource.id) }}" class="stack">
       {{ csrf() }}
-      <fieldset>
+      <fieldset class="admin-fieldset">
         <legend class="visually-hidden">Access mode</legend>
         {% for mode, label in mode_labels.items() %}
         <label class="check"><input type="radio" name="mode" value="{{ mode }}"{% if policy.mode == mode %} checked{% endif %}><span>{{ label }}<small>{{ mode_help[mode] }}</small></span></label>
@@ -28,7 +28,7 @@
     </form>
   </section>
 
-  <section class="card" aria-labelledby="add-title">
+  <section class="settings-section" aria-labelledby="add-title">
     <h2 id="add-title">Add someone to a list</h2>
     <form method="post" action="{{ url_for('admin.access_member_add', scope=resource.scope, resource_id=resource.id) }}" class="stack">
       {{ csrf() }}

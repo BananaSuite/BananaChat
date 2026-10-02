@@ -12,10 +12,10 @@
     </div>
   </header>
   {% include "developer/_tabs.html" %}
-  <div class="stack-lg">
+  <div class="section-stack">
     {% include "developer/_credits.html" %}
-    <section class="card" aria-labelledby="history-title">
-      <div class="card-header">
+    <section class="settings-section" aria-labelledby="history-title">
+      <div class="section-header">
         <h2 id="history-title">{{ t("developer.usage_title") }}</h2>
         {% if history %}<span class="hint">{{ t("developer.usage_limit", count=limit) }}</span>{% endif %}
       </div>
@@ -48,7 +48,6 @@
               <td class="text-right mono">{{ row.tokens_out | number }}</td>
               <td class="text-right mono nowrap">
                 {{ row.counted_tokens | number }}
-                {% if row.is_slow %}<span class="badge badge-warning">{{ t("developer.usage_slow") }}</span>{% endif %}
                 {% if row.usage_estimated %}<span class="badge" title="{{ t('developer.usage_estimated_hint') }}">{{ t("developer.usage_estimated") }}</span>{% endif %}
               </td>
             </tr>

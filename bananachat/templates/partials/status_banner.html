@@ -1,11 +1,12 @@
 {#- Service notices (maintenance, AI-server outage, backup server, announcements).
     Rendered on every page; core.js keeps it current by polling /status. -#}
 {% from "partials/icons.html" import icon %}
-<div class="status-region" id="status-region" data-status-region>
-{%- for notice in status_notices %}
-  {%- set icon_name = {"maintenance": "settings", "outage": "server", "fallback": "refresh", "announcement": "info"}.get(notice.kind, "info") %}
+<div class="status-region" id="status-region" data-status-region data-status-user="{{ current_user.id if current_user else 'public' }}">
+{%- for notice in status_notices if notice.visible | default(true) %}
+  {%- set worker_warning = notice.kind in ("outage", "local_outage", "fallback") %}
+  {%- set icon_name = {"maintenance": "settings", "outage": "server", "local_outage": "server", "fallback": "refresh", "announcement": "info"}.get(notice.kind, "info") %}
   <section class="status-banner status-{{ notice.level }}{% if notice.blocks_inference %} is-blocking{% endif %}"
-           data-kind="{{ notice.kind }}"{% if notice.dismissible %} data-dismissible="1" data-dismiss-key="{{ notice.message | truncate(80, true, '') }}"{% endif %}
+           data-kind="{{ notice.kind }}"{% if worker_warning %} data-worker-warning="1"{% endif %}{% if notice.dismissible %} data-dismissible="1" data-dismiss-key="{{ notice.message | truncate(80, true, '') }}"{% endif %}
            role="{{ 'alert' if notice.level == 'danger' else 'status' }}" aria-labelledby="status-title-{{ loop.index }}">
     <span class="status-icon" aria-hidden="true">{{ icon(icon_name) }}</span>
     <div class="status-body">
@@ -27,13 +28,20 @@
       {%- endif %}
       {%- endif %}
     </div>
-    {%- if is_admin and notice.kind == "maintenance" and has_endpoint("admin.settings") %}
-    <a class="btn btn-sm status-action" href="{{ url_for('admin.settings') }}">{{ t("status.manage") }}</a>
-    {%- elif is_admin and notice.kind in ("outage", "fallback") and has_endpoint("admin.dashboard") %}
-    <a class="btn btn-sm status-action" href="{{ url_for('admin.dashboard') }}">{{ t("status.details") }}</a>
-    {%- endif %}
-    {%- if notice.dismissible %}
-    <button type="button" class="icon-btn" data-dismiss-status aria-label="{{ t('common.dismiss') }}">{{ icon("close") }}</button>
+    {%- if worker_warning or notice.dismissible or (is_admin and notice.kind == "maintenance" and has_endpoint("admin.settings")) %}
+    <div class="status-actions">
+      {%- if is_admin and notice.kind == "maintenance" and has_endpoint("admin.settings") %}
+      <a class="btn btn-sm" href="{{ url_for('admin.settings') }}">{{ t("status.manage") }}</a>
+      {%- elif is_admin and worker_warning and has_endpoint("admin.dashboard") %}
+      <a class="btn btn-sm" href="{{ url_for('admin.dashboard') }}">{{ t("status.details") }}</a>
+      {%- endif %}
+      {%- if worker_warning %}
+      <button type="button" class="btn btn-sm" data-hide-worker-status>{{ t("status.hide_worker_24h") }}</button>
+      {%- endif %}
+      {%- if notice.dismissible %}
+      <button type="button" class="icon-btn" data-dismiss-status aria-label="{{ t('common.dismiss') }}">{{ icon("close") }}</button>
+      {%- endif %}
+    </div>
     {%- endif %}
   </section>
 {%- endfor %}

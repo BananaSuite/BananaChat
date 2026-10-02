@@ -21,7 +21,7 @@
           <button type="submit" class="btn btn-sm">{{ icon("close") }}{{ t("chat.end_chat") }}</button>
         </form>
         {% else %}
-        <button type="button" class="icon-btn" id="share-button" aria-label="{{ t('chat.share') }}" title="{{ t('chat.share') }}">{{ icon("share") }}</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="share-button" aria-label="{{ t('chat.share') }}" title="{{ t('chat.share') }}">{{ icon("share") }}<span>{{ t("chat.share") }}</span></button>
         {% endif %}
         <button type="button" class="icon-btn" id="chat-menu-button" aria-haspopup="menu" aria-expanded="false" aria-label="{{ t('chat.chat_options') }}" title="{{ t('chat.chat_options') }}">{{ icon("more") }}</button>
       </div>
@@ -55,7 +55,7 @@
 </div>
 <div class="popup-menu" id="popup-menu" role="menu" hidden></div>
 <p class="visually-hidden" id="chat-announcer" role="status" aria-live="polite"></p>
-{% for name in ["copy", "check", "speaker", "stop", "file", "image", "download", "edit", "share", "trash", "close", "alert", "info", "refresh", "more", "eye-off", "sparkles", "chevron-down", "lock"] %}
+{% for name in ["copy", "check", "speaker", "stop", "file", "image", "download", "edit", "share", "trash", "close", "alert", "info", "refresh", "more", "eye-off", "user", "chevron-down", "lock"] %}
 <template id="icon-{{ name }}">{{ icon(name) }}</template>
 {% endfor %}
 <script type="application/json" id="page-data">{{ data | tojson }}</script>

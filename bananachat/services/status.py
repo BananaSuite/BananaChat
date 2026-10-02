@@ -11,8 +11,8 @@ Conditions, in order of precedence:
   cannot start new answers; administrators still can (to test), and see a
   reminder that the site is closed to everyone else.
 * ``outage`` - the inference (compute) server stopped answering and
-  ``BC_INFERENCE_OUTAGE_MODE=shutdown``. Nobody can start new answers until it
-  is back; the banner updates by itself when it recovers.
+  ``BC_INFERENCE_OUTAGE_MODE=shutdown``. Answers are paused unless an accessible
+  hosted model remains available; then a nonblocking ``local_outage`` is shown.
 * ``fallback`` - the primary server is down but ``BC_INFERENCE_OUTAGE_MODE=fallback``
   routes requests to the backup server: informational only.
 * ``announcement`` - the administrator's banner message (Settings).
@@ -32,13 +32,14 @@ BLOCKING_KINDS = ("maintenance", "outage")
 
 @dataclass(frozen=True)
 class Notice:
-    kind: str                 # maintenance | outage | fallback | announcement
+    kind: str                 # maintenance | outage | local_outage | fallback | announcement
     level: str                # danger | warning | info
     message: str = ""         # administrator-written text (may be empty)
     blocks_inference: bool = False
     dismissible: bool = False
     since: float | None = None
     admin_bypass: bool = False  # the current user is exempt (administrator in maintenance)
+    visible: bool = True       # presentation only; never changes health or inference admission
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -53,6 +54,22 @@ def _settings() -> dict:
 
 
 _CURRENT = object()
+
+
+def _hosted_models_available(user):
+    from bananachat.db import catalog
+    from bananachat.services.access import AccessContext, is_text_model
+    from bananachat.services import claude_pool
+
+    context = AccessContext.load(user) if user is not None else None
+    for model in catalog.list_models(rolled_out_only=True):
+        if model["backend"] not in ("claude", "external") or not is_text_model(model):
+            continue
+        if model["backend"] == "claude" and claude_pool._site_chat is None:
+            continue
+        if context is None or context.can_use(model, "chat") or context.can_use(model, "api"):
+            return True
+    return False
 
 
 def notices(user=_CURRENT) -> list[Notice]:
@@ -72,10 +89,16 @@ def notices(user=_CURRENT) -> list[Notice]:
                              blocks_inference=not is_admin, admin_bypass=is_admin))
     if not config.ollama_is_local and health.inference_down():
         since = health.status().get("since")
+        visible = bool(settings.get("worker_offline_warning_enabled", 1))
         if config.inference_outage_mode == "shutdown":
-            result.append(Notice("outage", "danger", blocks_inference=True, since=since))
+            if _hosted_models_available(user):
+                result.append(Notice("local_outage", "warning", blocks_inference=False, since=since,
+                                     visible=visible))
+            else:
+                result.append(Notice("outage", "danger", blocks_inference=True, since=since,
+                                     visible=visible))
         else:
-            result.append(Notice("fallback", "info", since=since))
+            result.append(Notice("fallback", "info", since=since, visible=visible))
     if settings.get("warning_banner_enabled") and (settings.get("warning_banner_message") or "").strip():
         result.append(Notice("announcement", "info", settings["warning_banner_message"].strip(),
                              dismissible=bool(settings.get("warning_banner_dismissible"))))
@@ -98,20 +121,18 @@ def overall() -> str:
     for kind in ("outage", "maintenance"):
         if kind in kinds:
             return kind
-    return "degraded" if "fallback" in kinds else "ok"
+    return "degraded" if kinds & {"fallback", "local_outage"} else "ok"
 
 
 # Messages used for refusals; the interface shows translated text (status.* keys).
 REFUSALS = {
-    "maintenance": "The site is under maintenance, so new messages are paused. Your chats are safe; "
-                   "please try again later.",
-    "outage": "The AI server is unreachable right now, so new messages are paused. Your chats are safe; "
-              "sending will be possible again as soon as it is back.",
+    "maintenance": "Maintenance in progress. Sending is paused.",
+    "outage": "Model server unavailable. Sending is paused until it reconnects.",
 }
 
 
 def refusal(notice: Notice) -> str:
-    text = REFUSALS.get(notice.kind, "New messages are paused right now.")
+    text = REFUSALS.get(notice.kind, "Sending is paused.")
     if notice.kind == "maintenance" and notice.message:
         text = f"{text} {notice.message}"
     return text

@@ -9,6 +9,7 @@
   {% set page_title = self.title() | trim %}
   <title>{% if page_title %}{{ page_title }} · {% endif %}{{ site_name }}</title>
   <link rel="icon" href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/favicon.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
   {% block styles %}{% endblock %}
   {% include "partials/theme.html" %}

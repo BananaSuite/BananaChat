@@ -1,60 +1,111 @@
 {% extends "admin/_layout.html" %}
 {% from "admin/_macros.html" import header, csrf %}
 {% from "partials/icons.html" import icon %}
-{% block title %}Claude subscription pool{% endblock %}
+{% block title %}Claude accounts{% endblock %}
 {% block admin_content %}
-{% call header("Claude", "Pool the site's Claude subscriptions; users chat with Claude models here while the backend uses the pooled accounts.") %}{% endcall %}
+{% call header("Claude", "Manage accounts and models available through your configured Claude adapter.") %}{% endcall %}
 {% include "admin/_models_tabs.html" %}
 
-<section class="card mb-3">
-  <div class="card-header"><h2>Pool quota</h2>
-    <form method="post" action="{{ url_for('admin.claude_refresh') }}">{{ csrf() }}<button class="btn btn-sm" type="submit">Re-read quota</button></form>
+<section class="settings-section mb-3">
+  <div class="section-header"><h2>Pool status</h2>
+    <form method="post" action="{{ url_for('admin.claude_refresh') }}">{{ csrf() }}<button class="btn btn-sm" type="submit">Refresh quota</button></form>
   </div>
-  <p class="muted small">Token-based. Claude models do <strong>not</strong> count toward the service (pool) limits by default; each has its own strict 5-hour token window (weekly optional, off by default). While less than half of the pooled subscription quota is left, their limits shrink automatically — on top of dynamic adjustment for demand, active people and usage pattern. Opus is strictest, then Sonnet, then Haiku.</p>
-  <p>Pooled remaining: 5-hour {% if quota.window_left is none %}unknown{% else %}{{ (quota.window_left * 100) | round(1) }}%{% endif %} · weekly {% if quota.weekly_left is none %}unknown{% else %}{{ (quota.weekly_left * 100) | round(1) }}%{% endif %} · {{ quota.accounts }} active account(s), {{ quota.usable if quota.usable is defined else quota.accounts }} with quota left now.</p>
-  <p class="muted small mb-0">The pool is the sum of its active accounts: one exhausted subscription only removes its share. Requests go to the highest-priority account with quota left; when the Claude site reports an account out of quota (or it fails), it rests and the next account answers. With no account able to answer, Claude models count as used up and the chat falls back to local models (Limits → Services → Model fallback).</p>
-  {% if not has_client %}<div class="alert alert-warning mt-1">{{ icon("alert") }}<p>No Claude site client is registered on this server, so Claude models cannot answer yet: their requests fail over to local models while the model fallback allows it. Register one with <code>claude_pool.register_site_chat(handler)</code>.</p></div>{% endif %}
+  {% if extension_error %}
+  <div class="alert alert-warning">{{ icon("alert") }}<p>The Claude adapter could not initialize. Check the server configuration.</p></div>
+  {% elif not has_client %}
+  <p><strong>Disconnected.</strong> Claude requests need an authorized adapter configured on this server. <a href="https://github.com/BananaSuite/BananaChat/blob/main/docs/claude-router.md">Setup and adapter requirements</a></p>
+  {% else %}
+  <p><strong>{{ "Claude Code configured." if is_code_adapter else "Adapter configured." }}</strong> Model discovery and quota reports determine which requests can run.</p>
+  {% endif %}
+  <p>Scheduling capacity: 5-hour {% if quota.window_left is none %}unknown{% else %}{{ (quota.window_left * 100) | round(1) }}%{% endif %} · weekly {% if quota.weekly_left is none %}uncapped locally{% else %}{{ (quota.weekly_left * 100) | round(1) }}%{% endif %}</p>
+  {% if is_code_adapter %}<p class="muted small">This adjustment combines local token budgets and subscription observations. Actual subscription balances and plans are shown separately for each account below.</p>{% endif %}
+  <p class="muted small mb-0">{{ quota.accounts }} active account(s) · {{ quota.usable }} with fresh quota · {{ quota.busy }} answering{% if quota.stale %} · {{ quota.stale }} awaiting a fresh provider report{% endif %}</p>
+  {% if quota.reporter_error %}<p class="text-danger mt-1">The quota report could not be verified. Claude requests are paused until a valid refresh.</p>{% endif %}
+  <details class="mt-2">
+    <summary>How pool capacity works</summary>
+    <div class="stack mt-1">
+      <p class="muted small">Each account handles one request at a time. A 5-hour budget is required; a blank or zero budget cannot serve requests. Weekly budgets are optional. Higher priority accounts are tried first.</p>
+      <p class="muted small">Local budgets count usage recorded by this server; they are estimates, not the provider's billing units. Provider reports expire after 15 minutes or their reported reset time. Expired reports require a fresh observation before the account can answer again.</p>
+      <p class="muted small">Each model has its own limits: Fable and Opus are strictest, then Sonnet, then Haiku. Remaining provider capacity reduces these limits, alongside demand adjustment. Claude models do not count toward service token budgets by default; this can be changed in the model's limits.</p>
+      <p class="muted small mb-0">Another account is tried only before any text or reasoning is emitted. Model fallback follows your Services settings.</p>
+    </div>
+  </details>
 </section>
 
-<section class="card mb-3">
-  <div class="card-header"><h2>Subscription accounts ({{ accounts | length }})</h2></div>
-  <form method="post" action="{{ url_for('admin.claude_account_add') }}" class="row" data-busy>
+<section class="settings-section mb-3">
+  <div class="section-header"><h2>Accounts ({{ accounts | length }})</h2></div>
+  <p class="muted small">{% if is_code_adapter %}Choose a private server profile for each account. Each profile can be used once. <a href="https://github.com/BananaSuite/BananaChat/blob/main/docs/claude-code.md">Claude Code setup</a>{% else %}Use the account labels expected by your adapter. Credentials belong in its server configuration.{% endif %}</p>
+  <form method="post" action="{{ url_for('admin.claude_account_add') }}" class="stack" data-busy>
     {{ csrf() }}
-    <div class="field"><label for="claude-label" class="required">Account name</label><input id="claude-label" name="label" required maxlength="80" placeholder="claude-1"></div>
-    <div class="field"><label for="claude-priority">Priority</label><input id="claude-priority" name="priority" type="number" value="0" min="-100" max="100"></div>
-    <div class="field"><label for="claude-window">5-hour tokens</label><input id="claude-window" name="window_limit" type="number" min="0" max="1000000000" placeholder="optional"></div>
-    <div class="field"><label for="claude-weekly">Weekly tokens</label><input id="claude-weekly" name="weekly_limit" type="number" min="0" max="1000000000" placeholder="optional, off by default"></div>
-    <div class="form-actions"><button class="btn btn-primary" type="submit">Add account</button></div>
+    <div class="form-grid">
+      <div class="field"><label for="claude-label" class="required">Account name</label><input type="text" id="claude-label" name="label" required maxlength="80" placeholder="claude-1"></div>
+      {% if is_code_adapter %}<div class="field"><label for="claude-profile" class="required">Claude Code profile</label><select id="claude-profile" name="profile" required>{% for profile in code_profiles %}<option value="{{ profile }}">{{ profile }}</option>{% endfor %}</select></div>{% endif %}
+      <div class="field"><label for="claude-priority">Priority</label><input id="claude-priority" name="priority" type="number" value="0" min="-100" max="100"></div>
+      <div class="field"><label for="claude-window" class="required">5-hour token budget</label><input id="claude-window" name="window_limit" type="number" min="0" max="{{ tokens_max }}" required placeholder="100000"></div>
+      <div class="field"><label for="claude-weekly">Weekly token budget</label><input id="claude-weekly" name="weekly_limit" type="number" min="0" max="{{ tokens_max }}" placeholder="Optional, off by default"></div>
+    </div>
+    <div class="form-actions form-actions-start"><button class="btn btn-primary" type="submit">Add account</button></div>
   </form>
   {% for account in accounts %}
-  <form method="post" action="{{ url_for('admin.claude_account_save', account_id=account.id) }}" class="row mt-1" data-busy>
+  <form method="post" action="{{ url_for('admin.claude_account_save', account_id=account.id) }}" class="stack sub-card mt-2" data-busy>
     {{ csrf() }}
-    <strong class="mono">{{ account.label }}</strong>
-    <select name="status" aria-label="Status">{% for value in ["active", "disabled", "error"] %}<option value="{{ value }}"{% if account.status == value %} selected{% endif %}>{{ value }}</option>{% endfor %}</select>
-    <input name="priority" type="number" value="{{ account.priority }}" min="-100" max="100" aria-label="Priority" title="Priority">
-    <input name="window_limit" type="number" value="{{ account.window_limit or '' }}" min="0" max="1000000000" placeholder="5h tokens" aria-label="5-hour tokens">
-    <input name="weekly_limit" type="number" value="{{ account.weekly_limit or '' }}" min="0" max="1000000000" placeholder="weekly" aria-label="Weekly tokens">
-    <input name="note" value="{{ account.note }}" maxlength="500" placeholder="note" aria-label="Note">
-    <button class="btn btn-sm btn-primary" type="submit" name="action" value="save">Save</button>
-    <button class="btn btn-sm btn-ghost" type="submit" name="action" value="delete" data-confirm="Remove {{ account.label }} from the pool?">Remove</button>
-    <span class="small muted">used {{ account.window_used }} / {{ account.window_limit or '?' }} per 5h · {{ account.weekly_used }} / {{ account.weekly_limit or '?' }} per week{% if account.id in resting %} · resting until {{ resting[account.id] }} UTC{% endif %}{% if account.last_error %} · {{ account.last_error }}{% endif %}</span>
+    <h3 class="mono mb-0">{{ account.label }}</h3>
+    <p class="small muted mb-0">Local token budget: {{ local_usage[account.id][0] }} / {{ account.window_limit if account.window_limit is not none else 'unknown' }} used per 5h{% if account.weekly_limit is not none %} · {{ local_usage[account.id][1] }} / {{ account.weekly_limit }} used per week{% endif %}{% if account.id in resting %} · resting until {{ resting[account.id] }} UTC{% endif %}</p>
+    <p class="small muted mb-0">{% if account.quota_source == 'reported' %}Provider report: {{ account.quota_updated_at or 'unknown' }} UTC{% if account.id in stale %} · stale, requests paused{% endif %}{% else %}Local token budget{% endif %}{% if account.last_error %} · {{ account.last_error }}{% endif %}</p>
+    {% set usage = usage_views.get(account.id) %}
+    {% if usage %}
+    <div class="stack">
+      <p class="small mb-0"><strong>Subscription: {{ usage.plan_label or 'plan unknown' }}</strong>{% if usage.source == 'file' %} · authorized observation file{% endif %}</p>
+      {% if (usage.available and usage.fresh) or usage.has_observation %}
+      {% if not (usage.available and usage.fresh) %}<p class="small muted mb-0"><strong>Last known usage · stale.</strong> These percentages belong to the observation below. Requests are paused until a fresh report is available.</p>{% endif %}
+      <p class="small muted mb-0">5-hour remaining: {% if usage.window_left is none %}unknown{% else %}{{ (usage.window_left * 100) | round(1) }}%{% endif %}{% if usage.window_resets_at %} · resets {{ usage.window_resets_at }} UTC{% endif %}</p>
+      <p class="small muted mb-0">Weekly remaining: {% if usage.weekly_left is none %}not reported{% else %}{{ (usage.weekly_left * 100) | round(1) }}%{% endif %}{% if usage.weekly_resets_at %} · resets {{ usage.weekly_resets_at }} UTC{% endif %}</p>
+      {% for family, scope in usage.model_limits.items() %}<p class="small muted mb-0">{{ family | capitalize }} remaining: {{ (scope.left * 100) | round(1) }}%{% if scope.resets_at %} · resets {{ scope.resets_at }} UTC{% endif %}</p>{% endfor %}
+      <p class="small muted mb-0">Observed {{ usage.observed_at or 'unknown' }} UTC. Subscription percentages are separate from local token usage.</p>
+      {% else %}<p class="small muted mb-0">Subscription usage is unavailable. This account waits for a fresh observation; other healthy accounts can continue answering.</p>{% endif %}
+    </div>
+    {% elif is_code_adapter %}<p class="small muted mb-0">Subscription usage and plan are unknown. An explicit local-budget profile uses the token budget above.</p>{% endif %}
+    <div class="form-grid">
+      {% if is_code_adapter %}<div class="field"><label for="claude-profile-{{ account.id }}">Claude Code profile</label><select id="claude-profile-{{ account.id }}" name="profile" required>{% if code_bindings.get(account.id|string) not in code_profiles %}<option value="">Select a profile</option>{% endif %}{% for profile in code_profiles %}<option value="{{ profile }}"{% if code_bindings.get(account.id|string) == profile %} selected{% endif %}>{{ profile }}</option>{% endfor %}</select></div>{% endif %}
+      <div class="field"><label for="claude-status-{{ account.id }}">Status</label><select id="claude-status-{{ account.id }}" name="status">{% for value in ["active", "disabled", "error"] %}<option value="{{ value }}"{% if account.status == value %} selected{% endif %}>{{ value | capitalize }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="claude-priority-{{ account.id }}">Priority</label><input id="claude-priority-{{ account.id }}" name="priority" type="number" value="{{ account.priority }}" min="-100" max="100"></div>
+      <div class="field"><label for="claude-window-{{ account.id }}">5-hour token budget</label><input id="claude-window-{{ account.id }}" name="window_limit" type="number" value="{{ account.window_limit if account.window_limit is not none else '' }}" min="0" max="{{ tokens_max }}" placeholder="Required to serve requests"></div>
+      <div class="field"><label for="claude-weekly-{{ account.id }}">Weekly token budget</label><input id="claude-weekly-{{ account.id }}" name="weekly_limit" type="number" value="{{ account.weekly_limit if account.weekly_limit is not none else '' }}" min="0" max="{{ tokens_max }}" placeholder="Optional, off by default"></div>
+    </div>
+    <div class="field form-width"><label for="claude-note-{{ account.id }}">Note</label><input type="text" id="claude-note-{{ account.id }}" name="note" value="{{ account.note }}" maxlength="500"></div>
+    <div class="form-actions form-actions-start">
+      <button class="btn btn-primary" type="submit" name="action" value="save">Save</button>
+      {% if is_code_adapter %}<button class="btn" type="submit" form="claude-check-{{ account.id }}">Check login</button>{% endif %}
+      <button class="btn btn-ghost" type="submit" form="claude-remove-{{ account.id }}">Remove</button>
+    </div>
+  </form>
+  {% if is_code_adapter %}<form id="claude-check-{{ account.id }}" method="post" action="{{ url_for('admin.claude_account_check', account_id=account.id) }}" data-busy>{{ csrf() }}</form>{% endif %}
+  <form id="claude-remove-{{ account.id }}" method="post" action="{{ url_for('admin.claude_account_save', account_id=account.id) }}" data-confirm="Remove {{ account.label }} from the pool?" data-confirm-danger>
+    {{ csrf() }}<input type="hidden" name="action" value="delete">
   </form>
   {% endfor %}
 </section>
 
-<section class="card mb-3">
-  <div class="card-header"><h2>Claude models</h2></div>
-  <p class="muted small">Select which Claude models to offer. New models follow enrollment (currently <strong>{{ enrollment }}</strong> in Models → Settings): manual waits for review, automatic enables at once with strict limits. Reasoning effort defaults to low/medium; users request high/max unlocks via quota requests (approving max also allows high and below; sustained use auto-unlocks one level at a time).</p>
+<section class="settings-section mb-3">
+  <div class="section-header"><h2>Available models</h2>
+    <form method="post" action="{{ url_for('admin.claude_discover') }}">{{ csrf() }}<button class="btn btn-sm" type="submit"{% if not has_discovery %} disabled{% endif %}>Refresh models</button></form>
+  </div>
+  {% if is_code_adapter %}<p class="muted small">Automatic profiles discover models through the official Claude Code connection. Profiles configured for manual discovery use their verified server model list. Refresh checks available models and updates missing entries.</p>{% endif %}
+  <p class="muted small">Only models reported by your adapter can be selected. Enrollment is currently <strong>{{ enrollment }}</strong>: manual waits for review; automatic publishes with strict limits. Supported reasoning levels come from discovery. Medium is the default where supported; high, extra and max require the configured unlocks.</p>
+  {% if discovery.note %}<p class="muted">{{ discovery.note }}</p>{% endif %}
+  {% if available %}
   <form method="post" action="{{ url_for('admin.claude_sync') }}" data-busy>
     {{ csrf() }}
+    <div class="field form-width mb-2"><label for="claude-enrollment">New model enrollment</label><select id="claude-enrollment" name="enrollment"><option value="manual"{% if not automatic_enrollment %} selected{% endif %}>Manual review</option><option value="automatic"{% if automatic_enrollment %} selected{% endif %}>Automatic with strict limits</option></select><p class="hint">Automatic enrollment offers newly discovered models with family limits. Unchecked models remain excluded. The catalog ignore list still applies.</p></div>
     <div class="check-list">
-      {% for entry in curated %}
-      <label class="check"><input type="checkbox" name="models" value="{{ entry.item.name }}"{% if entry.row %} checked{% endif %}>
-        <span><span class="mono">{{ entry.item.name }}</span><small>{{ entry.item.display }} · {{ entry.item.family }} · strict {{ entry.strict.window_tokens }} tokens/5h{% if entry.row %} · {% if entry.row.is_rolled_out %}published{% else %}hidden{% endif %}{% if entry.row.missing_at %} · missing{% endif %}{% else %} · not enrolled{% endif %}{% if entry.ignored %} · ignored{% endif %}</small></span>
+      {% for entry in available %}
+      <label class="check"><input type="checkbox" name="models" value="{{ entry.item.name }}"{% if entry.selected %} checked{% endif %}>
+        <span><span class="mono">{{ entry.item.name }}</span><small>{{ entry.item.display }} · {{ entry.item.family }} · {{ entry.strict.window_tokens }} tokens/5h{% if entry.row %} · {% if entry.row.is_rolled_out %}published{% else %}waiting for review{% endif %}{% if entry.row.missing_at %} · unavailable{% endif %}{% else %} · not enrolled{% endif %}{% if entry.ignored %} · ignored{% endif %}</small></span>
       </label>
       {% endfor %}
     </div>
-    <div class="form-actions form-actions-start"><button class="btn btn-primary" type="submit">Sync selected models</button></div>
+    <div class="form-actions form-actions-start"><button class="btn btn-primary" type="submit">Save selected models</button></div>
   </form>
+  {% endif %}
 </section>
 {% endblock %}

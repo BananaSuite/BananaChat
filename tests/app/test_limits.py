@@ -86,7 +86,7 @@ def test_policies_are_validated_on_write(app):
         for scope, key, value in (("rate", "rules", _rules((0, "second", None))),
                                   ("rate", "rules", _rules((1, "second", 0))),
                                   ("rate", "rules", _rules((1.5, "second", None))),
-                                  ("window", "tokens", -1), ("weekly", "tokens", 2_000_000_000),
+                                  ("window", "tokens", -1), ("weekly", "tokens", limits.TOKENS_MAX + 1),
                                   ("rate", "rules", "fast")):
             bad = {section: dict(values) for section, values in good.items() if isinstance(values, dict)}
             bad[scope][key] = value
@@ -198,11 +198,11 @@ def test_usage_counts_inside_the_open_windows(app, make_user):
         _charge(user["id"], 2000, at=now - timedelta(minutes=30), slow=True)
         _charge(user["id"], 5000, at=now - timedelta(minutes=30), request_type="chat")
         current = limits.effective(user, "api")
-        assert (current.window.used, current.window.slow_used, current.weekly.used) == (3000, 2000, 9000)
+        assert (current.window.used, current.window.slow_used, current.weekly.used) == (5000, 0, 9000)
         assert current.window.resets_at - (now - timedelta(hours=1)) < timedelta(hours=5, seconds=2)
         assert current.weekly.resets_at - current.weekly.starts_at == timedelta(days=7)
         budget = current.budget()
-        assert budget.regular_left == 27_000 and budget.weekly_left == 41_000
+        assert budget.regular_left == 40_000 and budget.weekly_left == 41_000
 
 
 def test_weekly_limits_are_off_by_default_and_block_without_a_slow_lane(app, make_user):
@@ -214,11 +214,11 @@ def test_weekly_limits_are_off_by_default_and_block_without_a_slow_lane(app, mak
         _policy("api", weekly={"enabled": True, "tokens": 12_000})
         _charge(user["id"], 10_000)
         budget = credits.budget(user, "api")
-        assert budget.regular_left == 2000 and budget.slow_left == 2000  # weekly tokens cap both
+        assert budget.regular_left == 2000 and budget.slow_left == 0  # weekly tokens cap the single allowance
         _charge(user["id"], 2000)
         budget = credits.budget(user, "api")
         assert budget.weekly_exhausted and not budget.available
-        assert budget.slow_limit == 15_000 and budget.slow_used == 0  # slow tokens are left, but blocked
+        assert budget.slow_limit == 0 and budget.slow_used == 0  # no second allowance
         assert budget.blocked_until == budget.weekly_resets_at
         assert budget.seconds_until_reset() >= 7 * 86_400 - 120
 
@@ -256,9 +256,9 @@ def test_custom_limits_override_the_policy_and_admins_are_unlimited(app, make_us
     with app.app_context():
         store.set_override(user["id"], "api", None, window_tokens=80_000)
         current = limits.effective(user, "api")
-        assert current.window.tokens == 80_000 and current.window.slow_tokens == 15_000  # slow follows the policy
+        assert current.window.tokens == 80_000 and current.window.slow_tokens == 0
         assert current.window.custom and current.window.reasons[0].code == "custom"
-        assert credits.get_quota(user["id"]) == (80_000, 15_000)
+        assert credits.get_quota(user["id"]) == (80_000, 0)
         with pytest.raises(ValueError):
             store.set_override(user["id"], "api", None, rate_rules=_rules((1, "fortnight", None)))
         admin = users.get_by_username("admin")
@@ -299,8 +299,8 @@ def test_tiers_promote_automatically_upwards_only(app, make_user):
         _policy("api", window={"auto_tiers": True})
         promoted = limits.promote()
         assert promoted == [("gail", "Starter", "Regular")]
-        assert credits.budget(regular, "api").regular_limit == 60_000  # 30k x2
-        assert credits.budget(fresh, "api").regular_limit == 30_000
+        assert credits.budget(regular, "api").regular_limit == 90_000  # 45k x2
+        assert credits.budget(fresh, "api").regular_limit == 45_000
         assert credits.budget(regular, "chat").unlimited  # the chat policy has no 5-hour limit
         # Lifting the suspension is not enough: 30 clean days are needed.
         users.unsuspend(suspended["id"])
@@ -312,7 +312,7 @@ def test_tiers_promote_automatically_upwards_only(app, make_user):
         trusted = store.list_tiers()[2]
         store.update_user_settings(regular["id"], None, tier_id=trusted["id"])
         assert limits.promote() == []
-        assert credits.budget(regular, "api").regular_limit == 120_000
+        assert credits.budget(regular, "api").regular_limit == 180_000
         assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='limits.tier_promote'") == 2
 
 
@@ -341,7 +341,7 @@ def test_tier_multipliers_apply_only_where_auto_tiers_is_on(app, make_user):
         store.update_user_settings(user["id"], None, tier_id=store.list_tiers()[1]["id"])
         _policy("api", weekly={"enabled": True, "tokens": 100_000, "auto_tiers": True})
         current = limits.effective(user, "api")
-        assert current.window.tokens == 30_000 and current.weekly.tokens == 200_000
+        assert current.window.tokens == 45_000 and current.weekly.tokens == 200_000
         assert [reason.code for reason in current.weekly.reasons] == ["default", "tier"]
         store.set_override(user["id"], "api", None, weekly_tokens=150_000)  # custom beats the tier
         assert limits.effective(user, "api").weekly.tokens == 150_000
@@ -417,13 +417,13 @@ def test_dynamic_limits_follow_demand_explain_themselves_and_respect_custom_limi
 
     quiet, custom, exempt = make_user("quin"), make_user("cora"), make_user("xena")
     with app.app_context():
-        _policy("api", window={"dynamic": True}, rate={"dynamic": True})
+        _policy("api", window={"tokens": 30_000, "dynamic": True}, rate={"dynamic": True})
         store.set_override(custom["id"], "api", None, window_tokens=40_000, window_slow_tokens=10_000)
         store.update_user_settings(exempt["id"], None, dynamic_exempt=True)
         limits.record_demand(0, 0, 4, at=time.time())  # a quiet site: +25 %
         current = limits.effective(quiet, "api")
         assert current.dynamic.multiplier == 1.25
-        assert current.window.tokens == 37_500 and current.window.slow_tokens == 18_750
+        assert current.window.tokens == 37_500 and current.window.slow_tokens == 0
         assert [reason.code for reason in current.window.reasons] == ["default", "dynamic_up"]
         assert [reason.code for reason in current.dynamic.reasons] == ["offpeak"]
         assert current.dynamic.reasons[0].text("en") == "Off-peak bonus +25 %"
@@ -447,7 +447,7 @@ def test_the_personal_factor_rewards_off_peak_regular_use(app, make_user):
 
     night_owl, peak_user = make_user("nora"), make_user("pete")
     with app.app_context():
-        _policy("api", window={"dynamic": True})
+        _policy("api", window={"tokens": 30_000, "dynamic": True})
         now = datetime.now(timezone.utc)
         base = now.replace(minute=0, second=0, microsecond=0)
         for day in range(1, 21):
@@ -499,11 +499,11 @@ def test_grants_stack_unlimited_then_multipliers_then_extras(app, make_user):
         _grant(user_id=user["id"], kind="multiplier", amount=3, ends_at=db.now(-timedelta(seconds=1)))  # over
         _grant(user_id=user["id"], kind="unlimited", starts_at=db.now(timedelta(hours=1)))            # upcoming
         current = limits.effective(user, "api")
-        assert current.window.tokens == 70_000 and current.window.slow_tokens == 30_000  # 30k x2 + 10k; slow x2
+        assert current.window.tokens == 100_000 and current.window.slow_tokens == 0  # 45k x2 + 10k
         codes = [reason.code for reason in current.window.reasons]
         assert codes == ["default", "grant_multiplier", "grant_extra_forever"]
         assert current.window.reasons[2].text("en") == "+10k tokens"
-        assert limits.effective(other, "api").window.tokens == 40_000
+        assert limits.effective(other, "api").window.tokens == 55_000
         assert limits.effective(other, "chat").window.limited is False  # extras never switch a limit on
         assert len(store.user_grants(user["id"])) == 3  # two active, one upcoming
         unlimited = _grant(user_id=other["id"], pool="api", kind="unlimited", ends_at=db.now(timedelta(hours=1)))
@@ -558,7 +558,7 @@ def test_speed_sets_the_queue_lane_and_can_adjust_the_rate(app, make_user):
         assert queue.priority_for(user, slow=False) == queue.PRIORITY_CHAT
         limits.set_speed(user["id"], "fast", adjust_rate=False, updated_by=None)
         assert queue.priority_for(user, slow=False) == queue.PRIORITY_FAST
-        assert queue.priority_for(user, slow=True) == queue.PRIORITY_SLOW  # slow tokens keep the slow lane
+        assert queue.priority_for(user, slow=True) == queue.PRIORITY_FAST  # deprecated budget flag is ignored
         assert queue.PRIORITY_ADMIN < queue.PRIORITY_FAST < queue.PRIORITY_API < queue.PRIORITY_CHAT
         assert queue.priority_for(users.get_by_username("admin"), slow=True) == queue.PRIORITY_ADMIN
         _policy("api", rate={"rules": _rules((60, "minute", 10))})
@@ -585,8 +585,8 @@ def test_5_hour_requests_are_approved_automatically_within_the_thresholds(app, m
         outcome = credits.submit_request(user["id"], 80_000, 20_000, "Testing things", kind="window", pool="api")
         assert outcome["status"] == "approved"
         override = store.get_override(user["id"], "api")
-        assert (override.window_tokens, override.window_slow_tokens, override.updated_by) == \
-            (80_000, 20_000, user["id"])
+        assert (override.window_tokens, override.updated_by) == \
+            (80_000, user["id"])
         # The chat pool has no 5-hour limit by default: nothing to raise.
         with pytest.raises(credits.RequestError) as refused:
             credits.submit_request(user["id"], 80_000, 0, "More chat", kind="window", pool="chat")
@@ -649,7 +649,7 @@ def test_rate_and_temporary_requests_always_wait_and_approval_applies_them(app, 
         assert ends == timedelta(hours=24) and "Hackathon tonight" in grant["reason"]
         assert credits.budget(tom, "api").unlimited
         credits.resolve_request(extra["id"], admin["id"], True)
-        assert limits.effective(uma, "api").window.tokens == 80_000  # 30k + 50k extra
+        assert limits.effective(uma, "api").window.tokens == 95_000  # 45k + 50k extra
         with pytest.raises(ValueError):
             credits.resolve_request(extra["id"], admin["id"], False)
 
@@ -716,7 +716,7 @@ def test_admins_edit_policies_with_validation_and_audit(app, admin):
         policy = limits.get_policy("chat")
         assert policy["rate"] == {"enabled": True, "rules": [{"requests": 30, "per": "minute", "burst": 4}],
                                   "dynamic": False}
-        assert policy["window"] == {"enabled": True, "tokens": 25_000, "slow_tokens": 5000, "dynamic": True,
+        assert policy["window"] == {"enabled": True, "tokens": 25_000, "dynamic": True,
                                     "auto_tiers": False}
         assert policy["weekly"] == {"enabled": True, "tokens": 100_000, "dynamic": False, "auto_tiers": True}
         assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='admin.limits_policy' AND target='chat'") == 1
@@ -794,7 +794,7 @@ def test_admins_grant_and_revoke_for_one_account_or_everyone(app, admin, make_us
         span = db.parse_timestamp(lea_grant["ends_at"]) - db.parse_timestamp(lea_grant["starts_at"])
         assert span == timedelta(hours=24)
         assert credits.budget(lea, "api").unlimited
-        assert limits.effective(max_, "api").window.tokens == 60_000
+        assert limits.effective(max_, "api").window.tokens == 90_000
     page = admin.get("/admin/quotas/grants").get_data(as_text=True)
     assert "Coding jam" in page and "Explained a deadline" in page
     account = _signed_in(app, "max").get("/account").get_data(as_text=True)
@@ -850,7 +850,7 @@ def test_global_resets_and_restoring_defaults(app, admin, make_user):
     response = admin.post("/admin/quotas/restore-defaults", follow_redirects=True)
     assert "removed from 2 accounts" in response.get_data(as_text=True)
     with app.app_context():
-        assert credits.budget(ann, "api").regular_limit == 30_000
+        assert credits.budget(ann, "api").regular_limit == 45_000
         assert store.user_settings(ben["id"]).speed == "normal"
 
 
@@ -879,10 +879,10 @@ def test_admins_resolve_every_kind_of_request(app, admin, make_user):
 @pytest.mark.parametrize(("language", "texts"), [
     ("en", ("Your limits", "Requests: 1 request per second (bursts of up to 10)", "Tokens this week",
             "Level Regular ×2", "Your level", "To reach Trusted:", "Extra allowances", "×2 until",
-            "120k tokens")),
+            "180k tokens")),
     ("it", ("I tuoi limiti", "Richieste: 1 richiesta al secondo (fino a 10 di fila)", "Token di questa settimana",
             "Livello Regular ×2", "Il tuo livello", "Per passare a Trusted:", "Aumenti concessi", "×2 fino al",
-            "120k token")),
+            "180k token")),
 ])
 def test_the_account_page_shows_limits_in_both_languages(app, make_user, language, texts):
     from bananachat import db
@@ -897,7 +897,7 @@ def test_the_account_page_shows_limits_in_both_languages(app, make_user, languag
     html = _signed_in(app, f"lang{language}", language=language).get("/account").get_data(as_text=True)
     for text in texts:
         assert text in html, text
-    assert 'max="120000.0"' in html  # 30k x2 (tier) x2 (grant)
+    assert 'max="180000.0"' in html  # 45k x2 (tier) x2 (grant)
     assert 'id="quota-data"' in html
 
 

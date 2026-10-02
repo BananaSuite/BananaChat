@@ -208,6 +208,51 @@ def test_idle_clients_are_disconnected(make_proxy):
         assert time.monotonic() - started < 3
 
 
+@pytest.mark.parametrize("stage", ["headers", "body", "refusal"])
+def test_trickling_clients_cannot_hold_a_connection_forever(make_proxy, backend, stage):
+    proxy = make_proxy(max_connections=1, client_timeout=0.5, header_deadline=0.2, body_deadline=0.2)
+    held = None
+    if stage == "refusal":
+        held = socket.create_connection(("127.0.0.1", proxy.server_port), timeout=2)
+        held.sendall(b"GET /api/tags HTTP/1.1\r\nHost: ")
+        time.sleep(0.05)
+    request = b"GET /api/tags HTTP/1.1\r\nHost: "
+    if stage == "body":
+        request = (f"POST /api/chat HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n"
+                   "Content-Length: 10000\r\n\r\n{").encode()
+    stop = threading.Event()
+    try:
+        with socket.create_connection(("127.0.0.1", proxy.server_port), timeout=2) as sock:
+            sock.sendall(request)
+
+            def drip():
+                while not stop.wait(0.05):
+                    try:
+                        sock.sendall(b" ")
+                    except OSError:
+                        break
+
+            thread = threading.Thread(target=drip, daemon=True)
+            thread.start()
+            started = time.monotonic()
+            reply = sock.recv(4096)
+            assert time.monotonic() - started < 1
+            assert reply == b"" or reply.startswith(b"HTTP/1.1 503")
+            stop.set()
+            thread.join(1)
+    finally:
+        stop.set()
+        if held is not None:
+            held.close()
+    assert not backend.calls
+
+
+def test_request_deadline_does_not_interrupt_a_model_loading(make_proxy, backend):
+    proxy = make_proxy(header_deadline=0.1, body_deadline=0.1)
+    backend.slow.set()
+    assert call(proxy, "/api/chat", method="POST", body={})[0] == 200
+
+
 def test_configuration_is_validated(tmp_path):
     with pytest.raises(ValueError, match="loopback"):
         ComputeServer(("127.0.0.1", 0), upstream="http://10.0.0.5:11434", token=TOKEN)

@@ -2,32 +2,32 @@
 {% from "admin/_macros.html" import header, csrf, when %}
 {% from "partials/icons.html" import icon %}
 {% set section = "agents" %}
-{% block title %}Agent task · {{ task.title or "Untitled task" }}{% endblock %}
+{% block title %}Cloud session · {{ task.title or "Untitled session" }}{% endblock %}
 {% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/agents.css') }}">{% endblock %}
 {% set shown = "interrupted" if stale else task.status %}
 {% set status_badges = {"queued": "badge-info", "running": "badge-primary", "paused": "badge-warning", "finished": "badge-success", "failed": "badge-danger", "stopped": "", "out_of_budget": "badge-warning", "interrupted": "badge-warning"} %}
 {% block admin_content %}
-<p class="breadcrumb"><a href="{{ url_for('admin.agents', _anchor='tasks') }}">{{ icon("chevron-left") }}Agents</a></p>
-{% call header(task.title or "Untitled task", "Full log of an agent task: every model message, tool call and result.") %}
+<p class="breadcrumb"><a href="{{ url_for('admin.agents', _anchor='tasks') }}">{{ icon("chevron-left") }}Cloud sessions</a></p>
+{% call header(task.title or "Untitled session", "Session history: messages, tool calls and results.") %}
   {% if active %}
-  <form method="post" action="{{ url_for('admin.agents_task_stop', task_id=task.id) }}" data-confirm="Stop this task now? The owner sees that an administrator stopped it." data-confirm-label="Stop" data-confirm-danger>
-    {{ csrf() }}<button type="submit" class="btn btn-danger">{{ icon("stop") }}<span>Stop task</span></button>
+  <form method="post" action="{{ url_for('admin.agents_task_stop', task_id=task.id) }}" data-confirm="Stop this session now? The owner sees that an administrator stopped it." data-confirm-label="Stop" data-confirm-danger>
+    {{ csrf() }}<button type="submit" class="btn btn-danger">{{ icon("stop") }}<span>Stop session</span></button>
   </form>
   {% endif %}
-  <form method="post" action="{{ url_for('admin.agents_task_delete', task_id=task.id) }}" data-confirm="Delete this task, its log and its workspace?" data-confirm-label="Delete" data-confirm-danger>
+  <form method="post" action="{{ url_for('admin.agents_task_delete', task_id=task.id) }}" data-confirm="Delete this session, its history and its workspace?" data-confirm-label="Delete" data-confirm-danger>
     {{ csrf() }}<button type="submit" class="btn btn-ghost">{{ icon("trash") }}<span>Delete</span></button>
   </form>
 {% endcall %}
 
 <div class="stack-lg">
   <div class="grid grid-2">
-    <section class="card" aria-labelledby="facts-title">
-      <h2 id="facts-title">Task</h2>
+    <section class="settings-section" aria-labelledby="facts-title">
+      <h2 id="facts-title">Session</h2>
       <dl class="details">
         <dt>Status</dt><dd><span class="badge {{ status_badges.get(shown, '') }}">{{ shown | replace("_", " ") }}</span>{% if task.stop_requested and active %} <span class="badge badge-warning">stopping</span>{% endif %}</dd>
         <dt>Owner</dt><dd>{% if task.username %}<a href="{{ url_for('admin.user_detail', user_id=task.user_id) }}">{{ task.username }}</a>{% else %}<span class="faint">deleted</span>{% endif %}</dd>
         <dt>Model</dt><dd class="mono">{{ task.model_name }}</dd>
-        <dt>Swarm</dt><dd>{{ "yes" if task.swarm else "no" }}</dd>
+        <dt>Parallel agents</dt><dd>{{ "yes" if task.swarm else "no" }}</dd>
         <dt>Runs</dt><dd>{{ task.runs }}</dd>
         <dt>Steps</dt><dd>{{ task.steps_used | number }} model calls, {{ task.tool_calls | number }} tool calls, {{ total_steps | number }} log entries</dd>
         <dt>Tokens</dt><dd>{{ task.tokens_in | number }} in, {{ task.tokens_out | number }} out</dd>
@@ -40,11 +40,11 @@
       {% if error %}<div class="alert alert-warning mt-2">{{ icon("alert") }}<p>{{ error }}</p></div>{% endif %}
       {% if notice %}<div class="alert alert-info mt-2">{{ icon("info") }}<p>{{ notice }}</p></div>{% endif %}
     </section>
-    <section class="card" aria-labelledby="prompt-title">
+    <section class="settings-section" aria-labelledby="prompt-title">
       <h2 id="prompt-title">Prompt</h2>
       <pre class="tool-pre">{{ task.prompt }}</pre>
       {% if lanes %}
-      <h3 class="mt-2">Sub-agents</h3>
+      <h3 class="mt-2">Parallel agents</h3>
       <ul class="stack-sm">
         {% for lane in lanes %}
         <li><strong>{{ lane.agent }}. {{ lane.title }}</strong> <span class="badge">{{ lane.status | replace("_", " ") }}</span> <span class="muted small">{{ lane.steps_used }} steps</span></li>

@@ -45,6 +45,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import timedelta
+from functools import partial
 
 from flask import current_app
 
@@ -52,7 +53,7 @@ from bananachat import db
 from bananachat.db import agents as agents_db
 from bananachat.db import catalog, credits, metrics, users
 from bananachat.services import inference, limits, queue, status, supervisor
-from bananachat.services.access import AccessContext, is_text_model
+from bananachat.services.access import AccessContext
 from bananachat.services.agents import runner as runner_mod
 from bananachat.services.agents import settings as agent_settings
 from bananachat.services.agents import gitfetch, gitrepo, tools, uploads
@@ -96,6 +97,10 @@ class LeaseLost(Exception):
     """Another process took the task over (after this one was presumed dead): write nothing more."""
 
 
+class PauseModel(Exception):
+    """Service status changed while queued; release the slot before pausing."""
+
+
 @dataclass
 class Budget:
     max_steps: int
@@ -131,6 +136,19 @@ class Budget:
     def release_step(self) -> None:
         with self.lock:
             self.reserved = max(0, self.reserved - 1)
+
+    def check_admission(self) -> None:
+        """Honor a tightened step cap before dispatching already reserved work.
+
+        Reservations were made before a possible queue wait. An administrator
+        can reduce the cap during that wait, so completed steps alone no longer
+        describe the work about to run. Refused calls release their reservation
+        through the agent loop's existing finally block.
+        """
+        self.check()
+        with self.lock:
+            if self.steps + self.reserved > self.max_steps:
+                raise StopRun("out_of_budget", "agents.stop_steps", limit=self.max_steps)
 
     def steps_left(self) -> int:
         with self.lock:
@@ -487,23 +505,50 @@ class TaskRun:
         while True:
             self._check_cancel()
             self.budget.check()
-            if not agent_settings.enabled():
-                raise StopRun("stopped", "agents.stop_disabled")
-            user = users.get(self.user["id"])
-            if user is None or users.is_suspended(user):
-                raise StopRun("stopped", "agents.stop_account")
-            self.user = dict(user)
-            context = AccessContext.load(user)
-            if not context.allows("agents"):
-                raise StopRun("stopped", "agents.stop_access")
-            model = catalog.get(self.model["id"])
-            if model is None or not is_text_model(model) or not context.can_use(model, "chat"):
-                raise StopRun("failed", "agents.stop_model")
-            self.model = model
-            if self._admit_step(agent, user, model, take=take):
+            self._assert_authorized()
+            self.budget.check()
+            if self._admit_step(agent, self.user, self.model, take=take):
                 break
             take = True
         self._wait_while_paused(agent)
+        self._assert_authorized(check_quota=True)
+
+    def _assert_authorized(self, *, model=None, check_quota: bool = False) -> None:
+        """Fresh gates after every wait and before any model or sandbox action.
+
+        The start/step admission already consumed the model's rate. Rechecks
+        only inspect token quotas, so queue waits and tools cannot double debit
+        that rate. Settings may tighten a run's original budgets, never expand
+        them while work is in progress.
+        """
+        self._check_cancel()
+        settings = agent_settings.current(fresh=True)
+        if not settings.enabled:
+            raise StopRun("stopped", "agents.stop_disabled")
+        user = users.get(self.user["id"])
+        if user is None or users.is_suspended(user):
+            raise StopRun("stopped", "agents.stop_account")
+        context = AccessContext.load(user)
+        if not agent_settings.user_allowed(user, settings, context=context):
+            raise StopRun("stopped", "agents.stop_access")
+        if self.swarm and not settings.swarms_enabled:
+            raise StopRun("stopped", "agents.stop_access")
+        model = catalog.get((model or self.model)["id"])
+        if model is None or model["missing_at"] or not agent_settings.model_allowed(model, context, settings):
+            raise StopRun("failed", "agents.stop_model")
+        self.user, self.model, self.settings = dict(user), model, settings
+        with self.budget.lock:
+            self.budget.max_steps = min(self.budget.max_steps, settings.max_steps)
+            self.budget.max_tokens = min(self.budget.max_tokens, settings.max_tokens)
+            if settings.max_minutes < self.budget.minutes:
+                self.budget.deadline -= (self.budget.minutes - settings.max_minutes) * 60
+                self.budget.minutes = settings.max_minutes
+        if check_quota:
+            with limits.snapshot(fresh=True):
+                admission = limits.admit(user, "agent", model, take_rate=False)
+            if not admission.allowed:
+                raise StopRun("out_of_budget", "agents.stop_model_limit" if admission.model is not None else
+                              "agents.stop_credits")
 
     def _prepaid(self) -> bool:
         with self._rate_lock:
@@ -551,6 +596,7 @@ class TaskRun:
                 agents_db.set_status(self.task_id, self.token, "paused", notice=message(key))
                 self._step(kind="notice", content=message(key))
             while notice is not None:
+                self._assert_authorized()
                 if time.monotonic() - started > MAX_PAUSE_SECONDS:
                     raise StopRun("interrupted", "agents.stop_paused_too_long")
                 self._sleep(PAUSE_POLL_SECONDS)
@@ -563,6 +609,7 @@ class TaskRun:
         if owner:
             agents_db.set_status(self.task_id, self.token, "running", notice="")
             self._step(kind="notice", content=message("agents.notice_resumed"))
+        self._assert_authorized()
 
     # ----- the loop of one agent ---------------------------------------------------------------
     def _agent(self, agent: int, messages: list[dict], tool_names, lane_steps: int | None) -> tuple[str, str]:
@@ -613,6 +660,9 @@ class TaskRun:
                     return "finished", result.finish
 
     def _run_tool(self, agent: int, raw: dict, allowed) -> tuple[str, tools.Result]:
+        self._assert_authorized()
+        self._wait_while_paused(agent)
+        self.budget.check_time()
         started = time.monotonic()
         name = str(raw.get("name") or "")[:80]
         try:
@@ -625,6 +675,7 @@ class TaskRun:
             agents_db.add_usage(self.task_id, self.token, tool_calls=1)
             return name, result
         try:
+            self._assert_authorized(check_quota=call.name != "finish")
             if call.name == "delegate":
                 result = self._delegate(agent, call.arguments)
             else:
@@ -656,23 +707,24 @@ class TaskRun:
         return child, forward
 
     def _call_model(self, agent: int, messages: list[dict], allowed) -> Reply:
-        config = current_app.config["BC"]
-        definitions = tools.definitions(allowed, max_subagents=self.settings.max_subagents)
-        options = inference.build_options(self.model, None, config=config)
-        # Agents use the default effort: medium, or less when the account has not unlocked medium for the model.
-        think = inference.think_for(self.model, limits.resolve_effort(self.user, self.model, None))
         attempt = 0
         while True:
-            self._check_cancel()
+            self._assert_authorized(check_quota=True)
+            self.budget.check()
+            definitions = tools.definitions(allowed, max_subagents=self.settings.max_subagents)
+
             child, forward = self._child_token()
             request = inference.TextRequest(
-                user=self.user, model=self.model, messages=fit_context(messages), options=options,
+                user=self.user, model=self.model, messages=fit_context(messages),
                 request_type="agent", priority=PRIORITY_AGENT, owner_key=f"agent:{self.task_id}:{agent}",
-                think=think, max_response_bytes=MAX_RESPONSE_BYTES, tools=definitions)
+                max_response_bytes=MAX_RESPONSE_BYTES, tools=definitions)
+            request.authorize = partial(self._authorize_model, request)
+            deadline = supervisor.cancel_at(self.budget.deadline, child)
             content: list[str] = []
             thinking: list[str] = []
             finished = None
             problem = ""
+            paused = False
             try:
                 for event in inference.generate(request, child):
                     if isinstance(event, inference.Delta):
@@ -685,10 +737,17 @@ class TaskRun:
                 problem = "the inference queue did not admit the request in time"
             except Cancelled:
                 problem = "cancelled"
+            except PauseModel:
+                paused = True
             finally:
+                supervisor.clear_deadline(deadline)
                 self.cancel.remove(forward)
+            if paused:
+                self._wait_while_paused(agent)
+                continue
             if finished is not None:
                 self._charge(finished)
+                self.budget.check_time()
                 if finished.state == "completed" or finished.truncated:
                     return Reply("".join(content), "".join(thinking), finished.tool_calls if not finished.truncated
                                  else [], finished.prompt_tokens, finished.completion_tokens,
@@ -702,6 +761,21 @@ class TaskRun:
             self._step(agent=agent, kind="notice", content=message("agents.notice_model_retry", attempt=attempt,
                                                                    max=MODEL_RETRIES))
             self._sleep(MODEL_BACKOFF[min(attempt, len(MODEL_BACKOFF)) - 1])
+            self._checkpoint(agent)
+
+    def _authorize_model(self, request, model) -> None:
+        """Inference invokes this after queue admission, immediately before a provider call."""
+        self._assert_authorized(model=model, check_quota=True)
+        self.budget.check_admission()
+        if self._blocking_notice() is not None:
+            raise PauseModel()
+        # Account tiers and model options may have changed while queued.
+        with limits.snapshot(fresh=True):
+            effort = limits.resolve_effort(self.user, self.model, None)
+        request.user = self.user
+        request.effort = effort
+        request.think = inference.think_for(self.model, effort)
+        request.options = inference.build_options(self.model, None, config=current_app.config["BC"])
 
     def _charge(self, finished: inference.Finished) -> None:
         """Count the step and its tokens against the budgets and charge the ``agent`` credit pool."""
@@ -733,6 +807,8 @@ class TaskRun:
 
     def ensure_sandbox(self) -> str:
         with self._sandbox_lock:
+            self._assert_authorized(check_quota=True)
+            self.budget.check_time()
             if self.sandbox_id:
                 return self.sandbox_id
             if self.sandbox_resets > MAX_SANDBOX_RESETS:
@@ -741,7 +817,8 @@ class TaskRun:
             announced = False
             attempt = 0
             while True:
-                self._check_cancel()
+                self._assert_authorized(check_quota=True)
+                self.budget.check_time()
                 try:
                     data = self.runner.create(self.task_id)
                     break
@@ -801,7 +878,10 @@ class TaskRun:
         attempt = 0
         with self.workspace_lock:
             while True:
+                self._assert_authorized(check_quota=True)
+                self.budget.check_time()
                 sandbox_id = self.ensure_sandbox()
+                self._assert_authorized(check_quota=True)
                 child, forward = self._child_token()
                 if is_exec:
                     self.exec_in_flight += 1
@@ -843,7 +923,10 @@ class TaskRun:
 
         def run(sandbox_id, cancel):
             self.sandbox_dirty = True
-            data = self.runner.exec(sandbox_id, command, timeout=timeout, cancel=cancel)
+            # Another parallel agent may have held workspace_lock since the
+            # tool was validated. Reapply current caps at actual dispatch.
+            dispatch_timeout = max(1, min(timeout, self.command_timeout, math.ceil(self.budget.seconds_left())))
+            data = self.runner.exec(sandbox_id, command, timeout=dispatch_timeout, cancel=cancel)
             if data.get("sandbox_removed"):
                 self._sandbox_lost(sandbox_id)
             return data

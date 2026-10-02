@@ -2,22 +2,22 @@
 {% from "admin/_macros.html" import header, csrf, when, pagination, empty %}
 {% from "partials/icons.html" import icon %}
 {% set section = "agents" %}
-{% block title %}Agents{% endblock %}
+{% block title %}Cloud sessions{% endblock %}
 {% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/agents.css') }}">{% endblock %}
 {% set status_badges = {"queued": "badge-info", "running": "badge-primary", "paused": "badge-warning", "finished": "badge-success", "failed": "badge-danger", "stopped": "", "out_of_budget": "badge-warning", "interrupted": "badge-warning"} %}
 {% block admin_content %}
-{% call header("Agents", "Coding agents that run commands in sandboxes on the compute host. Off by default; people also need the Agents capability (Access).") %}
-  <a class="btn" href="{{ url_for('admin.access_detail', scope='agents', resource_id=0) }}">{{ icon("shield") }}<span>Who may use agents</span></a>
+{% call header("Cloud sessions", "Code and file work in isolated workspaces. Off by default; choose who can start sessions below.") %}
+  <a class="btn" href="{{ url_for('admin.access_detail', scope='agents', resource_id=0) }}">{{ icon("shield") }}<span>Custom access lists</span></a>
 {% endcall %}
 
-<div class="stack-lg">
+<div class="section-stack">
   {% for warning in warnings %}
   <div class="alert alert-error" role="alert">{{ icon("alert") }}<p>{{ warning }}</p></div>
   {% endfor %}
 
   <div class="grid grid-2">
-    <section class="card" aria-labelledby="runner-title">
-      <div class="card-header">
+    <section class="settings-section" aria-labelledby="runner-title">
+      <div class="section-header">
         <h2 id="runner-title">{{ icon("server") }}Sandbox runner</h2>
         <a class="btn btn-sm" href="{{ url_for('admin.agents', refresh=1) }}">{{ icon("refresh") }}<span>Check now</span></a>
       </div>
@@ -38,30 +38,40 @@
       {% endif %}
     </section>
 
-    <section class="card {{ 'card-danger' if active else '' }}" aria-labelledby="kill-title">
-      <h2 id="kill-title">{{ icon("stop") }}Running tasks</h2>
+    <section class="settings-section {{ 'settings-section-danger' if active else '' }}" aria-labelledby="kill-title">
+      <h2 id="kill-title">{{ icon("stop") }}Active sessions</h2>
       <p class="stat-value">{{ active }}</p>
-      <p class="muted">Tasks working right now (queued, running or paused). Stopping ends each task gracefully: the running command is killed and the owner sees that an administrator stopped it.</p>
-      <form method="post" action="{{ url_for('admin.agents_stop_all') }}" data-confirm="Stop every running agent task now?" data-confirm-label="Stop all" data-confirm-danger>
+      <p class="muted">Queued, running and paused sessions. Stop all interrupts their commands and tells each owner that an administrator stopped the session.</p>
+      <form method="post" action="{{ url_for('admin.agents_stop_all') }}" data-confirm="Stop every active cloud session now?" data-confirm-label="Stop all" data-confirm-danger>
         {{ csrf() }}
-        <button type="submit" class="btn btn-danger"{% if not active %} disabled{% endif %}>{{ icon("stop") }}<span>Stop all running tasks</span></button>
+        <button type="submit" class="btn btn-danger"{% if not active %} disabled{% endif %}>{{ icon("stop") }}<span>Stop all sessions</span></button>
       </form>
     </section>
   </div>
 
-  <section class="card" aria-labelledby="settings-title">
+  <section class="settings-section" id="settings" aria-labelledby="settings-title">
     <h2 id="settings-title">{{ icon("settings") }}Settings</h2>
     <form method="post" action="{{ url_for('admin.agents_settings') }}" class="stack">
       {{ csrf() }}
+      <input type="hidden" name="access_mode_present" value="1">
       <label class="switch">
         <input type="checkbox" name="enabled" value="1"{% if settings.enabled %} checked{% endif %}>
         <span class="track" aria-hidden="true"></span>
-        <span><strong>Enable agents</strong><small class="block muted">When off, nobody can start tasks or send follow-ups; running tasks continue (use “Stop all” to end them).</small></span>
+        <span><strong>Enable cloud sessions</strong><small class="block muted">When off, new sessions and follow-ups are blocked. Active sessions stop at their next step; use “Stop all” to interrupt them now.</small></span>
       </label>
+      <div class="field">
+        <label for="agents-access-mode">Who can start sessions</label>
+        <select id="agents-access-mode" name="access_mode" aria-describedby="agents-access-mode-hint">
+          <option value="admins"{% if settings.access_mode == "admins" %} selected{% endif %}>Administrators only</option>
+          <option value="everyone"{% if settings.access_mode == "everyone" %} selected{% endif %}>Everyone signed in</option>
+          <option value="custom"{% if settings.access_mode == "custom" %} selected{% endif %}>Custom access lists</option>
+        </select>
+        <span class="hint" id="agents-access-mode-hint">Model access and account limits still apply to everyone. Custom uses the existing Agents permission lists; changing the audience does not edit those lists.</span>
+      </div>
       <label class="switch">
         <input type="checkbox" name="swarms_enabled" value="1"{% if settings.swarms_enabled %} checked{% endif %}>
         <span class="track" aria-hidden="true"></span>
-        <span><strong>Enable agent swarms</strong><small class="block muted">Lets an agent run sub-agents in parallel (they cannot start sub-agents themselves).</small></span>
+        <span><strong>Allow parallel agents</strong><small class="block muted">Sessions can split work among several agents. These agents cannot start more agents themselves.</small></span>
       </label>
       <div class="form-grid">
         {% for name, (label, help) in limit_labels.items() %}
@@ -73,20 +83,20 @@
         </div>
         {% endfor %}
       </div>
-      <p class="hint mb-0">Tokens: every model call counts against the owner's <strong>agent</strong> token limits (Limits). A task stops when its owner runs out.</p>
+      <p class="hint mb-0">Every model call counts against the owner's <strong>agent</strong> token limits in Limits. A session stops when its owner runs out.</p>
       <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("check") }}<span>Save settings</span></button></div>
     </form>
   </section>
 
-  <section class="card" id="git" aria-labelledby="git-title">
-    <div class="card-header">
+  <section class="settings-section" id="git" aria-labelledby="git-title">
+    <div class="section-header">
       <h2 id="git-title">{{ icon("code") }}Git repositories</h2>
       <form method="post" action="{{ url_for('admin.agents_image_check') }}">
         {{ csrf() }}
         <button type="submit" class="btn btn-sm"{% if not runner_configured %} disabled{% endif %}>{{ icon("refresh") }}<span>Check the image for Git</span></button>
       </form>
     </div>
-    <p class="muted">Tasks can start from a public repository: the web server downloads its source archive over HTTPS from an allowed host (never from an address people type, never a private network address) and the runner unpacks it into the sandbox. With Git in the sandbox image, people can download the agent's changes as a <code>.patch</code>. No credentials are used, so only public repositories work; downloads cost no tokens.</p>
+    <p class="muted">Sessions can start from a public repository on an allowed host. The source archive is downloaded over HTTPS and copied into the workspace. With Git in the sandbox image, users can download changes as a <code>.patch</code>. Imports use no credentials or model tokens.</p>
     <p class="small muted">
       {% if image.git is sameas true %}The default image{% if image.default %} <span class="mono">{{ image.default }}</span>{% endif %} has Git{% if image.version %} ({{ image.version }}){% endif %}{% if image.checked_at %}, checked {{ when(image.checked_at) }}{% endif %}.
       {% elif image.git is sameas false %}The default image{% if image.default %} <span class="mono">{{ image.default }}</span>{% endif %} has no Git{% if image.checked_at %} (checked {{ when(image.checked_at) }}){% endif %}: repositories are still imported, but changes cannot be exported as a patch. Build the agent image in <code>compute/sandbox-image</code> and list it first in <code>BC_SANDBOX_IMAGES</code>.
@@ -97,7 +107,7 @@
       <label class="switch">
         <input type="checkbox" name="git_enabled" value="1"{% if settings.git_enabled %} checked{% endif %}>
         <span class="track" aria-hidden="true"></span>
-        <span><strong>Allow starting tasks from a Git repository</strong><small class="block muted">Off by default. Imports are rate-limited per person and recorded in the task's log.</small></span>
+        <span><strong>Allow starting sessions from a Git repository</strong><small class="block muted">Off by default. Imports are rate-limited per person and recorded in the session history.</small></span>
       </label>
       <div class="form-grid">
         <div class="field">
@@ -118,30 +128,30 @@
     </form>
   </section>
 
-  <section class="card flush" id="models" aria-labelledby="models-title">
-    <div class="card-header">
+  <section class="settings-section" id="models" aria-labelledby="models-title">
+    <div class="section-header">
       <h2 id="models-title">{{ icon("layers") }}Models</h2>
       <form method="post" action="{{ url_for('admin.agents_models_refresh') }}">
         {{ csrf() }}
         <button type="submit" class="btn btn-sm">{{ icon("refresh") }}<span>Check tool support</span></button>
       </form>
     </div>
-    <p class="card-body-pad muted">Agents need models that support tool calling. Support is read from Ollama (<code>/api/show</code>); override it when you know better. People also need access to the model in the chat.</p>
+    <p class="section-body muted">Cloud sessions need models that support tools. Automatic uses the provider's detected capabilities. Use Always only after testing the model. Users also need access to that model.</p>
     {% if not models %}
-    {{ empty("layers", "No Ollama models", "Models appear here after the catalog sync.") }}
+    {{ empty("layers", "No session models", "Local and external models appear here after the catalog sync.") }}
     {% else %}
     <form method="post" action="{{ url_for('admin.agents_models') }}">
       {{ csrf() }}
       <div class="table-wrap table-plain">
         <table class="table">
-          <thead><tr><th scope="col">Model</th><th scope="col">Detected</th><th scope="col">Use for agents</th><th scope="col">Result</th></tr></thead>
+          <thead><tr><th scope="col">Model</th><th scope="col">Detected</th><th scope="col">Use for sessions</th><th scope="col">Result</th></tr></thead>
           <tbody>
           {% for item in models %}{% set row = item.row %}
           <tr{% if not item.text %} class="row-muted"{% endif %}>
             <td><strong>{{ row.display_name }}</strong><br><span class="small faint mono">{{ row.ollama_name }}</span></td>
             <td>{% if item.caps is none %}<span class="badge">not checked</span>{% elif item.caps.supports_tools %}<span class="badge badge-success">tools</span>{% else %}<span class="badge">no tools</span>{% endif %}</td>
             <td>
-              <label class="visually-hidden" for="override-{{ row.id }}">Use {{ row.display_name }} for agents</label>
+              <label class="visually-hidden" for="override-{{ row.id }}">Use {{ row.display_name }} for sessions</label>
               <select id="override-{{ row.id }}" name="override_{{ row.id }}">
                 <option value=""{% if not item.override %} selected{% endif %}>Automatic</option>
                 <option value="allow"{% if item.override == "allow" %} selected{% endif %}>Always</option>
@@ -154,14 +164,14 @@
           </tbody>
         </table>
       </div>
-      <div class="form-actions card-body-pad"><button type="submit" class="btn btn-primary">{{ icon("check") }}<span>Save model choices</span></button></div>
+      <div class="form-actions section-body"><button type="submit" class="btn btn-primary">{{ icon("check") }}<span>Save model choices</span></button></div>
     </form>
     {% endif %}
   </section>
 
-  <section class="card flush" id="tasks" aria-labelledby="tasks-title">
-    <div class="card-header">
-      <h2 id="tasks-title">{{ icon("file") }}All tasks</h2>
+  <section class="settings-section" id="tasks" aria-labelledby="tasks-title">
+    <div class="section-header">
+      <h2 id="tasks-title">{{ icon("file") }}All sessions</h2>
       <nav class="row" aria-label="Filter by status">
         <a class="btn btn-sm{% if not status_filter %} btn-primary{% endif %}" href="{{ url_for('admin.agents', _anchor='tasks') }}">All</a>
         {% for value in statuses %}
@@ -170,15 +180,15 @@
       </nav>
     </div>
     {% if not tasks %}
-    {{ empty("file", "No tasks", "Tasks started by anyone appear here with their full log.") }}
+    {{ empty("file", "No sessions", "Sessions started by anyone appear here with their full history.") }}
     {% else %}
     <div class="table-wrap table-plain">
       <table class="table">
-        <thead><tr><th scope="col">Task</th><th scope="col">User</th><th scope="col">Status</th><th scope="col">Model</th><th scope="col" class="text-right">Steps</th><th scope="col" class="text-right">Tokens</th><th scope="col">Started</th></tr></thead>
+        <thead><tr><th scope="col">Session</th><th scope="col">User</th><th scope="col">Status</th><th scope="col">Model</th><th scope="col" class="text-right">Steps</th><th scope="col" class="text-right">Tokens</th><th scope="col">Started</th></tr></thead>
         <tbody>
         {% for item in tasks %}{% set row = item.row %}{% set shown = "interrupted" if item.stale else row.status %}
         <tr>
-          <td class="cell-wide"><a href="{{ url_for('admin.agents_task', task_id=row.id) }}">{{ row.title or "Untitled task" }}</a>{% if row.swarm %} <span class="badge badge-info">swarm</span>{% endif %}</td>
+          <td class="cell-wide"><a href="{{ url_for('admin.agents_task', task_id=row.id) }}">{{ row.title or "Untitled session" }}</a>{% if row.swarm %} <span class="badge badge-info">parallel agents</span>{% endif %}</td>
           <td>{% if row.username %}<a href="{{ url_for('admin.user_detail', user_id=row.user_id) }}">{{ row.username }}</a>{% else %}<span class="faint">deleted</span>{% endif %}</td>
           <td><span class="badge {{ status_badges.get(shown, '') }}">{{ shown | replace("_", " ") }}</span></td>
           <td class="mono small">{{ row.model_name }}</td>

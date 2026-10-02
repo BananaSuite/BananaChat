@@ -2,10 +2,24 @@
 
 import importlib
 
+import pytest
+
 from bananachat import db
 from bananachat.db import catalog, claude_pool as pool_db
 from bananachat.db import limits as limits_db
 from bananachat.services import claude_pool, limits
+
+
+@pytest.fixture(autouse=True)
+def declared_test_adapter(app):
+    """An explicit fake adapter declares availability and capabilities for these tests."""
+    claude_pool.register_site_discovery(lambda: [
+        {**item, "reasoning": ["low", "medium", "high", "xhigh", "max"],
+         "capabilities": ["completion"]} for item in claude_pool.CURATED
+    ])
+    claude_pool.register_site_chat(lambda account, model, messages, options: iter([{ "done": True}]))
+    yield
+    claude_pool.reset_transport()
 
 
 def _user(app, username="user1"):
@@ -31,7 +45,7 @@ def test_strict_defaults_are_token_based_and_not_counted(app):
     assert opus["counts_toward_pool"] is False
     assert opus["enabled"] is True
     # Effort defaults: powerful models start low/medium only.
-    assert opus["effort_default"] == "low"
+    assert opus["effort_default"] == "medium"
     assert sonnet["effort_default"] == "medium"
 
 
@@ -96,7 +110,7 @@ def _stamp(**delta):
     return (datetime.now(timezone.utc) + timedelta(**delta)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def test_pooled_quota_is_the_sum_of_accounts_and_expired_windows_are_empty(app):
+def test_pooled_quota_sums_accounts_and_expired_reports_require_refresh(app):
     with app.test_request_context():
         first = pool_db.add_account("claude-a", window_limit=100_000)
         second = pool_db.add_account("claude-b", window_limit=100_000)
@@ -105,8 +119,10 @@ def test_pooled_quota_is_the_sum_of_accounts_and_expired_windows_are_empty(app):
         # One exhausted subscription removes only its share.
         assert quota["window_left"] == 0.5 and quota["usable"] == 1
         assert claude_pool.pick_account()["id"] == second
-        # Its window ended: the pool counts it as empty again.
+        # An expired provider snapshot cannot prove a new allowance.
         pool_db.report_quota(first, window_resets_at=_stamp(hours=-1))
+        assert claude_pool.refresh_quota()["window_left"] == 0.5
+        pool_db.report_quota(first, window_used=0, window_resets_at=_stamp(hours=5))
         assert claude_pool.refresh_quota()["window_left"] == 1.0
         # Resting accounts count as empty; all resting means nothing is left.
         claude_pool.rest(first, claude_pool._now() + claude_pool.COOLDOWN_ERROR)
@@ -117,8 +133,8 @@ def test_pooled_quota_is_the_sum_of_accounts_and_expired_windows_are_empty(app):
 
 def test_highest_priority_account_answers_first(app):
     with app.test_request_context():
-        low = pool_db.add_account("low", priority=1)
-        high = pool_db.add_account("high", priority=10)
+        low = pool_db.add_account("low", priority=1, window_limit=100_000)
+        high = pool_db.add_account("high", priority=10, window_limit=100_000)
         assert claude_pool.pick_account()["id"] == high
         pool_db.update_account(high, status="disabled")
         assert claude_pool.pick_account()["id"] == low
@@ -136,14 +152,14 @@ def test_an_exhausted_account_rests_and_the_next_one_answers(app, monkeypatch):
 
     monkeypatch.setattr(claude_pool, "_site_chat", handler)
     with app.test_request_context():
-        first = pool_db.add_account("first", priority=5)
-        second = pool_db.add_account("second")
+        first = pool_db.add_account("first", priority=5, window_limit=100_000)
+        second = pool_db.add_account("second", window_limit=100_000)
         chunks = list(claude_pool.stream_chunks("claude-sonnet-4-5", [{"role": "user", "content": "hi"}],
                                                 effort="high"))
         assert "".join(chunk.content for chunk in chunks) == "Hello world"
         assert chunks[-1].done and (chunks[-1].prompt_tokens, chunks[-1].completion_tokens) == (7, 3)
         assert calls == [("first", "high"), ("second", "high")]
-        assert claude_pool._resting(pool_db.get(first)) and "usage limit" in pool_db.get(first)["last_error"]
+        assert claude_pool._resting(pool_db.get(first)) and "quota" in pool_db.get(first)["last_error"]
         assert pool_db.get(second)["window_used"] == 10
         # The next request skips the resting account.
         calls.clear()
@@ -170,8 +186,10 @@ def test_current_models_are_curated_with_family_strictness(app):
     assert claude_pool.family_of("claude-fable-5-1") == "fable"
     fable, opus = claude_pool.strict_policy("claude-fable-5-1"), claude_pool.strict_policy("claude-opus-5-5")
     assert fable["window_tokens"] < opus["window_tokens"] and fable["weight"] > opus["weight"]
-    # Thinking cannot be switched off on Fable 5.1 and Opus 5.5.
-    opus_item = next(item for item in claude_pool.CURATED if item["name"] == "claude-opus-5-5")
+    # Availability/capabilities come from actual discovery, not reference names.
+    assert all("reasoning" not in item for item in claude_pool.CURATED)
+    opus_item = next(item for item in claude_pool.discovered_models()["models"]
+                     if item["name"] == "claude-opus-5-5")
     assert "off" not in opus_item["reasoning"]
 
 
@@ -248,7 +266,7 @@ def test_used_up_local_tokens_fall_back_to_a_cloud_model(app, make_user, fake_ol
         config = limits_store.get_policy("chat")
         config["window"].update(enabled=True, tokens=1000, slow_tokens=0)
         limits_store.set_policy("chat", config, None)
-        settings.update(slow_credits_enabled=0)
+        settings.update(slow_credits_enabled=0, chat_local_token_consumption=1)
         local = db.one("SELECT * FROM ai_models WHERE backend='ollama' ORDER BY sort_order LIMIT 1")
     browser = user_browser(app, make_user)
     with app.app_context():

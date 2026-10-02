@@ -153,8 +153,8 @@ def json_body() -> dict:
         raise ValueError(f"{constant} is not valid JSON")
 
     try:
-        body = json.loads(request.get_data(cache=False) or b"", parse_constant=reject)
-    except ValueError:
+        body = current_app.json.loads(request.get_data(cache=False) or b"", parse_constant=reject)
+    except (ValueError, RecursionError):
         raise CompletionError("The request body is not valid JSON.", 400, "invalid_json") from None
     if not isinstance(body, dict):
         raise CompletionError("The request body must be a JSON object.", 400, "invalid_body")

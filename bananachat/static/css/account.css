@@ -1,19 +1,30 @@
-/* Account and personalities pages. */
-.account-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 2.5rem; align-items: start; }
-.account-toc { position: sticky; top: calc(var(--topbar-height) + 1rem); display: flex; flex-direction: column; gap: 2px; }
-.account-toc a { display: flex; align-items: center; gap: .5rem; padding: .4rem .65rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .92rem; }
+/* Account navigation and usage. Section and form layout comes from app.css. */
+.account-layout { display: flex; flex-direction: column; gap: 1.5rem; }
+.account-toc { width: 100%; padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
+.account-nav-sections { display: flex; flex-wrap: wrap; align-items: center; gap: .15rem; }
+.account-toc a { display: flex; align-items: center; gap: .5rem; min-height: var(--control-compact); padding: .4rem .6rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .875rem; line-height: 1.45; }
 .account-toc a:hover { background: var(--hover); color: var(--text); }
-.account-toc a[aria-current="location"] { color: var(--text); background: var(--hover); box-shadow: inset 2px 0 0 var(--primary); }
-.account-toc hr { margin: .5rem 0; }
+.account-toc a[aria-current="location"] { color: var(--text); background: var(--hover); text-decoration: underline; text-decoration-color: var(--primary); text-underline-offset: .35em; }
+.account-toc a[href="#delete"]:hover { color: var(--danger); }
 .account-toc svg { width: 16px; height: 16px; flex: none; }
+.account-sections { width: 100%; }
 .account-sections > section { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
-/* Settings are sections of one page, rather than a stack of separate cards. */
-.account-sections > .card { border: 0; border-radius: 0; background: transparent; padding: 0 0 1.75rem; }
-.account-sections > .card + .card { border-top: 1px solid var(--border); padding-top: 1.75rem; }
-.account-sections > .card-danger h2 { color: var(--danger); }
+.account-sections > section > p.muted { max-width: 68ch; font-size: .875rem; }
+.account-profile-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 1rem 1.5rem; margin: 0; }
+.account-profile-details > div { min-width: 0; }
+.account-profile-details dt { color: var(--text-muted); font-size: .8125rem; margin-bottom: .2rem; }
+.account-profile-details dd { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
+.account-profile-details dd .faint { font-size: .8125rem; }
+.account-sections .form-actions { justify-content: flex-start; }
+.quota-form > fieldset { border: 0; border-radius: 0; padding: 0; }
+.usage-pools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
+.usage-pools-expanded { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .plain-list { list-style: none; margin: 0; padding: 0; }
-.usage-pool h3 { margin-bottom: .25rem; }
+.usage-pool { min-width: 0; padding-block: .25rem; }
+.usage-pool + .usage-pool { padding-inline-start: 1.25rem; border-inline-start: 1px solid var(--border); }
+.usage-pool h3 { margin-bottom: .25rem; font-size: .9rem; }
 .usage-meter { display: flex; flex-direction: column; gap: .3rem; }
+.usage-meter .row-between { gap: .25rem .75rem; font-size: .875rem; }
 .limit-reasons { display: flex; flex-wrap: wrap; gap: .25rem .75rem; color: var(--text-muted); }
 .limit-reasons li::before { content: "• "; color: var(--text-faint); }
 .tier-requirements { display: flex; flex-direction: column; gap: .25rem; margin-bottom: .5rem; }
@@ -21,17 +32,30 @@
 .tier-requirements svg { width: 15px; height: 15px; flex: none; }
 .tier-requirements .is-met { color: var(--success); }
 .tier-requirements .is-open { color: var(--text-muted); }
-.row.align-end { align-items: flex-end; }
 .session-item form { flex: none; }
+.session-actions { min-width: 0; max-width: 100%; }
+.session-actions .btn { max-width: 100%; white-space: normal; }
+.session-item .grow { overflow-wrap: anywhere; }
+.session-item .grow > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; }
 .char-counter { font-size: .8rem; color: var(--text-faint); text-align: right; }
 .char-counter.is-over { color: var(--danger); }
 
-/* Personalities. */
-
+@media (max-width: 900px) {
+  .usage-pools-expanded { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .usage-pools-expanded .usage-pool + .usage-pool { padding: 1rem 0 0; border-inline-start: 0; border-top: 1px solid var(--border); }
+}
 @media (max-width: 860px) {
-  .account-layout { grid-template-columns: minmax(0, 1fr); }
-  .account-toc { position: static; flex-direction: row; flex-wrap: wrap; gap: .25rem; }
-  .account-toc hr { display: none; }
+  .account-layout { gap: 1.25rem; }
+}
+@media (max-width: 640px) {
+  .usage-pools { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .usage-pool + .usage-pool { padding: 1rem 0 0; border-inline-start: 0; border-top: 1px solid var(--border); }
+  .account-profile-details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem 1rem; }
+  #access .list-item { flex-direction: column; align-items: flex-start; gap: .5rem; }
+  #access .list-item .grow { width: 100%; }
+}
+@media (pointer: coarse) {
+  .account-toc a { min-height: var(--touch-target); }
 }
 .model-limits > li { display: flex; flex-direction: column; gap: .45rem; padding: .8rem 0; }
 .model-limits .badge svg, .model-limits p > svg { width: 14px; height: 14px; vertical-align: -2px; }

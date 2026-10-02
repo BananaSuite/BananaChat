@@ -214,7 +214,7 @@ def _watch_catalog(record: dict | None, installed: set[str], config, listed_at: 
         ignored = sorted({name for name in previous if not _installed(name, installed)})
     gone = []
     for row in catalog.list_models(rolled_out_only=True, backend="ollama"):
-        if row["retired_at"] or row["enrollment"] == "ignored":
+        if row["retired_at"] or row["delete_requested_at"] or row["enrollment"] == "ignored":
             continue  # withdrawn on purpose: not worth downloading again
         name = row["backend_model_name"] or row["ollama_name"]
         if not _installed(name, installed) and name not in ignored and name not in gone:

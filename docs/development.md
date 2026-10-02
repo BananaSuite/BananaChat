@@ -4,7 +4,8 @@ Use Python 3.12 or newer.
 
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt pytest ruff
+.venv/bin/python -m pip install --only-binary=:all: --no-deps --upgrade 'pip>=26.2.1'
+.venv/bin/python -m pip install --only-binary=:all: -r requirements.txt pytest ruff
 .venv/bin/python -m pytest -q      # the whole suite
 .venv/bin/python -m ruff check .   # lint
 ./dev.sh                           # development server on http://127.0.0.1:8000
@@ -29,7 +30,7 @@ rules for templates and scripts, translations and the inference pipeline.
 | Configuration | `bananachat/config.py`, [configuration](configuration.md) |
 | Database and migrations | `bananachat/db/`, `bananachat/db/migrations/` |
 | Inference pipeline, queue, model access | `bananachat/services/inference.py`, `queue.py`, `access.py` |
-| Chat | `bananachat/web/chat.py`, `bananachat/services/chat.py`, `templates/chat/`, `static/js/chat.js` |
+| Chat | `bananachat/web/chat.py`, `bananachat/services/chat.py`, `templates/chat/`, `static/js/chat.js`, `static/js/chat-pickers.js`, `static/js/chat-personas.js` |
 | API and playground | `bananachat/web/api_v1.py`, `bananachat/web/developer.py` |
 | Administration | `bananachat/web/admin/`, `templates/admin/` |
 | Styles and shared browser helpers | `static/css/app.css`, `static/js/core.js` |
@@ -54,6 +55,33 @@ rules for templates and scripts, translations and the inference pipeline.
   by manifests; see [CONTRIBUTING](../CONTRIBUTING.md) before editing them.
 
 ## Browser check
+
+Keep ordinary pages and settings on the shared 1280 px `--content-width` frame.
+Use responsive form grids within it; avoid squeezing settings into a sidebar
+or a capped column. Use `page-narrow` only inside an existing page for a
+conversation transcript. Authentication uses its dedicated auth layout.
+Conversation columns use `--reading-width`. The API playground keeps its
+working panes within the shared page frame; agent workspaces use that frame
+for their timeline and files too.
+Use `section-stack`, `settings-section` and `section-header` for settings and
+lists. Reserve enclosed surfaces for previews, results, dialogs and other
+distinct work areas. Semantic fieldsets can use `settings-section` too.
+
+Control sizes come from `--control-height` and `--control-compact` in
+`app.css`, with `--touch-target` on coarse pointers. Feature styles should
+describe their layout instead of overriding shared cards to remove their
+borders. Check new layouts in both languages, both themes and at phone widths,
+including increased font size and spacing. Preserve palette, contrast and
+reduced-motion preferences.
+
+Keep enabled destinations as direct header links. The browser measures the
+labels and opens a compact navigation menu only when they no longer fit.
+Without JavaScript the links wrap. Use crisp borders and keyboard outlines
+for focus; avoid glowing input shadows or animated service notices.
+
+Use native disclosures for optional controls. Validation must open their
+enclosing disclosure before focusing an invalid field. Keep primary actions
+and everyday controls visible without expanding optional settings.
 
 `scripts/check_browser.py` drives Chromium through sign-in, chatting,
 streaming, the model picker and the mobile layout against a temporary

@@ -2,7 +2,7 @@
 {%- set path = current_path() %}
 <header class="topbar">
   <a class="brand" href="{{ url_for('core.index') }}">
-    <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="" width="28" height="28">
+    <img src="{{ url_for('static', filename='img/favicon.png') }}" alt="" width="28" height="28">
     <span>{{ site_name }}</span>
   </a>
   {% if current_user %}
@@ -18,36 +18,32 @@
     {% if agents_nav_visible is defined and agents_nav_visible %}
     <a href="{{ url_for('agents.index') }}"{% if path.startswith('/agents') %} aria-current="page"{% endif %}>{{ t("agents.nav") }}</a>
     {% endif %}
-    {% if has_endpoint("developer.index") or music_nav_visible or community_nav_visible or is_admin %}
-    <details class="menu nav-more" data-menu>
-      <summary{% if path.startswith(('/developer', '/free-quota', '/community', '/admin')) %} class="is-current"{% endif %}>{{ t("nav.more") }}{{ icon("chevron-down") }}</summary>
-      <div class="menu-panel left">
-        {% if has_endpoint("developer.index") %}
-        <a href="{{ url_for('developer.index') }}"{% if path.startswith('/developer') %} aria-current="page"{% endif %}>{{ icon("code") }}{{ t("nav.developer") }}</a>
-        {% endif %}
-        {% if music_nav_visible is defined and music_nav_visible %}
-        <a href="{{ url_for('music.free_quota') }}"{% if path.startswith('/free-quota') %} aria-current="page"{% endif %}>{{ icon("music") }}{{ t("nav.free_quota") }}</a>
-        {% endif %}
-        {% if community_nav_visible is defined and community_nav_visible %}
-        <a href="{{ url_for('community.index') }}"{% if path.startswith('/community') %} aria-current="page"{% endif %}>{{ icon("users") }}{{ t("nav.community") }}</a>
-        {% endif %}
-        {% if is_admin %}
-        <a href="{{ url_for('admin.dashboard') }}"{% if path.startswith('/admin') %} aria-current="page"{% endif %}>{{ icon("settings") }}{{ t("nav.admin") }}</a>
-        {% endif %}
-      </div>
-    </details>
+    {% if has_endpoint("developer.index") %}
+    <a href="{{ url_for('developer.index') }}"{% if path.startswith('/developer') %} aria-current="page"{% endif %}>{{ t("nav.developer") }}</a>
+    {% endif %}
+    {% if music_nav_visible is defined and music_nav_visible %}
+    <a href="{{ url_for('music.free_quota') }}"{% if path.startswith('/free-quota') %} aria-current="page"{% endif %}>{{ t("nav.free_quota") }}</a>
+    {% endif %}
+    {% if community_nav_visible is defined and community_nav_visible %}
+    <a href="{{ url_for('community.index') }}"{% if path.startswith('/community') %} aria-current="page"{% endif %}>{{ t("nav.community") }}</a>
+    {% endif %}
+    {% if is_admin %}
+    <a href="{{ url_for('admin.dashboard') }}"{% if path.startswith('/admin') %} aria-current="page"{% endif %}>{{ t("nav.admin") }}</a>
     {% endif %}
   </nav>
   {% endif %}
   <div class="topbar-end">
     {% block topbar_extra %}{% endblock %}
     {% if current_user %}
-    <details class="menu" data-menu>
-      <summary class="icon-btn" aria-label="{{ t('nav.account_menu') }}"><span class="avatar" aria-hidden="true">{{ current_user.username[:1] }}</span></summary>
+    {% if has_endpoint("customization.index") %}
+    <a class="btn btn-ghost btn-sm topbar-shortcut" href="{{ url_for('customization.index') }}" aria-label="{{ t('nav.customize') }}" title="{{ t('nav.customize') }}"{% if path.startswith('/customize') %} aria-current="page"{% endif %}>{{ icon("palette") }}<span>{{ t("nav.customize") }}</span></a>
+    {% endif %}
+    <details class="menu topbar-account" data-menu>
+      <summary class="icon-btn" aria-label="{{ t('nav.account_menu') }}" title="{{ t('nav.account_menu') }}"><span class="avatar" aria-hidden="true">{{ current_user.username[:1] }}</span></summary>
       <div class="menu-panel">
-        <div class="menu-label">{{ current_user.username }}</div>
-        <a href="{{ url_for('account.index') }}">{{ icon("user") }}{{ t("nav.account") }}</a>
-        {% if has_endpoint("customization.index") %}<a href="{{ url_for('customization.index') }}">{{ icon("palette") }}{{ t("nav.customize") }}</a>{% endif %}
+        <div class="menu-label menu-identity">{{ current_user.username }}</div>
+        <a href="{{ url_for('account.index') }}"{% if path.startswith('/account') %} aria-current="page"{% endif %}>{{ icon("user") }}{{ t("nav.account") }}</a>
+        {% if has_endpoint("customization.index") %}<a href="{{ url_for('customization.index') }}"{% if path.startswith('/customize') %} aria-current="page"{% endif %}>{{ icon("palette") }}{{ t("nav.customize") }}</a>{% endif %}
         <hr>
         <div class="menu-label">{{ t("nav.language") }}</div>
         {% for code, name in language_names.items() %}

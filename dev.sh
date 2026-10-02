@@ -15,6 +15,7 @@ done
 
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else "Python 3.12 or newer is required")'
 [[ -x .venv/bin/python ]] || python3 -m venv .venv
-.venv/bin/python -m pip install -q -r requirements.txt
+.venv/bin/python -m pip install -q --only-binary=:all: --no-deps --upgrade 'pip>=26.2.1'
+.venv/bin/python -m pip install -q --only-binary=:all: -r requirements.txt
 export BC_ENV="${BC_ENV:-development}" BC_PROXY_MODE="${BC_PROXY_MODE:-0}"
 exec .venv/bin/python -m bananachat ${args[@]+"${args[@]}"}

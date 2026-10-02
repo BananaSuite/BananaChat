@@ -148,7 +148,15 @@ sudo bananachat source check
 sudo bananachat update
 ```
 
-The previous release's updater prepares the new code, backs everything up, starts it and checks `/health` before letting users back in; if anything fails it restores the old code together with the old database. On first start the database is upgraded in place (schema version 14): nothing is removed, sign-ins stay valid, API tokens keep working, and a site still named "BananaAI" from the project's earlier name is renamed to BananaChat (custom names are kept). No configuration change is needed; new optional settings are listed in [configuration](configuration.md) and in the [changelog](../CHANGELOG.md).
+The previous release's updater prepares the new code, backs everything up, starts it and checks `/health` before letting users back in; if anything fails it restores the old code together with the old database. On first start the database is upgraded in place (schema version 20): accounts and content are kept, sign-ins stay valid, API tokens keep working, and a site still named "BananaAI" from the project's earlier name is renamed to BananaChat (custom names are kept). No configuration change is needed; new optional settings are listed in [configuration](configuration.md) and in the [changelog](../CHANGELOG.md). After updating, reload open browser tabs to load the current interface; versioned static asset URLs refresh scripts and styles together without requiring a hard refresh. The optional Claude extension stays disconnected until configured; subscription pooling needs provider approval and private authenticated profiles and live validation as described in [Claude connector setup](claude-code.md).
+
+The five-hour token allowance combines the old regular amount and the slow
+amount when slow tokens were enabled; disabled sites keep the regular amount.
+Existing regular and slow usage count together without resetting windows or
+refilling tokens. Weekly limits and other customization are preserved. The
+managed updater's backup keeps the original code and database together for
+rollback; for a manual installation, take a complete backup before starting
+the new release and restore its matching code and database if you roll back.
 
 Update the compute server as well if you use a split deployment; either order works.
 
@@ -230,7 +238,9 @@ sudo bananachat proxy
 
 This restores the saved mode, compute connection and exact bundled source without fetching the update repository (`--mode`, `--pair`, `--backend-url` and `--skip-connection-check` are refused here; change the connection afterwards with `backend connect`). Installing Python dependencies still needs package-registry access. `single` and `compute` also need Ollama installed locally; add `--ollama-url http://127.0.0.1:11434` to restore onto an Ollama that already runs on the new machine instead of a managed one. Add `--domain new.example.org` when changing the public hostname, then configure the proxy and review integration URLs.
 
-To restore after installing an empty matching mode, run `sudo bananachat restore PACKAGE`. It saves a `before-restore` package before replacement and keeps this server's Ollama choice: a managed Ollama stays managed and an existing one (`--ollama-url`) stays in use, whichever the package came from. Restore cannot convert `web`, `single`, and `compute` modes; use a separate root and a deliberate data/backend migration for a role change. Restore packages only from trusted operators: they include executable source and secrets.
+To restore after installing an empty matching mode, run `sudo bananachat restore PACKAGE`. It saves a `before-restore` package before replacement and keeps this server's Ollama choice: a managed Ollama stays managed and an existing one (`--ollama-url`) stays in use, whichever the package came from. Restore cannot convert `web`, `single`, and `compute` modes; use a separate root and a deliberate data/backend migration for a role change. Restore packages only from trusted operators: they include executable source and secrets. If readiness checks fail, the previous repository URL, credentials and update signer trust are restored with the previous data.
+
+New packages include `config/repo.allowed_signers` when SSH signatures are required for updates. Packages made by earlier releases may omit it; recover the operator's original allowed signers file and configure `source set --require-signatures FILE` before updating that restored installation. Signature verification fails closed while the trust file is missing.
 
 **Automatic updates are disabled after every restore.** Verify login, chat history, attachments, models, and a streaming reply before enabling them again. For a split deployment, create a separate package for each server; after moving either one, run `sudo bananachat backend test` on the web server, and `backend connect` with a fresh pairing code if the compute address or token changed.
 

@@ -1,4 +1,4 @@
-"""Template filters for dates, numbers and sizes (language-aware)."""
+"""Template filters for readable colors, dates, numbers and sizes."""
 
 from __future__ import annotations
 
@@ -8,6 +8,20 @@ from flask import g
 
 from bananachat import db
 from bananachat.i18n import translate
+
+
+def primary_foreground(color: str) -> str:
+    """Choose the higher-contrast text color for a validated #rrggbb primary.
+
+    Compare WCAG contrast with pure black and white; either choice maintains
+    at least 4.5:1 for any opaque sRGB background. Keep the live Customize
+    preview's primaryForeground calculation in sync.
+    """
+    channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+              for channel in channels]
+    luminance = sum(channel * weight for channel, weight in zip(linear, (0.2126, 0.7152, 0.0722), strict=True))
+    return "#000000" if (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) else "#ffffff"
 
 
 def _language() -> str:

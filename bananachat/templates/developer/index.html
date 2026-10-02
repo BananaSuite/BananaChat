@@ -13,12 +13,10 @@
   </header>
   {% include "developer/_tabs.html" %}
 
-  <div class="stack-lg">
-    <div class="grid grid-2">
-      {% include "developer/_credits.html" %}
-
-      <section class="card" aria-labelledby="endpoint-title">
-        <div class="card-header"><h2 id="endpoint-title">{{ t("developer.endpoint_title") }}</h2></div>
+  <div class="section-stack">
+    <div class="dev-summary">
+      <section class="settings-section" aria-labelledby="endpoint-title">
+        <div class="section-header"><h2 id="endpoint-title">{{ t("developer.endpoint_title") }}</h2></div>
         <p class="muted">{{ t("developer.endpoint_text") }}</p>
         <div class="secret-box">
           <input type="text" readonly value="{{ api_base }}" aria-label="{{ t('developer.base_url') }}" class="mono">
@@ -26,10 +24,11 @@
         </div>
         <p class="hint mt-1 mb-0"><a href="{{ url_for('developer.playground') }}">{{ t("developer.try_playground") }}</a></p>
       </section>
+      {% include "developer/_credits.html" %}
     </div>
 
-    <section class="card" aria-labelledby="tokens-title">
-      <div class="card-header">
+    <section class="settings-section" aria-labelledby="tokens-title">
+      <div class="section-header">
         <h2 id="tokens-title">{{ t("developer.tokens_title") }}</h2>
         <span class="badge">{{ t("developer.tokens_count", count=tokens | length, max=max_tokens) }}</span>
       </div>
@@ -103,8 +102,8 @@
       {% endif %}
     </section>
 
-    <section class="card" aria-labelledby="quickstart-title">
-      <div class="card-header"><h2 id="quickstart-title">{{ t("developer.quickstart_title") }}</h2></div>
+    <section class="settings-section" aria-labelledby="quickstart-title">
+      <div class="section-header"><h2 id="quickstart-title">{{ t("developer.quickstart_title") }}</h2></div>
       <p class="muted">{{ t("developer.quickstart_text") }}</p>
       <div class="stack">
         {% for title_key, snippet in snippets %}
@@ -112,7 +111,7 @@
         <details class="dev-example"{% if loop.first %} open{% endif %}>
           <summary>{{ title }}{{ icon("chevron-down") }}</summary>
         <figure class="code-block dev-snippet">
-          <header><figcaption>{{ title }}</figcaption>
+          <header><figcaption class="visually-hidden">{{ title }}</figcaption>
             <button type="button" class="btn btn-sm btn-ghost" data-copy="{{ snippet }}">{{ icon("copy") }}{{ t("common.copy") }}<span class="visually-hidden"> {{ title }}</span></button>
           </header>
           <pre tabindex="0"><code>{{ snippet }}</code></pre>
@@ -123,8 +122,8 @@
       <p class="hint mb-0">{{ t("developer.quickstart_hint") }}</p>
     </section>
 
-    <section class="card" aria-labelledby="models-title">
-      <div class="card-header"><h2 id="models-title">{{ t("developer.models_title") }}</h2></div>
+    <section class="settings-section" aria-labelledby="models-title">
+      <div class="section-header"><h2 id="models-title">{{ t("developer.models_title") }}</h2></div>
       {% if models %}
       <p class="muted">{{ t("developer.models_text") }}</p>
       <div class="table-wrap">

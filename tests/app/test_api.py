@@ -489,6 +489,7 @@ def test_interrupted_stream_is_charged_once(app, user, token, fake_ollama):
     received = [next(iter(stream)) for _ in range(5)]
     assert any(b"word" in part if isinstance(part, bytes) else "word" in part for part in received)
     response.close()
+    response.close()  # repeated cleanup must not charge the same partial answer again
     rows = ledger(app, user)
     assert len(rows) == 1 and rows[0]["usage_estimated"] == 1 and rows[0]["tokens_out"] > 0
     from bananachat import db

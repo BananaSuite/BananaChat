@@ -118,10 +118,8 @@ def events_payload(task, *, after: int, lang: str) -> dict:
 # ----- access -----------------------------------------------------------------------------------
 
 def _access_state(user) -> str:
-    """``ok``, ``disabled`` (feature off) or ``denied`` (no capability)."""
-    if not agent_settings.enabled():
-        return "disabled"
-    return "ok" if AccessContext.load(user).allows("agents") else "denied"
+    """The same audience decision used by starts, follow-ups and execution."""
+    return agent_settings.access_state(user)
 
 
 @bp.app_context_processor

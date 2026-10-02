@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from flask import abort, current_app, g, jsonify, redirect, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from bananachat import db
 from bananachat.db import users
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
@@ -98,15 +99,17 @@ def load_current_user() -> None:
         return
     legacy_id = session.get("user_id")
     if legacy_id:
-        # Cookies issued before server-side sessions: accept them once if the
-        # account's session version still matches, then upgrade the cookie.
-        user = users.get(legacy_id)
+        # Cookies issued before server-side sessions: upgrade while the
+        # account's session version matches. Check and create atomically so
+        # revocation cannot occur between reading the version and upgrading.
         # The previous release read a missing version as 0.
         version = session.get("session_version", 0)
         for key in ("user_id", "session_version"):
             session.pop(key, None)
-        if user and _usable(user) and version == (user["session_version"] or 0):
-            login(user, remember_language=False)
+        with db.transaction():
+            user = users.get(legacy_id)
+            if user and _usable(user) and version == (user["session_version"] or 0):
+                login(user, remember_language=False)
 
 
 def _usable(user) -> bool:
@@ -249,7 +252,8 @@ def check_csrf() -> None:
         abort(403, description=translate(error_language(), "errors.cross_site"))
     expected = session.get("csrf")
     sent = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token") or ""
-    if not expected or not hmac.compare_digest(str(sent), str(expected)):
+    if (not isinstance(expected, str) or not expected or not expected.isascii()
+            or not isinstance(sent, str) or not sent.isascii() or not hmac.compare_digest(sent, expected)):
         raise CSRFError()
 
 
@@ -401,7 +405,11 @@ def form_looks_human() -> bool:
     if current_app.config.get("TESTING"):
         return True
     issued, _, signature = (request.form.get("_form_time") or "").partition(".")
-    if not issued.isdigit():
+    # Bound and validate before signing or converting attacker-controlled text.
+    # str.isdigit also accepts characters int() cannot parse, while compare_digest
+    # only accepts ASCII strings.
+    if (not 1 <= len(issued) <= 12 or not issued.isascii() or not issued.isdecimal()
+            or len(signature) != 24 or not signature.isascii()):
         return False
     expected = hmac.new(current_app.config["SECRET_KEY"].encode(), b"form:" + issued.encode(),
                         hashlib.sha256).hexdigest()[:24]

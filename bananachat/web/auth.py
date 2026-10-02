@@ -104,23 +104,35 @@ def login():
         valid = False
     else:
         valid = security.verify_password(user["password"], password)
-    if not valid:
+
+    def invalid_credentials():
         users.hit(address_key, 10**6, FAILURE_WINDOW)
         users.hit(account_key, 10**6, FAILURE_WINDOW)
         log.info("Failed sign-in from %s", security.client_ip())
         flash(_t("auth.invalid_credentials"), "error")
         return _render("auth/login.html", 401, next_url=next_url)
-    if users.is_suspended(user):
-        flash(_t("auth.suspended"), "error")
-        return _render("auth/login.html", 403, next_url=next_url)
 
-    users.clear_hits(account_key)
-    if security.needs_rehash(user["password"]):
-        db.execute("UPDATE users SET password=? WHERE id=?", (security.hash_password(password), user["id"]))
-    users.touch_login(user["id"])
-    security.login(user)
-    if user["role"] == "admin":
-        users.audit(user, "auth.admin_login", ip_address=security.client_ip())
+    if not valid:
+        return invalid_credentials()
+    # Password hashing stays outside the write lock. Recheck the account under
+    # that lock before any writes or session issuance so a concurrent password
+    # reset, suspension or session revocation cannot be undone by this login.
+    rehashed = security.hash_password(password) if security.needs_rehash(user["password"]) else None
+    with db.transaction():
+        fresh = users.get(user["id"])
+        if (fresh is None or fresh["password"] != user["password"]
+                or fresh["session_version"] != user["session_version"]):
+            return invalid_credentials()
+        if users.is_suspended(fresh):
+            flash(_t("auth.suspended"), "error")
+            return _render("auth/login.html", 403, next_url=next_url)
+        users.clear_hits(account_key)
+        if rehashed:
+            db.execute("UPDATE users SET password=? WHERE id=?", (rehashed, fresh["id"]))
+        users.touch_login(fresh["id"])
+        security.login(fresh)
+        if fresh["role"] == "admin":
+            users.audit(fresh, "auth.admin_login", ip_address=security.client_ip())
     return redirect(next_url or url_for("core.index"))
 
 

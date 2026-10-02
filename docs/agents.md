@@ -1,8 +1,21 @@
-# Agents
+# Cloud sessions
 
 Agents let a model work on a task in a disposable Linux container: it runs
 commands, reads and writes files in `/workspace` and finishes with a summary.
-Administrators turn the feature on; it is off by default.
+Administrators turn the feature on; it is off by default. In **Admin → Cloud
+sessions**, choose **Administrators only**, **Everyone signed in**, or
+**Custom access lists**. Fresh installations select administrators only when enabled.
+Existing explicitly configured installations keep their previous Agents capability policy
+through the access-list mode until an administrator changes it. An invalid
+stored audience disables the feature rather than granting broader access.
+
+Sessions use the existing `/agents` routes and retain their history. Model
+policies, five-hour token budgets, optional weekly limits and per-model rates
+remain independent of the audience. Native Claude Code subscription profiles
+serve chat; cloud sessions require an Ollama or external API model with tool
+support. Configure the sandbox runner on the compute host before enabling
+sessions. Provider credentials stay on the web server and are not copied into
+workspaces.
 
 ```text
 browser ──> web server (BananaChat)                              cluster (compute host)
@@ -332,8 +345,9 @@ Environment=XDG_RUNTIME_DIR=/run/user/1001
 ExecStart=/usr/bin/python3 -m compute.sandbox_runner
 Restart=on-failure
 RestartSec=5s
-# Stopping removes every sandbox; give the engine time to do it.
-TimeoutStopSec=90s
+# Allow pending creation and container cleanup to finish before a forced stop.
+# Increase this allowance if BC_SANDBOX_MAX exceeds the default of four.
+TimeoutStopSec=420s
 KillSignal=SIGTERM
 UMask=0077
 
@@ -545,15 +559,17 @@ users.
 
 ## Using agents
 
-**Agents** (top bar) appears when an administrator has enabled the feature
-and you may use it. Agents run code, so access is off for everyone by default:
-an administrator adds people to the *Agents* capability (Admin → Access), and
-you can ask for it from your account page (*Access* section).
+**Cloud sessions** (top bar) appears when an administrator has enabled the
+feature and you belong to the selected audience. Administrators-only mode
+restricts sessions to admins; everyone mode permits active signed-in accounts.
+Access-list mode uses the *Agents* capability in **Admin → Access**, including
+existing access requests and individual grants. Model access and usage limits
+still apply in every mode.
 
 ### Starting a task
 
 On `/agents`, describe the task (the goal, the files involved and how to check
-the result), pick a model and press **Start task**. When an administrator
+the result), pick a model and press **Start session**. When an administrator
 allows it, the task can start from a public Git repository
 ([Git repositories](#git-repositories)). You can add files or a
 `.zip`/`.tar.gz` archive (up to `BC_AGENTS_MAX_UPLOAD_MB`, default 20 MB in
@@ -563,7 +579,7 @@ are extracted there, never on the web server. When swarms are enabled,
 parallel.
 
 Only models that can call tools are offered. New tasks are refused while the
-site is in maintenance or the AI server is unreachable, when you already have
+site is in maintenance or no accessible model is available, when you already have
 as many running tasks as allowed, when all sandboxes are busy, or when your
 *agent* tokens (or the model's own limits) are used up (Account → Your limits).
 
@@ -741,7 +757,7 @@ DNS64/NAT64 are not supported for imports.
 
 ## Administering agents
 
-**Admin → Agents** (English only). Every change is recorded in the audit log
+**Admin → Cloud sessions** (English only). Every change is recorded in the audit log
 (`admin.agents.*`).
 
 - **Sandbox runner**: the runner's `/healthz` (engine, rootless, runtime,
@@ -759,7 +775,8 @@ DNS64/NAT64 are not supported for imports.
 
   | Setting | Default | Meaning |
   | --- | --- | --- |
-  | Enable agents | off | Off: nobody can start tasks or send follow-ups; running tasks continue; history stays readable. |
+  | Enable cloud sessions | off | Off: nobody can start sessions or send follow-ups; running work stops at its next safe point; history stays readable. |
+  | Who can start sessions | Administrators only | Admins only, everyone signed in, or the existing Agents access lists. Previously configured sites retain access-list mode. |
   | Enable agent swarms | off | Allows the *Agent swarm* option. |
   | Steps per run | 40 (1–200) | Model calls per run, all agents of a swarm together (each call reserves its step first, so parallel sub-agents cannot exceed it). |
   | Minutes per run | 20 (1–240) | Wall time per run; checked before every tool call, and no command may run past it. |
@@ -777,13 +794,14 @@ DNS64/NAT64 are not supported for imports.
   are clamped again, so no stored value can exceed the hard maximums.
 - **Models**: tool-calling support is read from Ollama's `/api/show`
   (`capabilities` contains `tools`) every 15 minutes while agents are enabled,
-  or with **Check tool support**. Override per model (*Always*/*Never*). People
+  or with **Check tool support**. External API models use their enrolled
+  capabilities. Override per model (*Always*/*Never*). People
   also need access to the model in the chat (rollout, categories, policies).
 - **All tasks**: every task of every user, filterable by state, with the full
   log (prompt, every model message and reasoning, tool call, arguments and
   result, tokens and timings). Administrators can stop or delete any task.
 
-**Who may use agents**: Admin → Access → *Agents*. The capability starts as
+**Access-list mode**: Admin → Access → *Agents*. The capability starts as
 *Only people on the allowlist* with access requests enabled; approve requests
 there or add people to the allowlist (optionally until a date).
 
@@ -797,6 +815,12 @@ the owner has not unlocked medium for the model).
 Agent model calls go through the normal inference queue with the lowest
 priority (people waiting for a chat answer go first) and are never sent to
 volunteer worker PCs.
+
+Account status, the session audience, model access and token limits are checked
+again after queue waits and on each provider attempt. Revoking access or
+disabling sessions stops subsequent model and tool work. Fresh checks do not
+charge the same model request rate twice. Tightened run budgets apply to active
+sessions; raising a setting does not expand a run's original allowance.
 
 ### How the web server runs tasks
 

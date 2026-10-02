@@ -337,7 +337,8 @@ class Manager:
         allowed_link = (lambda path: profile.hosting_storage_link(path, data)) if settings["mode"] == "hosting" else None
         inputs = [(path, "data/" + name) for path, name in regular_files(data, allowed_link=allowed_link, excluded=excluded)]
         inputs.extend((path, "site/" + name) for path, name in regular_files(self.root / "site"))
-        for name in ("installation.json", "source.json", "app.env", "repo.token", "repo.key", "repo.known_hosts", "updates.json"):
+        for name in ("installation.json", "source.json", "app.env", "repo.token", "repo.key", "repo.known_hosts",
+                     "repo.allowed_signers", "updates.json"):
             path = self.config_dir / name
             if path.is_file() and not path.is_symlink():
                 inputs.append((path, "config/" + name))
@@ -514,7 +515,7 @@ class Manager:
         atomic_write(self.root / "data/.banana-maintenance", "Restoring\n")
         self.tenant_maintenance(settings, True)
         if copy_source:
-            for name in ("source.json", "repo.token", "repo.key", "repo.known_hosts"):
+            for name in ("source.json", "repo.token", "repo.key", "repo.known_hosts", "repo.allowed_signers"):
                 file = extracted / "config" / name
                 if file.exists():
                     atomic_write(self.config_dir / name, file.read_bytes())
@@ -565,7 +566,7 @@ class Manager:
         if journal.get("backup"):
             self.system.remove_containers(current)
             with read_package(journal["backup"], self.product, self.root / "staging") as (extracted, manifest):
-                self.apply_package(extracted, manifest, settings, copy_source=False)
+                self.apply_package(extracted, manifest, settings, copy_source=journal.get("restore_source", False))
             self.switch(settings["revision"])
             self.system.install_units(settings)
             self.finish(journal, settings)
@@ -601,6 +602,9 @@ class Manager:
                 journal = self.snapshot_state(existing) if existing else None
                 try:
                     if journal:
+                        # A failed restore must also undo its source and trust
+                        # configuration; updates never replace these files.
+                        journal["restore_source"] = True
                         self.quiesce(journal)
                         before = self.package(existing, self.backup_name("before-restore"))
                         journal.update(backup=str(before), phase="backed_up")

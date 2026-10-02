@@ -8,6 +8,12 @@ no open ports and work behind home routers.
 Workers are off by default. They add capacity; they never replace the
 server's own Ollama, which answers whenever no worker does.
 
+Administrators can hide model-server offline notices in **Site settings →
+Maintenance and announcements → Model-server status**. Users can also hide a
+notice for 24 hours in their browser. These controls affect presentation only:
+offline models stay unavailable and health reporting stays accurate. Hosted
+Claude and external API models do not use the volunteer worker pool.
+
 ## Privacy: read this first
 
 **A worker's owner can read every request sent to it**: the conversation
@@ -25,11 +31,10 @@ What the server does to limit exposure:
   failed, stopped or timed out); relayed pieces of the answer are deleted as
   soon as they are delivered; the job record itself (model name, timings,
   token counts) is deleted after an hour.
-- `services.remote.should_route()` refuses requests whose `request_type` is a
-  no-history type (`chat_incognito`, `incognito`, `no_history`) — but only when
-  the caller passes it. The inference core does not do so today, so
-  **no-history chats can be answered by workers too**. If that is not
-  acceptable for your users, do not enable workers.
+- No-history chats are excluded from volunteer workers. The chat service marks
+  them as `chat_incognito`; the inference core forwards that request type, and
+  `services.remote.should_route()` rejects it. This restriction does not change
+  administrator audit access or the processing terms of a configured cloud model.
 
 ## Turning workers on
 

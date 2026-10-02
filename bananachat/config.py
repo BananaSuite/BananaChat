@@ -14,6 +14,7 @@ import hmac
 import logging
 import math
 import os
+import re
 import secrets
 import stat
 import tempfile
@@ -185,6 +186,9 @@ class Config:
     inference_fallback_api_key: str = ""
     workers_enabled: bool = False
     worker_claim_timeout: int = 20
+    # Operator-installed provider adapter; unset keeps Claude disconnected.
+    claude_extension: str = ""
+    claude_code_config: str = ""
 
     # Retention
     no_history_ttl_hours: int = 24
@@ -347,6 +351,12 @@ def load_config(environ=None, *, load_secret=True) -> Config:
     if outage_mode == "fallback" and not fallback_url:
         outage_mode = "shutdown"
 
+    claude_extension = r.text("BC_CLAUDE_EXTENSION")
+    if claude_extension and not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", claude_extension,
+                                             flags=re.ASCII):
+        r.warnings.append("BC_CLAUDE_EXTENSION must be an installed Python module name; Claude is disabled.")
+        claude_extension = ""
+
     config = Config(
         host=r.text("BC_HOST", "127.0.0.1") or "127.0.0.1",
         port=r.integer("BC_PORT", 8000, 1, 65535),
@@ -410,6 +420,8 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         inference_fallback_api_key=_bearer_token(r, "BC_INFERENCE_FALLBACK_API_KEY", fallback_url) if fallback_url else "",
         workers_enabled=r.flag("BC_WORKERS_ENABLED", False),
         worker_claim_timeout=r.integer("BC_WORKER_CLAIM_TIMEOUT", 20, 2, 600),
+        claude_extension=claude_extension,
+        claude_code_config=r.text("BC_CLAUDE_CODE_CONFIG"),
         no_history_ttl_hours=r.integer("BC_NO_HISTORY_TTL_HOURS", 24, 1, 24 * 365),
         deleted_chat_retention_days=r.integer("BC_DELETED_CHAT_RETENTION_DAYS", 30, 0, 36500),
         metrics_retention_days=r.integer("BC_METRICS_RETENTION_DAYS", 30, 1, 36500),

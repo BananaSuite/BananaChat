@@ -266,7 +266,6 @@ class ImageJob:
         budget = credits.budget(self.user, "api")
         weight = limits.charge_terms(self.model["id"])[0]
         charge = self.cost * weight
-        slow = self.counted and not budget.unlimited and budget.regular_left < charge
         cost = limits.tokens_label(self.cost, self.lang)
         try:
             reservation = credits.reserve_image(self.user, charge, ttl_seconds=self.config.image_credit_reservation_ttl,
@@ -283,7 +282,7 @@ class ImageJob:
                 self._say("images.error_cost_window", cost=cost)
             raise ImageError(message, 429, "insufficient_quota",
                              retry_after=budget.seconds_until_reset(weekly=False)) from None
-        return reservation, slow
+        return reservation
 
     def _authorize(self) -> None:
         user = users.get(self.user["id"])
@@ -296,11 +295,11 @@ class ImageJob:
         began = time.monotonic()
         self._check_rate()
         self._admit()
-        reservation, slow = self._reserve()
+        reservation = self._reserve()
         finalized = False
         wait_ms = 0
         try:
-            priority = queue.priority_for(self.user, slow=slow, api=True)
+            priority = queue.priority_for(self.user, api=True)
             with _Heartbeat(reservation, self.config.image_credit_reservation_heartbeat):
                 try:
                     with queue.Slot(priority, owner_key=f"user:{self.user['id']}:image") as slot:

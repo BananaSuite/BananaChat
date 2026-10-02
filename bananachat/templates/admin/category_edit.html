@@ -5,7 +5,7 @@
 {% block admin_content %}
 <p class="breadcrumb"><a href="{{ url_for('admin.categories') }}">{{ icon("chevron-left") }}Categories</a></p>
 {{ header("Edit " ~ category.name) }}
-<form method="post" action="{{ url_for('admin.category_edit', category_id=category.id) }}" class="card stack">
+<form method="post" action="{{ url_for('admin.category_edit', category_id=category.id) }}" class="settings-section stack">
   {{ csrf() }}
   {% include "admin/_category_fields.html" %}
   <div class="form-actions">

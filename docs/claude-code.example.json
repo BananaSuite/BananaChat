@@ -1,0 +1,12 @@
+{
+  "binary": "/opt/claude/bin/claude",
+  "timeout_seconds": 180,
+  "profiles": {
+    "account-one": {
+      "home": "/srv/bananachat-claude/account-one",
+      "config_dir": "/srv/bananachat-claude/account-one/config",
+      "discovery": "automatic",
+      "usage_source": "automatic"
+    }
+  }
+}

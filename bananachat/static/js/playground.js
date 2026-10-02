@@ -180,7 +180,10 @@ async function send() {
   } catch (error) {
     if (error instanceof FieldError) {
       toast(error.message, "error");
+      const section = error.field.closest("details");
+      if (section) section.open = true;
       error.field.focus();
+      error.field.reportValidity();
       return;
     }
     throw error;

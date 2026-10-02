@@ -14,18 +14,18 @@
 {% call header("Models", "Decide how new models are enrolled, when missing or broken ones are retired, and how downloads run.") %}{% endcall %}
 {% include "admin/_models_tabs.html" %}
 
-<form method="post" action="{{ url_for('admin.model_settings_save') }}" class="stack-lg mb-3">
+<form method="post" action="{{ url_for('admin.model_settings_save') }}" class="section-stack mb-3">
   {{ csrf() }}
-  <section class="card stack" aria-labelledby="enrollment-title">
+  <section class="settings-section stack" aria-labelledby="enrollment-title">
     <h2 id="enrollment-title">New models</h2>
-    <fieldset>
+    <fieldset class="admin-fieldset">
       <legend class="visually-hidden">Enrollment</legend>
       <label class="check"><input type="radio" name="enrollment" value="manual"{% if policy.enrollment == "manual" %} checked{% endif %}><span>Manual review<small>A model found on the model server is added as “new — waiting for review” and hidden until you enable it and choose its name, access, limits and features.</small></span></label>
       <label class="check"><input type="radio" name="enrollment" value="automatic"{% if policy.enrollment == "automatic" %} checked{% endif %}><span>Enable automatically<small>New chat models are published at once with limits for their size (heavy from 30B parameters, standard from 7B, light below) and flagged “enabled automatically — review” until you mark them reviewed. Embedding models and models on the ignore list are never enabled.</small></span></label>
     </fieldset>
   </section>
 
-  <section class="card stack" aria-labelledby="retirement-title">
+  <section class="settings-section stack" aria-labelledby="retirement-title">
     <h2 id="retirement-title">Missing and broken models</h2>
     <p class="muted small">A missing model is hidden from users (chats keep their history) and returns to its previous state when it is back. A failing model is hidden from selection and fallback and re-tested with a small prompt when the server has room; outages, busy servers and cancelled answers do not count as failures.</p>
     <div class="form-grid">
@@ -38,7 +38,7 @@
     </div>
   </section>
 
-  <section class="card stack" id="downloads-settings" aria-labelledby="download-settings-title">
+  <section class="settings-section stack" id="downloads-settings" aria-labelledby="download-settings-title">
     <h2 id="download-settings-title">Downloads</h2>
     <div class="form-grid">
       {{ number_field("download_concurrency", "Downloads at the same time", "1 is kindest to the model server's disk and network.") }}
@@ -49,7 +49,7 @@
   <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
 </form>
 
-<section class="card mb-3" id="ignore-list" aria-labelledby="ignore-title">
+<section class="settings-section mb-3" id="ignore-list" aria-labelledby="ignore-title">
   <h2 id="ignore-title">Ignore list</h2>
   <p class="muted small">Models matching these names or patterns are never offered or enabled. A new rule also ignores the models waiting for review that it matches; models you already enabled are not affected (use Ignore on them). <code>*</code> matches anything, <code>?</code> one character.</p>
   <form method="post" action="{{ url_for('admin.model_ignore_rule_add') }}" class="form-grid mb-2">
@@ -89,7 +89,7 @@
   {% endif %}
 </section>
 
-<section class="card mb-3" id="ignored" aria-labelledby="ignored-title">
+<section class="settings-section mb-3" id="ignored" aria-labelledby="ignored-title">
   <h2 id="ignored-title">Ignored models</h2>
   {% if ignored %}
   <ul class="divider-list lifecycle-list">
@@ -110,7 +110,7 @@
   {% endif %}
 </section>
 
-<section class="card" aria-labelledby="events-title">
+<section class="settings-section" aria-labelledby="events-title">
   <h2 id="events-title">Recent changes</h2>
   {% if events %}
   <ul class="plain-list event-list divider-list">

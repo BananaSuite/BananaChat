@@ -36,7 +36,7 @@
   </form>
   <details class="disclosure">
     <summary class="btn">{{ icon("plus") }}Create for a user</summary>
-    <form method="post" action="{{ url_for('admin.personality_create') }}" class="card stack mt-1">
+    <form method="post" action="{{ url_for('admin.personality_create') }}" class="settings-section stack mt-1">
       {{ csrf() }}
       <p class="hint mb-0">Adds a private personality to one user's list (it counts towards their limit). To offer one to everyone, create a featured personality instead.</p>
       <div class="form-grid">

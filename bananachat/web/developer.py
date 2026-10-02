@@ -69,16 +69,15 @@ def credit_summary(user) -> dict:
     if not budget.unlimited:
         if window.limited:
             meters.append(_meter(_t("developer.tokens_window"), window.used, window.tokens))
-            if window.slow_tokens > 0:
-                meters.append(_meter(_t("developer.tokens_slow"), window.slow_used, window.slow_tokens))
         if weekly.limited:
             meters.append(_meter(_t("developer.tokens_weekly"), weekly.used, weekly.tokens))
-    mode, bonus_regular, bonus_slow = current.bonus
+    mode, bonus_tokens, _ = current.bonus
     if mode == "multiplier":
-        bonus = _t("developer.bonus_multiplier", factor=f"{bonus_regular:g}")
+        bonus = _t("developer.bonus_multiplier", factor=f"{bonus_tokens:g}")
     elif mode == "fixed":
-        bonus = _t("developer.bonus_fixed", tokens=tokens_text(bonus_regular, g.lang),
-                   slow=tokens_text(bonus_slow, g.lang))
+        bonus_weekly = credits.music_weekly_fixed(g.settings) if weekly.limited and not budget.unlimited else 0
+        bonus = _t("developer.bonus_fixed_weekly" if bonus_weekly else "developer.bonus_fixed",
+                   tokens=tokens_text(bonus_tokens, g.lang), weekly=tokens_text(bonus_weekly, g.lang))
     else:
         bonus = ""
     notes = []
@@ -94,8 +93,7 @@ def credit_summary(user) -> dict:
                          left=time_left(window.resets_at)) if window.open else _t("developer.window_not_started")
     rate = current.rate
     return {"unlimited": budget.unlimited, "admin": current.admin, "meters": meters, "available": budget.available,
-            "slow_next": budget.next_is_slow and budget.slow_left > 0, "bonus": bonus,
-            "regular_left": budget.regular_left, "slow_left": budget.slow_left,
+            "bonus": bonus, "regular_left": budget.regular_left,
             "weekly_exhausted": budget.weekly_exhausted, "window_note": window_note,
             "weekly_limited": weekly.limited and not budget.unlimited,
             "resets_at": db.timestamp(window.resets_at) if window.resets_at else None,

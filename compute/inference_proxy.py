@@ -43,10 +43,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .http_limits import ConnectionDeadlines
+
 DEFAULT_SOURCE_URL = "https://github.com/BananaSuite/BananaChat"
 MAX_BODY = 32 * 1024 * 1024
 MIN_TOKEN_LENGTH = 32
 CLIENT_TIMEOUT = 30.0
+HEADER_DEADLINE = 30.0
+BODY_DEADLINE = 300.0
 HEALTH_TIMEOUT = 3.0
 HEALTH_CACHE_SECONDS = 1.0
 # How long a refused request's body is read and dropped, so the client gets the
@@ -138,13 +142,16 @@ class ComputeServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address, *, upstream, token, maintenance="", source=DEFAULT_SOURCE_URL, max_connections=32,
-                 upstream_timeout=900.0, client_timeout=CLIENT_TIMEOUT):
+                 upstream_timeout=900.0, client_timeout=CLIENT_TIMEOUT,
+                 header_deadline=HEADER_DEADLINE, body_deadline=BODY_DEADLINE):
         self.upstream = check_upstream(upstream)
         self.token = check_token(token).encode("utf-8")
         self.maintenance = maintenance or ""
         self.source = source or DEFAULT_SOURCE_URL
         self.upstream_timeout = float(upstream_timeout)
         self.client_timeout = float(client_timeout)
+        self.header_deadline = float(header_deadline)
+        self.body_deadline = float(body_deadline)
         self.slots = threading.BoundedSemaphore(max(1, int(max_connections)))
         # Refusals are answered by short-lived threads of their own, bounded too.
         self.refusals = threading.BoundedSemaphore(64)
@@ -153,6 +160,12 @@ class ComputeServer(ThreadingHTTPServer):
         if ":" in str(address[0]):
             self.address_family = socket.AF_INET6
         super().__init__(address, Handler)
+        self.deadlines = ConnectionDeadlines()
+
+    def server_close(self):
+        if hasattr(self, "deadlines"):
+            self.deadlines.close()
+        super().server_close()
 
     # ----- concurrency -------------------------------------------------------------------------
     def process_request(self, request, client_address):
@@ -177,6 +190,7 @@ class ComputeServer(ThreadingHTTPServer):
 
     def _refuse(self, request) -> None:
         try:
+            self.deadlines.set(request, self.header_deadline)
             request.settimeout(2.0)
             received = b""
             try:
@@ -187,6 +201,7 @@ class ComputeServer(ThreadingHTTPServer):
                     received += data
             except OSError:
                 pass
+            self.deadlines.set(request, DRAIN_SECONDS)
             _drain_after_headers(request, received, time.monotonic() + DRAIN_SECONDS)
             body = _json_bytes({"error": "The compute server is busy. Retry shortly."})
             head = ("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
@@ -197,6 +212,7 @@ class ComputeServer(ThreadingHTTPServer):
             except OSError:
                 pass
         finally:
+            self.deadlines.clear(request)
             self.shutdown_request(request)
             self.refusals.release()
 
@@ -246,6 +262,14 @@ class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         self.connection.settimeout(self.server.client_timeout)
+        self.server.deadlines.set(self.connection, self.server.header_deadline)
+
+    def finish(self):
+        self.server.deadlines.clear(self.connection)
+        try:
+            super().finish()
+        except OSError:
+            pass
 
     # ----- responses ---------------------------------------------------------------------------------
     def reply(self, status: int, payload, headers=None) -> None:
@@ -266,7 +290,7 @@ class Handler(BaseHTTPRequestHandler):
     def handle_one_request(self):
         try:
             super().handle_one_request()
-        except (socket.timeout, TimeoutError, ConnectionError):
+        except (socket.timeout, TimeoutError, ConnectionError, OSError):
             self.close_connection = True
 
     # ----- routing --------------------------------------------------------------------------------------
@@ -331,6 +355,7 @@ class Handler(BaseHTTPRequestHandler):
         reset it, and the client (a web server posting a chat with images) then
         sees a broken pipe instead of this answer.
         """
+        self.server.deadlines.set(self.connection, DRAIN_SECONDS)
         if self.headers.get("Transfer-Encoding"):
             return
         remaining = _body_length(self.headers.get("Content-Length"))
@@ -345,6 +370,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _read_body(self):
+        self.server.deadlines.set(self.connection, self.server.body_deadline)
         if self.headers.get("Transfer-Encoding"):
             self.reply(411, {"error": "Send the request body with a Content-Length."})
             return None
@@ -370,6 +396,9 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_body()
         except (OSError, socket.timeout):
             return None
+        finally:
+            # Model downloads and generation may legitimately outlast an upload.
+            self.server.deadlines.clear(self.connection)
         if body is None:
             return None
         upstream = http.client.HTTPConnection(*self.server.upstream, timeout=self.server.upstream_timeout)

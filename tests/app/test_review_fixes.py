@@ -26,14 +26,14 @@ def test_an_automatically_approved_quota_is_a_custom_quota(app, make_user, admin
     _signed_in(app, "quinn").post("/account/quota-request",
                                   {"tokens": "80k", "slow_tokens": "20k", "reason": "More experiments"})
     with app.app_context():
-        assert credits.get_quota(user["id"]) == (80_000, 20_000)
+        assert credits.get_quota(user["id"]) == (80_000, 0)
     with app.app_context():
         policy = limits.get_policy("api")
         policy["window"].update(tokens=10_000, slow_tokens=5000)
         limits.set_policy("api", policy, None)
-        assert credits.get_quota(user["id"]) == (80_000, 20_000)
+        assert credits.get_quota(user["id"]) == (80_000, 0)
     html = admin.get(f"/admin/users/{user['id']}").get_data(as_text=True)
-    assert '80k tokens + 20k tokens slow per 5 hours <span class="badge">custom</span>' in html
+    assert '80k tokens per 5 hours <span class="badge">custom</span>' in html
 
 
 # ----- image reservations -------------------------------------------------------------------------

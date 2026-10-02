@@ -16,32 +16,61 @@ Booleans accept `1/0`, `true/false`, `yes/no` and `on/off`.
 Settings that administrators change in the browser (site name, sign-up,
 maintenance mode, theme, quotas, access policies, the music program) are
 stored in the database, not here. Maintenance mode and AI-server outages never
-close the site: users can sign in and read their chats, a banner explains the
-situation, and only sending new messages is paused. Monitors should poll
+close the site: users can sign in and read their chats. Maintenance pauses new
+answers; a local model-server outage still permits accessible hosted models.
+Offline local models remain unavailable. Monitors should poll
 `GET /status` (always HTTP 200, `status` is `ok`, `degraded`, `maintenance`,
 `outage` or `updating`); `GET /health` is the readiness probe.
+
+### Offline model-server notices
+
+In **Admin → Site settings → Maintenance and announcements → Model-server
+status**, **Show the model-server offline warning** controls the notice for
+all users. It is enabled by default. Users can choose **Hide for 24 hours**
+on an offline or backup-server notice. This choice is per account in the
+current browser; it survives reloads and applies to other tabs until the
+original 24 hours expire. If browser storage is blocked, the interface reports
+that the choice lasts for the current page only.
+
+Hiding a notice does not change `/status`, maintenance, access checks, quotas or
+model availability. An unavailable local backend still refuses generation;
+published, accessible Claude or external models can continue answering.
 
 ### Limits
 
 Usage limits have no environment variables: administrators set them in
 **Admin → Limits**. Everything is counted in **tokens** (prompt plus answer).
 
+* **Chat token consumption** has two switches: local model chats are unmetered
+  by default; cloud model chats consume token allowances by default to protect
+  expensive external models. Site-owned Ollama workers on a separate compute
+  server still count as local. These switches apply to regular and no-history
+  chats. Existing local chat allowances need **Apply token limits to local chats** on
+  to keep deducting tokens after an upgrade; their configured amounts are kept.
+  Usage is recorded in either mode, and enabling consumption never
+  charges earlier unmetered chats. Request rates, model locks and access rules
+  remain active. Set token amounts under Chat and Models; each model's
+  service-counting choice still decides whether its usage spends the chat
+  allowance, its own allowance, or both. API, playground, images and agents
+  retain their existing consumption rules.
 * **Services** (API, chat, agents), each with:
   * a **request rate**: one or more rules such as “60 requests per minute”
     and “1,000 per day” (per second, minute, hour or day, each with an
     optional burst); every rule must pass. One set of buckets per account and
     service, shared by every API key, the playground, chat and agents;
   * **tokens per 5 hours**: a window opens with the account's first request
-    and lasts 5 hours, then the allowance is full again. Optional **slow
-    tokens** are used afterwards (slow requests wait behind others);
+    and lasts 5 hours, then the single allowance is full again. Once it is
+    spent, further requests that count toward it are refused until the reset
+    or an approved increase; there is no slow-token spillover;
   * **tokens per week** (off by default): a rolling week that starts with the
-    first request after the previous week ended; no slow lane.
+    first request after the previous week ended. Both enabled token limits
+    must have tokens left.
 
   Each limit can *adjust to demand* (dynamic: more when the server is quiet
   and few people are online and for accounts that use it off-peak and
   regularly, less under load, between 0.5× and 2×; the request rate is only
   ever lowered), and the token limits can *rise with tier levels*. Defaults:
-  API 1 request per second (bursts of 10), 30k + 15k slow tokens per 5
+  API 1 request per second (bursts of 10), 45k tokens per 5
   hours; chat 1 request per second (bursts of 5) and agents 1 per second
   (bursts of 10), without token limits.
 * **Models** - each model has a **weight** (usage counts tokens × weight
@@ -55,13 +84,16 @@ Usage limits have no environment variables: administrators set them in
   requests a minute and 200 a day, 200k tokens per 5 hours, sensitivity 2,
   reasoning up to Low). A model nobody configured follows the preset the
   catalog gives it (`ai_models.limit_preset`), else *standard*.
-* **Reasoning effort** - levels `off < low < medium < high < max`, as each
+* **Reasoning effort** - levels `off < low < medium < high < extra < max`, as each
   model supports them. Everyone may use up to the default (Medium, or the
   model's own default); higher levels are unlocked for one account (one model
   or all), by an approved request, or automatically after sustained use (by
   default 30 active days and 2M tokens with that model in the last 60 days and
   no suspension in 90 days; one level at a time, never above High unless you
-  raise the ceiling). Gating can be switched off for everyone or one account.
+  raise the ceiling). Gating can be switched off for everyone, one account or
+  one model. Automatic unlocks have separate model and account opt-outs. API
+  requests may use `xhigh` as an alias for Extra; only model-supported levels
+  are shown and accepted.
 * **Tiers** - an ordered ladder with a token multiplier and promotion
   requirements (account age, active days and tokens used in the last 30 days,
   days without a suspension). Only usage of services with token limits counts
@@ -72,6 +104,11 @@ Usage limits have no environment variables: administrators set them in
   everyone, for one service, all services or one model, for 1 hour, 24 hours,
   7 days, until a date, or forever. Unlimited use for every service also lifts
   the models' own limits; other grants for services leave them alone.
+* **Music program** - Admin → Music can offer participants a token multiplier
+  or fixed extra tokens. Fixed bonuses for the five-hour and weekly allowances
+  can be set independently. An unset weekly bonus follows seven times the
+  five-hour bonus; upgrades preserve the previous weekly bonus separately,
+  even when active slow tokens are added to the five-hour bonus.
 * **Requests** - users ask for more tokens per 5 hours or per week, a higher
   request rate (one of their rules), a temporary increase, or a higher
   reasoning effort. 5-hour requests (and weekly ones, when an amount is set)
@@ -94,7 +131,62 @@ the account), reasoning-effort levels, speed (slow down or speed up), tier
 (and a lock), dynamic exemption and usage resets. Every change is recorded in
 the audit log.
 
-Upgrading converts amounts at 1 credit = 1,000 tokens: the daily amount
+Accounts can be exempted independently from internal token allowances and
+request rates. A per-account model exemption removes only that model's own
+token or rate limits; the service allowance and request rate still apply.
+Models also have independent token/rate switches globally. Exemptions preserve
+usage recording, access rules, model locks, reasoning controls and provider
+availability: they never create capacity on an exhausted Claude subscription.
+Request-rate exemptions cover these quota policy rules; image generation's
+separate safety RPM cap, queue capacity and execution timeouts still apply.
+
+### Claude provider extension
+
+`BC_CLAUDE_EXTENSION` names an operator-installed Python module exporting
+`create_adapter(config)` with cancellable chat, discovery and quota callbacks.
+It is empty by default, leaving Claude disconnected. Invalid configuration or
+adapter initialization clears every callback and keeps the provider disabled.
+The pool stores account labels, local budgets and usage, not credentials.
+
+For the built-in official Claude Code subscription connector, set
+`BC_CLAUDE_EXTENSION=bananachat.services.claude_code` and
+`BC_CLAUDE_CODE_CONFIG` to an absolute path to its private JSON manifest.
+The server operator installs the official CLI and authenticates isolated
+profiles; web administrators choose profiles and budgets. Shared subscription
+routing requires provider approval. New profiles discover models and native
+subscription usage automatically. Explicit manual model lists and local-only
+usage remain available; failed automatic telemetry never silently selects
+local-only mode. Claude has its own enrollment setting, and unchecked existing
+models stay excluded when automatic enrollment is enabled.
+See [Claude Code setup](claude-code.md)
+for credentials, supported flags, text-only chat and usage observations, and
+[router design](claude-router.md) for the extension contract. Enabling the
+module alone does not prove live authentication or model access.
+
+An account's **slow**, **normal** or **fast** speed setting controls queue
+priority separately from its token allowance. Slow accounts can still be
+configured; using up tokens no longer changes a request's queue priority.
+
+The upgrade to a single allowance combines each previous regular allocation
+with its slow allocation only when the site's slow tokens were enabled.
+For example, 30k regular plus 15k enabled slow tokens becomes 45k per five
+hours; with slow tokens disabled it stays 30k. Historical regular and slow
+usage count together, and open five-hour and weekly windows keep their
+start times: the upgrade does not refill or reset usage. Legacy slow-token
+columns remain as compatibility data for rollback and are inactive in the
+current release. Request rates, weekly and model limits, tiers, dynamic
+adjustment, grants, reasoning settings and other customization are preserved.
+
+Automatic approval now compares the requested total against one ceiling.
+The upgrade adds the old configured regular and active slow approval caps;
+it keeps the enable switch and other approval settings. The former exception
+for an unchanged slow allocation no longer applies. For example, an old
+50k regular approval cap plus a zero slow cap becomes a 50k total cap, even
+if a request could previously keep 15k slow tokens unchanged. Set the new
+ceiling to 65k if that is the total you want approved automatically.
+
+For older installations using credits, upgrading first converts amounts at
+1 credit = 1,000 tokens: the daily amount
 becomes the same amount per **5 hours** (30 credits a day become 30,000 tokens
 per 5 hours), which is more generous than a day; administrators may want to
 lower it after upgrading. A *requests per minute* setting of the previous release becomes a
@@ -240,3 +332,13 @@ neither. A web server's compute connection is managed with
 The compute node reads `BC_COMPUTE_HOST`, `BC_COMPUTE_PORT`,
 `BC_COMPUTE_UPSTREAM` and `BC_COMPUTE_TOKEN_FILE`; the worker daemon has its
 own variables (see [workers](workers.md)).
+
+### External API providers
+
+Configure hosted providers through **Administration → Models → External APIs**;
+no environment change is required. OpenAI-compatible and native Anthropic
+formats support operator-owned base URLs and private server API keys. Model
+selection, publication, capabilities and quota controls remain explicit.
+Keys live under `BC_INSTANCE_DIR/.provider-keys` and must be preserved with the
+instance data during updates/restores. Public endpoints require HTTPS; trusted
+private gateways need explicit permission. See [external provider setup](external-providers.md).

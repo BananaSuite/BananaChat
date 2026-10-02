@@ -1,10 +1,31 @@
 // Customize page: live preview of appearance preferences, saved automatically.
-import { api, confirmDialog, debounce, pageData, requestHeaders, t, toast } from "./core.js";
+import {
+  api, confirmDialog, fragmentTarget, keepInitialFragmentVisible, pageData,
+  requestHeaders, revealDisclosures, t, toast,
+} from "./core.js";
 
 const data = pageData();
 const form = document.getElementById("prefs-form");
 const status = document.getElementById("save-status");
 const root = document.documentElement;
+
+// Deep links retain access to optional settings even when their group starts closed.
+function revealSettings(hash = window.location.hash, scroll = true) {
+  const target = fragmentTarget(hash);
+  if (!target) return;
+  const withinDisclosure = revealDisclosures(target, form);
+  // The browser may have tried to scroll while the anchored control was hidden.
+  if (scroll && withinDisclosure) requestAnimationFrame(() => target.scrollIntoView({ block: "start" }));
+  return target;
+}
+
+window.addEventListener("hashchange", () => revealSettings());
+document.querySelector(".customize-toc")?.addEventListener("click", (event) => {
+  const link = event.target.closest('a[href^="#"]');
+  if (link) revealSettings(link.hash);
+});
+const initialSettingsTarget = revealSettings(window.location.hash, false);
+if (initialSettingsTarget?.closest(".customize-extra")) keepInitialFragmentVisible(initialSettingsTarget);
 
 const COLOUR_KEYS = ["custom_bg", "custom_text", "custom_primary", "custom_secondary", "custom_accent", "custom_sidebar"];
 const PALETTE_NAME = { custom_bg: "bg", custom_text: "text", custom_primary: "primary", custom_secondary: "secondary", custom_accent: "accent", custom_sidebar: "sidebar" };
@@ -33,6 +54,7 @@ function apply() {
   document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", theme);
   const palette = effectivePalette();
   for (const [name, value] of Object.entries(palette)) root.style.setProperty(`--palette-${name}`, value);
+  root.style.setProperty("--palette-on-primary", primaryForeground(palette.primary));
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", palette.bg);
   root.style.setProperty("--font-scale", String(prefs.font_scale));
   root.style.setProperty("--line-height", LINE_HEIGHTS[prefs.line_height] || LINE_HEIGHTS[0]);
@@ -60,8 +82,14 @@ function apply() {
 // ----- contrast check -----------------------------------------------------
 function luminance(hex) {
   const channels = [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16) / 255);
-  const linear = channels.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  const linear = channels.map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
   return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+// Match formatting.primary_foreground for the initial server-rendered theme.
+function primaryForeground(hex) {
+  const value = luminance(hex);
+  return (value + 0.05) / 0.05 >= 1.05 / (value + 0.05) ? "#000000" : "#ffffff";
 }
 
 function contrastRatio(a, b) {
@@ -119,7 +147,42 @@ function updateSidebarOutput() {
 }
 
 // ----- saving -------------------------------------------------------------
-let saving = 0;
+let revision = 0;
+let savedRevision = 0;
+let failedRevision = null;
+let saveTimer;
+let writes = Promise.resolve();
+let pendingWrites = 0;
+let resetting = false;
+let resetGeneration = 0;
+let reloadNeeded = false;
+let allowReload = false;
+
+// Preferences, reset and background changes all share the same ordering boundary.
+// Discarding an old response alone cannot stop its request overwriting a newer save.
+function queueWrite(operation) {
+  pendingWrites += 1;
+  const request = writes.then(operation).finally(() => {
+    pendingWrites -= 1;
+    if (!pendingWrites && !resetting && savedRevision === revision && reloadNeeded) {
+      allowReload = true;
+      window.location.reload();
+    }
+  });
+  writes = request.catch(() => {});
+  return request;
+}
+
+function cancelScheduledSave() {
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+}
+
+function showCurrentStatus() {
+  if (failedRevision === revision) setStatus(t("customize_save_failed"), "is-error");
+  else if (savedRevision === revision) setStatus(t("customize_saved"), "is-saved");
+  else setStatus(t(saveTimer ? "customize_unsaved" : "customize_saving"));
+}
 
 function setStatus(text, kind = "") {
   status.textContent = text;
@@ -132,31 +195,40 @@ function clientPreferences() {
   return copy;
 }
 
-async function save() {
-  saving += 1;
-  const ticket = saving;
+function save() {
+  cancelScheduledSave();
+  const ticket = revision;
+  const changes = clientPreferences();
+  failedRevision = null;
   setStatus(t("customize_saving"));
-  try {
-    const result = await api(data.urls.save, { json: clientPreferences() });
-    if (ticket !== saving) return;
-    const languageChanged = result.reload;
-    prefs = { ...prefs, ...result.preferences };
-    setStatus(t("customize_saved"), "is-saved");
-    if (languageChanged) window.location.reload();
-  } catch (error) {
-    if (ticket === saving) setStatus(t("customize_save_failed"), "is-error");
-    toast(error.message, "error");
-  }
+  return queueWrite(async () => {
+    try {
+      const result = await api(data.urls.save, { json: changes });
+      reloadNeeded ||= Boolean(result.reload);
+      if (ticket !== revision) return;
+      prefs = { ...prefs, ...result.preferences };
+      savedRevision = ticket;
+      setStatus(t("customize_saved"), "is-saved");
+    } catch (error) {
+      if (ticket === revision) {
+        failedRevision = ticket;
+        setStatus(t("customize_save_failed"), "is-error");
+      }
+      toast(error.message, "error");
+    }
+  });
 }
 
-const scheduleSave = debounce(save, 450);
-
 function change(name, value, { immediate = false } = {}) {
+  if (resetting) return;
+  revision += 1;
+  failedRevision = null;
   prefs[name] = value;
   apply();
   setStatus(t("customize_unsaved"));
+  cancelScheduledSave();
   if (immediate) save();
-  else scheduleSave();
+  else saveTimer = setTimeout(save, 450);
 }
 
 form.addEventListener("submit", (event) => event.preventDefault());
@@ -215,21 +287,53 @@ function paintPresets() {
 }
 
 // ----- reset --------------------------------------------------------------
-document.getElementById("reset-all")?.addEventListener("click", async () => {
+const resetButton = document.getElementById("reset-all");
+resetButton?.addEventListener("click", async () => {
+  if (resetting) return;
   const ok = await confirmDialog({ title: t("customize_reset_title"), message: t("customize_reset_confirm"), confirmLabel: t("customize_reset_action"), danger: true });
-  if (!ok) return;
-  try {
-    const result = await api(data.urls.reset, { method: "POST", json: {} });
-    prefs = { ...result.preferences };
-    backgroundUrl = null;
-    syncForm();
-    apply();
-    updateBackgroundControls();
-    setStatus(t("customize_saved"), "is-saved");
-    if (result.reload) window.location.reload();
-  } catch (error) {
-    toast(error.message, "error");
-  }
+  if (!ok || resetting) return;
+  cancelScheduledSave();
+  revision += 1;
+  resetGeneration += 1;
+  failedRevision = null;
+  resetting = true;
+  form.inert = true;
+  form.setAttribute("aria-busy", "true");
+  resetButton.disabled = true;
+  setStatus(t("customize_saving"));
+  await queueWrite(async () => {
+    try {
+      const result = await api(data.urls.reset, { method: "POST", json: {} });
+      prefs = { ...result.preferences };
+      backgroundUrl = null;
+      savedRevision = revision;
+      reloadNeeded ||= Boolean(result.reload);
+      syncForm();
+      apply();
+      updateBackgroundControls();
+      setStatus(t("customize_saved"), "is-saved");
+    } catch (error) {
+      // Earlier queued uploads/removals may have completed while reset hid
+      // their results. If reset fails, show the background the server kept.
+      try {
+        const current = await api(data.urls.save);
+        backgroundUrl = current.background_url;
+        prefs.background_image = current.preferences.background_image;
+        updateBackgroundControls();
+        apply();
+      } catch {
+        // Keep the original reset error; the preview remains unchanged offline.
+      }
+      failedRevision = revision;
+      setStatus(t("customize_save_failed"), "is-error");
+      toast(error.message, "error");
+    } finally {
+      resetting = false;
+      form.inert = false;
+      form.removeAttribute("aria-busy");
+      resetButton.disabled = false;
+    }
+  });
 });
 
 // ----- background image ---------------------------------------------------
@@ -248,44 +352,60 @@ function updateBackgroundControls() {
 fileInput?.addEventListener("change", async () => {
   const file = fileInput.files[0];
   fileInput.value = "";
-  if (!file) return;
+  if (!file || resetting) return;
   if (file.size > data.background_max_bytes) {
     toast(t("customize_background_too_large", { size: Math.round(data.background_max_bytes / 1048576) }), "error");
     return;
   }
   const body = new FormData();
   body.append("file", file);
+  const generation = resetGeneration;
   setStatus(t("customize_uploading"));
-  try {
-    const result = await api(data.urls.background, { form: body });
-    backgroundUrl = result.background_url;
-    prefs.background_image = result.preferences.background_image;
-    updateBackgroundControls();
-    apply();
-    setStatus(t("customize_saved"), "is-saved");
-  } catch (error) {
-    setStatus(t("customize_save_failed"), "is-error");
-    toast(error.message, "error");
-  }
+  await queueWrite(async () => {
+    try {
+      const result = await api(data.urls.background, { form: body });
+      if (generation !== resetGeneration) return;
+      backgroundUrl = result.background_url;
+      prefs.background_image = result.preferences.background_image;
+      updateBackgroundControls();
+      apply();
+      showCurrentStatus();
+    } catch (error) {
+      if (generation === resetGeneration) setStatus(t("customize_save_failed"), "is-error");
+      toast(error.message, "error");
+    }
+  });
 });
 
 removeButton?.addEventListener("click", async () => {
-  try {
-    await api(data.urls.background, { method: "DELETE" });
-    backgroundUrl = null;
-    prefs.background_image = "";
-    updateBackgroundControls();
-    apply();
-    setStatus(t("customize_saved"), "is-saved");
-    fileInput.focus();
-  } catch (error) {
-    toast(error.message, "error");
-  }
+  if (resetting) return;
+  const generation = resetGeneration;
+  await queueWrite(async () => {
+    try {
+      await api(data.urls.background, { method: "DELETE" });
+      if (generation !== resetGeneration) return;
+      backgroundUrl = null;
+      prefs.background_image = "";
+      updateBackgroundControls();
+      apply();
+      showCurrentStatus();
+      fileInput.focus();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
 });
 
-// Save before leaving when a change is still waiting for the debounce.
+// Pending changes must not disappear during navigation. A final keepalive save
+// is safe only when it cannot overtake an already running write.
+window.addEventListener("beforeunload", (event) => {
+  if (allowReload || (!pendingWrites && revision === savedRevision)) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 window.addEventListener("pagehide", () => {
-  if (status.textContent !== t("customize_unsaved")) return;
+  cancelScheduledSave();
+  if (resetting || pendingWrites || revision === savedRevision) return;
   const blob = new Blob([JSON.stringify(clientPreferences())], { type: "application/json" });
   fetch(data.urls.save, { method: "POST", body: blob, keepalive: true, credentials: "same-origin",
     headers: requestHeaders({ "Content-Type": "application/json" }) }).catch(() => {});

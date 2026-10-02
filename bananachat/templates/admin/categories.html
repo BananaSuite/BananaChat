@@ -7,7 +7,7 @@
 <p class="breadcrumb"><a href="{{ url_for('admin.models') }}">{{ icon("chevron-left") }}Models</a></p>
 {{ header("Model categories", "Group models (for example “Coding” or “Staff only”) and control who may use each group on the Access page.") }}
 
-<section class="card mb-3" aria-labelledby="new-category-title">
+<section class="settings-section mb-3" aria-labelledby="new-category-title">
   <h2 id="new-category-title">New category</h2>
   <form method="post" action="{{ url_for('admin.category_create') }}" class="stack">
     {{ csrf() }}

@@ -34,12 +34,12 @@
 {{ header("Limits", "Grants raise limits for a while or for good: for one account or for everyone.") }}
 {% include "admin/_limits_tabs.html" %}
 
-<form method="post" action="{{ url_for('admin.limit_grant_create') }}" class="card stack" aria-labelledby="grant-new-title">
+<form method="post" action="{{ url_for('admin.limit_grant_create') }}" class="settings-section stack" aria-labelledby="grant-new-title">
   {{ csrf() }}
   <h2 id="grant-new-title">New grant</h2>
   <p class="muted small mb-0">Examples: unlimited use for 24 hours for someone who explained why; ×2 tokens for everyone during a coding jam; +500k tokens per 5 hours with one heavy model. Several grants add up: any unlimited grant wins, then multipliers multiply, then extras are added.</p>
   <div class="grid grid-2">
-    <fieldset class="stack">
+    <fieldset class="admin-fieldset stack">
       <legend>For</legend>
       {#- Nothing is chosen by default: one click must never lift the limits of every account. -#}
       {% set target = form.get("target") if form else ("user" if prefill else "") %}
@@ -50,7 +50,7 @@
       </div>
       <label class="check"><input type="radio" name="target" value="everyone"{% if target == "everyone" %} checked{% endif %}><span>Everyone</span></label>
     </fieldset>
-    <fieldset class="stack">
+    <fieldset class="admin-fieldset stack">
       <legend>What</legend>
       <div class="form-grid">
         <div class="field">
@@ -92,7 +92,7 @@
         </div>
       </div>
     </fieldset>
-    <fieldset class="stack">
+    <fieldset class="admin-fieldset stack">
       <legend>How long</legend>
       <div class="check-list">
         {% for value, label in [("1h", "1 hour"), ("24h", "24 hours"), ("7d", "7 days"), ("custom", "Until a date"), ("forever", "Forever")] %}

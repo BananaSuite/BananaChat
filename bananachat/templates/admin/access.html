@@ -1,7 +1,7 @@
 {% extends "admin/_layout.html" %}
 {% from "admin/_macros.html" import header, empty %}
 {% from "partials/icons.html" import icon %}
-{% block title %}Access{% endblock %}
+{% block title %}Permissions{% endblock %}
 {% block admin_content %}
 {% macro counts_text(counts) -%}
 {% set allow, deny = counts.get("allowlist", 0), counts.get("denylist", 0) %}
@@ -12,7 +12,7 @@
 {%- if policy.requests_enabled %} <span class="badge">Requests open</span>{% endif %}
 {%- endmacro %}
 
-{{ header("Access", "Decide who may use sensitive features, categories and individual models. A user needs every rule that applies to a model to allow them.") }}
+{{ header("Permissions", "Choose who can use features and models. All rules that apply to a model must allow the account.") }}
 
 <section id="requests" class="mb-3" aria-labelledby="requests-title">
   <h2 id="requests-title">Pending requests {% if pending %}<span class="badge badge-warning">{{ pending | length }}</span>{% endif %}</h2>

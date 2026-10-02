@@ -146,12 +146,12 @@ def test_the_upgrade_from_the_previous_release_converts_credits_to_tokens(tmp_pa
         assert policies["api"]["rate"]["rules"] == [{"requests": 1, "per": "second", "burst": 10}]
         assert policies["chat"]["rate"]["rules"] == [{"requests": 20, "per": "minute", "burst": 3}]
         # The daily amount becomes the same amount per 5 hours, in tokens.
-        assert (policies["api"]["window"]["tokens"], policies["api"]["window"]["slow_tokens"]) == (30_000, 15_000)
+        assert policies["api"]["window"]["tokens"] == 45_000
         assert policies["api"]["window"]["enabled"] and not policies["chat"]["window"]["enabled"]
         assert all(not policy["weekly"]["enabled"] for policy in policies.values())
         override = limits.get_override("4lttj861", "api")
-        assert (override.window_tokens, override.window_slow_tokens) == (40_000, 10_000)
-        assert credits.get_quota("4lttj861") == (40_000, 10_000)
+        assert override.window_tokens == 50_000
+        assert credits.get_quota("4lttj861") == (50_000, 0)
         assert [tier["min_tokens_30d"] for tier in limits.list_tiers()] == [0, 20_000, 200_000]
         # Credit columns are kept for older releases.
         assert db.scalar("SELECT daily_credits FROM user_limit_overrides WHERE user_id='4lttj861'") == 40
@@ -187,23 +187,23 @@ def test_version_9_converts_a_database_of_this_release_forward(tmp_path):
         apply_migrations(conn, APPLICATION_ID, MIGRATIONS)
         conn.row_factory = sqlite3.Row
         policy = json.loads(conn.execute("SELECT config FROM limit_policy WHERE pool='api'").fetchone()[0])
-        assert policy["version"] == 2
+        assert policy["version"] == 3
         assert policy["rate"] == {"enabled": True, "rules": [{"requests": 30, "per": "minute", "burst": 4}],
                                   "dynamic": True}
-        assert policy["window"] == {"enabled": True, "tokens": 12_000, "slow_tokens": 3_000, "dynamic": False,
+        assert policy["window"] == {"enabled": True, "tokens": 15_000, "dynamic": False,
                                     "auto_tiers": True}
         assert policy["weekly"]["tokens"] == 60_000 and policy["weekly"]["enabled"]
         override = conn.execute("SELECT * FROM user_limit_overrides").fetchone()
         assert json.loads(override["rate_rules"]) == [{"requests": 2, "per": "second", "burst": 8}]
-        assert (override["window_tokens"], override["weekly_tokens"]) == (25_000, 100_000)
+        assert (override["window_tokens"], override["weekly_tokens"]) == (28_000, 100_000)  # inherited 3k is active
         grants = {row["id"]: dict(row) for row in conn.execute("SELECT * FROM limit_grants")}
         assert (grants[1]["scope"], grants[1]["amount"]) == ("window", 5000)
         assert (grants[2]["kind"], grants[2]["amount"]) == ("multiplier", 2.0)  # (0.5 + 0.5) / 0.5
         assert grants[3]["model_id"] is None and grants[3]["kind"] == "multiplier"
         request = conn.execute("SELECT * FROM quota_requests").fetchone()
-        assert (request["kind"], request["new_tokens"], request["new_slow_tokens"]) == ("window", 40_000, 5_000)
+        assert (request["kind"], request["new_tokens"], request["new_slow_tokens"]) == ("window", 45_000, 0)
         settings = conn.execute("SELECT * FROM site_settings").fetchone()
-        assert settings["quota_auto_approve_max_tokens"] == 20_000 and settings["music_bonus_fixed_tokens"] == 7000
+        assert settings["quota_auto_approve_max_tokens"] == 20_000 and settings["music_bonus_fixed_tokens"] == 22_000
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
@@ -360,13 +360,14 @@ def test_resets_close_the_windows_and_keep_the_ledger(app, admin, make_user):
 # ----- model weights and model limits ------------------------------------------------------------
 
 def test_a_models_weight_spends_the_pool_faster_and_model_limits_count_raw_tokens(app, make_user):
-    from bananachat.db import credits
+    from bananachat.db import credits, settings
     from bananachat.services import limits
 
     models = _models(app)
     big = models["qwen3:4b"]
     user = make_user("wes")
     with app.app_context():
+        settings.update(chat_local_token_consumption=1)
         _policy("api", window={"tokens": 20_000, "slow_tokens": 0})
         _model_policy(big, weight=3, enabled=True, window_tokens=10_000)
         counted, _slow = credits.charge(user["id"], 2000, 1000, request_type="api", model_id=big["id"])
@@ -771,7 +772,7 @@ def test_5_hour_and_rate_requests_in_tokens_and_rules(app, admin, make_user):
                                                        "slow_tokens": "15k", "reason": "Batch job"})
     assert response.status_code == 302
     with app.app_context():
-        assert credits.get_quota(user["id"]) == (50_000, 15_000)
+        assert credits.get_quota(user["id"]) == (50_000, 0)
     rate = browser.post("/account/quota-request", {"kind": "rate", "pool": "api", "rate_per": "day",
                                                    "rate_requests": "3000", "reason": "Nightly sync"})
     assert rate.status_code == 302
@@ -852,7 +853,7 @@ def test_admins_edit_service_policies_with_rules_and_friendly_amounts(app, admin
         policy = limits.get_policy("api")
         assert policy["rate"]["rules"] == [{"requests": 2, "per": "second", "burst": 2},
                                            {"requests": 300, "per": "hour", "burst": 50}]
-        assert (policy["window"]["tokens"], policy["window"]["slow_tokens"]) == (45_000, 1_500_000)
+        assert policy["window"]["tokens"] == 45_000 and "slow_tokens" not in policy["window"]
         assert not policy["weekly"]["enabled"] and policy["weekly"]["tokens"] == 500_000
         assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='admin.limits_policy'") == 1
     bad = admin.post("/admin/quotas/policy/api", {**form, "window_tokens": "plenty"}, follow_redirects=True)
@@ -864,6 +865,7 @@ def test_admins_edit_service_policies_with_rules_and_friendly_amounts(app, admin
 def test_admins_apply_presets_and_edit_models(app, admin):
     from bananachat.db import catalog
     from bananachat.db import limits
+    from bananachat.db import settings
 
     models = _models(app)
     big = models["qwen3:4b"]
@@ -879,7 +881,15 @@ def test_admins_apply_presets_and_edit_models(app, admin):
         assert (policy["weight"], policy["counts_toward_pool"], policy["window_tokens"]) == (2, False, 100_000)
         assert policy["weekly_tokens"] is None and policy["preset"] == "custom" and policy["effort_default"] == "high"
     page = admin.get("/admin/quotas/models").get_data(as_text=True)
-    assert "not counted toward service limits" in page and "4 requests per minute" in page
+    assert "Service tokens excluded" in page and "1 rate rule" in page
+    assert 'name="rule_requests_0"' in page and 'value="4"' in page
+    with app.app_context():
+        from bananachat import db
+        db.execute("UPDATE ai_models SET is_reasoning=1, reasoning_levels=? WHERE id=?",
+                   ('["low", "medium", "high"]', big["id"]))
+        settings.update(effort_gating_enabled=0)
+    page = admin.get("/admin/quotas/models").get_data(as_text=True)
+    assert "All reasoning levels" in page and "Reasoning up to High" not in page
     assert admin.post(f"/admin/quotas/models/{big['id']}", {"action": "reset"}).status_code == 302
     with app.app_context():
         assert not limits.has_model_policy(big["id"])

@@ -274,7 +274,10 @@ def _chat_policy(**sections):
 
 
 def test_rate_limit_and_5_hour_tokens(app, alice):
+    from bananachat.db import settings
+
     with app.app_context():
+        settings.update(chat_local_token_consumption=1)
         _chat_policy(rate={"rules": [{"requests": 1, "per": "minute"}]})
     session_id = new_chat(alice)
     assert send(alice, session_id).status_code == 200

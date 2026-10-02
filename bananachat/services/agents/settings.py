@@ -15,10 +15,12 @@ administrator overrides that for the model (``allow`` or ``deny``).
 from __future__ import annotations
 
 import time
+import json
 from dataclasses import dataclass
 
 from bananachat import db
 from bananachat.db import agents as agents_db
+from bananachat.db import users
 from bananachat.services.access import AccessContext, is_text_model, usable_models
 from bananachat.services.agents import gitfetch
 
@@ -39,6 +41,7 @@ INTEGER_FIELDS = {
     "git_imports_per_hour": (10, 1, 100),    # repository imports per user per hour
 }
 BOOLEAN_FIELDS = {"enabled": False, "swarms_enabled": False, "git_enabled": False}
+ACCESS_MODES = ("admins", "everyone", "custom")
 OVERRIDES = ("allow", "deny")
 # Hard caps that do not depend on settings.
 MAX_TOOL_CALLS_PER_STEP = 8
@@ -50,6 +53,7 @@ MAX_PENDING_FOLLOW_UPS = 5
 @dataclass(frozen=True)
 class Settings:
     enabled: bool
+    access_mode: str
     swarms_enabled: bool
     max_steps: int
     max_minutes: int
@@ -69,7 +73,8 @@ class Settings:
     model_overrides: dict
 
     def to_dict(self) -> dict:
-        data = {name: getattr(self, name) for name in (*BOOLEAN_FIELDS, *INTEGER_FIELDS, "model_overrides")}
+        data = {name: getattr(self, name) for name in
+                (*BOOLEAN_FIELDS, *INTEGER_FIELDS, "access_mode", "model_overrides")}
         data["git_hosts"] = list(self.git_hosts)
         return data
 
@@ -81,6 +86,16 @@ def normalise(data: dict) -> Settings:
     for name, default in BOOLEAN_FIELDS.items():
         value = data.get(name, default)
         values[name] = value if isinstance(value, bool) else default
+    # Existing saved configurations use capability policies. Preserve that
+    # audience when upgrading, including a disabled site's later reactivation.
+    # A fresh document defaults to administrators only and remains disabled.
+    if "access_mode" not in data:
+        values["access_mode"] = "custom" if isinstance(data.get("enabled"), bool) else "admins"
+    elif isinstance(data["access_mode"], str) and data["access_mode"] in ACCESS_MODES:
+        values["access_mode"] = data["access_mode"]
+    else:
+        values["access_mode"] = "admins"
+        values["enabled"] = False
     for name, (default, low, high) in INTEGER_FIELDS.items():
         value = data.get(name, default)
         if isinstance(value, bool) or not isinstance(value, int):
@@ -127,15 +142,19 @@ def enabled() -> bool:
 # ----- models ----------------------------------------------------------------------
 
 def supports_tools(model, caps: dict, overrides: dict) -> bool:
-    # Agent tool calls run on this site's Ollama server only: models of other backends (the Claude pool) cannot
-    # run agents, whatever an override says.
-    if model["backend"] != "ollama":
+    # Claude Code chat disables tools; Ollama and external API transports support them.
+    if model["backend"] not in ("ollama", "external"):
         return False
     override = overrides.get(str(model["id"]))
     if override == "deny":
         return False
     if override == "allow":
         return True
+    if model["backend"] == "external":
+        try:
+            return "tools" in json.loads(model["capabilities"])
+        except (ValueError, TypeError):
+            return False
     info = caps.get(model["id"])
     return bool(info and info["supports_tools"])
 
@@ -154,10 +173,29 @@ def model_allowed(model, context: AccessContext, settings: Settings | None = Non
                 and supports_tools(model, agents_db.model_caps(), settings.model_overrides))
 
 
-def user_allowed(user) -> bool:
-    """The feature is on and the user holds the ``agents`` capability (administrators always do)."""
-    if user is None:
+def user_allowed(user, settings: Settings | None = None, *, context: AccessContext | None = None) -> bool:
+    """An active signed-in user belongs to the configured session audience.
+
+    Everyone means every active account; model policies and quotas still apply
+    independently. Custom preserves the existing ``agents`` capability policy.
+    """
+    if user is None or users.is_suspended(user):
         return False
-    if not enabled():
+    settings = settings or current()
+    if not settings.enabled:
         return False
-    return AccessContext.load(user).allows("agents")
+    if settings.access_mode == "admins":
+        return user["role"] == "admin"
+    if settings.access_mode == "everyone":
+        return True
+    if settings.access_mode == "custom":
+        return (context or AccessContext.load(user)).allows("agents")
+    return False
+
+
+def access_state(user, settings: Settings | None = None) -> str:
+    """The UI state: ``ok``, ``disabled`` or ``denied``."""
+    settings = settings or current()
+    if not settings.enabled:
+        return "disabled"
+    return "ok" if user_allowed(user, settings) else "denied"

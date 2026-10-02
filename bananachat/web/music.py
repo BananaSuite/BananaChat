@@ -42,13 +42,14 @@ def offered_bonus(settings: dict) -> tuple[str, float, float]:
     """The bonus the program currently grants, whether or not the viewer takes part.
 
     Mirrors :func:`bananachat.db.credits.music_bonus` (which answers for one
-    participant): ``("multiplier", x, x)`` or ``("fixed", tokens, slow tokens)`` per 5-hour window.
+    participant): ``("multiplier", factor, 0)`` or ``("fixed", tokens, 0)`` per 5-hour window.
+    The final, unused slot remains for callers of the released helper.
     """
     if (settings.get("music_bonus_mode") or "multiplier") == "fixed":
         return ("fixed", *credits.music_fixed(settings))
     multiplier = settings.get("music_credit_multiplier")
     multiplier = DEFAULT_MULTIPLIER if multiplier is None else max(0.0, float(multiplier))
-    return "multiplier", multiplier, multiplier
+    return "multiplier", multiplier, 0.0
 
 
 def _participant(user) -> bool:
@@ -87,26 +88,21 @@ def music_context():
 
 
 def _base_limits(user, settings: dict) -> list[dict]:
-    """5-hour allowances without and with the bonus, per pool."""
-    mode, regular_bonus, slow_bonus = offered_bonus(settings)
-    slow_enabled = bool(settings.get("slow_credits_enabled", 1))
+    """Enabled 5-hour and weekly allowances without and with the bonus, per pool."""
+    mode, token_bonus, _ = offered_bonus(settings)
+    weekly_bonus = credits.music_weekly_fixed(settings) if mode == "fixed" else token_bonus
 
     def boosted(value, bonus):
         return value * bonus if mode == "multiplier" else value + bonus
 
-    pools = []
-    for pool in ("api", "chat"):
-        base = limits.base_limits(user["id"], pool)
-        if base["window_enabled"]:
-            pools.append((pool, float(base["window_tokens"]), float(base["window_slow_tokens"])))
     rows = []
-    for pool, regular, slow in pools:
-        rows.append({
-            "pool": pool,
-            "regular": regular, "regular_with_bonus": boosted(regular, regular_bonus),
-            "slow": slow if slow_enabled else None,
-            "slow_with_bonus": boosted(slow, slow_bonus) if slow_enabled else None,
-        })
+    for pool in limits.visible_pools(user):
+        base = limits.base_limits(user["id"], pool)
+        for period, bonus in (("window", token_bonus), ("weekly", weekly_bonus)):
+            if base[f"{period}_enabled"]:
+                tokens = float(base[f"{period}_tokens"])
+                rows.append({"pool": pool, "period": period, "tokens": tokens,
+                             "tokens_with_bonus": boosted(tokens, bonus)})
     return rows
 
 
@@ -119,16 +115,18 @@ def free_quota():
         flash(_t("music.unavailable"), "info")
         return redirect(url_for("account.index"))
     opted_in, forced = music_db.participation(user["id"])
-    mode, regular_bonus, slow_bonus = offered_bonus(settings)
+    mode, token_bonus, _ = offered_bonus(settings)
+    allowances = [] if user["role"] == "admin" else _base_limits(user, settings)
+    weekly_bonus = credits.music_weekly_fixed(settings) if mode == "fixed" and \
+        any(row["period"] == "weekly" for row in allowances) else 0
     return render_template(
         "music/free_quota.html",
         opted_in=opted_in,
         forced=forced,
         bonus_mode=mode,
-        bonus_regular=regular_bonus,
-        bonus_slow=slow_bonus,
-        slow_enabled=bool(settings.get("slow_credits_enabled", 1)),
-        limits=[] if user["role"] == "admin" else _base_limits(user, settings),
+        bonus_tokens=token_bonus,
+        bonus_weekly=weekly_bonus,
+        limits=allowances,
         can_join=bool(settings.get("music_opt_in_allowed")) and bool(settings.get("music_visible")),
         can_leave=bool(settings.get("music_opt_out_allowed")) and not forced,
         opt_out_allowed=bool(settings.get("music_opt_out_allowed")),

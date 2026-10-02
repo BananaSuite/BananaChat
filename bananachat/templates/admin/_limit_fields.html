@@ -8,6 +8,13 @@
 </label>
 {%- endmacro %}
 
+{% macro checkbox(name, label, checked=false, hint=None) -%}
+<label class="check">
+  <input type="checkbox" name="{{ name }}" value="1"{% if checked %} checked{% endif %}>
+  <span>{{ label }}{% if hint %}<small>{{ hint }}</small>{% endif %}</span>
+</label>
+{%- endmacro %}
+
 {#- A token amount: typed as 50000, 50k or 1.5M (a string is shown as typed, for a refused form).
     `placeholder` shows what an empty field means. -#}
 {% macro token_field(name, label, value, id, hint=None, required=true, placeholder=None) -%}
@@ -20,7 +27,7 @@
 
 {#- Rows of request-rate rules ("N requests per unit, bursts of B"). Empty rows are ignored when saved. -#}
 {% macro rules_editor(rules, id, units, rows=4, legend="Rules", hint=None, placeholders=None) -%}
-<fieldset class="rule-list" aria-describedby="{{ id }}-hint">
+<fieldset class="admin-fieldset rule-list" aria-describedby="{{ id }}-hint">
   <legend class="label">{{ legend }}</legend>
   {#- The rules there are, plus one empty row to add another (up to `rows`). -#}
   {% for index in range([rows, ([rules | length if rules else 0, placeholders | length if placeholders else 0] | max) + 1] | min) %}
@@ -39,6 +46,18 @@
     <input type="number" id="{{ id }}-burst-{{ index }}" name="rule_burst_{{ index }}" min="1" step="1" inputmode="numeric" value="{{ rule.burst if rule else '' }}" placeholder="{{ shown.burst if shown else 'same' }}">
   </div>
   {% endfor %}
-  <span class="hint" id="{{ id }}-hint">{{ hint or "Every rule must pass. The burst is how many requests may come in a row (empty: the same as the number of requests). Fill the empty row to add a rule (save to get another); empty a row to drop it." }}</span>
+  <span class="hint" id="{{ id }}-hint">{{ hint or "All rules apply. Burst allows consecutive requests; leave it empty to use the request count. Fill the last row to add a rule, then save for another row. Clear a row to remove it." }}</span>
 </fieldset>
+{%- endmacro %}
+
+{#- Both existing and new account overrides use the same fields and access controls. -#}
+{% macro model_override_fields(shown, id, units, rows, username) -%}
+{{ rules_editor(shown.rate_rules if shown else none, id ~ "-rules", units, rows, "Request rate", "All rules apply. Leave every row empty to use the model policy.") }}
+<div class="form-grid">
+  {{ token_field("window_tokens", "Tokens per 5 hours", shown.window_tokens if shown else none, id ~ "-window", "Empty: use the model policy.", false) }}
+  {{ token_field("weekly_tokens", "Tokens per week", shown.weekly_tokens if shown else none, id ~ "-weekly", "Empty: use the model policy.", false) }}
+</div>
+{{ checkbox("locked", "Lock this model for " ~ username, shown.locked if shown else false, "Blocks chat, API and agents until unlocked.") }}
+{{ checkbox("token_exempt", "Exempt from this model's token limits", shown.token_exempt if shown else false, "Service token limits and provider capacity still apply.") }}
+{{ checkbox("rate_exempt", "Exempt from this model's request-rate limits", shown.rate_exempt if shown else false, "Service request rates still apply.") }}
 {%- endmacro %}

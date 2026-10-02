@@ -1,0 +1,61 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf %}
+{% macro capabilities(levels=[], vision=false, tools=false) %}
+<details><summary>Capabilities and reasoning</summary><div class="stack mt-2">
+  <p class="muted small">Enable only features supported by this model. Reasoning choices use your existing unlock rules. Extra maps to the provider's xhigh effort.</p>
+  <label class="check"><input type="checkbox" name="vision"{% if vision %} checked{% endif %}><span>Images in conversations</span></label>
+  <label class="check"><input type="checkbox" name="tools"{% if tools %} checked{% endif %}><span>Function tools for agents</span></label>
+  <fieldset><legend>Supported reasoning levels</legend><div class="check-list">{% for level in ['off', 'low', 'medium', 'high', 'extra', 'max'] %}<label class="check"><input type="checkbox" name="reasoning" value="{{ level }}"{% if level in levels %} checked{% endif %}><span>{{ level|title }}</span></label>{% endfor %}</div></fieldset>
+</div></details>
+{% endmacro %}
+{% macro connection(prefix, provider=none) %}
+<div class="form-grid">
+  <div class="field"><label for="{{ prefix }}-name" class="required">Provider name</label><input type="text" id="{{ prefix }}-name" name="name" required maxlength="80" value="{{ provider.name if provider else '' }}" placeholder="OpenAI"></div>
+  <div class="field"><label for="{{ prefix }}-protocol">API format</label><select id="{{ prefix }}-protocol" name="protocol"><option value="openai"{% if not provider or provider.protocol == 'openai' %} selected{% endif %}>OpenAI-compatible</option><option value="anthropic"{% if provider and provider.protocol == 'anthropic' %} selected{% endif %}>Anthropic Messages</option></select></div>
+  <div class="field"><label for="{{ prefix }}-url" class="required">API base URL</label><input id="{{ prefix }}-url" name="base_url" type="url" required maxlength="1000" value="{{ provider.base_url if provider else '' }}" placeholder="https://api.openai.com/v1"></div>
+  <div class="field"><label for="{{ prefix }}-key">API key</label><input id="{{ prefix }}-key" name="api_key" type="password" autocomplete="new-password" maxlength="8192" placeholder="{{ 'Leave blank to keep the current key' if provider and provider.secret_ref else 'Server-side provider key' }}"><span class="hint">{{ 'A key is configured.' if provider and provider.secret_ref else 'No key configured. Leave blank only for a trusted endpoint without authentication.' }}</span></div>
+</div>
+<label class="check"><input type="checkbox" name="enabled"{% if not provider or provider.enabled %} checked{% endif %}><span>Enabled</span></label>
+<details><summary>Enrollment and connection options</summary><div class="stack mt-2">
+  <div class="field"><label for="{{ prefix }}-token-field">Output limit field (OpenAI-compatible)</label><select id="{{ prefix }}-token-field" name="token_parameter">{% for value, label in [('auto','Automatic'), ('max_tokens','max_tokens'), ('max_completion_tokens','max_completion_tokens')] %}<option value="{{ value }}"{% if provider and provider.token_parameter == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select><span class="hint">Automatic uses max_completion_tokens for OpenAI's API and max_tokens for other endpoints. Override this for a compatible gateway that expects a different field.</span></div>
+  <div class="field"><label for="{{ prefix }}-usage">Streamed token usage (OpenAI-compatible)</label><select id="{{ prefix }}-usage" name="stream_usage"><option value="1"{% if not provider or provider.stream_usage %} selected{% endif %}>Request provider usage</option><option value="0"{% if provider and not provider.stream_usage %} selected{% endif %}>Endpoint has no stream_options support</option></select><span class="hint">When the provider omits usage, BananaChat records an estimate.</span></div>
+  <label class="check"><input type="checkbox" name="auto_enroll"{% if provider and provider.auto_enroll %} checked{% endif %}><span>Enroll new chat models automatically<small>Known chat model families publish with standard token limits. Other models wait for review. Check their capabilities before use.</small></span></label>
+  <label class="check"><input type="checkbox" name="allow_private"{% if provider and provider.allow_private %} checked{% endif %}><span>Allow a trusted private endpoint<small>For an internal compatible server. Public endpoints still require HTTPS; link-local and metadata addresses are blocked.</small></span></label>
+  {% if provider and provider.secret_ref %}<label class="check"><input type="checkbox" name="clear_key"><span>Remove the stored API key</span></label>{% endif %}
+</div></details>
+{% endmacro %}
+{% block title %}External API providers{% endblock %}
+{% block admin_content %}
+{% call header("External APIs", "Offer hosted models through BananaChat alongside your self-hosted models.") %}{% endcall %}
+{% include "admin/_models_tabs.html" %}
+<section class="settings-section mb-3">
+  <h2>Add a provider</h2>
+  <p class="muted small">OpenAI: <span class="mono">https://api.openai.com/v1</span> · Grok: <span class="mono">https://api.x.ai/v1</span> · Anthropic: <span class="mono">https://api.anthropic.com/v1</span>. Use the API root, without a chat endpoint suffix. Requests use your provider account and its billing.</p>
+  <form method="post" action="{{ url_for('admin.external_provider_add') }}" class="stack" data-busy>{{ csrf() }}{{ connection('provider-new') }}<div class="form-actions form-actions-start"><button class="btn btn-primary" type="submit">Add provider</button></div></form>
+</section>
+{% for provider in providers %}
+<section class="settings-section mb-3" id="provider-{{ provider.id }}">
+  <div class="section-header"><h2>{{ provider.name }}</h2><form method="post" action="{{ url_for('admin.external_provider_check', provider_id=provider.id) }}" data-busy>{{ csrf() }}<button class="btn" type="submit"{% if not provider.enabled %} disabled{% endif %}>Check connection &amp; refresh models</button></form></div>
+  <p class="muted small">{{ 'Enabled' if provider.enabled else 'Disabled' }} · {{ bound[provider.id]|length }} enrolled model(s){% if provider.last_checked_at %} · last checked {{ provider.last_checked_at }} UTC{% endif %}</p>
+  {% if provider.last_error %}<p class="text-danger">{{ provider.last_error }}</p>{% endif %}
+  <details><summary>Connection settings</summary><form method="post" action="{{ url_for('admin.external_provider_save', provider_id=provider.id) }}" class="stack mt-2" data-busy>{{ csrf() }}{{ connection('provider-' ~ provider.id, provider) }}<div class="form-actions form-actions-start"><button class="btn btn-primary" type="submit">Save connection</button><button class="btn btn-ghost" type="submit" form="provider-remove-{{ provider.id }}">Remove provider</button></div></form></details>
+  <form id="provider-remove-{{ provider.id }}" method="post" action="{{ url_for('admin.external_provider_remove', provider_id=provider.id) }}" data-confirm="Remove this provider and its key? Its models will be retired; conversation history is kept." data-confirm-danger>{{ csrf() }}</form>
+  {% if provider.enabled %}
+  <div class="sub-card mt-2">
+    <h3>Enroll a model</h3>
+    <form method="post" action="{{ url_for('admin.external_provider_enroll', provider_id=provider.id) }}" class="stack" data-busy>{{ csrf() }}
+      <div class="form-grid"><div class="field"><label for="provider-model-{{ provider.id }}" class="required">Listed model</label><select id="provider-model-{{ provider.id }}" name="model_id" required><option value="">Select a model</option>{% for model in discovered[provider.id] %}<option value="{{ model.id }}">{{ model.display }}</option>{% endfor %}</select></div><div class="field"><label for="provider-display-{{ provider.id }}">Display name</label><input type="text" id="provider-display-{{ provider.id }}" name="display_name" maxlength="120" placeholder="Optional"></div></div>
+      {{ capabilities() }}<div class="form-actions form-actions-start"><button class="btn btn-primary" type="submit"{% if not discovered[provider.id] %} disabled{% endif %}>Enroll model</button></div>
+    </form>
+    <details class="mt-2"><summary>Add a verified model ID manually</summary><p class="muted small mt-1">Use this when your endpoint has no model-list API. Availability and features must be verified with the provider.</p><form method="post" action="{{ url_for('admin.external_provider_enroll', provider_id=provider.id) }}" class="stack" data-busy>{{ csrf() }}<input type="hidden" name="manual" value="1"><div class="field"><label for="provider-manual-{{ provider.id }}">Exact model ID</label><input type="text" id="provider-manual-{{ provider.id }}" name="model_id" required maxlength="200"></div>{{ capabilities() }}<div class="form-actions form-actions-start"><button class="btn" type="submit">Add verified model</button></div></form></details>
+  </div>
+  {% endif %}
+  {% for model in bound[provider.id] %}
+  <details class="sub-card mt-2"><summary>{{ model.display_name }} · {{ 'Published' if model.is_rolled_out else 'Waiting for review' }}</summary><div class="stack mt-2"><p class="muted small">API model ID: <span class="mono">{{ model.ollama_name }}</span>{% if not model.backend_available %} · unavailable{% endif %}</p>
+    <form method="post" action="{{ url_for('admin.external_provider_enroll', provider_id=provider.id) }}" class="stack" data-busy>{{ csrf() }}<input type="hidden" name="manual" value="{{ '1' if model_manual[model.id] else '0' }}"><input type="hidden" name="model_id" value="{{ model.backend_model_name }}">{{ capabilities(model_levels[model.id], model.supports_vision, 'tools' in model.capabilities) }}<div class="form-actions form-actions-start"><button class="btn" type="submit"{% if not provider.enabled %} disabled{% endif %}>Save capabilities</button><a class="btn" href="{{ url_for('admin.models') }}#model-{{ model.id }}">Review in catalog</a>{% if model_limits_urls[model.id] %}<a class="btn" href="{{ model_limits_urls[model.id] }}">Model limits</a>{% endif %}</div></form>
+  </div></details>
+  {% endfor %}
+</section>
+{% endfor %}
+<p class="muted small">Users access published models through the chat and BananaChat API. All of a user's API keys share that account's rate and token allowance. External models count toward standard service token budgets by default; administrators can customize their model limits.</p>
+{% endblock %}

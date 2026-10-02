@@ -10,12 +10,11 @@ limits:
   playground, chat and agents of one account share their pool's buckets) and
   all must pass. Never raised automatically; ``dynamic`` may only lower it
   while demand is high.
-* **window** - tokens per **5-hour window**, then slow tokens (slow requests
-  queue behind others). A window opens at the first counted request when none
+* **window** - tokens per **5-hour window**. A window opens at the first counted request when none
   is open for that account and pool, lasts 5 hours, and resets when it ends.
 * **weekly** - tokens per rolling week (7 days from the first counted request
   after the previous weekly window ended); off by default. When used up,
-  requests wait for the week to end (there is no slow lane).
+  requests wait for the week to end.
 
 Every model has a policy too: a **weight** (usage counts ``tokens × weight``
 against pool limits), whether it **counts toward the pool** limits (on by
@@ -23,7 +22,9 @@ default for local models, off by default for other providers), and optional
 model-specific limits (rate rules, 5-hour and weekly tokens, counted in raw
 tokens across every service) with the same windows. A request passes the
 pool limits (unless the model does not count toward them) **and** the model's
-limits; :func:`admit` checks both.
+limits; :func:`admit` checks both. Normal and no-history chats consume token
+limits only when the administrator enables their provider class (local off,
+cloud on by default); access, request rates and effort still apply.
 
 :func:`effective` (pool) and :func:`model_limits` compute what applies to one
 account, in this order:
@@ -41,7 +42,7 @@ account, in this order:
    then multipliers (multiplied together), then extras (added);
 6. administrators are never limited.
 
-Reasoning effort (``off < low < medium < high < max``): a model's supported
+Reasoning effort (``off < low < medium < high < extra < max``): a model's supported
 levels come from the catalog (:func:`supported_efforts`); each account may use
 levels up to its ceiling (:func:`effort_ceiling`): its own level for the model
 or for all models, else the model's default, else the site default (medium).
@@ -64,7 +65,7 @@ import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from bananachat import db
@@ -169,7 +170,7 @@ class RateLimit:
 
 @dataclass(frozen=True)
 class Window:
-    """A 5-hour or weekly limit with its usage. ``used`` is regular tokens (5-hour) or all tokens (weekly).
+    """A 5-hour or weekly limit with all counted usage in ``used``.
 
     ``open`` tells whether the window is running; a closed window opens with
     the next counted request (``starts_at``/``resets_at`` are then None).
@@ -193,11 +194,12 @@ class Window:
 
     @property
     def slow_left(self) -> float:
-        return 0.0 if not self.limited else max(0.0, self.slow_tokens - self.slow_used)
+        """Deprecated compatibility value; there is no second token allowance."""
+        return 0.0
 
     @property
     def exhausted(self) -> bool:
-        return self.limited and self.left <= 0 and self.slow_left <= 0
+        return self.limited and self.left <= 0
 
 
 @dataclass(frozen=True)
@@ -235,7 +237,7 @@ class Effective:
                                   weekly_resets_at=weekly.resets_at)
         return credits.Budget(
             self.pool, False, window.tokens if window.limited else UNLIMITED,
-            window.slow_tokens if window.limited else 0.0, window.used, window.slow_used,
+            0.0, window.used, 0.0,
             weekly_limit=weekly.tokens if weekly.limited else None, weekly_used=weekly.used,
             resets_at=window.resets_at, weekly_resets_at=weekly.resets_at)
 
@@ -733,63 +735,53 @@ def _rate(enabled: bool, base_rules, custom_rules, *, dynamic: float | None, dyn
     return RateLimit(True, rules, custom, tuple(reasons))
 
 
-def _window(period: str, policy: dict, custom_tokens, custom_slow, *, tier, dynamic, dynamic_on, bonus,
-            slow_enabled, grants, started: datetime | None, used: tuple[float, float], length: timedelta,
+def _window(period: str, policy: dict, custom_tokens, *, tier, dynamic, dynamic_on, bonus,
+            grants, started: datetime | None, used: float, length: timedelta,
             limited_override: bool | None = None, capacity: float = 1.0,
             renounced: tuple[float, str | None] = (0.0, None)) -> Window:
-    custom = custom_tokens is not None or custom_slow is not None
+    custom = custom_tokens is not None
     limited = (policy["enabled"] or custom) if limited_override is None else limited_override
     start, end = (started, started + length) if started else (None, None)
     reasons = [_reason("custom" if custom else "default")]
     tier_factor = float(tier["multiplier"]) if policy.get("auto_tiers") and tier is not None else 1.0
-    uses_tier = custom_tokens is None or (period == "window" and custom_slow is None)
-    if tier_factor != 1.0 and uses_tier:
+    if tier_factor != 1.0 and custom_tokens is None:
         reasons.append(_reason("tier", name=tier["name"], factor=f"{tier_factor:g}"))
-    regular = float(custom_tokens) if custom_tokens is not None else float(policy.get("tokens") or 0) * tier_factor
-    slow = float(custom_slow) if custom_slow is not None else float(policy.get("slow_tokens") or 0) * tier_factor
-    base = regular
+    tokens = float(custom_tokens) if custom_tokens is not None else float(policy.get("tokens") or 0) * tier_factor
+    base = tokens
     if not limited:
-        return Window(period, False, UNLIMITED, 0.0, used[0], used[1], started is not None, start, end, base, custom,
+        return Window(period, False, UNLIMITED, 0.0, used, 0.0, started is not None, start, end, base, custom,
                       (_reason("not_limited"),))
     if dynamic_on and dynamic is not None and dynamic != 1.0:
         if custom and dynamic < 1:
             reasons.append(_reason("custom_floor"))
         else:
-            regular *= dynamic
-            slow *= dynamic
+            tokens *= dynamic
             reasons.append(_reason("dynamic_up" if dynamic > 1 else "dynamic_down", percent=_percent(dynamic)))
     if capacity < 1:
-        regular *= capacity
-        slow *= capacity
+        tokens *= capacity
         reasons.append(_reason("capacity", percent=_percent(capacity)))
-    mode, bonus_regular, bonus_slow = bonus
-    if mode == "multiplier" and bonus_regular != 1.0:
-        regular *= bonus_regular
-        slow *= bonus_slow
-        reasons.append(_reason("music_multiplier", factor=f"{bonus_regular:g}"))
+    mode, bonus_amount, _legacy_slow = bonus
+    if mode == "multiplier" and bonus_amount != 1.0:
+        tokens *= bonus_amount
+        reasons.append(_reason("music_multiplier", factor=f"{bonus_amount:g}"))
     elif mode == "fixed":
-        windows = 7 if period == "weekly" else 1
-        regular += bonus_regular * windows
-        slow += bonus_slow if period == "window" else 0.0
-        reasons.append(_reason("music_fixed", tokens=bonus_regular * windows))
-    if not slow_enabled or period == "weekly":
-        slow = 0.0
+        tokens += bonus_amount
+        reasons.append(_reason("music_fixed", tokens=bonus_amount))
     unlimited, multipliers, extras = _grant_parts(grants, period)
     if unlimited:
-        return Window(period, False, UNLIMITED, 0.0, used[0], used[1], started is not None, start, end, base, custom,
+        return Window(period, False, UNLIMITED, 0.0, used, 0.0, started is not None, start, end, base, custom,
                       tuple(reasons + [_grant_reason(unlimited[0])]))
     for grant in multipliers:
-        regular *= grant["amount"]
-        slow *= grant["amount"]
+        tokens *= grant["amount"]
         reasons.append(_grant_reason(grant))
     for grant in extras:
-        regular += grant["amount"]
+        tokens += grant["amount"]
         reasons.append(_grant_reason(grant))
     if renounced[0] > 0:
         # Tokens the account renounced to support someone else's request (community consent).
-        regular = max(0.0, regular - renounced[0])
+        tokens = max(0.0, tokens - renounced[0])
         reasons.append(_reason("renounced", tokens=renounced[0], until=_until(renounced[1])))
-    return Window(period, True, _whole(regular), _whole(slow), used[0], used[1], started is not None, start, end,
+    return Window(period, True, _whole(tokens), 0.0, used, 0.0, started is not None, start, end,
                   _whole(base), custom, tuple(reasons))
 
 
@@ -825,7 +817,7 @@ def effective(user, pool: str, *, usage: bool = True, now: datetime | None = Non
     grants = tuple(grant.to_dict() for grant in _grants(user_id, db.timestamp(now))
                    if grant["model_id"] is None and grant["pool"] in (None, pool))
     bonus = _once(("bonus", user_id), lambda: credits.music_bonus(user_id, settings))
-    slow_enabled = bool(settings.get("slow_credits_enabled", 1))
+    weekly_bonus = ("fixed", credits.music_weekly_fixed(settings), 0.0) if bonus[0] == "fixed" else bonus
 
     window_start = week_start = None
     regular_used = slow_used = weekly_used = 0.0
@@ -836,19 +828,22 @@ def effective(user, pool: str, *, usage: bool = True, now: datetime | None = Non
                                                      lambda: store.usage(user_id, pool, window_since, week_since))
 
     multiplier = dynamic.multiplier if dynamic else None
-    common = {"tier": tier, "dynamic": multiplier, "bonus": bonus, "slow_enabled": slow_enabled, "grants": grants}
+    common = {"tier": tier, "dynamic": multiplier, "grants": grants}
     renounced = _renounced(user_id, db.timestamp(now))
     window = _window("window", policy["window"], _custom(override, "window_tokens", policy["window"], "tokens", tier),
-                     _custom(override, "window_slow_tokens", policy["window"], "slow_tokens", tier), **common,
+                     bonus=bonus, **common,
                      dynamic_on=policy["window"]["dynamic"], started=window_start,
-                     used=(round(regular_used, 2), round(slow_used, 2)), length=WINDOW,
+                     used=round(regular_used + slow_used, 2), length=WINDOW,
+                     limited_override=False if prefs.token_exempt else None,
                      renounced=renounced.get((pool, None, "window"), (0.0, None)))
     weekly = _window("weekly", policy["weekly"], _custom(override, "weekly_tokens", policy["weekly"], "tokens", tier),
-                     None, **common,
-                     dynamic_on=policy["weekly"]["dynamic"], started=week_start, used=(round(weekly_used, 2), 0.0),
+                     bonus=weekly_bonus, **common,
+                     dynamic_on=policy["weekly"]["dynamic"], started=week_start, used=round(weekly_used, 2),
+                     limited_override=False if prefs.token_exempt else None,
                      length=WEEK, renounced=renounced.get((pool, None, "weekly"), (0.0, None)))
-    rate = _rate(policy["rate"]["enabled"], policy["rate"]["rules"], override.rate_rules, dynamic=multiplier,
-                 dynamic_on=policy["rate"]["dynamic"], grants=grants)
+    rate = RateLimit(False, reasons=(_reason("not_limited"),)) if prefs.rate_exempt else _rate(
+        policy["rate"]["enabled"], policy["rate"]["rules"], override.rate_rules, dynamic=multiplier,
+        dynamic_on=policy["rate"]["dynamic"], grants=grants)
     return Effective(pool, False, rate, window, weekly, prefs.speed, tier, tiers_apply, dynamic, dynamic_applies,
                      grants, bonus)
 
@@ -866,6 +861,8 @@ def rate_limit(user, pool: str) -> RateLimit:
     """Only the request rate of a pool (no usage queries), for admission."""
     if user["role"] == "admin":
         return _admin_rate()
+    if _prefs(user["id"]).rate_exempt:
+        return RateLimit(False, reasons=(_reason("not_limited"),))
     policy = _policy(pool)["rate"]
     override = _override(user["id"], pool)
     dynamic = None
@@ -884,6 +881,22 @@ def is_local(model) -> bool:
     return _get(model, "provider", "") in LOCAL_PROVIDERS
 
 
+def consumes_token_limits(model, pool: str | None) -> bool:
+    """Whether usage consumes token limits in this service.
+
+    Normal and no-history chat share the administrator's local/cloud choice.
+    Other services and unknown models keep their existing metering; an identity
+    removed during generation must not turn an expensive answer into free usage.
+    This choice never changes access, request rates or reasoning effort.
+    """
+    if pool != "chat" or model is None:
+        return True
+    settings = _settings()
+    local = is_local(model)
+    value = settings.get("chat_local_token_consumption" if local else "chat_cloud_token_consumption")
+    return not local if value is None else bool(value)
+
+
 def counts_toward_pool(model, policy: dict | None = None) -> bool:
     """Whether a model's usage counts against the pool limits: the policy's choice, else yes for local models
     (Ollama, ComfyUI) and no for other providers."""
@@ -893,19 +906,28 @@ def counts_toward_pool(model, policy: dict | None = None) -> bool:
     return is_local(model)
 
 
-def outside_pool(name: str | None) -> bool:
-    """Whether the model called *name* exists and does not count toward the pool limits."""
+def outside_pool(name: str | None, *, pool: str | None = None) -> bool:
+    """Whether the named model exists and can run without consuming this pool's tokens."""
     if not name or name == "auto":
         return False
     model = db.one("SELECT * FROM ai_models WHERE ollama_name=?", (name,))
-    return model is not None and not counts_toward_pool(model)
+    return model is not None and (not consumes_token_limits(model, pool) or not counts_toward_pool(model))
 
 
-def any_outside_pool() -> bool:
-    """Whether a published model does not count toward the pool limits (``auto`` may then still find one)."""
+def any_outside_pool(*, pool: str | None = None, from_model=None) -> bool:
+    """Whether a published model can run without consuming this pool's tokens.
+
+    When replacing *from_model*, only the administrator's allowed fallback
+    directions apply; replacements of the same provider class remain allowed.
+    Access and model availability are checked by the final selection.
+    """
     models = db.query("SELECT * FROM ai_models WHERE is_rolled_out=1")
     policies = store.model_policies(models)
-    return any(not counts_toward_pool(model, policies[model["id"]]) for model in models)
+    if from_model is not None:
+        directions = fallback_directions()
+        models = [model for model in models if crosses_allowed(from_model, model, directions)]
+    return any(not consumes_token_limits(model, pool) or not counts_toward_pool(model, policies[model["id"]])
+               for model in models)
 
 
 def model_limits(user, model, *, usage: bool = True, now: datetime | None = None,
@@ -923,6 +945,8 @@ def model_limits(user, model, *, usage: bool = True, now: datetime | None = None
     prefs = _prefs(user_id)
     settings = _settings()
     enabled = policy["enabled"]
+    tokens_enabled = policy.get("tokens_enabled", True) and not (prefs.token_exempt or override.token_exempt)
+    rate_enabled = policy.get("rate_enabled", True) and not (prefs.rate_exempt or override.rate_exempt)
     tier = resolve_tier(prefs.tier_id) if policy["auto_tiers"] and enabled else None
     dynamic = None
     if enabled and policy["dynamic"] and not prefs.dynamic_exempt:
@@ -940,20 +964,23 @@ def model_limits(user, model, *, usage: bool = True, now: datetime | None = None
                                          lambda: store.model_usage(user_id, model["id"], window_since, week_since))
 
     common = {"tier": tier, "dynamic": dynamic, "dynamic_on": True, "bonus": ("none", 1.0, 0.0),
-              "slow_enabled": False, "grants": grants, "capacity": capacity}
+              "grants": grants, "capacity": capacity}
     window_policy = {"enabled": enabled and policy["window_tokens"] is not None,
-                     "tokens": policy["window_tokens"] or 0, "slow_tokens": 0, "auto_tiers": policy["auto_tiers"]}
+                     "tokens": policy["window_tokens"] or 0, "auto_tiers": policy["auto_tiers"]}
     weekly_policy = {"enabled": enabled and policy["weekly_tokens"] is not None,
                      "tokens": policy["weekly_tokens"] or 0, "auto_tiers": policy["auto_tiers"]}
     renounced = _renounced(user_id, db.timestamp(now))
-    window = _window("window", window_policy, override.window_tokens, None, **common, started=window_start,
-                     used=(round(window_used, 2), 0.0), length=WINDOW,
+    window = _window("window", window_policy, override.window_tokens, **common, started=window_start,
+                     limited_override=False if not tokens_enabled else None,
+                     used=round(window_used, 2), length=WINDOW,
                      renounced=renounced.get((None, model["id"], "window"), (0.0, None)))
-    weekly = _window("weekly", weekly_policy, override.weekly_tokens, None, **common, started=week_start,
-                     used=(round(weekly_used, 2), 0.0), length=WEEK,
+    weekly = _window("weekly", weekly_policy, override.weekly_tokens, **common, started=week_start,
+                     limited_override=False if not tokens_enabled else None,
+                     used=round(weekly_used, 2), length=WEEK,
                      renounced=renounced.get((None, model["id"], "weekly"), (0.0, None)))
     rate = _rate(enabled, policy["rate_rules"], override.rate_rules, dynamic=dynamic, dynamic_on=True,
-                 grants=grants, capacity=capacity)
+                 grants=grants, capacity=capacity) if rate_enabled else RateLimit(
+                     False, reasons=(_reason("not_limited"),))
     return ModelLimits(model["id"], name, False, policy["weight"], counts, override.locked, rate, window, weekly,
                        policy, not override.empty, dynamic or 1.0, capacity)
 
@@ -1116,8 +1143,8 @@ class Admission:
 
     @property
     def slow(self) -> bool:
-        """Whether the request should wait in the slow lane (the pool's regular tokens are used up)."""
-        return self.budget is not None and self.budget.next_is_slow
+        """Deprecated compatibility flag; account speed alone controls queue priority."""
+        return False
 
 
 def _time_text(moment: datetime | None) -> str:
@@ -1140,11 +1167,16 @@ def pool_refusal(budget: credits.Budget) -> Refusal:
                    (("date", _time_text(budget.resets_at)),))
 
 
-def model_refusal(limits: ModelLimits) -> Refusal | None:
+def model_refusal(limits: ModelLimits, *, consume_tokens: bool = True) -> Refusal | None:
     if limits.admin:
         return None
     if limits.locked:
         return Refusal("model_locked", 403, None, "model_locked", (("model", limits.name),))
+    # Internal exemptions never provide capacity on an exhausted provider.
+    if limits.capacity <= 0:
+        return Refusal("insufficient_quota", 429, 3600, "model_window_none", (("model", limits.name),))
+    if not consume_tokens:
+        return None
     if limits.weekly.exhausted:
         return Refusal("insufficient_quota", 429, _seconds_until(limits.weekly.resets_at), "model_weekly",
                        (("date", _time_text(limits.weekly.resets_at)), ("model", limits.name)))
@@ -1158,7 +1190,8 @@ def model_refusal(limits: ModelLimits) -> Refusal | None:
 
 def admit(user, pool: str, model, *, take_rate: bool = True, now: float | None = None) -> Admission:
     """Can *user* run a request in *pool* with *model* now? Checks the pool's 5-hour and weekly tokens (unless
-    the model does not count toward them), then the model's lock and limits, and takes one request from the
+    the model does not count toward them or chat token consumption is off), then the model's lock and limits,
+    skipping user token limits for unmetered chat, and takes one request from the
     model's rate buckets (*take_rate*). The pool's request rate is checked separately (:func:`check_rate`),
     where requests arrive."""
     if user["role"] == "admin":
@@ -1169,14 +1202,15 @@ def admit(user, pool: str, model, *, take_rate: bool = True, now: float | None =
 
 def _admit(user, pool: str, model, *, take_rate: bool, now: float | None) -> Admission:
     policy = _model_policy(model) if model is not None else None
-    counted = model is None or counts_toward_pool(model, policy)
-    budget = credits.budget(user, pool)
+    consume_tokens = consumes_token_limits(model, pool)
+    counted = consume_tokens and (model is None or counts_toward_pool(model, policy))
+    budget = credits.budget(user, pool) if consume_tokens else _admin_result(pool).budget()
     if counted and not budget.available:
         return Admission(pool_refusal(budget), budget)
     if model is None:
         return Admission(None, budget)
     limits = model_limits(user, model, policy=policy)
-    refusal = model_refusal(limits)
+    refusal = model_refusal(limits, consume_tokens=consume_tokens)
     if refusal is not None:
         return Admission(refusal, budget, limits)
     decision = None
@@ -1187,21 +1221,20 @@ def _admit(user, pool: str, model, *, take_rate: bool, now: float | None) -> Adm
                                      (("model", limits.name), ("rate", rule_text("en", decision.rule)),
                                       ("rule", decision.rule), ("seconds", decision.retry_after))), budget, limits,
                                      decision)
-    if not counted:
-        budget = replace(budget, slow_limit=0.0) if not budget.unlimited else budget
     return Admission(None, budget if counted else _admin_result(pool).budget(), limits, decision)
 
 
 def model_blocked(user, model, pool: str | None = None, *, budget: credits.Budget | None = None) -> bool:
     """Whether *model* cannot be used by *user* now: locked or its own tokens used up, or (with *pool*) it counts
-    toward the pool's tokens and those are used up. Takes nothing."""
+    toward the pool's tokens and those are used up. Unmetered chat skips user token limits. Takes nothing."""
     if user["role"] == "admin":
         return False
     policy = _model_policy(model)
-    if pool is not None and counts_toward_pool(model, policy):
+    consume_tokens = consumes_token_limits(model, pool)
+    if consume_tokens and pool is not None and counts_toward_pool(model, policy):
         if not (budget or credits.budget(user, pool)).available:
             return True
-    return model_refusal(model_limits(user, model, policy=policy)) is not None
+    return model_refusal(model_limits(user, model, policy=policy), consume_tokens=consume_tokens) is not None
 
 
 def prefer_usable(user, selection, requested: str | None, *, pool: str | None = None, candidates=None):
@@ -1289,11 +1322,12 @@ def usable_fallbacks(user, pool: str, fallbacks, *, think=None, effort: str | No
     result = []
     for model in candidates:
         policy = _model_policy(model)
-        if counts_toward_pool(model, policy):
+        consume_tokens = consumes_token_limits(model, pool)
+        if consume_tokens and counts_toward_pool(model, policy):
             budget = budget or credits.budget(user, pool)
             if not budget.available:
                 continue
-        if model_refusal(model_limits(user, model, policy=policy)) is not None:
+        if model_refusal(model_limits(user, model, policy=policy), consume_tokens=consume_tokens) is not None:
             continue
         if effort is None:
             # The first model does not reason, so no ``think`` is sent: a reasoning fallback thinks at its own
@@ -1316,7 +1350,8 @@ def base_limits(user_id: str, pool: str) -> dict:
     """The account's own limits before dynamic adjustment, bonus and grants (request forms compare to these)."""
     policy = store.get_policy(pool)
     override = store.get_override(user_id, pool) or store.Override(pool)
-    return _base(policy, override, resolve_tier(store.user_settings(user_id).tier_id))
+    prefs = store.user_settings(user_id)
+    return _base(policy, override, resolve_tier(prefs.tier_id), prefs)
 
 
 def base_limits_many(pairs) -> dict:
@@ -1324,13 +1359,14 @@ def base_limits_many(pairs) -> dict:
     pairs = set(pairs)
     user_ids = sorted({user_id for user_id, _pool in pairs})
     policies, all_tiers = store.all_policies(), tiers()
-    overrides, tier_ids = store.overrides_of(user_ids), store.tier_ids_of(user_ids)
+    overrides, preferences = store.overrides_of(user_ids), store.user_settings_of(user_ids)
     return {(user_id, pool): _base(policies[pool], overrides.get((user_id, pool)) or store.Override(pool),
-                                   resolve_tier(tier_ids.get(user_id), all_tiers))
+                                   resolve_tier(preferences.get(user_id, store.UserSettings()).tier_id, all_tiers),
+                                   preferences.get(user_id, store.UserSettings()))
             for user_id, pool in pairs}
 
 
-def _base(policy: dict, override, tier) -> dict:
+def _base(policy: dict, override, tier, prefs) -> dict:
     def tiered(period, value):
         return _whole(value * float(tier["multiplier"])) if policy[period]["auto_tiers"] and tier else value
 
@@ -1343,12 +1379,11 @@ def _base(policy: dict, override, tier) -> dict:
     rules = list(override.rate_rules) if override.has_rate else policy["rate"]["rules"]
     return {
         "window_tokens": amount("window_tokens", "window", "tokens"),
-        "window_slow_tokens": amount("window_slow_tokens", "window", "slow_tokens"),
         "weekly_tokens": amount("weekly_tokens", "weekly", "tokens"),
         "rate_rules": [dict(rule) for rule in rules],
-        "window_enabled": policy["window"]["enabled"] or override.has_window,
-        "weekly_enabled": policy["weekly"]["enabled"] or override.has_weekly,
-        "rate_enabled": (policy["rate"]["enabled"] or override.has_rate) and bool(rules),
+        "window_enabled": not prefs.token_exempt and (policy["window"]["enabled"] or override.has_window),
+        "weekly_enabled": not prefs.token_exempt and (policy["weekly"]["enabled"] or override.has_weekly),
+        "rate_enabled": not prefs.rate_exempt and (policy["rate"]["enabled"] or override.has_rate) and bool(rules),
     }
 
 
@@ -1358,7 +1393,10 @@ def model_base(user_id: str, model) -> dict:
     policy = store.get_model_policy(model)
     override = store.get_model_override(user_id, model["id"]) or store.ModelOverride(model["id"])
     enabled = policy["enabled"]
-    tier = resolve_tier(store.user_settings(user_id).tier_id) if policy["auto_tiers"] and enabled else None
+    prefs = store.user_settings(user_id)
+    tokens_enabled = policy["tokens_enabled"] and not (prefs.token_exempt or override.token_exempt)
+    rate_enabled = policy["rate_enabled"] and not (prefs.rate_exempt or override.rate_exempt)
+    tier = resolve_tier(prefs.tier_id) if policy["auto_tiers"] and enabled else None
 
     def amount(name):
         own = getattr(override, name)
@@ -1372,20 +1410,22 @@ def model_base(user_id: str, model) -> dict:
     window, weekly = amount("window_tokens"), amount("weekly_tokens")
     rules = list(override.rate_rules) if override.rate_rules is not None else \
         (list(policy["rate_rules"]) if enabled else [])
-    return {"window_tokens": window or 0.0, "window_slow_tokens": 0.0, "weekly_tokens": weekly or 0.0,
-            "rate_rules": [dict(rule) for rule in rules], "window_enabled": window is not None,
-            "weekly_enabled": weekly is not None, "rate_enabled": bool(rules)}
+    return {"window_tokens": window or 0.0, "weekly_tokens": weekly or 0.0,
+            "rate_rules": [dict(rule) for rule in rules], "window_enabled": tokens_enabled and window is not None,
+            "weekly_enabled": tokens_enabled and weekly is not None, "rate_enabled": rate_enabled and bool(rules)}
 
 
 def limit_on(user_id: str | None, pool: str | None, scope: str, model=None) -> bool:
     """Whether the *scope* limit is on in *pool* (any pool when None) - or for *model* - for the account (the
     policies when None), so that an ``extra`` grant for it changes something."""
     if model is not None:
+        if user_id is not None:
+            return model_base(user_id, model)[f"{scope}_enabled"]
         policy = store.get_model_policy(model)
-        override = (store.get_model_override(user_id, model["id"]) if user_id else None) or \
-            store.ModelOverride(model["id"])
+        if scope == "rate":
+            return policy["rate_enabled"] and policy["enabled"] and bool(policy["rate_rules"])
         key = f"{scope}_tokens"
-        return getattr(override, key, None) is not None or (policy["enabled"] and policy.get(key) is not None)
+        return policy["tokens_enabled"] and policy["enabled"] and policy.get(key) is not None
     for name in [pool] if pool else store.POOLS:
         if user_id is not None:
             if base_limits(user_id, name)[f"{scope}_enabled"]:
@@ -1538,7 +1578,7 @@ def tier_progress(user, now: datetime | None = None) -> dict | None:
 
 # ----- reasoning effort ----------------------------------------------------------------------
 
-EFFORT_CHOICES = (*store.EFFORT_LEVELS, "on")
+EFFORT_CHOICES = (*store.EFFORT_LEVELS, "on", "xhigh")
 
 
 class EffortLocked(Exception):
@@ -1563,8 +1603,9 @@ def supported_efforts(model) -> tuple[str, ...]:
             parsed = None
         if isinstance(parsed, (list, tuple)):
             levels = [str(level).strip().lower() for level in parsed]
+            levels = ["extra" if level == "xhigh" else level for level in levels]
     known = {level for level in levels if level in store.EFFORT_LEVELS or level == "on"}
-    if "on" in known and known & {"low", "medium", "high", "max"}:
+    if "on" in known and known & {"low", "medium", "high", "extra", "max"}:
         known.discard("on")  # a model with named levels needs no generic "on"
     if known:
         return tuple(sorted(known, key=lambda level: (store.effort_rank(level), level == "on")))
@@ -1575,7 +1616,7 @@ def supported_efforts(model) -> tuple[str, ...]:
 
 def named_levels(model) -> bool:
     """Whether the model takes named levels (low, medium, high) rather than thinking on or off."""
-    return bool(set(supported_efforts(model)) & {"low", "medium", "high", "max"})
+    return bool(set(supported_efforts(model)) & {"low", "medium", "high", "extra", "max"})
 
 
 def effort_settings(settings: dict | None = None) -> dict:
@@ -1602,12 +1643,18 @@ def effort_settings(settings: dict | None = None) -> dict:
             "ceiling": level("effort_auto_ceiling", "high")}
 
 
-def effort_gated(user, prefs=None, settings: dict | None = None) -> bool:
+def effort_gated(user, prefs=None, settings: dict | None = None, *, model=None, policy: dict | None = None) -> bool:
     """Whether effort levels are limited for the account (never for administrators)."""
     if user["role"] == "admin" or not effort_settings(settings)["gating"]:
         return False
     prefs = prefs or _prefs(user["id"])
-    return not prefs.effort_gating_off
+    if prefs.effort_gating_off:
+        return False
+    if model is not None:
+        policy = policy if policy is not None else _model_policy(model)
+        if policy.get("effort_gating_off"):
+            return False
+    return True
 
 
 def effort_ceiling(user, model, *, policy: dict | None = None, own: dict | None = None, prefs=None,
@@ -1623,10 +1670,10 @@ def effort_ceiling(user, model, *, policy: dict | None = None, own: dict | None 
     levels = supported_efforts(model)
     if not levels:
         return None
-    if not effort_gated(user, prefs, settings):
+    policy = policy if policy is not None else _model_policy(model)
+    if not effort_gated(user, prefs, settings, model=model, policy=policy):
         return "medium" if levels[-1] == "on" else levels[-1]
     own = own if own is not None else _effort_levels(user["id"])
-    policy = policy if policy is not None else _model_policy(model)
     level = policy.get("effort_default") or effort_settings(settings)["default"]
     for mine in (own.get(None), own.get(model["id"])):
         if mine is not None and (mine.source == "admin" or store.effort_rank(mine.level) > store.effort_rank(level)):
@@ -1661,14 +1708,19 @@ def resolve_effort(user, model, requested: str | None, **kwargs) -> str | None:
     levels = supported_efforts(model)
     if not levels:
         return None
+    if requested == "xhigh":
+        requested = "extra"
     allowed = allowed_efforts(user, model, **kwargs)
+    if not allowed:
+        name = _get(model, "display_name") or _get(model, "ollama_name", "")
+        raise EffortLocked(requested or EFFORT_DEFAULT, "off", name)
     if requested is None:
         target = _model_level(levels, EFFORT_DEFAULT)
         if target in allowed:
             return target
-        # Below the default: the highest allowed level (or the lowest the model has, when it cannot stop thinking).
+        # Below the default: the highest level this account may actually use.
         thinking = [level for level in allowed if level != "off"]
-        return thinking[-1] if thinking else (allowed[0] if allowed else levels[0])
+        return thinking[-1] if thinking else allowed[0]
     level = _model_level(levels, requested)
     if level not in allowed:
         best = [level for level in allowed if level != "off"]
@@ -1687,7 +1739,7 @@ def effort_summary(user, model, *, lang: str = "en", **kwargs) -> dict | None:
     if not levels:
         return None
     allowed = allowed_efforts(user, model, **kwargs)
-    default = resolve_effort(user, model, None, **kwargs)
+    default = resolve_effort(user, model, None, **kwargs) if allowed else None
     return {"levels": [{"value": level, "label": effort_label(level, lang), "allowed": level in allowed}
                        for level in levels],
             "default": default, "locked": [level for level in levels if level not in allowed]}
@@ -1715,7 +1767,8 @@ def composer_choices(user, choices: list[dict], *, lang: str, request_url) -> li
                 if not level["allowed"]:
                     level["request_url"] = request_url(model["ollama_name"], level["value"])
         weight = policies[model["id"]]["weight"] if model is not None else 1.0
-        counted = counts_toward_pool(model, policies[model["id"]]) if model is not None else True
+        counted = consumes_token_limits(model, "chat") and (
+            counts_toward_pool(model, policies[model["id"]]) if model is not None else True)
         result.append({**choice, "effort": effort, "weight": weight if counted else None})
     return result
 
@@ -1759,27 +1812,42 @@ def auto_unlock_effort(now: datetime | None = None) -> list[tuple[str, str, str]
     candidates = [row for row in store.effort_candidates(db.timestamp(since), clean_since)
                   if row["active_days"] >= settings["active_days"] and (row["tokens"] or 0) >= settings["tokens"]]
     unlocked = []
-    ceiling_rank = store.effort_rank(settings["ceiling"])
     for row in candidates:
-        user = users.get(row["user_id"])
-        model = db.one("SELECT * FROM ai_models WHERE id=?", (row["model_id"],))
-        if user is None or model is None or users.is_suspended(user) or not effort_gated(user):
-            continue
-        levels = supported_efforts(model)
-        own = store.effort_levels(user["id"])
-        mine = own.get(model["id"])
-        if mine is not None and mine.pinned:
-            continue
-        if mine is not None and mine.updated_at and mine.updated_at > db.timestamp(since):
-            # Counting starts again after the last change of this level.
-            active_days, tokens = _model_activity(user["id"], model["id"], mine.updated_at)
-            if active_days < settings["active_days"] or tokens < settings["tokens"]:
-                continue
-        current = effort_ceiling(user, model, own=own) or "off"
-        target = _next_level(levels, current)
-        if target is None or store.effort_rank(target) > ceiling_rank:
-            continue
+        # Read the final permissions and write under the same lock: an admin
+        # pin, suspension or opt-out must not be overwritten by a stale check.
         with db.transaction():
+            user = users.get(row["user_id"])
+            model = db.one("SELECT * FROM ai_models WHERE id=?", (row["model_id"],))
+            prefs = store.user_settings(row["user_id"])
+            raw_settings = site_settings.get()
+            current_settings = effort_settings(raw_settings)
+            if user is None or model is None or users.is_suspended(user) or not current_settings["auto"] \
+                    or prefs.effort_auto_unlock_off:
+                continue
+            policy = store.get_model_policy(model)
+            if policy.get("effort_auto_unlock_off") or not effort_gated(
+                    user, prefs, raw_settings, model=model, policy=policy):
+                continue
+            levels = supported_efforts(model)
+            own = store.effort_levels(user["id"])
+            mine = own.get(model["id"])
+            if any(level is not None and level.pinned for level in (own.get(None), mine)):
+                continue
+            activity_since = db.timestamp(now - timedelta(days=current_settings["period_days"]))
+            if mine is not None and mine.updated_at:
+                activity_since = max(activity_since, mine.updated_at)
+            last_suspension = _get(user, "last_suspension_at")
+            if last_suspension and last_suspension >= db.timestamp(now - timedelta(days=current_settings["clean_days"])):
+                continue
+            # Recheck the current thresholds as well as the post-unlock reset.
+            active_days, tokens = _model_activity(user["id"], model["id"], activity_since)
+            if active_days < current_settings["active_days"] or tokens < current_settings["tokens"]:
+                continue
+            current = effort_ceiling(user, model, policy=policy, own=own, prefs=prefs,
+                                     settings=raw_settings) or "off"
+            target = _next_level(levels, current)
+            if target is None or store.effort_rank(target) > store.effort_rank(current_settings["ceiling"]):
+                continue
             store.set_effort_level(user["id"], model["id"], target, source="automatic")
             users.audit(None, "limits.effort_unlock", user["username"],
                         {"model": model["ollama_name"], "from": current, "to": target, "source": "automatic"})
@@ -1803,7 +1871,25 @@ def apply_model_preset(model_id: int, preset: str, *, updated_by: str | None = N
     if model is None:
         raise ValueError("That model does not exist.")
     current = store.get_model_policy(model)
-    return store.set_model_policy(model_id, store.preset_policy(preset, current), updated_by)
+    policy = store.preset_policy(preset, current)
+    if model["backend"] == "external":
+        from bananachat.services import external_providers
+
+        policy.update(external_providers.preset_limits(preset))
+    elif model["backend"] == "claude":
+        from bananachat.services import claude_pool
+
+        family = model["family"] or claude_pool.family_of(model["ollama_name"])
+        strict = claude_pool.strict_policy(model["ollama_name"], family=family)
+        if preset != strict["preset"]:
+            family = {"light": "haiku", "standard": "sonnet", "heavy": "opus"}[preset]
+            strict = claude_pool.strict_policy(model["ollama_name"], family=family)
+        # Presets replace budget fields, keeping administrator switches.
+        strict.pop("auto_tiers")
+        strict["counts_toward_pool"] = current["counts_toward_pool"] \
+            if current["counts_toward_pool"] is not None else False
+        policy.update(strict)
+    return store.set_model_policy(model_id, policy, updated_by)
 
 
 # ----- background jobs -------------------------------------------------------------------
@@ -1828,16 +1914,72 @@ def tiers_job(app) -> None:
     auto_unlock_effort()
 
 
+def _cleanup_grant_sets(grants, *, pool=None, model_id=None, user_id=None):
+    """Applicable rate multipliers, including each account's combination with site-wide grants."""
+    groups = {}
+    for grant in grants:
+        applies = grant["model_id"] == model_id if model_id is not None else (
+            grant["model_id"] is None and grant["pool"] in (None, pool))
+        if applies:
+            groups.setdefault(grant["user_id"], []).append(grant)
+    common = groups.pop(None, [])
+    own = [groups.get(user_id, [])] if user_id is not None else [[], *groups.values()]
+    # Multipliers are rounded after each application, so preserve their admission order.
+    return [sorted([*common, *items], key=lambda grant: grant["id"]) for items in own]
+
+
+def _cleanup_refill_seconds(rules, *, dynamic=False, capacity=False, grant_sets=((),)) -> float:
+    """A conservative full-refill bound using admission's scaling and rounding.
+
+    Dynamic adjustment bottoms out at 0.5. Provider capacity is in 5% steps;
+    zero capacity refuses admission, making 5% the smallest usable factor.
+    Keep the unreduced burst as an upper bound because grants can enlarge it.
+    """
+    longest = 0.0
+    for grants in grant_sets:
+        small = _rate(True, rules, None, dynamic=DYNAMIC_MIN, dynamic_on=dynamic, grants=grants,
+                      capacity=DYNAMIC_STEP if capacity else 1.0)
+        large = _rate(True, rules, None, dynamic=None, dynamic_on=False, grants=grants)
+        for slow, full in zip(small.rules, large.rules, strict=True):
+            longest = max(longest, max(slow.burst, full.burst) / slow.per_second)
+    return longest
+
+
 def forget_idle_buckets(now: float | None = None) -> int:
-    """Forget request buckets idle for a day, or for as long as the slowest rule needs to refill its burst
-    (a forgotten bucket counts as full, so forgetting one earlier would hand out requests)."""
-    rule_sets = [policy["rate"]["rules"] for policy in store.all_policies().values()]
-    rule_sets += [policy["rate_rules"] for policy in store.model_policies(
-        db.query("SELECT * FROM ai_models")).values()]
-    rule_sets += store.custom_rule_sets()
-    refills = [rule["burst"] / store.rule_per_second(rule) for rules in rule_sets for rule in rules]
-    idle = max(BUCKET_IDLE_SECONDS, *refills) if refills else BUCKET_IDLE_SECONDS
-    return store.purge_buckets(idle, time.time() if now is None else now)
+    """Forget buckets only after the slowest effective rule could refill them completely.
+
+    A missing bucket starts full. Demand, provider capacity and grant burst
+    rounding must therefore be included, not just the configured base rate.
+    """
+    with db.transaction():
+        at = db.now()
+        grants = db.query("SELECT * FROM limit_grants WHERE kind='multiplier' AND (scope IS NULL OR scope='rate') "
+                          "AND revoked_at IS NULL AND starts_at<=? AND (ends_at IS NULL OR ends_at>?) "
+                          "ORDER BY id", (at, at))
+        refills = [_cleanup_refill_seconds(policy["rate"]["rules"], dynamic=policy["rate"]["dynamic"],
+                   grant_sets=_cleanup_grant_sets(grants, pool=pool))
+                   for pool, policy in store.all_policies().items()]
+        models = db.query("SELECT * FROM ai_models")
+        capacities = {model["id"]: _get(model, "provider", "") in _capacity_providers for model in models}
+        for model_id, policy in store.model_policies(models).items():
+            refills.append(_cleanup_refill_seconds(policy["rate_rules"], dynamic=policy["dynamic"],
+                           capacity=capacities[model_id],
+                           grant_sets=_cleanup_grant_sets(grants, model_id=model_id)))
+        custom = db.query("SELECT user_id, pool, NULL AS model_id, rate_rules FROM user_limit_overrides "
+                          "WHERE rate_rules IS NOT NULL UNION ALL "
+                          "SELECT user_id, NULL AS pool, model_id, rate_rules FROM user_model_limits "
+                          "WHERE rate_rules IS NOT NULL")
+        for row in custom:
+            try:
+                rules = store.validate_rules(json.loads(row["rate_rules"]))
+            except (TypeError, ValueError):
+                continue  # Unreadable overrides follow the already-included policy.
+            # Custom rates never shrink with demand; model rates still follow provider capacity.
+            refills.append(_cleanup_refill_seconds(rules, capacity=capacities.get(row["model_id"], False),
+                           grant_sets=_cleanup_grant_sets(grants, pool=row["pool"], model_id=row["model_id"],
+                                                         user_id=row["user_id"])))
+        idle = max(BUCKET_IDLE_SECONDS, *refills)
+        return store.purge_buckets(idle, time.time() if now is None else now)
 
 
 @background.job("limits-buckets", every=3600, initial_delay=300)

@@ -93,9 +93,10 @@ def check_access(user) -> None:
     """Raise :class:`AgentError` unless *user* may use agents now."""
     if user is None:
         raise AgentError("agents.error_signed_out", 401, "auth_required")
-    if not agent_settings.enabled():
+    settings = agent_settings.current(fresh=True)
+    if not settings.enabled:
         raise AgentError("agents.error_disabled", 403, "disabled")
-    if not AccessContext.load(user).allows("agents"):
+    if not agent_settings.user_allowed(user, settings):
         raise AgentError("agents.error_no_access", 403, "forbidden")
 
 
@@ -188,7 +189,7 @@ def parse_repository(user, url, ref, settings) -> gitfetch.Source | None:
 def start_task(user, *, prompt: str, model_name: str | None, swarm: bool, files=(), repo_url=None,
                repo_ref=None) -> Started:
     check_access(user)
-    settings = agent_settings.current()
+    settings = agent_settings.current(fresh=True)
     prompt = (prompt or "").strip() if isinstance(prompt, str) else ""
     if not prompt:
         raise AgentError("agents.error_empty")
@@ -231,7 +232,7 @@ def start_task(user, *, prompt: str, model_name: str | None, swarm: bool, files=
 def follow_up(user, task, content: str) -> Started:
     """Send a message to a task: queued for a running task, or starts a new run."""
     check_access(user)
-    settings = agent_settings.current()
+    settings = agent_settings.current(fresh=True)
     content = (content or "").strip() if isinstance(content, str) else ""
     if not content:
         raise AgentError("agents.error_empty")
@@ -277,7 +278,9 @@ def _after_run(run: loop.TaskRun) -> None:
             return
         try:
             check_access(user)
-            settings = agent_settings.current()
+            settings = agent_settings.current(fresh=True)
+            if task["swarm"] and not settings.swarms_enabled:
+                return
             if status.inference_block(user) is not None:
                 return
             model = catalog.get(task["model_id"]) if task["model_id"] else None

@@ -25,6 +25,7 @@ COLUMNS = frozenset({
     *(f"{key}_color" for key in PALETTE_KEYS), *(f"light_{key}_color" for key in PALETTE_KEYS),
     "default_daily_credits", "default_slow_credits", "slow_credits_enabled",
     "warning_banner_enabled", "warning_banner_dismissible", "warning_banner_message",
+    "worker_offline_warning_enabled",
     "music_enabled", "music_visible", "music_opt_in_allowed", "music_opt_out_allowed",
     "music_credit_multiplier", "music_playback_mode", "music_bonus_mode",
     "music_bonus_fixed_credits", "music_bonus_fixed_slow",
@@ -33,20 +34,35 @@ COLUMNS = frozenset({
     "quota_auto_approve_max_weekly_credits", "limits_usage_reset_at", "limits_weekly_reset_at",
     # Token amounts and reasoning effort (schema version 9); the credit columns above are no longer read.
     "quota_auto_approve_max_tokens", "quota_auto_approve_max_slow_tokens", "quota_auto_approve_max_weekly_tokens",
-    "music_bonus_fixed_tokens", "music_bonus_fixed_slow_tokens",
+    "music_bonus_fixed_tokens", "music_bonus_fixed_slow_tokens", "music_bonus_fixed_weekly_tokens",
     "effort_gating_enabled", "effort_default_level", "effort_auto_unlock", "effort_auto_active_days",
     "effort_auto_tokens", "effort_auto_period_days", "effort_auto_clean_days", "effort_auto_ceiling",
     # Community consent for quota requests and quota fallbacks between local and cloud models (schema version 14).
     "community_quota_enabled", "community_kinds", "community_min_supporters", "community_approval_percent",
     "community_coverage_percent", "community_hours", "community_boost_hours", "community_min_account_days",
     "community_max_pledge_percent", "quota_fallback_to_local", "quota_fallback_to_cloud",
+    # Chat usage can be recorded without consuming token limits (schema version 15).
+    "chat_local_token_consumption", "chat_cloud_token_consumption",
+})
+
+# Retained schema columns are accepted for older callers but cannot restore a
+# second token allowance. Migration 16 combines the previously active amounts.
+DEPRECATED_SLOW_COLUMNS = frozenset({
+    "default_slow_credits", "slow_credits_enabled", "chat_daily_slow_credits",
+    "quota_auto_approve_max_slow_credits", "quota_auto_approve_max_slow_tokens",
+    "music_bonus_fixed_slow", "music_bonus_fixed_slow_tokens",
 })
 
 
 def get() -> dict:
     """The settings row as a plain dict (an empty-but-valid dict if missing)."""
     row = db.one("SELECT * FROM site_settings WHERE id=1")
-    return row.to_dict() if row else {"site_name": "BananaChat", "setup_done": 0}
+    if row is None:
+        return {"site_name": "BananaChat", "setup_done": 0}
+    values = row.to_dict()
+    for name in DEPRECATED_SLOW_COLUMNS:
+        values[name] = 0
+    return values
 
 
 def update(**values) -> None:
@@ -55,6 +71,7 @@ def update(**values) -> None:
         raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
     if not values:
         return
+    values = {name: 0 if name in DEPRECATED_SLOW_COLUMNS else value for name, value in values.items()}
     assignments = ", ".join(f"{name}=?" for name in values)
     db.execute(f"UPDATE site_settings SET {assignments} WHERE id=1", tuple(values.values()))
 

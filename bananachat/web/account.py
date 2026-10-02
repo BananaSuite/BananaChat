@@ -26,7 +26,7 @@ log = logging.getLogger("bananachat.account")
 
 USE_CASE_MIN, USE_CASE_MAX = 10, 2000
 QUOTA_REASON_MIN, QUOTA_REASON_MAX = 5, 1000
-QUOTA_REQUEST_MAX = 100_000_000  # tokens per 5 hours (see db.credits.REQUEST_TOKENS_MAX)
+QUOTA_REQUEST_MAX = credits.REQUEST_TOKENS_MAX
 EXPORTS_PER_HOUR = 10
 REQUESTABLE_SCOPES = ("category", "model")
 
@@ -37,6 +37,12 @@ def _t(key, **params):
 
 def _back(anchor: str | None = None):
     return redirect(url_for("account.index", _anchor=anchor) if anchor else url_for("account.index"))
+
+
+def _authentication_changed():
+    security.logout()
+    flash(_t("auth.invalid_credentials"), "error")
+    return redirect(url_for("auth.login"))
 
 
 # ----- usage ----------------------------------------------------------------
@@ -68,8 +74,7 @@ def _window(window) -> dict | None:
         return None
     return {"meter": _meter(window.used, window.tokens), "open": window.open,
             "resets_at": db.timestamp(window.resets_at) if window.resets_at else None,
-            "slow": _meter(window.slow_used, window.slow_tokens) if window.slow_tokens > 0 else None,
-            "blocked": window.left <= 0 and window.slow_left <= 0}
+            "blocked": window.left <= 0}
 
 
 def limits_summary(user) -> list[dict]:
@@ -279,7 +284,10 @@ def _page(draft: dict | None = None):
     user = security.current_user()
     settings = g.settings
     config = current_app.config["BC"]
-    bonus_mode, bonus_regular, bonus_slow = credits.music_bonus(user["id"], settings)
+    bonus_mode, bonus_tokens, _ = credits.music_bonus(user["id"], settings)
+    usage = limits_summary(user)
+    bonus_weekly = credits.music_weekly_fixed(settings) if bonus_mode == "fixed" and \
+        any(pool["weekly"] for pool in usage) else 0
     access = access_overview(user)
     pending = credits.pending_request(user["id"])
     community_options = community.settings(settings)
@@ -291,19 +299,17 @@ def _page(draft: dict | None = None):
     return render_template(
         "account/index.html",
         user=user,
-        usage=limits_summary(user),
+        usage=usage,
         models=model_summary(user),
         grants=_grants(user),
         dynamic=_dynamic(user),
         tier=_tier(user),
         bonus_mode=bonus_mode,
-        bonus_regular=bonus_regular,
-        bonus_slow=bonus_slow,
+        bonus_tokens=bonus_tokens,
+        bonus_weekly=bonus_weekly,
         quota_form=form,
-        slow_enabled=bool(settings.get("slow_credits_enabled", 1)),
         auto_approve=bool(settings.get("quota_auto_approve_enabled")),
         auto_max_tokens=int(settings.get("quota_auto_approve_max_tokens") or 0),
-        auto_max_slow=int(settings.get("quota_auto_approve_max_slow_tokens") or 0),
         auto_max_weekly=int(settings.get("quota_auto_approve_max_weekly_tokens") or 0),
         pending_quota=pending,
         pending_summary=request_summary(pending) if pending else "",
@@ -389,7 +395,7 @@ def _request_form(user) -> dict:
     efforts = _effort_targets(user)
     kinds = [kind for kind, offered in (("window", window_pools), ("weekly", weekly_pools), ("rate", rate_pools),
                                         ("temporary", True), ("effort", efforts)) if offered]
-    current = {pool: {"tokens": base["window_tokens"], "slow": base["window_slow_tokens"],
+    current = {pool: {"tokens": base["window_tokens"],
                       "weekly": base["weekly_tokens"],
                       "rules": [{"per": rule["per"], "requests": rule["requests"],
                                  "label": limits.rule_text(g.lang, rule)} for rule in base["rate_rules"]]}
@@ -448,7 +454,7 @@ def request_summary(row) -> str:
         return _t("account.quota_summary_temporary", tokens=_amount(_request_tokens(row, "new_tokens", "new_credits")),
                   hours=row["grant_hours"], pool=pool)
     return _t("account.quota_summary_window", tokens=_amount(_request_tokens(row, "new_tokens", "new_credits")),
-              slow=_amount(_request_tokens(row, "new_slow_tokens", "new_slow_credits")), pool=pool)
+              pool=pool)
 
 
 def _amount(value) -> str:
@@ -474,7 +480,11 @@ def change_password():
     if new == current:
         flash(_t("account.password_same"), "error")
         return _back("password")
-    users.set_password(user["id"], security.hash_password(new), keep_session=security.current_session_hash())
+    try:
+        users.set_password(user["id"], security.hash_password(new), keep_session=security.current_session_hash(),
+                           expected_password=user["password"])
+    except users.AuthenticationChanged:
+        return _authentication_changed()
     users.audit(user, "account.password_change", user["id"], ip_address=security.client_ip())
     flash(_t("account.password_changed"), "success")
     return _back("password")
@@ -562,9 +572,13 @@ def delete_chats():
         return _back("data")
     days = current_app.config["BC"].deleted_chat_retention_days
     # Without a retention period the chats are erased at once rather than waiting for the purge job.
-    result = delete_all(user["id"], hard=True) if days == 0 else delete_all(user["id"])
-    users.audit(user, "account.chats_delete_all", user["id"],
-                {"count": result} if isinstance(result, int) else None, security.client_ip())
+    try:
+        with users.verified_credentials(user["id"], user["password"], security.current_session_hash()):
+            result = delete_all(user["id"], hard=True) if days == 0 else delete_all(user["id"])
+            users.audit(user, "account.chats_delete_all", user["id"],
+                        {"count": result} if isinstance(result, int) else None, security.client_ip())
+    except users.AuthenticationChanged:
+        return _authentication_changed()
     flash(_t("account.chats_deleted", count=days) if days else _t("account.chats_deleted_now"), "success")
     return _back("data")
 
@@ -582,9 +596,11 @@ def delete_account():
         return _back("delete")
     background_name = users.get_preferences(user["id"])["background_image"]
     try:
-        with db.transaction():
+        with users.verified_credentials(user["id"], user["password"], security.current_session_hash()):
             users.audit(user, "account.delete", user["id"], {"username": user["username"]}, security.client_ip())
             users.delete(user["id"])
+    except users.AuthenticationChanged:
+        return _authentication_changed()
     except ValueError:
         flash(_t("account.delete_last_admin"), "error")
         return _back("delete")
@@ -605,7 +621,7 @@ def _int(value, default=None):
         return default
 
 
-REQUEST_FIELDS = ("kind", "pool", "tokens", "slow_tokens", "weekly_tokens", "rate_per", "rate_requests", "hours",
+REQUEST_FIELDS = ("kind", "pool", "tokens", "weekly_tokens", "rate_per", "rate_requests", "hours",
                   "extra_tokens", "unlimited", "effort_model", "effort_level", "reason", "community")
 
 
@@ -629,7 +645,6 @@ def quota_request():
     kind = form.get("kind") or "window"
     pool = form.get("pool") or "api"
     draft = {"form": "quota", **{name: (form.get(name) or "").strip() for name in REQUEST_FIELDS}}
-    slow_enabled = bool(g.settings.get("slow_credits_enabled", 1))
     model_id = None
     if pool.startswith(MODEL_TARGET) and kind != "effort":
         target = _model_targets(user).get(pool)
@@ -651,8 +666,7 @@ def quota_request():
     try:
         outcome = credits.submit_request(
             user["id"], _tokens_field(form.get("extra_tokens" if kind == "temporary" else "tokens")),
-            _tokens_field(form.get("slow_tokens")) if slow_enabled and (form.get("slow_tokens") or "").strip()
-            else None,
+            0,
             form.get("reason") or "", kind=kind, pool=pool, weekly=_tokens_field(form.get("weekly_tokens")),
             per=form.get("rate_per"), requests=_int(form.get("rate_requests")), hours=_int(form.get("hours")),
             unlimited=form.get("unlimited") == "1", model_id=model_id, level=form.get("effort_level"),
@@ -670,7 +684,6 @@ def quota_request():
                  "LEFT JOIN ai_models m ON m.id=r.model_id WHERE r.id=?", (outcome["id"],))
     users.audit(user, "quota.request", outcome["id"], {"kind": credits.request_kind(row), "pool": row["pool"],
                                                        "status": outcome["status"], "tokens": row["new_tokens"],
-                                                       "slow": row["new_slow_tokens"],
                                                        "weekly": row["new_weekly_tokens"],
                                                        "rules": credits.request_rules(row),
                                                        "hours": row["grant_hours"], "model": row["model_id"],

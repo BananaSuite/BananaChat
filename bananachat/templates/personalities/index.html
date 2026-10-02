@@ -7,7 +7,7 @@
 {% macro try_form(row) -%}
 <form method="post" action="{{ url_for('chat.new') }}">
   {{ csrf() }}<input type="hidden" name="personality_id" value="{{ row.id }}">
-  <button type="submit" class="btn btn-primary btn-sm" aria-label="{{ t('personality.try_label', name=row.name) }}">{{ icon("chat") }}{{ t("personality.try") }}</button>
+  <button type="submit" class="btn btn-sm" aria-label="{{ t('personality.try_label', name=row.name) }}">{{ icon("chat") }}{{ t("personality.try") }}</button>
 </form>
 {%- endmacro %}
 {% block content %}
@@ -52,7 +52,7 @@
   {% endif %}
 
   {% if allowed and default_choices %}
-  <section class="card persona-default mb-3" id="default" aria-labelledby="default-title">
+  <section class="persona-default mb-3" id="default" aria-labelledby="default-title">
     <div class="persona-default-text">
       <h2 id="default-title">{{ t("personality.default_title") }}</h2>
       <p class="hint mb-0">{{ t("personality.default_hint") }}</p>
@@ -83,49 +83,52 @@
     </div>
     {% if allowed and count >= max_count %}<p class="hint">{{ t("personality.limit_reached", max=max_count) }}</p>{% endif %}
     {% if not items %}
-    <div class="empty card">
-      {{ icon("sparkles") }}
+    <div class="empty persona-empty">
       <h3>{{ t("personality.empty_title") }}</h3>
       <p class="mb-0">{{ t("personality.empty_text") if allowed else t("personality.empty_text_no_access") }}</p>
     </div>
     {% endif %}
+    {% if items %}
     <div class="persona-grid">
       {% for item in items %}
       {% set row = item.row %}
-      <article class="card persona-card accent-{{ row.color or 'default' }}{% if not item.active %} is-off{% endif %}" id="personality-{{ row.id }}" aria-labelledby="personality-{{ row.id }}-title">
-        <div class="persona-head">
-          {{ avatar(row) }}
-          <div class="grow">
-            <h3 id="personality-{{ row.id }}-title">{{ row.name }}</h3>
-            {% if row.description %}<p class="persona-description">{{ row.description }}</p>{% endif %}
+      <article class="persona-card accent-{{ row.color or 'default' }}{% if not item.active %} is-off{% endif %}" id="personality-{{ row.id }}" aria-labelledby="personality-{{ row.id }}-title">
+        <div class="persona-card-content">
+          <div class="persona-head">
+            {{ avatar(row) }}
+            <div class="grow">
+              <h3 id="personality-{{ row.id }}-title">{{ row.name }}</h3>
+              {% if row.description %}<p class="persona-description">{{ row.description }}</p>{% endif %}
+            </div>
           </div>
+          {% if item.moderation.blocked or not item.active or item.is_default or item.share_url %}
+          <div class="persona-badges">
+            {% if item.moderation.blocked %}<span class="badge badge-danger">{{ t("personality.admin_disabled") }}</span>
+            {% elif not item.active %}<span class="badge">{{ t("personality.switched_off") }}</span>{% endif %}
+            {% if item.is_default %}<span class="badge badge-primary">{{ icon("check") }}{{ t("personality.default_badge") }}</span>{% endif %}
+            {% if item.share_url %}<span class="badge badge-info">{{ icon("share") }}{{ t("personality.shared_badge") }}</span>{% endif %}
+          </div>
+          {% endif %}
+          {% if item.moderation.blocked %}
+          <div class="alert alert-error">
+            {{ icon("alert") }}
+            <p>{% if item.moderation.until %}{{ t("personality.moderated_until", date=(item.moderation.until | datetime)) }}{% else %}{{ t("personality.moderated") }}{% endif %}
+            {% if item.moderation.reason %}<br>{{ t("personality.moderation_reason", reason=item.moderation.reason) }}{% endif %}</p>
+          </div>
+          {% endif %}
+          {{ traits(item) }}
+          <details class="persona-instructions">
+            <summary>{{ t("personality.show_instructions") }}</summary>
+            <pre class="instructions">{{ row.instructions }}</pre>
+          </details>
+          {% if item.share_url %}
+          <div class="share-row">
+            <label class="visually-hidden" for="share-{{ row.id }}">{{ t("personality.share_link_label", name=row.name) }}</label>
+            <input type="text" id="share-{{ row.id }}" value="{{ item.share_url }}" readonly data-select-all>
+            <button type="button" class="btn btn-sm" data-copy="{{ item.share_url }}">{{ icon("copy") }}{{ t("common.copy") }}</button>
+          </div>
+          {% endif %}
         </div>
-        <div class="persona-badges">
-          {% if item.moderation.blocked %}<span class="badge badge-danger">{{ t("personality.admin_disabled") }}</span>
-          {% elif item.active %}<span class="badge badge-success">{{ t("common.enabled") }}</span>
-          {% else %}<span class="badge">{{ t("personality.switched_off") }}</span>{% endif %}
-          {% if item.is_default %}<span class="badge badge-primary">{{ icon("check") }}{{ t("personality.default_badge") }}</span>{% endif %}
-          {% if item.share_url %}<span class="badge badge-info">{{ icon("share") }}{{ t("personality.shared_badge") }}</span>{% endif %}
-        </div>
-        {% if item.moderation.blocked %}
-        <div class="alert alert-error">
-          {{ icon("alert") }}
-          <p>{% if item.moderation.until %}{{ t("personality.moderated_until", date=(item.moderation.until | datetime)) }}{% else %}{{ t("personality.moderated") }}{% endif %}
-          {% if item.moderation.reason %}<br>{{ t("personality.moderation_reason", reason=item.moderation.reason) }}{% endif %}</p>
-        </div>
-        {% endif %}
-        {{ traits(item) }}
-        <details class="persona-instructions">
-          <summary>{{ t("personality.show_instructions") }}</summary>
-          <pre class="instructions">{{ row.instructions }}</pre>
-        </details>
-        {% if item.share_url %}
-        <div class="share-row">
-          <label class="visually-hidden" for="share-{{ row.id }}">{{ t("personality.share_link_label", name=row.name) }}</label>
-          <input type="text" id="share-{{ row.id }}" value="{{ item.share_url }}" readonly data-select-all>
-          <button type="button" class="btn btn-sm" data-copy="{{ item.share_url }}">{{ icon("copy") }}{{ t("common.copy") }}</button>
-        </div>
-        {% endif %}
         <div class="persona-footer">
           <div class="persona-actions">
             {% if allowed and item.active %}{{ try_form(row) }}{% endif %}
@@ -172,6 +175,7 @@
       </article>
       {% endfor %}
     </div>
+    {% endif %}
   </section>
 
   {% if featured %}
@@ -183,23 +187,26 @@
     <div class="persona-grid">
       {% for item in featured %}
       {% set row = item.row %}
-      <article class="card persona-card accent-{{ row.color or 'default' }}" id="featured-{{ row.id }}" aria-labelledby="featured-{{ row.id }}-title">
-        <div class="persona-head">
-          {{ avatar(row) }}
-          <div class="grow">
-            <h3 id="featured-{{ row.id }}-title">{{ row.name }}</h3>
-            {% if row.description %}<p class="persona-description">{{ row.description }}</p>{% endif %}
+      <article class="persona-card accent-{{ row.color or 'default' }}" id="featured-{{ row.id }}" aria-labelledby="featured-{{ row.id }}-title">
+        <div class="persona-card-content">
+          <div class="persona-head">
+            {{ avatar(row) }}
+            <div class="grow">
+              <h3 id="featured-{{ row.id }}-title">{{ row.name }}</h3>
+              {% if row.description %}<p class="persona-description">{{ row.description }}</p>{% endif %}
+            </div>
           </div>
+          {% if item.is_default %}
+          <div class="persona-badges">
+            <span class="badge badge-primary">{{ icon("check") }}{{ t("personality.default_badge") }}</span>
+          </div>
+          {% endif %}
+          {{ traits(item) }}
+          <details class="persona-instructions">
+            <summary>{{ t("personality.show_instructions") }}</summary>
+            <pre class="instructions">{{ row.instructions }}</pre>
+          </details>
         </div>
-        <div class="persona-badges">
-          <span class="badge badge-primary">{{ icon("sparkles") }}{{ t("personality.featured_badge") }}</span>
-          {% if item.is_default %}<span class="badge badge-primary">{{ icon("check") }}{{ t("personality.default_badge") }}</span>{% endif %}
-        </div>
-        {{ traits(item) }}
-        <details class="persona-instructions">
-          <summary>{{ t("personality.show_instructions") }}</summary>
-          <pre class="instructions">{{ row.instructions }}</pre>
-        </details>
         <div class="persona-footer">
           <div class="persona-actions">
             {{ try_form(row) }}
@@ -227,6 +234,7 @@
       <a class="template-card accent-{{ item.color }}" href="{{ url_for('personalities.new', template=item.key) }}">
         {{ avatar(item, "sm") }}
         <span class="grow"><strong>{{ item.name }}</strong><span>{{ item.description }}</span></span>
+        {{ icon("chevron-right") }}
       </a>
       {% endfor %}
     </div>

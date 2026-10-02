@@ -227,7 +227,7 @@ def test_an_automatically_approved_amount_never_holds_an_account_below_its_tier(
         assert limits.effective(user, "api").window.tokens == 60_000
         assert limits.base_limits(user["id"], "api")["window_tokens"] == 60_000
     page = admin.get(f"/admin/users/{user['id']}/limits").get_data(as_text=True)
-    assert "Approved automatically, so never below the tier's amount: slow tokens per 5 hours, tokens per 5 hours." \
+    assert "Approved automatically, so never below the tier's amount: tokens per 5 hours." \
         in page
     # Saving the account's form unchanged keeps the amount automatic ...
     form = {"pool": "api", "window_tokens": "40k", "window_slow_tokens": "", "weekly_tokens": ""}
@@ -243,7 +243,7 @@ def test_an_automatically_approved_amount_never_holds_an_account_below_its_tier(
 def test_auto_moves_to_a_model_outside_a_used_up_service(app, make_user, fake_ollama):
     """With the service's tokens used up, ``auto`` refused although a model that does not count toward them
     could answer (chat refused before even choosing a model)."""
-    from bananachat.db import catalog, credits
+    from bananachat.db import catalog, credits, settings
     from tests.app.test_chat import new_chat, send, wait_idle
     from tests.app.test_limits_tokens import _signed_in
 
@@ -251,6 +251,7 @@ def test_auto_moves_to_a_model_outside_a_used_up_service(app, make_user, fake_ol
     user = make_user("otis")
     raw = _api_key(app, user["id"])
     with app.app_context():
+        settings.update(chat_local_token_consumption=1)
         catalog.update(models["llama3.2:3b"]["id"], sort_order=0)
         catalog.update(models["qwen3:4b"]["id"], sort_order=1)
         _model_policy(models["qwen3:4b"], counts_toward_pool=False)

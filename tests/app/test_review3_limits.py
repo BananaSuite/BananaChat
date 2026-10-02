@@ -39,22 +39,10 @@ def test_quotas_raised_by_automatic_approval_in_1x_survive_the_upgrade(tmp_path,
     app = make_app(setup=False, INSTANCE_DIR=str(instance))
     with app.app_context():
         override = limits.get_override("bob00001", "api")
-        assert override is not None and (override.window_tokens, override.window_slow_tokens) == (60_000, 20_000)
-        assert credits.get_quota("bob00001") == (60_000, 20_000)
+        assert override is not None and override.window_tokens == 80_000
+        assert credits.get_quota("bob00001") == (80_000, 0)
         assert limits.get_override("carol001", "api") is None
-        assert limits.get_override("4lttj861", "api").window_tokens == 40_000
-
-
-# ----- account page layout --------------------------------------------------------------
-
-def test_the_account_page_column_can_shrink_below_its_widest_table_on_phones():
-    """A bare ``1fr`` grid column grows to the quota history table, so the page scrolled sideways at 390 px."""
-    import re
-    from pathlib import Path
-
-    css = (Path(__file__).resolve().parents[2] / "bananachat/static/css/account.css").read_text()
-    columns = re.findall(r"\.account-layout\s*\{[^}]*grid-template-columns:\s*([^;]+);", css)
-    assert columns and all(re.match(r"^(200px )?minmax\(0, 1fr\)$", value.strip()) for value in columns), columns
+        assert limits.get_override("4lttj861", "api").window_tokens == 50_000
 
 
 # ----- quota requests ------------------------------------------------------------------------
@@ -95,7 +83,7 @@ def test_approving_a_request_never_switches_on_a_limit_the_service_no_longer_has
         store.set_policy("chat", policy, None)
         with pytest.raises(ValueError):
             credits.resolve_request(request_id, admin_id, True)
-    assert "now 100k tokens + 0 tokens slow (not limited)" in admin.get("/admin/quotas/requests").get_data(as_text=True)
+    assert "now 100k tokens per 5 hours (not limited)" in admin.get("/admin/quotas/requests").get_data(as_text=True)
     with app.app_context():
         assert store.get_override(user["id"], "chat") is None
         assert not limits.effective(user, "chat").window.limited

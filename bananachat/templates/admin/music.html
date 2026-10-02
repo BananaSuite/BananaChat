@@ -21,26 +21,26 @@
   </div>
 </header>
 
-<div class="grid grid-4 mb-3">
-  <div class="card stat"><span class="stat-value">{% if music.music_enabled %}On{% else %}Off{% endif %}</span><span class="stat-label">Program{% if music.music_enabled and not music.music_visible %} (hidden){% endif %}</span></div>
-  <div class="card stat"><span class="stat-value">{{ opted_count | number }}</span><span class="stat-label">Participants</span></div>
-  <div class="card stat"><span class="stat-value">{{ forced_count | number }}</span><span class="stat-label">Enrolled by an administrator</span></div>
-  <div class="card stat"><span class="stat-value">{{ tracks | length }}</span><span class="stat-label">Tracks</span></div>
+<div class="grid grid-4 admin-stats mb-3">
+  <div class="stat"><span class="stat-value">{% if music.music_enabled %}On{% else %}Off{% endif %}</span><span class="stat-label">Program{% if music.music_enabled and not music.music_visible %} (hidden){% endif %}</span></div>
+  <div class="stat"><span class="stat-value">{{ opted_count | number }}</span><span class="stat-label">Participants</span></div>
+  <div class="stat"><span class="stat-value">{{ forced_count | number }}</span><span class="stat-label">Enrolled by an administrator</span></div>
+  <div class="stat"><span class="stat-value">{{ tracks | length }}</span><span class="stat-label">Tracks</span></div>
 </div>
 
-<div class="stack-lg">
-<section class="card" id="settings" aria-labelledby="settings-title">
+<div class="section-stack">
+<section class="settings-section" id="settings" aria-labelledby="settings-title">
   <h2 id="settings-title">Settings</h2>
   <form method="post" action="{{ url_for('admin.music_settings') }}" class="stack" data-busy>
     {{ csrf() }}
-    <fieldset class="stack-sm">
+    <fieldset class="admin-fieldset stack-sm">
       <legend>Availability</legend>
       <label class="check"><input type="checkbox" name="music_enabled" value="1"{% if music.music_enabled %} checked{% endif %}><span>Program enabled<small>When off, nobody receives the bonus, the player disappears and audio is no longer served.</small></span></label>
       <label class="check"><input type="checkbox" name="music_visible" value="1"{% if music.music_visible %} checked{% endif %}><span>Visible to everyone<small>When hidden, only current participants see the Free quota page (so they can still leave); they keep the bonus.</small></span></label>
       <label class="check"><input type="checkbox" name="music_opt_in_allowed" value="1"{% if music.music_opt_in_allowed %} checked{% endif %}><span>People may join</span></label>
       <label class="check"><input type="checkbox" name="music_opt_out_allowed" value="1"{% if music.music_opt_out_allowed %} checked{% endif %}><span>People may leave<small>People you enrol yourself can never leave on their own.</small></span></label>
     </fieldset>
-    <fieldset class="stack-sm">
+    <fieldset class="admin-fieldset stack-sm">
       <legend>Bonus</legend>
       <div class="segmented" role="radiogroup" aria-label="Bonus type">
         <label><input type="radio" name="music_bonus_mode" value="multiplier"{% if (music.music_bonus_mode or "multiplier") == "multiplier" %} checked{% endif %}><span>Multiply the token limits</span></label>
@@ -50,16 +50,17 @@
         <div class="field">
           <label for="music_credit_multiplier">Multiplier</label>
           <input type="number" id="music_credit_multiplier" name="music_credit_multiplier" min="{{ multiplier_range[0] }}" max="{{ multiplier_range[1] }}" step="0.1" required value="{{ music.music_credit_multiplier if music.music_credit_multiplier is not none else 2 }}" aria-describedby="multiplier-hint">
-          <span class="hint" id="multiplier-hint">{{ multiplier_range[0] | int }}–{{ multiplier_range[1] | int }}. Used by “Multiply”: regular and slow tokens are both multiplied.</span>
+          <span class="hint" id="multiplier-hint">{{ multiplier_range[0] | int }}–{{ multiplier_range[1] | int }}. Used by “Multiply”: 5-hour and weekly token limits are multiplied.</span>
         </div>
         <div class="field">
           <label for="music_bonus_fixed_tokens">Extra tokens per 5 hours</label>
-          <input type="text" id="music_bonus_fixed_tokens" name="music_bonus_fixed_tokens" inputmode="decimal" autocomplete="off" maxlength="20" required value="{{ fixed[0] | token_input }}">
+          <input type="text" id="music_bonus_fixed_tokens" name="music_bonus_fixed_tokens" inputmode="decimal" autocomplete="off" maxlength="20" required value="{{ fixed[0] | token_input }}" aria-describedby="fixed-hint">
+          <span class="hint" id="fixed-hint">Used by “Add”: added to each limited 5-hour window. E.g. 30k. Zero is allowed.</span>
         </div>
         <div class="field">
-          <label for="music_bonus_fixed_slow_tokens">Extra slow tokens per 5 hours</label>
-          <input type="text" id="music_bonus_fixed_slow_tokens" name="music_bonus_fixed_slow_tokens" inputmode="decimal" autocomplete="off" maxlength="20" required value="{{ fixed[1] | token_input }}" aria-describedby="fixed-hint">
-          <span class="hint" id="fixed-hint">Used by “Add”: added to every 5-hour window (seven times as much to a weekly limit). E.g. 30k. Zero is allowed.</span>
+          <label for="music_bonus_fixed_weekly_tokens">Extra tokens per week</label>
+          <input type="text" id="music_bonus_fixed_weekly_tokens" name="music_bonus_fixed_weekly_tokens" inputmode="decimal" autocomplete="off" maxlength="20" required value="{{ weekly_fixed | token_input }}" aria-describedby="fixed-weekly-hint">
+          <span class="hint" id="fixed-weekly-hint">Used by “Add” when a weekly token limit applies. Set this separately from the 5-hour bonus. Zero is allowed.</span>
         </div>
       </div>
     </fieldset>
@@ -72,7 +73,7 @@
     </div>
     <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
   </form>
-  <div class="card-footer row">
+  <div class="section-footer row">
     {% if music.music_visible %}
     <form method="post" action="{{ url_for('admin.music_hide') }}" data-confirm="Hide the program? Participants keep their bonus and can still leave; nobody else can join.">
       {{ csrf() }}<button type="submit" class="btn">{{ icon("eye-off") }}Hide the program</button>
@@ -84,7 +85,7 @@
   </div>
 </section>
 
-<section class="card" id="tracks" aria-labelledby="tracks-title">
+<section class="settings-section" id="tracks" aria-labelledby="tracks-title">
   <h2 id="tracks-title">Tracks</h2>
   <form method="post" action="{{ url_for('admin.music_upload') }}" enctype="multipart/form-data" class="stack mb-3" id="track-upload" data-busy data-max-bytes="{{ max_track_mb * 1024 * 1024 }}">
     {{ csrf() }}
@@ -139,8 +140,8 @@
   {% endif %}
 </section>
 
-<section class="card" id="participants" aria-labelledby="participants-title">
-  <div class="card-header">
+<section class="settings-section" id="participants" aria-labelledby="participants-title">
+  <div class="section-header">
     <h2 id="participants-title">Participants</h2>
     <div class="row">
       <form method="post" action="{{ url_for('admin.music_opt_in_all') }}" data-confirm="Enrol every regular account? They can leave again while leaving is allowed.">

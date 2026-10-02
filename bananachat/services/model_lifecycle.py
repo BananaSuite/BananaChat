@@ -37,6 +37,7 @@ in ``services.limits`` (or ``db.limits``) when that function exists.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import importlib
 import inspect
 import json
@@ -46,6 +47,7 @@ import time
 from datetime import timedelta
 
 from flask import current_app
+from filelock import FileLock, Timeout
 
 from bananachat import db
 from bananachat.db import catalog, users
@@ -106,7 +108,17 @@ def _loads(value, default):
 
 
 def _name(model) -> str:
-    return model["backend_model_name"] or model["ollama_name"]
+    return model["ollama_name"] if model["backend"] == "external" else model["backend_model_name"] or model["ollama_name"]
+
+
+def operation_lock(name: str, config=None, *, backend: str = "ollama") -> FileLock:
+    """Serialize downloads, cancellation cleanup and deletion of the same model across workers."""
+    if backend == "ollama":
+        name = pulls_db.canonical_ollama_name(name)
+    key = hashlib.sha256(f"{backend}:{name}".encode()).hexdigest()
+    directory = _config(config).instance_dir / ".model-operations"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return FileLock(str(directory / f"{key}.lock"), timeout=0, mode=0o600)
 
 
 def _record(model, event: str, reason: str, actor=None) -> None:
@@ -246,10 +258,14 @@ def preset_for(model) -> str:
         backend = model["backend"]
     except (IndexError, KeyError, TypeError):
         backend = None
+    if backend == "external":
+        from bananachat.services import external_providers
+
+        return external_providers.preset_for_name(model["backend_model_name"] or model["ollama_name"])
     if backend == "claude":
         from bananachat.services import claude_pool
 
-        return claude_pool.strict_policy(model["ollama_name"])["preset"]
+        return claude_pool.strict_policy(model["ollama_name"], family=model["family"] or None)["preset"]
     billions = parameters_billions(model["parameter_size"])
     if billions is None:
         return "standard"
@@ -390,7 +406,12 @@ def sync(config=None, *, source: str = "background") -> dict:
     site_settings.state_delete(EMPTY_LISTINGS_KEY)
     rules = patterns()
     with db.transaction():
-        summary = catalog.sync_ollama([_listing_item(tag) for tag in tags], missing_syncs=current["missing_syncs"],
+        blocked = pulls_db.blocked_discovery_names()
+        known = {pulls_db.canonical_ollama_name(row["ollama_name"])
+                 for row in catalog.list_models(backend="ollama")}
+        visible_tags = [tag for tag in tags if pulls_db.canonical_ollama_name(tag["name"]) not in blocked
+                        or pulls_db.canonical_ollama_name(tag["name"]) in known]
+        summary = catalog.sync_ollama([_listing_item(tag) for tag in visible_tags], missing_syncs=current["missing_syncs"],
                                       missing_minutes=current["missing_minutes"],
                                       is_ignored=lambda name: matches(name, rules))
         for model_id, _inserted in summary["inserted"]:
@@ -487,6 +508,8 @@ def _auto_candidate(row) -> bool:
         return False
     if row["enrolled_at"] or not row["backend_available"] or not row["details_at"] or row["details_error"]:
         return False
+    if any(row[key] for key in ("missing_at", "failing_at", "deprecated_at", "retired_at", "delete_requested_at")):
+        return False
     if row["embedding_only"] or (row["backend_digest"] and row["details_digest"] != row["backend_digest"]):
         return False
     capabilities = _loads(row["capabilities"], [])
@@ -502,19 +525,26 @@ def enroll_pending(current: dict | None = None) -> list[str]:
     for row in catalog.with_enrollment("new"):
         if not _auto_candidate(row):
             continue
-        preset = preset_for(row)
-        capabilities = _loads(row["capabilities"], [])
         with db.transaction():
             fresh = catalog.get(row["id"])
             if fresh is None or fresh["enrollment"] != "new" or not _auto_candidate(fresh):
                 continue  # another process decided first
+            preset = preset_for(fresh)
+            capabilities = _loads(fresh["capabilities"], [])
+            try:
+                with db.transaction():
+                    if not apply_limit_preset(fresh["id"], preset):
+                        raise ValueError("The limit preset could not be applied.")
+            except ValueError:
+                catalog.set_lifecycle(fresh["id"], limit_preset=preset,
+                                      state_reason="Waiting for review: its limit preset could not be applied.")
+                continue
             reason = (f"Enabled automatically with the {preset} limit preset "
-                      f"({row['parameter_size'] or 'unknown size'}); review it.")
+                      f"({fresh['parameter_size'] or 'unknown size'}); review it.")
             catalog.set_lifecycle(row["id"], enrollment="auto", enrolled_at=db.now(), is_rolled_out=1,
                                   limit_preset=preset, supports_vision=int("vision" in capabilities),
                                   is_reasoning=int("thinking" in capabilities), state_reason=reason)
-            _record(row, "auto_enabled", reason)
-        apply_limit_preset(row["id"], preset)
+            _record(fresh, "auto_enabled", reason)
         enabled.append(row["ollama_name"])
     return enabled
 
@@ -522,15 +552,31 @@ def enroll_pending(current: dict | None = None) -> list[str]:
 def enable(model, actor=None, *, preset: str | None = None) -> None:
     """An administrator enables a model after reviewing it: published and reviewed. Raises ValueError for an
     ignored model (restore it first)."""
-    if model["enrollment"] == "ignored":
-        raise ValueError(f"{model['ollama_name']} is on the ignore list; restore it first.")
-    preset = preset or model["limit_preset"] or preset_for(model)
     with db.transaction():
+        fresh = catalog.get(model["id"])
+        if fresh is None:
+            raise ValueError("The model no longer exists; refresh the catalog.")
+        if fresh["enrollment"] == "ignored":
+            raise ValueError(f"{fresh['ollama_name']} is on the ignore list; restore it first.")
+        if fresh["retired_at"] or fresh["delete_requested_at"]:
+            raise ValueError("This model is retired or being deleted; restore it before publishing it.")
+        current_preset = fresh["limit_preset"] or preset_for(fresh)
+        preset = preset or current_preset
+        from bananachat.db import limits as limits_db
+
+        preserve_policy = fresh["backend"] in ("claude", "external") and \
+            limits_db.has_model_policy(fresh["id"]) and preset == current_preset
+        if preserve_policy:
+            # Enrollment installs hosted-model limits before publication. A
+            # review/re-publication must not reset those limits or custom edits.
+            catalog.set_lifecycle(fresh["id"], limit_preset=preset)
+        elif not apply_limit_preset(fresh["id"], preset, actor):
+            raise ValueError("The limit preset could not be applied. The model stays unpublished; try again or "
+                             "check its limit settings.")
         reason = f"Enabled by an administrator with the {preset} limit preset."
         catalog.set_lifecycle(model["id"], enrollment="reviewed", enrolled_at=db.now(), is_rolled_out=1,
                               state_reason=reason)
-        _record(model, "enabled", reason, actor)
-    apply_limit_preset(model["id"], preset, actor)
+        _record(fresh, "enabled", reason, actor)
 
 
 def mark_reviewed(model, actor=None) -> None:
@@ -783,11 +829,14 @@ def retire(model, actor=None, reason: str = "Retired by an administrator.") -> N
 
 def retire_due() -> int:
     count = 0
-    for row in catalog.retirement_due(db.now()):
-        fresh = catalog.get(row["id"])
-        if fresh is not None and not fresh["retired_at"]:
-            retire(fresh, None, "Its retirement date passed.")
-            count += 1
+    now = db.now()
+    for row in catalog.retirement_due(now):
+        with db.transaction():
+            fresh = catalog.get(row["id"])
+            if (fresh is not None and fresh["deprecated_at"] and not fresh["retired_at"] and
+                    fresh["retire_at"] and fresh["retire_at"] <= now):
+                retire(fresh, None, "Its retirement date passed.")
+                count += 1
     return count
 
 
@@ -842,23 +891,37 @@ def delete_from_server(model, actor=None, *, when_idle: bool = False, config=Non
     if model["backend"] != "ollama":
         raise ValueError("Only Ollama models can be deleted from here; remove checkpoints on the ComfyUI server.")
     name = _name(model)
-    if pulls_db.active_for(name, "ollama"):
-        raise ValueError(f"A download of {name} is queued or running; cancel it first.")
-    already = model["delete_requested_at"]
     who = actor["username"] if actor else "the system"
-    catalog.set_lifecycle(model["id"], delete_requested_at=already or db.now(),
-                          state_reason=f"Being deleted from the model server ({who}).")
-    count = in_use(model)
-    if count:
+    with db.transaction():
+        model = catalog.get(model["id"])
+        if model is None:
+            raise ValueError("The model no longer exists; refresh the catalog.")
+        if pulls_db.active_for(name, "ollama"):
+            raise ValueError(f"A download of {name} is queued or running; cancel it first.")
+        already = model["delete_requested_at"]
+        catalog.set_lifecycle(model["id"], delete_requested_at=already or db.now(),
+                              state_reason=f"Being deleted from the model server ({who}).")
+        count = in_use(model)
+        if count:
+            if when_idle:
+                _record(model, "delete_scheduled", f"Deleted when its {count} running request"
+                                                   f"{'s finish' if count != 1 else ' finishes'}.", actor)
+                return "scheduled"
+            raise ModelInUse(count)  # the transaction also restores the previous visibility
+    try:
+        with operation_lock(name, config):
+            fresh = catalog.get(model["id"])
+            if fresh is None or not fresh["delete_requested_at"]:
+                raise ValueError("The deletion was cancelled; refresh the catalog.")
+            return _delete_now(fresh, actor, config)
+    except Timeout:
         if when_idle:
-            _record(model, "delete_scheduled", f"Deleted when its {count} running request"
-                                               f"{'s finish' if count != 1 else ' finishes'}.", actor)
+            _record(model, "delete_scheduled", "Deleted after its current model operation finishes.", actor)
             return "scheduled"
         if not already:
             catalog.set_lifecycle(model["id"], delete_requested_at=None, state_reason=model["state_reason"])
-        raise ModelInUse(count)
-    try:
-        return _delete_now(catalog.get(model["id"]), actor, config)
+        raise ValueError("An operation on this model is still finishing. Try again shortly or delete it when idle.") \
+            from None
     except (UpstreamError, OSError):
         if not already:
             catalog.set_lifecycle(model["id"], delete_requested_at=None, state_reason=model["state_reason"])
@@ -866,19 +929,23 @@ def delete_from_server(model, actor=None, *, when_idle: bool = False, config=Non
 
 
 def cancel_delete(model, actor=None) -> None:
-    with db.transaction():
-        catalog.set_lifecycle(model["id"], delete_requested_at=None, state_reason="Deletion cancelled.")
-        _record(model, "delete_cancelled", "Deletion cancelled.", actor)
+    try:
+        with operation_lock(_name(model)):
+            with db.transaction():
+                catalog.set_lifecycle(model["id"], delete_requested_at=None, state_reason="Deletion cancelled.")
+                _record(model, "delete_cancelled", "Deletion cancelled.", actor)
+    except Timeout:
+        raise ValueError("Deletion has already started on the model server; it can no longer be cancelled.") from None
 
 
 def _delete_now(model, actor, config) -> str:
     from bananachat.services import model_recovery
 
     name = _name(model)
-    # Deleted on purpose: not a missing model to offer for download again.
-    # Recorded first, so the background check never sees it gone but not ignored.
-    model_recovery.ignore([name], config)
     existed = ollama.delete(name, config)
+    # The pending-deletion marker excludes recovery checks while the backend
+    # call runs. A failed call must not suppress future recovery of the model.
+    model_recovery.ignore([name], config)
     replacement = catalog.get(model["replacement_id"]) if model["replacement_id"] else None
     reason = (f"Deleted from the model server by {actor['username']}." if actor else
               "Deleted from the model server after its requests finished.")
@@ -899,12 +966,15 @@ def process_pending_deletes(config=None) -> int:
     for row in catalog.pending_deletes():
         if in_use(row) or pulls_db.active_for(_name(row), "ollama"):
             continue  # a download queued before the deletion was asked for: it waits (or is cancelled) first
-        fresh = catalog.get(row["id"])
-        if fresh is None or not fresh["delete_requested_at"]:
-            continue  # "Keep it" was chosen meanwhile
         try:
-            _delete_now(fresh, None, config)
-            done += 1
+            with operation_lock(_name(row), config):
+                fresh = catalog.get(row["id"])
+                if fresh is None or not fresh["delete_requested_at"]:
+                    continue  # "Keep it" was chosen meanwhile
+                _delete_now(fresh, None, config)
+                done += 1
+        except Timeout:
+            continue
         except (UpstreamError, OSError) as error:
             catalog.set_lifecycle(row["id"], state_reason=f"Deleting from the model server failed: {error}; "
                                                           "trying again shortly.")
@@ -915,17 +985,26 @@ def process_pending_deletes(config=None) -> int:
 def purge_missing(current: dict | None = None) -> int:
     """Remove models missing for longer than the retention period (history keeps their names)."""
     current = current or policy()
+    status = sync_status()
+    if _outage(_config()) or (status is not None and not status.get("ok")):
+        return 0  # a failed listing never establishes that a model is still missing
     cutoff = db.now(-timedelta(days=current["retention_days"]))
     removed = 0
     for row in catalog.missing_before(cutoff):
-        with db.transaction():
-            fresh = catalog.get(row["id"])
-            if fresh is None or not fresh["missing_at"] or fresh["backend_available"] or fresh["missing_at"] >= cutoff:
-                continue
-            _record(fresh, "removed", f"Missing for more than {current['retention_days']} days; removed from the "
-                                      "catalog. Chats keep its name.")
-            catalog.delete(fresh["id"])
-            removed += 1
+        try:
+            with operation_lock(_name(row), backend=row["backend"]):
+                with db.transaction():
+                    fresh = catalog.get(row["id"])
+                    if (fresh is None or not fresh["missing_at"] or fresh["backend_available"] or
+                            fresh["missing_at"] >= cutoff or fresh["delete_requested_at"] or in_use(fresh) or
+                            pulls_db.active_for(_name(fresh), fresh["backend"])):
+                        continue
+                    _record(fresh, "removed", f"Missing for more than {current['retention_days']} days; removed from the "
+                                              "catalog. Chats keep its name.")
+                    catalog.delete(fresh["id"])
+                    removed += 1
+        except Timeout:
+            continue
     return removed
 
 

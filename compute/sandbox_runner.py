@@ -108,6 +108,7 @@ SEND_GRACE = 15.0
 SEND_IDLE_TIMEOUT = 10.0
 SEND_CHUNK = 256 * 1024
 ENGINE_TIMEOUT = 60.0
+CREATE_SHUTDOWN_TIMEOUT = ENGINE_TIMEOUT + 60.0  # bounded wait for creation/verification and its cleanup
 FILE_OP_TIMEOUT = 60
 ARCHIVE_TIMEOUT = 300
 KILL_TIMEOUT = 10.0
@@ -1009,9 +1010,11 @@ class SandboxManager:
         self.wall = wall
         self.rootless = None
         self._lock = threading.Lock()
+        self._pending_changed = threading.Condition(self._lock)
+        self._cleanup_lock = threading.RLock()  # cleanup passes cannot race an in-flight engine removal
         self._sandboxes: dict[str, Sandbox] = {}
         self._pending: set[str] = set()
-        self._doomed: set[str] = set()  # container names whose removal failed; retried by the reaper
+        self._doomed: set[str] = set()  # retiring containers keep their capacity until removal succeeds
         self._removed: OrderedDict[str, None] = OrderedDict()  # recently removed ids (answered with 410)
         self._slots = threading.BoundedSemaphore(config.max_execs)
         self._stop = threading.Event()
@@ -1095,11 +1098,21 @@ class SandboxManager:
                 LOG.exception("The sandbox reaper failed")
 
     def shutdown(self) -> None:
-        self._stop.set()
-        with self._lock:
-            boxes = list(self._sandboxes.values())
-        for box in boxes:
-            self.remove(box, "runner stopping")
+        with self._pending_changed:
+            self._stop.set()
+            if not self._pending_changed.wait_for(lambda: not self._pending, timeout=CREATE_SHUTDOWN_TIMEOUT):
+                LOG.error("Timed out waiting for %s pending sandbox creations during shutdown", len(self._pending))
+        # Wait for a reaper/delete already using the engine, then include failed earlier removals.
+        # Creation waits above release the state lock and never hold the cleanup lock.
+        with self._cleanup_lock:
+            with self._lock:
+                boxes = list(self._sandboxes.values())
+            for box in boxes:
+                self.remove(box, "runner stopping")
+            with self._lock:
+                doomed = list(self._doomed)
+            for name in doomed:
+                self._remove_container(name)
         if self._reaper is not None:
             self._reaper.join(5)
 
@@ -1120,16 +1133,17 @@ class SandboxManager:
         return containers
 
     def _remove_container(self, name: str) -> bool:
-        result = self.engine.run(["rm", "-f", "-v", name], timeout=30)
-        text = result.stderr.decode("utf-8", "replace").lower()
-        if result.returncode == 0 or "no such container" in text or "no container with name" in text:
+        with self._cleanup_lock:
             with self._lock:
-                self._doomed.discard(name)
-            return True
-        LOG.error("Removing sandbox container %s failed; will retry", name)
-        with self._lock:
-            self._doomed.add(name)
-        return False
+                self._doomed.add(name)
+            result = self.engine.run(["rm", "-f", "-v", name], timeout=30)
+            text = result.stderr.decode("utf-8", "replace").lower()
+            if result.returncode == 0 or "no such container" in text or "no container with name" in text:
+                with self._lock:
+                    self._doomed.discard(name)
+                return True
+            LOG.error("Removing sandbox container %s failed; will retry", name)
+            return False
 
     def _running(self, box: Sandbox) -> bool:
         result = self.engine.run(["inspect", "--format", "{{.State.Running}}", box.name], timeout=15)
@@ -1149,42 +1163,50 @@ class SandboxManager:
 
     def reconcile(self) -> None:
         """Remove labelled containers this runner does not know, and forget dead sandboxes."""
-        containers = self._list_containers()
-        if containers is None:
-            LOG.error("Cannot list sandbox containers")
-            return
-        with self._lock:
-            known = {box.name: box for box in self._sandboxes.values()}
-            pending = set(self._pending)
-        for name, state in containers.items():
-            if name in pending:
-                continue
-            box = known.get(name)
-            if box is None:
-                LOG.warning("Removing unknown sandbox container %s", name)
-                self._remove_container(name)
-            elif state != "running":
-                self.remove(box, f"container {state or 'stopped'}")
-        for name, box in known.items():
-            if name not in containers and name not in pending:
-                self.remove(box, "container missing")
+        with self._cleanup_lock:
+            # The engine listing is a snapshot. Sandboxes registered while it runs must not
+            # be mistaken for missing containers, or for leftovers from a previous runner.
+            with self._lock:
+                known = {box.name: box for box in self._sandboxes.values()}
+            containers = self._list_containers()
+            if containers is None:
+                LOG.error("Cannot list sandbox containers")
+                return
+            with self._lock:
+                registered = {box.name for box in self._sandboxes.values()}
+                pending = set(self._pending)
+            for name, state in containers.items():
+                if name in pending:
+                    continue
+                box = known.get(name)
+                if box is None:
+                    if name in registered:
+                        continue
+                    LOG.warning("Removing unknown sandbox container %s", name)
+                    self._remove_container(name)
+                elif state != "running":
+                    self.remove(box, f"container {state or 'stopped'}")
+            for name, box in known.items():
+                if name not in containers and name not in pending:
+                    self.remove(box, "container missing")
 
     def reap(self) -> list:
         """Remove idle and expired sandboxes; returns the removed ids."""
-        now = self.clock()
-        removed = []
-        with self._lock:
-            boxes = list(self._sandboxes.values())
-            doomed = list(self._doomed)
-        for box in boxes:
-            idle = not box.active and now - box.last_used_mono > self.config.idle_ttl
-            if now - box.created_mono > self.config.max_age or idle:
-                self.remove(box, "expired" if now - box.created_mono > self.config.max_age else "idle")
-                removed.append(box.id)
-        for name in doomed:
-            self._remove_container(name)
-        self.reconcile()
-        return removed
+        with self._cleanup_lock:
+            now = self.clock()
+            removed = []
+            with self._lock:
+                boxes = list(self._sandboxes.values())
+                doomed = list(self._doomed)
+            for box in boxes:
+                idle = not box.active and now - box.last_used_mono > self.config.idle_ttl
+                if now - box.created_mono > self.config.max_age or idle:
+                    self.remove(box, "expired" if now - box.created_mono > self.config.max_age else "idle")
+                    removed.append(box.id)
+            for name in doomed:
+                self._remove_container(name)
+            self.reconcile()
+            return removed
 
     def expires_at(self, box: Sandbox) -> float:
         idle_deadline = box.last_used_at + self.config.idle_ttl
@@ -1295,7 +1317,9 @@ class SandboxManager:
         sandbox_id = secrets.token_hex(16)
         name = NAME_PREFIX + sandbox_id
         with self._lock:
-            if len(self._sandboxes) + len(self._pending) + len(self._doomed) >= self.config.max_sandboxes:
+            if self._stop.is_set():
+                raise ApiError(503, "busy", "The sandbox runner is stopping.", {"Retry-After": "5"})
+            if len(self._sandboxes) + len(self._pending | self._doomed) >= self.config.max_sandboxes:
                 raise ApiError(429, "capacity", "All sandboxes are in use. Retry later.", {"Retry-After": "30"})
             self._pending.add(name)
         try:
@@ -1310,6 +1334,8 @@ class SandboxManager:
                 now_mono, now = self.clock(), self.wall()
                 box = Sandbox(sandbox_id, name, session, image, limits, now, now_mono, now_mono, now)
                 try:
+                    if self._stop.is_set():
+                        raise ApiError(503, "busy", "The sandbox runner is stopping.", {"Retry-After": "5"})
                     self._verify(box)
                     keeper = self.engine.run(self._exec_args(box, ["sh", "-c", FIND_KEEPER]), timeout=15)
                     value = keeper.stdout.decode("ascii", "replace").strip()
@@ -1320,11 +1346,17 @@ class SandboxManager:
                     self._remove_container(name)
                     raise
             with self._lock:  # registered before it stops being pending, so the reaper never sees a gap
-                self._sandboxes[sandbox_id] = box
-                self._pending.discard(name)
+                stopping = self._stop.is_set()
+                if not stopping:
+                    self._sandboxes[sandbox_id] = box
+                    self._pending.discard(name)
+            if stopping:
+                self._remove_container(name)
+                raise ApiError(503, "busy", "The sandbox runner is stopping.", {"Retry-After": "5"})
         finally:
-            with self._lock:
+            with self._pending_changed:
                 self._pending.discard(name)
+                self._pending_changed.notify_all()
         LOG.info("Created sandbox %s for session %s (%s)", sandbox_id, session, image)
         return box
 
@@ -1344,16 +1376,20 @@ class SandboxManager:
         return box
 
     def remove(self, box: Sandbox, reason: str) -> None:
-        with self._lock:
-            if self._sandboxes.get(box.id) is box:
-                del self._sandboxes[box.id]
-            box.gone = True
-            self._removed[box.id] = None
-            self._removed.move_to_end(box.id)
-            while len(self._removed) > REMEMBER_REMOVED:
-                self._removed.popitem(last=False)
-        self._remove_container(box.name)
-        LOG.info("Removed sandbox %s (%s)", box.id, reason)
+        with self._cleanup_lock:
+            with self._lock:
+                if box.gone and box.name not in self._doomed:
+                    return
+                self._doomed.add(box.name)
+                if self._sandboxes.get(box.id) is box:
+                    del self._sandboxes[box.id]
+                box.gone = True
+                self._removed[box.id] = None
+                self._removed.move_to_end(box.id)
+                while len(self._removed) > REMEMBER_REMOVED:
+                    self._removed.popitem(last=False)
+            self._remove_container(box.name)
+            LOG.info("Removed sandbox %s (%s)", box.id, reason)
 
     def delete(self, sandbox_id: str) -> None:
         with self._lock:

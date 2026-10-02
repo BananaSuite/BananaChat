@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from flask import current_app
 
 from bananachat.db import catalog, credits, tokens, users
+from bananachat.i18n import translate
 from bananachat.services import api_usage, inference, limits, model_lifecycle, queue
 from bananachat.services.access import AccessContext
 from bananachat.services.upstream import MAX_CONTEXT_IMAGE_BYTES, Cancelled, CancelToken
@@ -45,7 +46,8 @@ _DATA_URL = re.compile(r"^data:(image/(?:png|jpeg|webp));base64,(.*)$", re.IGNOR
 _URL = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
 _ADDRESS = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b|\[[0-9a-f:]+\](?::\d+)?", re.IGNORECASE)
 # OpenAI's reasoning_effort values (and "max") to effort levels.
-EFFORTS = {"none": "off", "minimal": "low", "low": "low", "medium": "medium", "high": "high", "max": "max"}
+EFFORTS = {"none": "off", "minimal": "low", "low": "low", "medium": "medium", "high": "high",
+           "extra": "extra", "xhigh": "extra", "max": "max"}
 _UNREACHABLE = ("could not be reached", "did not answer in time", "stopped responding", "connection to the backend")
 
 
@@ -284,8 +286,9 @@ def parse_chat_request(body, config=None) -> ChatParams:
 
     effort = body.get("reasoning_effort")
     if effort is not None:
-        if effort not in EFFORTS:
-            raise _bad("'reasoning_effort' must be none, minimal, low, medium, high or max.", "reasoning_effort")
+        if not isinstance(effort, str) or effort not in EFFORTS:
+            raise _bad("'reasoning_effort' must be none, minimal, low, medium, high, extra, xhigh or max.",
+                       "reasoning_effort")
         effort = EFFORTS[effort]
 
     return ChatParams(model=model.strip(), messages=messages, stream=stream, include_usage=include_usage,
@@ -304,6 +307,15 @@ def _queue_full(error: Exception) -> CompletionError:
 def refused(refusal: limits.Refusal, lang: str = "en") -> CompletionError:
     """A limit refusal (``services.limits.admit``) as an API error (English unless *lang* says otherwise)."""
     return CompletionError(refusal.message(lang), refusal.status, refusal.code, retry_after=refusal.retry_after)
+
+
+def _admission_error(admission: limits.Admission, model, lang: str) -> CompletionError:
+    """Keep provider availability distinct from the account's own token allowance."""
+    if model["backend"] == "claude" and admission.refusal.code == "insufficient_quota" and \
+            admission.model is not None and admission.model.capacity <= 0:
+        return CompletionError("Claude is currently at capacity. Try again shortly.", 503,
+                               "provider_capacity_unavailable", retry_after=30)
+    return refused(admission.refusal, lang)
 
 
 def credits_exhausted(budget: credits.Budget) -> CompletionError:
@@ -377,13 +389,13 @@ class CompletionRun:
             think = inference.think_for(model, self.effort)
             admission = limits.admit(user, "api", model)
             if not admission.allowed:
-                raise refused(admission.refusal, lang)
+                raise _admission_error(admission, model, lang)
             fallbacks = limits.usable_fallbacks(user, "api", selection.fallbacks, think=think, effort=self.effort)
         messages, options = self._for_model(model)
         self.model = model
         self.request = inference.TextRequest(
             user=user, model=model, messages=messages, options=options, request_type=request_type,
-            priority=queue.priority_for(user, slow=admission.slow, api=True),
+            priority=queue.priority_for(user, api=True),
             owner_key=f"user:{user['id']}:api", fallbacks=fallbacks, think=think, effort=self.effort,
             authorize=self._authorize, prepare=self._for_model)
 
@@ -396,22 +408,38 @@ class CompletionRun:
         options = inference.build_options(model, params.overrides, max_tokens=params.max_tokens)
         if params.stop:
             options["stop"] = list(params.stop)
+        if hasattr(self, "request"):
+            # Inference rebuilds this for a fallback. Interrupted usage must
+            # estimate the prompt actually sent, including its system prompt.
+            self.request.messages, self.request.options = messages, options
         return messages, options
 
     # admission check, run once the request leaves the queue -----------------
-    def _authorize(self) -> str | None:
+    def _authorize(self, model) -> str | None:
+        self.refusal = None
+        self.model = model
         user = users.get(self.user["id"])
         if user is None or users.is_suspended(user):
             self.refusal = CompletionError("This account is suspended.", 403, "account_suspended")
         elif self.token_id is not None and not _token_active(user["id"], self.token_id):
             self.refusal = CompletionError("The API token was revoked.", 401, "invalid_api_key")
-        elif not (admission := self._admit_again(user)).allowed:
-            self.refusal = refused(admission.refusal, self.lang)
+        elif not AccessContext.load(user).can_use(model, "api"):
+            self.refusal = CompletionError(f"You do not have access to '{model['ollama_name']}'.", 403,
+                                           "model_not_allowed", param="model")
+        else:
+            with limits.snapshot(fresh=True):
+                try:
+                    # A fallback with no explicit think value uses its own
+                    # default; that level must still be unlocked now.
+                    limits.resolve_effort(user, model, self.effort or (
+                        limits.EFFORT_DEFAULT if limits.supported_efforts(model) else None))
+                except limits.EffortLocked as error:
+                    self.refusal = effort_locked(error)
+                if self.refusal is None:
+                    admission = limits.admit(user, "api", model, take_rate=self._admitted)
+                    if not admission.allowed:
+                        self.refusal = _admission_error(admission, model, self.lang)
         return self.refusal.message if self.refusal else None
-
-    def _admit_again(self, user):
-        with limits.snapshot(fresh=True):  # after the queue wait: read everything again
-            return limits.admit(user, "api", self.model, take_rate=False)
 
     # iteration -------------------------------------------------------------
     def events(self):
@@ -437,6 +465,7 @@ class CompletionRun:
 
     def _run(self):
         source = inference.generate(self.request, self.cancel)
+        interrupted = True
         try:
             try:
                 for event in source:
@@ -448,23 +477,45 @@ class CompletionRun:
                     elif isinstance(event, inference.Finished):
                         self.finished = event
                         self.model = event.model or self.model
-                        self._settle(event)
                         problem = self._problem(event)
+                        try:
+                            self._settle(event)
+                        except CompletionError:
+                            # A failed answer keeps its original error even if recording
+                            # that failure also failed. Success requires committed usage.
+                            if problem is None:
+                                raise
                         if problem is not None:
                             raise problem
                     yield event
+                    if isinstance(event, inference.Finished):
+                        # The outcome is committed. Close through the guarded cleanup
+                        # below instead of advancing backend cleanup after success.
+                        break
             except queue.QueueFull as error:
                 raise _queue_full(error) from None
             except queue.QueueTimeout as error:
                 raise CompletionError(str(error), 503, "queue_timeout", retry_after=10) from None
             except Cancelled:
                 raise CompletionError("The request was cancelled.", 503, "cancelled") from None
+            interrupted = False
         finally:
             if self.finished is None:
                 self.cancel.cancel("disconnected")
-            source.close()
-            if not self._settled:
-                self._settle(None)
+            try:
+                source.close()
+            except Exception:  # noqa: BLE001 - cleanup must not replace the request's outcome
+                log.exception("Closing inference for a %s request failed", self.request_type)
+            # A terminal event already attempted accounting with its exact usage.
+            # Do not retry it here with an estimate after a failed commit.
+            if self.finished is None and not self._settled:
+                try:
+                    self._settle(None)
+                except CompletionError:
+                    # A disconnected stream cannot receive an error; an upstream
+                    # exception must keep its original meaning. _settle logs the failure.
+                    if not interrupted:
+                        raise
 
     def _problem(self, finished: inference.Finished) -> CompletionError | None:
         if finished.state == "completed" or finished.truncated:
@@ -472,6 +523,12 @@ class CompletionRun:
         if self.refusal is not None:
             return self.refusal
         error = finished.error or "The model stopped before finishing its answer."
+        if not self.text_parts and not self.reasoning_parts and finished.error_status == 503 and \
+                finished.error_code == "provider_capacity_unavailable":
+            retry_after = finished.retry_after
+            if isinstance(retry_after, bool) or not isinstance(retry_after, int) or not 1 <= retry_after <= 300:
+                retry_after = 30
+            return CompletionError(sanitize_backend_message(error), 503, finished.error_code, retry_after=retry_after)
         if "took too long" in error:
             return CompletionError(error, 504, "timeout")
         if not self.text_parts and not self.reasoning_parts and model_lifecycle.gone(finished.model, error):
@@ -502,8 +559,8 @@ class CompletionRun:
         """Charge the request once: exact usage when known, an estimate for interrupted answers."""
         if self._settled:
             return
-        self._settled = True
         if not self._admitted or self.model is None:
+            self._settled = True
             return
         produced = self.produced
         completed = finished is not None and finished.state == "completed"
@@ -512,7 +569,6 @@ class CompletionRun:
         else:
             prompt = sum(credits.estimate_tokens(str(m.get("content", ""))) for m in self.request.messages)
             completion, estimated = credits.estimate_tokens(produced), True
-        self.usage = (prompt, completion, estimated)
         # Metrics durations include the queue wait (as for chat and images).
         duration = finished.duration_ms + finished.wait_ms if finished is not None \
             else int((time.monotonic() - self._began) * 1000)
@@ -526,13 +582,17 @@ class CompletionRun:
                                         model_id=self.model["id"], duration_ms=duration, queue_wait_ms=wait,
                                         status="error")
                 self.usage = (0, 0, False)
-                return
-            self.tokens_counted = api_usage.charge_text(
-                user_id=self.user["id"], request_type=self.request_type, model_id=self.model["id"],
-                token_id=self.token_id, prompt_tokens=prompt, completion_tokens=completion, usage_estimated=estimated,
-                duration_ms=duration, queue_wait_ms=wait, status=status)
-        except Exception:  # noqa: BLE001 - never lose the answer because accounting failed
+            else:
+                self.tokens_counted = api_usage.charge_text(
+                    user_id=self.user["id"], request_type=self.request_type, model_id=self.model["id"],
+                    token_id=self.token_id, prompt_tokens=prompt, completion_tokens=completion, usage_estimated=estimated,
+                    duration_ms=duration, queue_wait_ms=wait, status=status)
+                self.usage = (prompt, completion, estimated)
+        except Exception:  # noqa: BLE001 - report a controlled failure, never an uncharged success
             log.exception("Recording usage for a %s request failed", self.request_type)
+            raise CompletionError(translate(self.lang, "errors.storage_unavailable"), 503,
+                                  "storage_unavailable", retry_after=5) from None
+        self._settled = True
 
 
 

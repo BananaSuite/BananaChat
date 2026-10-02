@@ -15,9 +15,12 @@ from bananachat.security import admin_required
 from bananachat.services import limits
 
 from . import bp
-from ._helpers import FormError, audit, back, choice, flag, integer, me, number, text, tokens, user_or_404, \
-    utc_datetime, utc_input_min
-from .quotas import POOL_LABELS, _tabs_context, rules_en, rules_from_form, tokens_en, typed, typed_rules
+from ._helpers import (
+    FormError, audit, back, choice, flag, integer, me, number, text, tokens, user_or_404, utc_datetime, utc_input_min,
+)
+from ._quota_ui import (
+    POOL_LABELS, quota_tabs_context, rate_form_context, rules_en, rules_from_form, tokens_en, typed, typed_rules,
+)
 
 DURATIONS = {"1h": timedelta(hours=1), "24h": timedelta(hours=24), "7d": timedelta(days=7)}
 PRESET_HELP = {
@@ -57,7 +60,7 @@ def tiers():
     applies += [f"{model['display_name']} (model limits)" for model in _models()
                 if (policy := limits_db.get_model_policy(model))["auto_tiers"] and policy["enabled"]]
     return render_template("admin/limit_tiers.html", tab="tiers", tiers=limits_db.list_tiers(),
-                           counts=limits_db.tier_counts(), applies=applies, **_tabs_context())
+                           counts=limits_db.tier_counts(), applies=applies, **quota_tabs_context())
 
 
 def _tier_form() -> dict:
@@ -156,7 +159,7 @@ def _grants_page(form=None):
         upcoming=[_grant_view(row) for row in limits_db.list_grants("upcoming")],
         ended=[_grant_view(row) for row in limits_db.list_grants("ended", limit=50)],
         prefill=prefill, form=form, pools=limits_db.POOLS, models=_models(), min_datetime=utc_input_min(),
-        **_tabs_context())
+        **quota_tabs_context())
 
 
 def _grant_form() -> dict:
@@ -248,22 +251,29 @@ def revoke_grant(grant_id):
 # ----- models -------------------------------------------------------------------------------
 
 def model_summary(model, policy: dict) -> list[str]:
-    """Short facts about a model's policy, for its card."""
-    facts = [f"counts ×{policy['weight']:g}"]
+    """Scan-friendly facts for a closed model row; exact rates stay in its editor."""
+    facts = [f"Token weight ×{policy['weight']:g}"]
     if not limits.counts_toward_pool(model, policy):
-        facts = ["not counted toward service limits"]
+        facts = ["Service tokens excluded"]
+    if not policy["tokens_enabled"]:
+        facts.append("Model tokens off")
+    if not policy["rate_enabled"]:
+        facts.append("Model rates off")
     if policy["enabled"]:
-        if policy["rate_rules"]:
-            facts.append(rules_en(policy["rate_rules"]))
-        if policy["window_tokens"] is not None:
-            facts.append(f"{tokens_en(policy['window_tokens'])} per 5 hours")
-        if policy["weekly_tokens"] is not None:
-            facts.append(f"{tokens_en(policy['weekly_tokens'])} per week")
+        if policy["rate_enabled"] and policy["rate_rules"]:
+            count = len(policy["rate_rules"])
+            facts.append(f"{count} rate rule{'s' if count != 1 else ''}")
+        if policy["tokens_enabled"] and policy["window_tokens"] is not None:
+            facts.append(f"{tokens_en(policy['window_tokens'])} / 5h")
+        if policy["tokens_enabled"] and policy["weekly_tokens"] is not None:
+            facts.append(f"{tokens_en(policy['weekly_tokens'])} / week")
         if not (policy["rate_rules"] or policy["window_tokens"] is not None or policy["weekly_tokens"] is not None):
-            facts.append("model limits on, none set")
+            facts.append("No model limits set")
     if limits.supported_efforts(model):
-        default = policy["effort_default"] or limits.effort_settings()["default"]
-        facts.append(f"reasoning up to {limits.effort_label(default)} by default")
+        effort = limits.effort_settings()
+        default = policy["effort_default"] or effort["default"]
+        facts.append("All reasoning levels" if not effort["gating"] or policy["effort_gating_off"] else
+                     f"Reasoning up to {limits.effort_label(default)}")
     return facts
 
 
@@ -287,14 +297,15 @@ def _models_page(refused: dict | None = None):
             item["policy"] = refused["policy"]
     return render_template("admin/limit_models.html", tab="models", items=items, presets=limits_db.PRESETS,
                            preset_help=PRESET_HELP, efforts=limits_db.EFFORT_LEVELS, refused=refused or {},
-                           site_effort=limits.effort_settings()["default"], **_tabs_context())
+                           site_effort=limits.effort_settings()["default"], **quota_tabs_context())
 
 
 def _model_policy_form(current: dict) -> dict:
     counts = choice("counts_toward_pool", ("default", "yes", "no"), label="Counts toward service limits",
                     default="default")
     effort = choice("effort_default", ("", *limits_db.EFFORT_LEVELS), label="Default reasoning effort", default="")
-    return {**current, "preset": "custom", "enabled": flag("enabled"),
+    controls = _model_controls(current)
+    return {**current, **controls, "preset": "custom", "enabled": flag("enabled"),
             "weight": number("weight", minimum=limits_db.WEIGHT_MIN, maximum=limits_db.WEIGHT_MAX, label="Weight"),
             "counts_toward_pool": None if counts == "default" else counts == "yes",
             "rate_rules": rules_from_form(),
@@ -303,6 +314,12 @@ def _model_policy_form(current: dict) -> dict:
             "dynamic": flag("dynamic"),
             "sensitivity": number("sensitivity", minimum=0, maximum=limits_db.SENSITIVITY_MAX, label="Sensitivity"),
             "auto_tiers": flag("auto_tiers"), "effort_default": effort or None}
+
+
+def _model_controls(current: dict) -> dict:
+    """Older forms leave new independent controls unchanged."""
+    names = ("tokens_enabled", "rate_enabled", "effort_gating_off", "effort_auto_unlock_off")
+    return {name: flag(name) if "limit_controls" in request.form else current[name] for name in names}
 
 
 @bp.post("/quotas/models/<int:model_id>", endpoint="limit_model_save")
@@ -330,7 +347,8 @@ def save_model(model_id):
             return back("admin.limit_models", _anchor=f"model-{model_id}")
         counts = request.form.get("counts_toward_pool")
         return _models_page({"model_id": model_id, "policy": {
-            **current, "weight": typed("weight"), "sensitivity": typed("sensitivity"), "enabled": flag("enabled"),
+            **current, **_model_controls(current), "weight": typed("weight"), "sensitivity": typed("sensitivity"),
+            "enabled": flag("enabled"),
             "dynamic": flag("dynamic"), "auto_tiers": flag("auto_tiers"), "rate_rules": typed_rules(),
             "window_tokens": typed("window_tokens"), "weekly_tokens": typed("weekly_tokens"),
             "counts_toward_pool": {"yes": True, "no": False}.get(counts),
@@ -359,8 +377,9 @@ def _effort_page(refused: dict | None = None):
     return render_template("admin/limit_effort.html", tab="effort", settings=limits.effort_settings(), typed_settings=refused,
                            levels=limits_db.EFFORT_LEVELS, unlocks=rows,
                            models=[{"model": model, "levels": limits.supported_efforts(model),
-                                    "default": policies[model["id"]]["effort_default"]} for model in reasoning],
-                           **_tabs_context())
+                                    "default": policies[model["id"]]["effort_default"],
+                                    "policy": policies[model["id"]]} for model in reasoning],
+                           **quota_tabs_context())
 
 
 @bp.post("/quotas/effort", endpoint="limit_effort_save")
@@ -416,13 +435,14 @@ def effort_model(model_id):
     try:
         level = choice("effort_default", ("", *limits_db.EFFORT_LEVELS), label="Level", default="") or None
         current = limits_db.get_model_policy(model)
-        limits_db.set_model_policy(model_id, {**current, "effort_default": level}, me()["id"])
+        controls = {name: flag(name) for name in ("effort_gating_off", "effort_auto_unlock_off")} \
+            if "limit_controls" in request.form else {}
+        limits_db.set_model_policy(model_id, {**current, **controls, "effort_default": level}, me()["id"])
     except (FormError, ValueError) as error:
         flash(str(error), "error")
         return back("admin.limit_effort")
-    audit("limits_effort_model", model["ollama_name"], {"default": level})
-    flash(f"{model['display_name']}: everyone may use up to "
-          f"{limits.effort_label(level or limits.effort_settings()['default'])} unless unlocked further.", "success")
+    audit("limits_effort_model", model["ollama_name"], {"default": level, **controls})
+    flash(f"{model['display_name']}: reasoning settings saved.", "success")
     return back("admin.limit_effort", _anchor="models")
 
 
@@ -494,13 +514,13 @@ def _user_limits_page(user, refused: dict | None = None):
         grants=[_grant_view(row) for row in limits_db.list_grants("active", user_id=user_id)] +
         [_grant_view(row) for row in limits_db.list_grants("upcoming", user_id=user_id)],
         limits={"tokens": limits_db.TOKENS_MAX, "requests": limits_db.REQUESTS_MAX, "burst": limits_db.BURST_MAX},
-        **{key: value for key, value in _tabs_context().items() if key in ("units", "rule_rows")})
+        **rate_form_context())
 
 
 def _typed_override() -> dict:
     """A refused custom-limit form as typed, in the shape of an override."""
     return {"rate_rules": typed_rules() or None, "window_tokens": typed("window_tokens"),
-            "window_slow_tokens": typed("window_slow_tokens"), "weekly_tokens": typed("weekly_tokens")}
+            "weekly_tokens": typed("weekly_tokens")}
 
 
 @bp.post("/users/<user_id>/limits/custom", endpoint="user_limits_custom")
@@ -514,8 +534,8 @@ def set_custom(user_id):
         rules = rules_from_form()
         values = {
             "rate_rules": rules or None,
-            "window_tokens": tokens("window_tokens", label="Tokens per 5 hours", optional=True),
-            "window_slow_tokens": tokens("window_slow_tokens", label="Slow tokens per 5 hours", optional=True),
+            "window_tokens": tokens("window_tokens", maximum=limits_db.OVERRIDE_WINDOW_MAX,
+                                    label="Tokens per 5 hours", optional=True),
             "weekly_tokens": tokens("weekly_tokens", label="Tokens per week", optional=True),
         }
         limits_db.set_override(user_id, pool, me()["id"], **values)
@@ -535,17 +555,23 @@ def set_model_custom(user_id):
     model = _model_or_404(request.form.get("model_id", type=int) or 0)
     try:
         if request.form.get("action") == "clear":
-            values = {"rate_rules": None, "window_tokens": None, "weekly_tokens": None, "locked": False}
+            values = {"rate_rules": None, "window_tokens": None, "weekly_tokens": None, "locked": False,
+                      "token_exempt": False, "rate_exempt": False}
         else:
             values = {"rate_rules": rules_from_form() or None,
                       "window_tokens": tokens("window_tokens", label="Tokens per 5 hours", optional=True),
                       "weekly_tokens": tokens("weekly_tokens", label="Tokens per week", optional=True),
                       "locked": flag("locked")}
+            if "limit_controls" in request.form:
+                values.update(token_exempt=flag("token_exempt"), rate_exempt=flag("rate_exempt"))
         limits_db.set_model_override(user_id, model["id"], me()["id"], **values)
     except (FormError, ValueError) as error:
         flash(f"{model['display_name']}: {error}", "error")
+        current = limits_db.get_model_override(user_id, model["id"]) or limits_db.ModelOverride(model["id"])
+        controls = {name: flag(name) if "limit_controls" in request.form else getattr(current, name)
+                    for name in ("token_exempt", "rate_exempt")}
         return _user_limits_page(user, {"model_id": model["id"], "override": {
-            **_typed_override(), "locked": flag("locked")}}), 400
+            **_typed_override(), "locked": flag("locked"), **controls}}), 400
     audit("limits_user_model", user["username"], {"model": model["ollama_name"], **values})
     flash(f"{model['display_name']}: " + ("custom limits of " + user["username"] + " removed."
                                           if request.form.get("action") == "clear" else
@@ -561,8 +587,11 @@ def set_effort(user_id):
     try:
         if request.form.get("action") == "gating":
             off = flag("effort_gating_off")
-            limits_db.update_user_settings(user_id, me()["id"], effort_gating_off=off)
-            audit("limits_user_effort_gating", user["username"], {"off": off})
+            controls = {"effort_gating_off": off}
+            if "limit_controls" in request.form:
+                controls["effort_auto_unlock_off"] = flag("effort_auto_unlock_off")
+            limits_db.update_user_settings(user_id, me()["id"], **controls)
+            audit("limits_user_effort_gating", user["username"], controls)
             flash(f"Reasoning effort is {'no longer limited' if off else 'limited again'} for {user['username']}.",
                   "success")
             return back("admin.user_limits", user_id=user_id, _anchor="effort")
@@ -582,6 +611,17 @@ def set_effort(user_id):
                                      + (" (kept)." if pinned else ".") if level else
                                      f"{name} follows the default reasoning effort again."), "success")
     return back("admin.user_limits", user_id=user_id, _anchor="effort")
+
+
+@bp.post("/users/<user_id>/limits/exemptions", endpoint="user_limits_exemptions")
+@admin_required
+def set_exemptions(user_id):
+    user = user_or_404(user_id)
+    controls = {name: flag(name) for name in ("token_exempt", "rate_exempt")}
+    limits_db.update_user_settings(user_id, me()["id"], **controls)
+    audit("limits_user_exemptions", user["username"], controls)
+    flash(f"{user['username']}: token and request-rate exemptions saved.", "success")
+    return back("admin.user_limits", user_id=user_id, _anchor="exemptions")
 
 
 @bp.post("/users/<user_id>/limits/restore", endpoint="user_limits_restore")

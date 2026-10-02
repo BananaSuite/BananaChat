@@ -38,7 +38,6 @@ function tokenInput(value) {
 /** Suggested new value for a field, from the account's current limits in the chosen pool. */
 function suggestion(name, current) {
   const value = Number(current[name] || 0);
-  if (name === "slow") return tokenInput(Math.ceil(value));
   return tokenInput(Math.max(1000, Math.ceil(value * 2)));
 }
 

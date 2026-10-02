@@ -14,7 +14,7 @@
   </form>
   <details class="disclosure">
     <summary class="btn btn-primary">{{ icon("plus") }}New user</summary>
-    <form method="post" action="{{ url_for('admin.user_create') }}" class="card stack mt-1" data-busy>
+    <form method="post" action="{{ url_for('admin.user_create') }}" class="settings-section stack mt-1" data-busy>
       {{ csrf() }}
       <div class="form-grid">
         <div class="field">
@@ -62,8 +62,8 @@
         </td>
         <td class="nowrap">
           {% if row.role == "admin" %}<span class="muted">Unlimited</span>
-          {% elif row.quota_tokens is none and row.quota_slow_tokens is none %}<span class="muted">Default ({{ defaults[0] | compact }} + {{ defaults[1] | compact }} slow)</span>
-          {% else %}{{ (defaults[0] if row.quota_tokens is none else row.quota_tokens) | compact }} + {{ (defaults[1] if row.quota_slow_tokens is none else row.quota_slow_tokens) | compact }} slow <span class="badge">custom</span>{% endif %}
+          {% elif row.quota_tokens is none %}<span class="muted">Default ({{ defaults[0] | compact }})</span>
+          {% else %}{{ row.quota_tokens | compact }} <span class="badge">custom</span>{% endif %}
           {% if row.limit_speed == "slow" %} <span class="badge badge-warning">slowed down</span>{% elif row.limit_speed == "fast" %} <span class="badge badge-info">sped up</span>{% endif %}
         </td>
         <td class="nowrap">{{ when(row.last_login_at) }}</td>

@@ -56,6 +56,11 @@ def _window_limit(app, user, pool="api"):
 def people(app, make_user):
     with app.app_context():
         _settings()
+        # Keep the consent examples' 30k baseline independent of site defaults.
+        from bananachat.db import limits
+        policy = limits.get_policy("api")
+        policy["window"]["tokens"] = 30_000
+        limits.set_policy("api", policy, None)
     return _people(make_user, "asker", "ann", "bob", "cid", "dee")
 
 
@@ -188,7 +193,18 @@ def test_disabled_or_excluded_kinds_only_wait_for_administrators(app, people):
     assert _row(app, request_id)["community"] == 0
 
 
-def test_unlimited_for_a_day_on_one_model_by_votes(app, people):
+def _available_claude(monkeypatch, model_name):
+    """Community tests use a discovered fake provider, never curated availability."""
+    from bananachat.db import claude_pool as pool_db
+    from bananachat.services import claude_pool
+
+    monkeypatch.setattr(claude_pool, "_site_discovery", lambda: [
+        {"name": model_name, "reasoning": ["low", "medium", "high", "extra", "max"]}])
+    monkeypatch.setattr(claude_pool, "_site_chat", lambda *args, **kwargs: iter(()))
+    pool_db.add_account("community-fixture", window_limit=100_000)
+
+
+def test_unlimited_for_a_day_on_one_model_by_votes(app, people, monkeypatch):
     """A temporary unlimited boost for one model's own limits (e.g. a strict cloud model)."""
     from bananachat import db
     from bananachat.db import catalog
@@ -197,6 +213,7 @@ def test_unlimited_for_a_day_on_one_model_by_votes(app, people):
 
     asker, ann, bob, cid, _ = people
     with app.test_request_context():
+        _available_claude(monkeypatch, "claude-opus-4-1")
         claude_pool.sync_catalog(selected=["claude-opus-4-1"], source="test")
         model = catalog.get_by_name("claude-opus-4-1")
         db.execute("UPDATE ai_models SET is_rolled_out=1 WHERE id=?", (model["id"],))
@@ -217,13 +234,14 @@ def test_unlimited_for_a_day_on_one_model_by_votes(app, people):
         assert limits.model_limits(ann, catalog.get(model["id"])).window.limited
 
 
-def test_model_window_request_approved_by_an_administrator(app, people):
+def test_model_window_request_approved_by_an_administrator(app, people, monkeypatch):
     from bananachat.db import catalog, credits, users
     from bananachat.db import limits as limits_db
     from bananachat.services import claude_pool, limits
 
     asker, *_ = people
     with app.test_request_context():
+        _available_claude(monkeypatch, "claude-sonnet-4-5")
         claude_pool.sync_catalog(selected=["claude-sonnet-4-5"], source="test")
         model = catalog.get_by_name("claude-sonnet-4-5")
         limits_db.set_model_policy(model["id"], claude_pool.strict_policy(model["ollama_name"]), None)

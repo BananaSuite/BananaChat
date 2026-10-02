@@ -10,6 +10,9 @@
       <h1>{{ t("agents.title") }}</h1>
       <p>{{ t("agents.subtitle") }}</p>
     </div>
+    {% if is_admin %}
+    <a class="btn" href="{{ url_for('admin.agents') }}">{{ icon("settings") }}{{ t("agents.manage") }}</a>
+    {% endif %}
   </header>
 
   {% if access == "disabled" %}
@@ -18,27 +21,33 @@
     <div>
       <p><strong>{{ t("agents.disabled_title") }}</strong></p>
       <p>{{ t("agents.disabled_text") }}{% if tasks %} {{ t("agents.existing_tasks") }}{% endif %}</p>
+      {% if is_admin %}<p><a href="{{ url_for('admin.agents', _anchor='settings') }}">{{ t("agents.configure") }}</a></p>{% endif %}
     </div>
   </div>
   {% elif access == "denied" %}
   <div class="alert alert-warning mb-3">
     {{ icon("shield") }}
     <div>
+      {% if settings.access_mode == "admins" %}
+      <p><strong>{{ t("agents.admins_only_title") }}</strong></p>
+      <p>{{ t("agents.admins_only_text") }}{% if tasks %} {{ t("agents.existing_tasks") }}{% endif %}</p>
+      {% else %}
       <p><strong>{{ t("agents.no_access_title") }}</strong></p>
       <p>{{ t("agents.no_access_text") }}{% if tasks %} {{ t("agents.existing_tasks") }}{% endif %}</p>
       <p><a href="{{ url_for('account.index', _anchor='access') }}">{{ t("agents.request_access") }}</a></p>
+      {% endif %}
     </div>
   </div>
   {% endif %}
 
   <div class="agents-grid">
     {% if access == "ok" %}
-    <section class="card agents-new" aria-labelledby="new-task-title">
+    <section class="agents-new" aria-labelledby="new-task-title">
       <h2 id="new-task-title">{{ t("agents.new_task") }}</h2>
       {% if not runner_ready %}
-      <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("agents.runner_missing") }}</p></div>
+      <div class="alert alert-warning">{{ icon("alert") }}<div><p>{{ t("agents.runner_missing") }}</p>{% if is_admin %}<p><a href="{{ url_for('admin.agents') }}">{{ t("agents.configure") }}</a></p>{% endif %}</div></div>
       {% elif not models %}
-      <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("agents.no_models") }}</p></div>
+      <div class="alert alert-warning">{{ icon("alert") }}<div><p>{{ t("agents.no_models") }}</p>{% if is_admin %}<p><a href="{{ url_for('admin.agents', _anchor='models') }}">{{ t("agents.configure_models") }}</a></p>{% endif %}</div></div>
       {% else %}
       <form method="post" action="{{ url_for('agents.create') }}" enctype="multipart/form-data" class="stack" id="new-task-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -96,13 +105,12 @@
     <section class="agents-list" aria-labelledby="tasks-title">
       <h2 id="tasks-title">{{ t("agents.your_tasks") }}</h2>
       {% if not tasks %}
-      <div class="empty card">
-        {{ icon("terminal") }}
+      <div class="empty agents-empty">
         <h3>{{ t("agents.empty_title") }}</h3>
         <p class="mb-0">{{ t("agents.empty_text") }}</p>
       </div>
       {% else %}
-      <ul class="agents-tasks card flush divider-list">
+      <ul class="agents-tasks divider-list">
         {% for item in tasks %}{% set row = item.row %}
         <li>
           <a class="agents-task-link" href="{{ url_for('agents.task', task_id=row.id) }}">

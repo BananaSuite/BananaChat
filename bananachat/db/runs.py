@@ -88,7 +88,11 @@ def begin(session, user, *, content: str, attachments: list[dict], title: str | 
 def abort(session_id: str, begun: Begun) -> None:
     """Undo :func:`begin` for a request refused before it ran (e.g. the queue is full)."""
     with db.transaction():
-        db.execute("DELETE FROM active_streams WHERE session_id=? AND owner_token=?", (session_id, begun.token))
+        if not db.execute("DELETE FROM active_streams WHERE session_id=? AND owner_token=?",
+                          (session_id, begun.token)).rowcount:
+            # Recovery or a newer run already owns this chat. Its state and
+            # the recovered message must survive a late refusal of the old run.
+            return
         # A no-history chat's message was also copied to the audit log by begin().
         db.execute("DELETE FROM incognito_audit WHERE id=(SELECT a.id FROM incognito_audit a JOIN chat_messages m "
                    "ON a.session_id=m.session_id AND a.role=m.role AND a.content=m.content AND a.created_at=m.created_at "

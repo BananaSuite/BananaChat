@@ -1,11 +1,13 @@
 """Agents: enable the feature, limits, Git imports, models, the runner's status, every task and its full log.
 
-Disabling the feature stops new tasks (running ones continue); the kill
-switch asks every running task to stop. Every change is recorded in the audit
+Disabling the feature stops new tasks and running tasks at their next
+authorization check; the kill switch asks them to stop immediately. Every change is recorded in the audit
 log (``admin.agents.*``).
 """
 
 from __future__ import annotations
+
+import json
 
 from flask import abort, flash, redirect, render_template, request, url_for
 
@@ -23,18 +25,18 @@ from . import bp
 from ._helpers import FormError, audit, back, flag, integer, me, page, text
 
 LIMIT_LABELS = {
-    "max_steps": ("Steps per run", "Model calls per run, all agents of a swarm together."),
+    "max_steps": ("Steps per run", "Model calls per run, including parallel agents."),
     "max_minutes": ("Minutes per run", "Wall time per run; time paused for maintenance does not count."),
     "max_tokens": ("Tokens per run", "Prompt and answer tokens per run (also counted against the agent token limits)."),
-    "max_tasks_per_user": ("Running tasks per user", "Administrators are limited only by the site limit."),
-    "max_tasks_total": ("Running tasks on the site", "Also capped by the runner's sandbox limit."),
+    "max_tasks_per_user": ("Running sessions per user", "Administrators are limited only by the site limit."),
+    "max_tasks_total": ("Running sessions on the site", "Also capped by the runner's sandbox limit."),
     "command_timeout": ("Command timeout (seconds)", "Longest single command; the runner applies its own cap too."),
     "keep_workspace_minutes": ("Keep workspace (minutes)", "After a run ends, keep the sandbox for downloads and "
                                                            "follow-ups (0 deletes it at once)."),
     "starts_per_hour": ("Starts per user per hour", "New tasks and follow-ups that start a run."),
-    "retention_days": ("Keep tasks (days)", "Ended tasks and their logs are deleted after this many days."),
-    "max_subagents": ("Sub-agents per swarm run", "Only used when swarms are enabled."),
-    "max_concurrent_subagents": ("Sub-agents at the same time", "At most this many sub-agents work in parallel."),
+    "retention_days": ("Keep sessions (days)", "Ended sessions and their logs are deleted after this many days."),
+    "max_subagents": ("Agents per parallel run", "Only used when parallel agents are enabled."),
+    "max_concurrent_subagents": ("Agents at the same time", "At most this many agents work in parallel."),
 }
 STATUS_FILTERS = agents_db.STATES
 GIT_LABELS = {
@@ -73,8 +75,17 @@ def overview():
     health = runner_mod.health(fresh=request.args.get("refresh") == "1")
     caps = agents_db.model_caps()
     models = []
-    for model in catalog.list_models(backend="ollama"):
+    for model in catalog.list_models():
+        if model["backend"] not in ("ollama", "external"):
+            continue
         info = caps.get(model["id"])
+        if model["backend"] == "external":
+            try:
+                capabilities = json.loads(model["capabilities"])
+            except (TypeError, ValueError):
+                capabilities = []
+            info = {"supports_tools": isinstance(capabilities, list) and "tools" in capabilities,
+                    "supports_thinking": bool(model["is_reasoning"]), "checked_at": None}
         models.append({"row": model, "caps": info, "text": is_text_model(model),
                        "override": settings.model_overrides.get(str(model["id"]), ""),
                        "usable": is_text_model(model) and agent_settings.supports_tools(model, caps,
@@ -104,6 +115,11 @@ def save_settings():
     values = current.to_dict()
     try:
         values["enabled"] = flag("enabled")
+        if "access_mode_present" in request.form:
+            mode = request.form.get("access_mode", "")
+            if mode not in agent_settings.ACCESS_MODES:
+                raise FormError("Choose who can use cloud sessions.")
+            values["access_mode"] = mode
         values["swarms_enabled"] = flag("swarms_enabled")
         for name, (label, _) in LIMIT_LABELS.items():
             _, low, high = agent_settings.INTEGER_FIELDS[name]
@@ -174,7 +190,9 @@ def save_models():
     current = agent_settings.current(fresh=True)
     values = current.to_dict()
     overrides = {}
-    for model in catalog.list_models(backend="ollama"):
+    for model in catalog.list_models():
+        if model["backend"] not in ("ollama", "external"):
+            continue
         choice = request.form.get(f"override_{model['id']}", "")
         if choice in agent_settings.OVERRIDES:
             overrides[str(model["id"])] = choice

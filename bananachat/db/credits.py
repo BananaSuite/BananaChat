@@ -10,17 +10,17 @@ request type and counted per *pool*:
 The limits of each pool and model (request rates, 5-hour and weekly tokens,
 tiers, dynamic adjustment, grants) are decided by
 :mod:`bananachat.services.limits`; :func:`budget` is the short answer
-admission needs. Each pool has *regular* tokens and, when enabled, *slow*
-tokens used once the regular ones are spent (slow requests queue behind
-others). Music-program participants receive a bonus (multiplier or fixed
+admission needs. Each pool has one 5-hour token allowance and an optional
+weekly allowance. Music-program participants receive a bonus (multiplier or fixed
 amount). Administrators are never limited.
 
-A ledger row keeps the request's raw ``tokens_in``/``tokens_out`` (what model
-limits count) and, in ``credits_used``, the tokens counted against the pool
+A ledger row keeps the request's raw ``tokens_in``/``tokens_out`` and a
+``consumes_limits`` flag (unmetered chat keeps raw usage for reporting). In
+``credits_used`` it keeps the tokens counted against the pool
 divided by 1,000 - tokens × the model's weight, or 0 for a model that does not
-count toward the pool - which is the credit unit of earlier releases. Charging
-opens the account's 5-hour and weekly windows (of the pool and of the model)
-when none is open.
+count toward the pool - which is the credit unit of earlier releases. Metered
+usage opens the account's 5-hour and weekly windows (of the pool and of the
+model) when none is open; unmetered chat opens neither.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def tokens_to_credits(tokens: float) -> float:
 
 @dataclass(frozen=True)
 class Budget:
-    """What remains of the 5-hour (and weekly) tokens. Weekly tokens cap both 5-hour kinds.
+    """What remains of the 5-hour tokens, capped by the optional weekly allowance.
 
     ``resets_at`` is when the open 5-hour window ends (None while no window is
     open: the next counted request opens one).
@@ -86,15 +86,16 @@ class Budget:
 
     @property
     def slow_left(self) -> float:
-        return 0.0 if self.unlimited else min(max(0.0, self.slow_limit - self.slow_used), self.weekly_left)
+        """Deprecated compatibility value; there is no second token allowance."""
+        return 0.0
 
     @property
     def available(self) -> bool:
-        return self.unlimited or self.regular_left > 0 or self.slow_left > 0
+        return self.unlimited or self.regular_left > 0
 
     @property
     def next_is_slow(self) -> bool:
-        return not self.unlimited and self.regular_limit - self.regular_used <= 0
+        return False
 
     @property
     def weekly_exhausted(self) -> bool:
@@ -124,11 +125,11 @@ def pool_of(request_type: str) -> str:
 # ----- per-account API quota (compatibility) -----------------------------------
 
 def site_defaults(settings: dict | None = None) -> tuple[int, int]:
-    """The API pool's default 5-hour ``(tokens, slow_tokens)`` from its policy."""
+    """The API pool's default 5-hour tokens, followed by an inert legacy zero."""
     from bananachat.db import limits
 
     window = limits.get_policy("api")["window"]
-    return int(window["tokens"]), int(window["slow_tokens"])
+    return int(window["tokens"]), 0
 
 
 def _settings() -> dict:
@@ -137,11 +138,11 @@ def _settings() -> dict:
 
 
 def get_quota(user_id: str) -> tuple[float, float]:
-    """The account's own API-pool 5-hour ``(tokens, slow_tokens)``: custom, else tier and policy."""
+    """The account's own API-pool 5-hour tokens, followed by an inert legacy zero."""
     from bananachat.services import limits
 
     base = limits.base_limits(user_id, "api")
-    return _whole(base["window_tokens"]), _whole(base["window_slow_tokens"])
+    return _whole(base["window_tokens"]), 0.0
 
 
 def _whole(value):
@@ -149,62 +150,69 @@ def _whole(value):
 
 
 def set_quota(user_id: str, tokens: int, slow: int, updated_by: str | None) -> None:
-    """Set the account's API 5-hour tokens as a custom limit (``db.limits.set_override``)."""
+    """Set the account's API 5-hour tokens; the deprecated *slow* argument is ignored."""
     from bananachat.db import limits
 
-    if not (0 <= tokens <= limits.TOKENS_MAX and 0 <= slow <= limits.TOKENS_MAX):
-        raise ValueError("Quotas must be between 0 and 1,000,000,000 tokens.")
-    limits.set_override(user_id, "api", updated_by, window_tokens=tokens, window_slow_tokens=slow)
+    if not 0 <= tokens <= limits.TOKENS_MAX:
+        raise ValueError(f"Quotas must be between 0 and {limits.TOKENS_MAX:,} tokens.")
+    limits.set_override(user_id, "api", updated_by, window_tokens=tokens)
 
 
 # ----- music program bonus --------------------------------------------------
 
 def music_bonus(user_id: str, settings: dict | None = None) -> tuple[str, float, float]:
-    """``(mode, regular, slow)``: ``none``, ``multiplier`` (x, x) or ``fixed`` (+a, +b tokens per 5-hour window)."""
+    """``(mode, amount, 0)``: no bonus, a multiplier, or fixed extra tokens per 5-hour window.
+
+    The final tuple slot is retained for older callers and never grants tokens.
+    """
     settings = settings if settings is not None else _settings()
     if not settings.get("music_enabled"):
         return "none", 1.0, 0.0
     if not db.scalar("SELECT music_opted_in FROM users WHERE id=?", (user_id,), 0):
         return "none", 1.0, 0.0
     if (settings.get("music_bonus_mode") or "multiplier") == "fixed":
-        tokens, slow = music_fixed(settings)
-        return "fixed", tokens, slow
+        tokens, _legacy_slow = music_fixed(settings)
+        return "fixed", tokens, 0.0
     multiplier = settings.get("music_credit_multiplier")
     multiplier = 2.0 if multiplier is None else max(0.0, float(multiplier))
-    return "multiplier", multiplier, multiplier
+    return "multiplier", multiplier, 0.0
 
 
 def music_fixed(settings: dict) -> tuple[float, float]:
-    """The fixed music bonus ``(tokens, slow tokens)`` per 5-hour window (the credit columns of the previous release as a fallback)."""
-    tokens, slow = settings.get("music_bonus_fixed_tokens"), settings.get("music_bonus_fixed_slow_tokens")
+    """The fixed token bonus followed by an inert zero (legacy credit units are a fallback)."""
+    tokens = settings.get("music_bonus_fixed_tokens")
     if tokens is None:
         credits = settings.get("music_bonus_fixed_credits")
         tokens = (30 if credits is None else credits) * TOKENS_PER_CREDIT
-    if slow is None:
-        credits = settings.get("music_bonus_fixed_slow")
-        slow = (15 if credits is None else credits) * TOKENS_PER_CREDIT
-    return float(tokens), float(slow)
+    return float(tokens), 0.0
+
+
+def music_weekly_fixed(settings: dict) -> float:
+    """The weekly music bonus, preserved separately when old 5-hour allowances were combined."""
+    tokens = settings.get("music_bonus_fixed_weekly_tokens")
+    return float(tokens) if tokens is not None else music_fixed(settings)[0] * 7
 
 
 # ----- usage ----------------------------------------------------------------
 
 def usage_today(user_id: str, pool: str) -> tuple[float, float]:
-    """Regular and slow tokens counted in the ledger today (UTC), ignoring windows and resets."""
+    """All counted tokens today (UTC), followed by an inert legacy zero.
+
+    Historical slow charges and active image reservations consume the same allowance.
+    """
     start, end = db.day_bounds()
     types = POOL_TYPES[pool]
     placeholders = ",".join("?" for _ in types)
     row = db.one(
-        "SELECT SUM(CASE WHEN is_slow=0 THEN credits_used ELSE 0 END), SUM(CASE WHEN is_slow=1 THEN credits_used ELSE 0 END) "
+        "SELECT SUM(credits_used) "
         f"FROM credit_ledger WHERE user_id=? AND created_at>=? AND created_at<? AND request_type IN ({placeholders})",
         (user_id, start, end, *types))
-    regular, slow = (row[0] or 0.0, row[1] or 0.0) if row else (0.0, 0.0)
+    used = (row[0] or 0.0) if row else 0.0
     if pool == "api":
-        reserved = db.one("SELECT SUM(CASE WHEN is_slow=0 THEN credits_reserved ELSE 0 END), "
-                          "SUM(CASE WHEN is_slow=1 THEN credits_reserved ELSE 0 END) "
+        reserved = db.one("SELECT SUM(credits_reserved) "
                           "FROM image_credit_reservations WHERE user_id=?", (user_id,))
-        regular += reserved[0] or 0.0
-        slow += reserved[1] or 0.0
-    return float(regular) * TOKENS_PER_CREDIT, float(slow) * TOKENS_PER_CREDIT
+        used += reserved[0] or 0.0
+    return float(used) * TOKENS_PER_CREDIT, 0.0
 
 
 def budget(user, pool: str) -> Budget:
@@ -229,7 +237,7 @@ def charge(user_id: str, tokens_in: int, tokens_out: int, *, request_type: str, 
            usage_estimated: bool = False) -> tuple[float, bool]:
     """Record usage in the ledger and open the account's windows. Join an open transaction when one exists.
 
-    Returns ``(tokens counted against the pool, slow)``.
+    Returns ``(tokens counted against the pool, False)``; the legacy slow flag is inert.
     """
     from bananachat.services import limits
 
@@ -240,24 +248,24 @@ def charge(user_id: str, tokens_in: int, tokens_out: int, *, request_type: str, 
         user = db.one("SELECT id, role FROM users WHERE id=?", (user_id,))
         if user is None:
             return 0.0, False
-        if model_id is not None and not db.one("SELECT 1 FROM ai_models WHERE id=?", (model_id,)):
+        model = db.one("SELECT * FROM ai_models WHERE id=?", (model_id,)) if model_id is not None else None
+        if model is None:
             model_id = None
         pool = pool_of(request_type)
         with limits.snapshot(fresh=True):  # the latest windows and usage, never what admission read
             weight, counted = limits.charge_terms(model_id)
+            consumes_limits = limits.consumes_token_limits(model, pool)
+            counted = counted and consumes_limits
             counted_tokens = (tokens_in + tokens_out) * weight if counted else 0.0
-            is_slow = False
-            if counted:
-                current = budget(user, pool)
-                is_slow = current.next_is_slow and current.slow_limit > 0
         stamp = db.now()
         db.execute(
             "INSERT INTO credit_ledger (user_id, token_id, model_id, credits_used, is_slow, tokens_in, tokens_out, "
-            "request_type, created_at, usage_estimated) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (user_id, token_id, model_id, tokens_to_credits(counted_tokens), int(is_slow), tokens_in, tokens_out,
-             request_type, stamp, int(usage_estimated)))
-        _open_windows(user_id, pool if counted else None, model_id, stamp)
-    return counted_tokens, is_slow
+            "request_type, created_at, usage_estimated, consumes_limits) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (user_id, token_id, model_id, tokens_to_credits(counted_tokens), 0, tokens_in, tokens_out,
+             request_type, stamp, int(usage_estimated), int(consumes_limits)))
+        if consumes_limits:
+            _open_windows(user_id, pool if counted else None, model_id, stamp)
+    return counted_tokens, False
 
 
 def estimate_tokens(text: str) -> int:
@@ -294,19 +302,15 @@ def reserve_image(user, tokens: float, *, ttl_seconds: float, model_id=None, tok
             return None
         with limits.snapshot(fresh=True):  # checked and reserved in one transaction: never what admission read
             current = budget(user, "api")
-        if current.regular_left >= tokens:
-            is_slow = False
-        elif current.slow_left >= tokens:
-            is_slow = True
-        elif current.weekly_exhausted or current.weekly_left < tokens:
-            raise InsufficientCredits("Not enough tokens remain this week for an image.", weekly=True)
-        else:
+        if current.regular_left < tokens:
+            if current.weekly_exhausted or current.weekly_left < tokens:
+                raise InsufficientCredits("Not enough tokens remain this week for an image.", weekly=True)
             raise InsufficientCredits("Not enough tokens remain in this 5-hour window for an image.")
         stamp = db.now()
         cursor = db.execute(
             "INSERT INTO image_credit_reservations (user_id, token_id, model_id, credits_reserved, is_slow, created_at, "
             "updated_at) VALUES (?,?,?,?,?,?,?)",
-            (user["id"], token_id, model_id, tokens_to_credits(tokens), int(is_slow), stamp, stamp))
+            (user["id"], token_id, model_id, tokens_to_credits(tokens), 0, stamp, stamp))
         _open_windows(user["id"], "api", None, stamp)
         return cursor.lastrowid
 
@@ -344,24 +348,23 @@ def finalize_reservation(reservation_id, *, user_id: str, tokens: float, model_i
         row = None
         if reservation_id is not None:
             row = db.one("SELECT * FROM image_credit_reservations WHERE id=?", (reservation_id,))
-        is_slow = 0
         weight, _counts = limits.charge_terms(model_id)
         counted_credits = tokens_to_credits(tokens * weight) if counted else 0.0
         if row is not None:
             db.execute("DELETE FROM image_credit_reservations WHERE id=?", (reservation_id,))
-            counted_credits, is_slow = row["credits_reserved"], row["is_slow"]
+            counted_credits = row["credits_reserved"]
         stamp = db.now()
         db.execute(
             "INSERT INTO credit_ledger (user_id, token_id, model_id, credits_used, is_slow, tokens_in, tokens_out, "
             "request_type, created_at, usage_estimated) VALUES (?,?,?,?,?,0,?,'api',?,0)",
-            (user_id, token_id, model_id, counted_credits, is_slow, int(tokens), stamp))
+            (user_id, token_id, model_id, counted_credits, 0, int(tokens), stamp))
         _open_windows(user_id, "api" if counted else None, model_id, stamp)
 
 
 # ----- quota requests -------------------------------------------------------
 
 REQUEST_KINDS = ("window", "weekly", "rate", "temporary", "effort")
-REQUEST_TOKENS_MAX = 100_000_000
+REQUEST_TOKENS_MAX = 2_000_000_000
 REQUEST_WEEKLY_MAX = 700_000_000
 REQUEST_HOURS_MAX = 720
 REQUEST_REASON_MIN, REQUEST_REASON_MAX = 5, 1000
@@ -411,7 +414,7 @@ def submit_request(user_id: str, tokens: int | None = None, slow: int | None = N
     Service 5-hour (and, when configured, weekly) requests within the automatic-approval
     amounts are approved at once; other requests wait for an administrator, and with *community* (when the
     site allows it for the kind) for other people's consent too (``services.community``). One request can be
-    pending per account.
+    pending per account. The deprecated *slow* argument is ignored.
     """
     from bananachat.db import limits as limits_db
     from bananachat.services import community as community_service
@@ -430,33 +433,26 @@ def submit_request(user_id: str, tokens: int | None = None, slow: int | None = N
             target = db.one("SELECT * FROM ai_models WHERE id=?", (model_id,))
             if target is None:
                 raise RequestError("That model does not exist.", "quota_failed")
-            if kind in ("window", "temporary"):
-                slow = 0
         base = limits.model_base(user_id, target) if target is not None else limits.base_limits(user_id, pool)
         if db.one("SELECT 1 FROM quota_requests WHERE user_id=? AND status='pending'", (user_id,)):
             raise RequestError("You already have a pending request.", "quota_already_pending")
         settings = _settings()
         auto = bool(settings.get("quota_auto_approve_enabled"))
-        values = {"new_tokens": None, "new_slow_tokens": None, "new_weekly_tokens": None, "new_rate_rules": None,
+        values = {"new_tokens": None, "new_slow_tokens": 0, "new_weekly_tokens": None, "new_rate_rules": None,
                   "grant_hours": None, "grant_unlimited": 0, "model_id": None, "effort_level": None,
                   "effort_all_models": 0}
         automatic = False
         if kind == "window":
             if not base["window_enabled"]:
                 raise RequestError("This service has no 5-hour limit.", "quota_not_limited")
-            slow = base["window_slow_tokens"] if slow is None else slow
-            if not (_in_range(tokens, 1, REQUEST_TOKENS_MAX) and _in_range(slow, 0, REQUEST_TOKENS_MAX)):
-                raise RequestError("Request between 1 and 100,000,000 tokens.", "quota_range",
+            if not _in_range(tokens, 1, REQUEST_TOKENS_MAX):
+                raise RequestError(f"Request between 1 and {REQUEST_TOKENS_MAX:,} tokens.", "quota_range",
                                    max=REQUEST_TOKENS_MAX)
-            current, current_slow = base["window_tokens"], base["window_slow_tokens"]
-            if tokens < current or slow < current_slow or (tokens == current and slow == current_slow):
-                raise RequestError("A request must raise your quota without lowering either value.",
-                                   "quota_must_raise")
-            values.update(new_tokens=int(tokens), new_slow_tokens=int(slow))
-            # Slow tokens the request leaves as they are (always, while slow tokens are off) are not a raise.
+            if tokens <= base["window_tokens"]:
+                raise RequestError("A request must raise your quota.", "quota_must_raise")
+            values.update(new_tokens=int(tokens))
             automatic = auto and target is None and \
-                tokens <= int(settings.get("quota_auto_approve_max_tokens") or 0) and \
-                (slow == current_slow or slow <= int(settings.get("quota_auto_approve_max_slow_tokens") or 0))
+                tokens <= int(settings.get("quota_auto_approve_max_tokens") or 0)
         elif kind == "weekly":
             if not base["weekly_enabled"]:
                 raise RequestError("This service has no weekly limit.", "quota_not_limited")
@@ -503,7 +499,7 @@ def submit_request(user_id: str, tokens: int | None = None, slow: int | None = N
                 raise RequestError("This service has no 5-hour limit: only unlimited use can be requested.",
                                    "quota_temporary_no_window")
             if not unlimited and not _in_range(tokens, 1, REQUEST_TOKENS_MAX):
-                raise RequestError("Request between 1 and 100,000,000 tokens.", "quota_range",
+                raise RequestError(f"Request between 1 and {REQUEST_TOKENS_MAX:,} tokens.", "quota_range",
                                    max=REQUEST_TOKENS_MAX)
             values.update(new_tokens=0 if unlimited else int(tokens), grant_hours=int(hours),
                           grant_unlimited=int(bool(unlimited)))
@@ -563,11 +559,8 @@ def _apply(row, resolved_by: str) -> None:
     # An automatically approved amount is a floor under the tier's amount (an administrator's approval is exact).
     automatic = row["resolution_source"] == "automatic"
     if kind == "window":
-        new_slow = row["new_slow_tokens"] if row["new_slow_tokens"] is not None else \
-            (row["new_slow_credits"] or 0) * TOKENS_PER_CREDIT
         limits_db.set_override(user_id, pool, resolved_by, automatic=automatic,
-                               window_tokens=_ceil(max(base["window_tokens"], new_tokens)),
-                               window_slow_tokens=_ceil(max(base["window_slow_tokens"], new_slow)))
+                               window_tokens=_ceil(max(base["window_tokens"], new_tokens)))
     elif kind == "weekly":
         new_weekly = row["new_weekly_tokens"] if row["new_weekly_tokens"] is not None else \
             (row["new_weekly_credits"] or 0) * TOKENS_PER_CREDIT

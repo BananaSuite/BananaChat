@@ -6,6 +6,7 @@
   --palette-secondary: {{ palette.secondary }};
   --palette-text: {{ palette.text }};
   --palette-primary: {{ palette.primary }};
+  --palette-on-primary: {{ palette.primary | primary_foreground }};
   --palette-accent: {{ palette.accent }};
   --font-scale: {{ prefs.font_scale }};
   --line-height: {{ ["1.55", "1.8", "2.05"][prefs.line_height] }};

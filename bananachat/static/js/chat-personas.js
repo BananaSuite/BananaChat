@@ -3,6 +3,7 @@
 //
 // Personality texts come from page data and are only ever set with textContent.
 import { api, el, icon, t, toast } from "./core.js";
+import { createComposerPopover } from "./chat-popover.js";
 
 const $ = (id) => document.getElementById(id);
 const COLOR = /^[a-z]{1,16}$/;
@@ -54,7 +55,7 @@ export function initPersonas({ personalities, session, chatUrl, models, isEmpty,
 
   function renderButton() {
     const label = current ? current.name : t("personality_none");
-    button.replaceChildren(current ? personaAvatar(current, "xs") : icon("sparkles"),
+    button.replaceChildren(current ? personaAvatar(current, "xs") : icon("user"),
       el("span", { class: "truncate persona-button-label", text: label }), icon("chevron-down"));
     button.classList.toggle("is-set", Boolean(current));
     button.setAttribute("aria-label", t("personality_button", { name: label }));
@@ -110,7 +111,7 @@ export function initPersonas({ personalities, session, chatUrl, models, isEmpty,
     const node = el("li", {
       id: `persona-option-${index}`, role: "option", class: `model-option persona-option${index === active ? " is-active" : ""}`,
       "aria-selected": selected ? "true" : "false",
-    }, persona.id === null ? el("span", { class: "persona-avatar persona-avatar-none", "aria-hidden": "true" }, icon("sparkles"))
+    }, persona.id === null ? el("span", { class: "persona-avatar persona-avatar-none", "aria-hidden": "true" }, icon("user"))
       : personaAvatar(persona),
     el("span", { class: "persona-option-text" },
       el("span", { class: "model-option-name", text: persona.name }),
@@ -132,24 +133,17 @@ export function initPersonas({ personalities, session, chatUrl, models, isEmpty,
     $(`persona-option-${active}`)?.scrollIntoView({ block: "nearest" });
   }
 
-  function open() {
-    if (!popover.hidden) return;
-    popover.hidden = false;
-    button.setAttribute("aria-expanded", "true");
-    active = Math.max(0, options.findIndex((item) => (item.id ?? null) === (current ? current.id : null)));
-    render();
-    list.focus();
-  }
-
-  function close(focusButton) {
-    popover.hidden = true;
-    button.setAttribute("aria-expanded", "false");
-    if (focusButton) button.focus();
-  }
+  const popup = createComposerPopover({
+    root: picker, button, panel: popover, focusTarget: list, triggers: chip ? [chip] : [],
+    onOpen: () => {
+      active = Math.max(0, options.findIndex((item) => (item.id ?? null) === (current ? current.id : null)));
+      render();
+    },
+  });
 
   async function choose(persona) {
     const next = persona && persona.id !== null ? persona : null;
-    close(true);
+    popup.close(true);
     if ((next ? next.id : null) === (current ? current.id : null) || busy) return;
     busy = true;
     try {
@@ -183,21 +177,10 @@ export function initPersonas({ personalities, session, chatUrl, models, isEmpty,
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       choose(options[active]);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      close(true);
-    } else if (event.key === "Tab") {
-      close(false);
     }
   }
 
-  button.addEventListener("click", () => (popover.hidden ? open() : close(true)));
-  chip?.addEventListener("click", () => open());
   list.addEventListener("keydown", onKey);
-  document.addEventListener("pointerdown", (event) => {
-    if (!popover.hidden && !event.target.closest("#persona-picker") && !event.target.closest("#persona-chip")) close(false);
-  });
   if (manageUrl) $("persona-manage")?.setAttribute("href", manageUrl);
 
   renderButton();

@@ -6,7 +6,7 @@
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">{% endblock %}
 {% block content %}
 {%- set state_labels = {"stopped": t("chat.state_stopped"), "failed": t("chat.state_failed"), "interrupted": t("chat.state_interrupted")} -%}
-<div class="page page-narrow">
+<div class="page">
   <header class="page-header">
     <div>
       <h1>{{ title }}</h1>

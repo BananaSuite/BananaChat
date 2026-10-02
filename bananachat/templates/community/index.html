@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% from "partials/icons.html" import icon %}
 {% block title %}{{ t("community.title") }}{% endblock %}
-{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/account.css') }}">{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/community.css') }}">{% endblock %}
 {% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
 {% block content %}
-<div class="page page-narrow">
+<div class="page community-page">
   <header class="page-header">
     <div>
       <h1>{{ t("community.title") }}</h1>
@@ -12,28 +12,28 @@
     </div>
   </header>
 
-  <div class="stack-lg">
-    <section class="card" aria-labelledby="community-rules">
-      <h2 id="community-rules">{{ t("community.rules_title") }}</h2>
+  <div class="section-stack">
+    <details class="settings-section community-rules" aria-labelledby="community-rules">
+      <summary id="community-rules">{{ t("community.rules_title") }}</summary>
       <p class="mb-1">{{ t("community.rules", min=options.min_supporters, approval=options.approval_percent, hours=options.hours) }}</p>
       {% if options.coverage_percent %}<p class="mb-1">{{ t("community.rules_tokens", coverage=options.coverage_percent, boost=options.boost_hours, share=options.max_pledge_percent) }}</p>
       {% else %}<p class="mb-1">{{ t("community.rules_votes_only", boost=options.boost_hours, share=options.max_pledge_percent) }}</p>{% endif %}
       <p class="hint mb-0">{{ t("community.rules_after", days=options.min_account_days) }}</p>
-    </section>
+    </details>
 
     {% if not options.enabled %}
-    <section class="card"><p class="muted mb-0">{{ t("community.disabled") }}</p></section>
+    <section class="settings-section"><p class="muted mb-0">{{ t("community.disabled") }}</p></section>
     {% elif not items %}
-    <section class="card"><p class="muted mb-0">{{ t("community.empty") }}</p></section>
+    <section class="settings-section"><p class="muted mb-0">{{ t("community.empty") }}</p></section>
     {% endif %}
 
     {% for item in items %}
     {% set row = item.row %}
     {% set c = item.consent %}
-    <section class="card" id="request-{{ row.id }}" aria-labelledby="request-{{ row.id }}-title">
+    <section class="settings-section community-request" id="request-{{ row.id }}" aria-labelledby="request-{{ row.id }}-title">
       <div class="row-between">
         <h2 id="request-{{ row.id }}-title">{{ item.summary }}</h2>
-        <span class="badge badge-warning">{{ t("community.closes", date=(row.community_until | datetime)) }}</span>
+        <span class="hint community-deadline">{{ t("community.closes", date=(row.community_until | datetime)) }}</span>
       </div>
       <p class="muted mb-1">{{ t("community.asked_by", user=row.username, date=(row.created_at | datetime)) }}</p>
       <blockquote class="mb-1">{{ row.reason }}</blockquote>
@@ -47,8 +47,8 @@
       {% if item.problem %}
       <p class="hint mb-0">{{ t("community.cannot_" ~ item.problem, days=options.min_account_days) }}</p>
       {% else %}
-      <div class="row">
-        <form method="post" action="{{ url_for('community.vote', request_id=row.id) }}" class="row" data-busy>
+      <div class="row community-vote">
+        <form method="post" action="{{ url_for('community.vote', request_id=row.id) }}" class="row community-support" data-busy>
           {{ csrf() }}
           <input type="hidden" name="stance" value="support">
           {% if item.scope %}
@@ -77,9 +77,9 @@
     {% endfor %}
 
     {% if pledges %}
-    <section class="card" aria-labelledby="my-pledges">
+    <section class="settings-section" aria-labelledby="my-pledges">
       <h2 id="my-pledges">{{ t("account.pledges") }}</h2>
-      <ul class="plain-list">
+      <ul class="community-pledges">
         {% for row in pledges %}
         <li>{{ t("account.pledge_active" if row.starts_at else "account.pledge_promised", tokens=(row.tokens | tokens), period=t("account.pledge_scope_" ~ (row.scope or "window")), target=(row.model_name if row.model_id is not none else t("account.pool_" ~ (row.pool or "api"))), user=row.username, until=((row.ends_at or "")[:16])) }}</li>
         {% endfor %}

@@ -1,4 +1,4 @@
-{#- The message composer. Behaviour lives in static/js/chat.js. -#}
+{#- Chat composition lives in chat.js; model/reasoning selectors in chat-pickers.js. -#}
 <form class="composer" id="composer" method="post" action="{{ url_for('chat.send', session_id=session.id) }}" enctype="multipart/form-data" novalidate>
   <div class="params-panel" id="params-panel" hidden>
     <fieldset>
@@ -33,10 +33,6 @@
     <textarea id="chat-input" name="content" rows="1" placeholder="{{ t('chat.placeholder_no_history') if session.is_incognito else t('chat.placeholder') }}" aria-describedby="composer-hint" enterkeyhint="send"></textarea>
     <div class="composer-toolbar">
       <div class="composer-tools">
-        {% if not session.is_incognito %}
-        <button type="button" class="icon-btn" id="attach-button"{% if paused %} disabled{% endif %} aria-label="{{ t('chat.attach') }}" title="{{ t('chat.attach') }}">{{ icon("paperclip") }}</button>
-        <input type="file" id="file-input" name="files" multiple hidden{% if paused %} disabled{% endif %} accept="{{ data.limits.accept }}">
-        {% endif %}
         <div class="model-picker" id="model-picker">
           <button type="button" class="btn btn-ghost btn-sm model-button" id="model-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="model-popover">
             <span class="visually-hidden">{{ t("chat.model") }}:</span><span class="truncate" id="model-button-label">{{ t("chat.model_auto") }}</span>{{ icon("chevron-down") }}
@@ -49,7 +45,7 @@
         </div>
         <div class="model-picker effort-picker" id="effort-picker" hidden>
           <button type="button" class="btn btn-ghost btn-sm model-button effort-button" id="effort-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="effort-popover" title="{{ t('chat.effort') }}">
-            {{ icon("brain") }}<span class="visually-hidden">{{ t("chat.effort") }}:</span><span class="truncate" id="effort-button-label"></span>{{ icon("chevron-down") }}
+            {{ icon("brain") }}<span class="picker-label">{{ t("chat.reasoning") }}:</span><span class="truncate" id="effort-button-label"></span>{{ icon("chevron-down") }}
           </button>
           <div class="model-popover effort-popover" id="effort-popover" hidden>
             <p class="effort-popover-title" id="effort-popover-title">{{ t("chat.effort") }}</p>
@@ -60,7 +56,7 @@
         {% if personality_allowed %}
         <div class="model-picker persona-picker" id="persona-picker">
           <button type="button" class="btn btn-ghost btn-sm model-button persona-button" id="persona-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="persona-popover" aria-label="{{ t('personality.chat_picker') }}">
-            {{ icon("sparkles") }}<span class="truncate persona-button-label">{{ t("personality.chat_none") }}</span>{{ icon("chevron-down") }}
+            {{ icon("user") }}<span class="truncate persona-button-label">{{ t("personality.chat_none") }}</span>{{ icon("chevron-down") }}
           </button>
           <div class="model-popover persona-popover" id="persona-popover" hidden>
             <ul class="model-list" id="persona-list" role="listbox" tabindex="-1" aria-label="{{ t('personality.chat_picker') }}"></ul>
@@ -68,10 +64,16 @@
           </div>
         </div>
         {% endif %}
-        <button type="button" class="icon-btn" id="params-toggle" aria-expanded="false" aria-controls="params-panel" aria-label="{{ t('chat.params_toggle') }}" title="{{ t('chat.params_toggle') }}">{{ icon("sliders") }}</button>
-        <button type="button" class="icon-btn" id="voice-button"{% if paused %} disabled{% endif %} aria-pressed="false" aria-label="{{ t('chat.voice_start') }}" title="{{ t('chat.voice_start') }}" hidden>{{ icon("mic") }}</button>
+        <div class="composer-secondary">
+          {% if not session.is_incognito %}
+          <button type="button" class="btn btn-ghost btn-sm composer-action" id="attach-button"{% if paused %} disabled{% endif %} aria-label="{{ t('chat.attach') }}" title="{{ t('chat.attach') }}">{{ icon("paperclip") }}<span class="composer-action-label">{{ t("chat.attach_short") }}</span></button>
+          <input type="file" id="file-input" name="files" multiple hidden{% if paused %} disabled{% endif %} accept="{{ data.limits.accept }}">
+          {% endif %}
+          <button type="button" class="btn btn-ghost btn-sm composer-action" id="params-toggle" aria-expanded="false" aria-controls="params-panel" aria-label="{{ t('chat.params_toggle') }}" title="{{ t('chat.params_toggle') }}">{{ icon("sliders") }}<span class="composer-action-label">{{ t("chat.options") }}</span></button>
+          <button type="button" class="icon-btn" id="voice-button"{% if paused %} disabled{% endif %} aria-pressed="false" aria-label="{{ t('chat.voice_start') }}" title="{{ t('chat.voice_start') }}" hidden>{{ icon("mic") }}</button>
+        </div>
       </div>
-      <button type="submit" class="btn btn-primary send-button" id="send-button"{% if paused %} disabled{% endif %} aria-label="{{ t('chat.send') }}" title="{{ t('chat.send') }}">{{ icon("arrow-up") }}</button>
+      <button type="submit" class="btn btn-primary send-button" id="send-button"{% if paused %} disabled{% endif %} aria-label="{{ t('chat.send') }}" title="{{ t('chat.send') }}">{{ icon("arrow-up") }}<span class="composer-action-label">{{ t("chat.send") }}</span></button>
       <button type="button" class="btn stop-button" id="stop-button" hidden>{{ icon("stop") }}<span>{{ t("chat.stop") }}</span></button>
     </div>
   </div>

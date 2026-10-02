@@ -4,32 +4,34 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Models · Limits{% endblock %}
 {% block admin_content %}
-{{ header("Limits", "How much each model costs, and limits of its own for powerful models.") }}
+{{ header("Limits", "Set model token limits, request rates and how usage counts toward service allowances.") }}
 {% include "admin/_limits_tabs.html" %}
 
-<section class="card stack mb-3" aria-labelledby="models-help-title">
-  <h2 id="models-help-title">Quick start</h2>
-  <p class="mb-0">Pick a <strong>strictness preset</strong> for each model; you can fine-tune it afterwards.</p>
+<details class="settings-section admin-help mb-3">
+  <summary>{{ icon("chevron-down") }}<span id="models-help-title">Quick start</span></summary>
+  <div class="stack">
+  <p class="mb-0">Pick a <strong>preset</strong> for each model; you can fine-tune it afterwards.</p>
   <div class="preset-grid">
     {% for preset in presets %}
-    <div class="sub-card preset-option"><strong>{{ preset | capitalize }}</strong><p class="small muted">{{ preset_help[preset] }}</p></div>
+    <div class="preset-option"><strong>{{ preset | capitalize }}</strong><p class="small muted mb-0">{{ preset_help[preset] }}</p></div>
     {% endfor %}
   </div>
   <ul class="plain-list small muted">
-    <li><strong>Weight</strong>: usage counts tokens × weight against the service limits (5-hour and weekly tokens). People see it as “counts ×3”.</li>
-    <li><strong>Counts toward service limits</strong>: on by default for models served here (Ollama, ComfyUI). Models from other providers are off by default and rely on their own limits.</li>
-    <li><strong>Model limits</strong> apply on top of the service limits and count the model's tokens in every service. Empty fields mean no limit of that kind.</li>
+    <li><strong>Weight</strong> multiplies token usage against service allowances. A weight of 3 counts each token three times.</li>
+    <li><strong>Service tokens</strong> count by default for Ollama and ComfyUI models; other providers are excluded by default. Service request rates still apply.</li>
+    <li><strong>Model limits</strong> count usage across services and apply alongside service limits. Empty token fields mean no model limit.</li>
   </ul>
-</section>
+</div>
+</details>
 
 {% if items %}
-<div class="stack">
+<div class="section-stack">
   {% for item in items %}
   {% set model = item.model %}
   {% set policy = item.policy %}
   {% set prefix = "m" ~ model.id %}
   {#- A refused form shows again, open and as typed. -#}
-  <details class="card model-card" id="model-{{ model.id }}"{% if refused.model_id == model.id %} open{% endif %}>
+  <details class="settings-section model-card" id="model-{{ model.id }}"{% if refused.model_id == model.id %} open{% endif %}>
     <summary>
       <h2>{{ model.display_name }}</h2>
       <span class="badge{% if policy.preset == 'heavy' %} badge-warning{% elif policy.preset == 'light' %} badge-success{% endif %}">{{ policy.preset }}</span>
@@ -37,63 +39,79 @@
       <span class="limit-summary grow">{{ item.facts | join(" · ") }}</span>
       <span class="chevron" aria-hidden="true">{{ icon("chevron-down") }}</span>
     </summary>
-    <form method="post" action="{{ url_for('admin.limit_model_save', model_id=model.id) }}" class="stack" aria-label="Settings of {{ model.display_name }}">
+    <form method="post" action="{{ url_for('admin.limit_model_save', model_id=model.id) }}" class="stack" aria-label="Limits for {{ model.display_name }}">
       {{ csrf() }}
+      <input type="hidden" name="limit_controls" value="1">
       <div class="row">
         <span class="label">Apply a preset:</span>
         {% for preset in presets %}
         <button type="submit" name="action" value="{{ preset }}" class="btn btn-sm" formnovalidate>{{ preset | capitalize }}</button>
         {% endfor %}
       </div>
-      <div class="grid grid-2">
-        <fieldset class="stack">
-          <legend>Cost</legend>
+      <fieldset class="admin-fieldset stack">
+        <legend>Service token accounting</legend>
+        <div class="form-grid">
           <div class="field">
-            <label for="{{ prefix }}-weight" class="required">Weight</label>
+            <label for="{{ prefix }}-weight" class="required">Token weight</label>
             <input type="number" id="{{ prefix }}-weight" name="weight" min="0.01" max="100" step="any" required value="{{ policy.weight if policy.weight is string else '%g' | format(policy.weight) }}" aria-describedby="{{ prefix }}-weight-hint">
-            <span class="hint" id="{{ prefix }}-weight-hint">1 = normal, 0.5 = half, 3 = three times.</span>
+            <span class="hint" id="{{ prefix }}-weight-hint">Multiplier for service token usage: 1 = normal, 0.5 = half, 3 = triple.</span>
           </div>
           <div class="field">
-            <label for="{{ prefix }}-counts">Counts toward service limits</label>
+            <label for="{{ prefix }}-counts">Counts toward service token limits</label>
             <select id="{{ prefix }}-counts" name="counts_toward_pool">
               <option value="default"{% if policy.counts_toward_pool is none %} selected{% endif %}>Default ({{ "yes" if item.counts_default else "no" }})</option>
               <option value="yes"{% if policy.counts_toward_pool == true %} selected{% endif %}>Yes</option>
-              <option value="no"{% if policy.counts_toward_pool == false %} selected{% endif %}>No: only its own limits</option>
+              <option value="no"{% if policy.counts_toward_pool == false %} selected{% endif %}>No: skip service token limits</option>
             </select>
           </div>
-          {% if item.efforts %}
-          <div class="field">
-            <label for="{{ prefix }}-effort">Reasoning effort for everyone</label>
-            <select id="{{ prefix }}-effort" name="effort_default" aria-describedby="{{ prefix }}-effort-hint">
-              <option value="">Site default ({{ site_effort }})</option>
-              {% for level in efforts %}<option value="{{ level }}"{% if policy.effort_default == level %} selected{% endif %}>{{ level | capitalize }}</option>{% endfor %}
-            </select>
-            <span class="hint" id="{{ prefix }}-effort-hint">The highest level people may use until they unlock more. This model takes: {{ item.efforts | join(", ") }}.</span>
-          </div>
-          {% else %}<input type="hidden" name="effort_default" value="{{ policy.effort_default or '' }}">{% endif %}
-        </fieldset>
-        <fieldset class="stack">
-          <legend>Adjustments</legend>
-          {{ toggle("dynamic", "Adjust to demand", policy.dynamic, "Model limits follow demand like the service limits.") }}
-          <div class="field">
-            <label for="{{ prefix }}-sensitivity" class="required">Sensitivity</label>
-            <input type="number" id="{{ prefix }}-sensitivity" name="sensitivity" min="0" max="5" step="0.1" required value="{{ policy.sensitivity if policy.sensitivity is string else '%g' | format(policy.sensitivity) }}" aria-describedby="{{ prefix }}-sensitivity-hint">
-            <span class="hint" id="{{ prefix }}-sensitivity-hint">How strongly demand moves this model's limits: 2 doubles every change (−20 % becomes −40 %).</span>
-          </div>
-          {{ toggle("auto_tiers", "Raise with tier levels", policy.auto_tiers, "Multiply the model's token limits by the account's tier.") }}
-        </fieldset>
-      </div>
-      <fieldset class="stack">
+        </div>
+      </fieldset>
+      <fieldset class="admin-fieldset stack">
         <legend>Model limits</legend>
-        {{ toggle("enabled", "Limit this model", policy.enabled, "Off: only the service limits apply (with the weight).") }}
-        {{ rules_editor(policy.rate_rules, prefix ~ "-rules", units, 3, "Request rate") }}
+        {{ toggle("enabled", "Enable model limits", policy.enabled, "Account overrides still apply when defaults are disabled.") }}
+        {{ toggle("tokens_enabled", "Apply token limits", policy.tokens_enabled, "Off skips model token limits, including account overrides. Service limits and provider capacity still apply.") }}
+        {{ toggle("rate_enabled", "Apply request-rate limits", policy.rate_enabled, "Off skips model rate rules, including account overrides. Service rates still apply.") }}
+        {{ rules_editor(policy.rate_rules, prefix ~ "-rules", units, rule_rows, "Request rate") }}
         <div class="form-grid">
           {{ token_field("window_tokens", "Tokens per 5 hours", policy.window_tokens, prefix ~ "-window", "Empty: no 5-hour limit.", false, "no limit") }}
           {{ token_field("weekly_tokens", "Tokens per week", policy.weekly_tokens, prefix ~ "-weekly", "Empty: no weekly limit.", false, "no limit") }}
         </div>
       </fieldset>
+      <details class="admin-help admin-options"{% if refused.model_id == model.id %} open{% endif %}>
+        <summary>{{ icon("chevron-down") }}Demand and tier adjustments</summary>
+        <div class="stack">
+          {{ toggle("dynamic", "Adjust to demand", policy.dynamic, "Model limits follow demand like the service limits.") }}
+          <div class="field field-narrow">
+            <label for="{{ prefix }}-sensitivity" class="required">Demand sensitivity</label>
+            <input type="number" id="{{ prefix }}-sensitivity" name="sensitivity" min="0" max="5" step="0.1" required value="{{ policy.sensitivity if policy.sensitivity is string else '%g' | format(policy.sensitivity) }}" aria-describedby="{{ prefix }}-sensitivity-hint">
+            <span class="hint" id="{{ prefix }}-sensitivity-hint">Multiplier for demand adjustments. At 2, a −20% change becomes −40%.</span>
+          </div>
+          {{ toggle("auto_tiers", "Apply account tier multiplier", policy.auto_tiers, "Multiply the model's token limits by the account's tier.") }}
+        </div>
+      </details>
+      {% if item.efforts %}
+      <details class="admin-help admin-options"{% if refused.model_id == model.id %} open{% endif %}>
+        <summary>{{ icon("chevron-down") }}Reasoning access</summary>
+        <div class="stack">
+          <div class="field field-narrow">
+            <label for="{{ prefix }}-effort">Default maximum level</label>
+            <select id="{{ prefix }}-effort" name="effort_default" aria-describedby="{{ prefix }}-effort-hint">
+              <option value="">Site default ({{ site_effort }})</option>
+              {% for level in efforts %}<option value="{{ level }}"{% if policy.effort_default == level %} selected{% endif %}>{{ level | capitalize }}</option>{% endfor %}
+            </select>
+            <span class="hint" id="{{ prefix }}-effort-hint">Users may request higher levels. Supported: {{ item.efforts | join(", ") }}.</span>
+          </div>
+          {{ toggle("effort_gating_off", "Allow all reasoning levels", policy.effort_gating_off, "Every supported level, without an unlock request.") }}
+          {{ toggle("effort_auto_unlock_off", "Disable automatic unlocks", policy.effort_auto_unlock_off, "Requests and administrator unlocks remain available.") }}
+        </div>
+      </details>
+      {% else %}
+      <input type="hidden" name="effort_default" value="{{ policy.effort_default or '' }}">
+      {% if policy.effort_gating_off %}<input type="hidden" name="effort_gating_off" value="1">{% endif %}
+      {% if policy.effort_auto_unlock_off %}<input type="hidden" name="effort_auto_unlock_off" value="1">{% endif %}
+      {% endif %}
       <div class="form-actions">
-        <button type="submit" form="reset-{{ model.id }}" class="btn btn-ghost"{% if not item.configured %} disabled{% endif %}>Back to defaults</button>
+        <button type="submit" form="reset-{{ model.id }}" class="btn btn-ghost"{% if not item.configured %} disabled{% endif %}>Restore preset</button>
         <button type="submit" name="action" value="save" class="btn btn-primary">Save {{ model.display_name }}</button>
       </div>
     </form>

@@ -47,6 +47,10 @@ def save():
             "warning_banner_message": text("warning_banner_message", max_length=500, label="Banner message"),
             "default_theme_mode": choice("default_theme_mode", THEMES, label="Default theme"),
         }
+        # Cached forms from an older release do not carry this checkbox.
+        # Only the current form's sentinel makes an unchecked value explicit.
+        if request.form.get("worker_offline_warning_present") == "1":
+            values["worker_offline_warning_enabled"] = 1 if flag("worker_offline_warning_enabled") else 0
         if values["warning_banner_enabled"] and not values["warning_banner_message"]:
             raise FormError("Write the banner message before turning the banner on.")
         for mode in THEMES:

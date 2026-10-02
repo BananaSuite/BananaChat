@@ -217,9 +217,10 @@ class FakeRunner:
                         return self._error(409, "busy", "Another command is running in this sandbox.")
                     try:
                         box.release.clear()
-                        return self._reply(200, fake._exec(box, request["command"], request.get("timeout")))
+                        result = fake._exec(box, request["command"], request.get("timeout"))
                     finally:
                         box.busy.release()
+                    return self._reply(200, result)
                 if action == "files":
                     path = posixpath.normpath(query.get("path", "/workspace"))
                     if not (path == "/workspace" or path.startswith("/workspace/")):

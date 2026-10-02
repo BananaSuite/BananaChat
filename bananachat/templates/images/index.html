@@ -3,7 +3,7 @@
 {% block title %}{{ t("images.title") }}{% endblock %}
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/images.css') }}">{% endblock %}
 {% block content %}
-<div class="page">
+<div class="page images-page">
   <header class="page-header">
     <div>
       <h1>{{ t("images.title") }}</h1>
@@ -20,7 +20,7 @@
   {% else %}
   <noscript><p class="alert alert-warning mb-2">{{ t("images.needs_js") }}</p></noscript>
   <div class="img-layout">
-    <section class="card" aria-labelledby="img-form-title">
+    <section class="img-controls" aria-labelledby="img-form-title">
       <h2 id="img-form-title">{{ t("images.form_title") }}</h2>
       <form id="img-form" class="stack" novalidate>
         <div class="field">
@@ -56,8 +56,8 @@
         </p>
         <p id="img-paused" class="alert alert-warning status-paused mb-0" aria-live="polite">{% if paused %}{{ t("images.paused") }}{% endif %}</p>
         <div class="row-end">
-          <button type="button" class="btn btn-lg" id="img-cancel" hidden>{{ icon("stop") }}{{ t("images.cancel") }}</button>
-          <button type="submit" class="btn btn-primary btn-lg" id="img-generate"{% if paused %} disabled{% endif %}>{{ icon("sparkles") }}{{ t("images.generate") }}</button>
+          <button type="button" class="btn" id="img-cancel" hidden>{{ icon("stop") }}{{ t("images.cancel") }}</button>
+          <button type="submit" class="btn btn-primary" id="img-generate"{% if paused %} disabled{% endif %}>{{ icon("image") }}{{ t("images.generate") }}</button>
         </div>
       </form>
     </section>

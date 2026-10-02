@@ -1,5 +1,6 @@
 {
  "en": {
+  "chat.effort_extra": "Extra",
   "chat.untitled": "New chat",
   "chat.sidebar_label": "Chats",
   "chat.new_chat": "New chat",
@@ -45,7 +46,7 @@
   "chat.conversation": "Conversation",
   "chat.empty_title": "New chat",
   "chat.empty_title_no_history": "New no-history chat",
-  "chat.empty_hint": "Choose a model and write your first message.",
+  "chat.empty_hint": "Write your first message below.",
   "chat.scroll_bottom": "Jump to latest",
   "chat.drop_files": "Drop files to attach them",
   "chat.state_stopped": "The answer was stopped before the end.",
@@ -206,9 +207,12 @@
   "js.chat_effort_selected": "Reasoning effort: {level}",
   "js.chat_badge_weight": "counts ×{factor}",
   "chat.model_unreviewed": "New — not reviewed",
-  "chat.notice_model_quota": "Your quota for {requested} is used up for now, so {model} is answering instead."
+  "chat.notice_model_quota": "Your quota for {requested} is used up for now, so {model} is answering instead.",
+  "chat.attach_short": "Attach",
+  "chat.options": "Options"
  },
  "it": {
+  "chat.effort_extra": "Extra",
   "chat.untitled": "Nuova chat",
   "chat.sidebar_label": "Chat",
   "chat.new_chat": "Nuova chat",
@@ -254,7 +258,7 @@
   "chat.conversation": "Conversazione",
   "chat.empty_title": "Nuova chat",
   "chat.empty_title_no_history": "Nuova chat senza cronologia",
-  "chat.empty_hint": "Scegli un modello e scrivi il primo messaggio.",
+  "chat.empty_hint": "Scrivi il primo messaggio qui sotto.",
   "chat.scroll_bottom": "Vai agli ultimi messaggi",
   "chat.drop_files": "Rilascia i file per allegarli",
   "chat.state_stopped": "La risposta è stata interrotta prima della fine.",
@@ -415,6 +419,8 @@
   "js.chat_effort_selected": "Livello di ragionamento: {level}",
   "js.chat_badge_weight": "conta ×{factor}",
   "chat.model_unreviewed": "Nuovo — non ancora esaminato",
-  "chat.notice_model_quota": "La tua quota per {requested} è esaurita per ora, quindi risponde {model}."
+  "chat.notice_model_quota": "La tua quota per {requested} è esaurita per ora, quindi risponde {model}.",
+  "chat.attach_short": "Allega",
+  "chat.options": "Opzioni"
  }
 }

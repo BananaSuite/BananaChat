@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import secrets
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from bananachat import db
@@ -18,7 +20,7 @@ ROLES = ("user", "admin")
 FONT_SCALES = (0.85, 0.9, 1.0, 1.1, 1.2, 1.35)
 PREFERENCE_DEFAULTS = {
     "theme_mode": "default", "interface_language": "default", "font_scale": 1.0, "contrast": 0,
-    "line_height": 0, "letter_spacing": 0, "reduce_motion": False, "sidebar_width": 280,
+    "line_height": 0, "letter_spacing": 0, "reduce_motion": False, "sidebar_width": 250,
     "custom_bg": "", "custom_text": "", "custom_primary": "", "custom_secondary": "",
     "custom_accent": "", "custom_sidebar": "",
     "semantic_bold": 0, "semantic_italic": 0, "semantic_code": 0, "semantic_link": 0, "semantic_heading": 0,
@@ -33,7 +35,7 @@ _BACKGROUND = re.compile(r"^[0-9a-f]{32}\.jpe?g$")
 def _int_in(value, low, high, default):
     try:
         number = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return number if low <= number <= high else default
 
@@ -48,14 +50,15 @@ def clean_preferences(raw) -> dict:
         prefs["interface_language"] = raw["interface_language"]
     try:
         scale = float(raw.get("font_scale", 1.0))
-        prefs["font_scale"] = min(FONT_SCALES, key=lambda option: abs(option - scale))
-    except (TypeError, ValueError):
+        if math.isfinite(scale):
+            prefs["font_scale"] = min(FONT_SCALES, key=lambda option: abs(option - scale))
+    except (TypeError, ValueError, OverflowError):
         pass
     prefs["contrast"] = _int_in(raw.get("contrast"), 0, 5, 0)
     prefs["line_height"] = _int_in(raw.get("line_height"), 0, 2, 0)
     prefs["letter_spacing"] = _int_in(raw.get("letter_spacing"), 0, 2, 0)
     prefs["reduce_motion"] = raw.get("reduce_motion") is True or raw.get("reduce_motion") in (1, "1", "true")
-    prefs["sidebar_width"] = _int_in(raw.get("sidebar_width"), 200, 420, 280)
+    prefs["sidebar_width"] = _int_in(raw.get("sidebar_width"), 200, 420, PREFERENCE_DEFAULTS["sidebar_width"])
     for key in COLOR_KEYS:
         value = raw.get(key)
         prefs[key] = value.lower() if isinstance(value, str) and _HEX_COLOR.match(value) else ""
@@ -136,9 +139,38 @@ def _escape_like(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def set_password(user_id: str, password_hash: str, *, keep_session: str | None = None) -> None:
-    """Change a password and end every other login session of the account."""
+class AuthenticationChanged(ValueError):
+    """The credentials or login session verified by a request have been revoked."""
+
+
+@contextmanager
+def verified_credentials(user_id: str, password_hash: str, id_hash: str | None):
+    """Lock an account mutation to the password and session already verified.
+
+    Hash verification can run outside the write transaction; the action itself
+    must run inside this context to respect concurrent resets and revocation.
+    """
     with db.transaction():
+        current = get(user_id)
+        live = id_hash and db.one(
+            "SELECT 1 FROM auth_sessions WHERE user_id=? AND id_hash=? AND expires_at>?",
+            (user_id, id_hash, db.now()))
+        if current is None or current["password"] != password_hash or not live or is_suspended(current):
+            raise AuthenticationChanged("The verified credentials or session have changed.")
+        yield current
+
+
+def set_password(user_id: str, password_hash: str, *, keep_session: str | None = None,
+                 expected_password: str | None = None) -> None:
+    """Change a password and end every other login session of the account.
+
+    Account self-service supplies the hash it verified. Check it and the retained
+    session under the same lock as the update so revocation cannot be undone by
+    an in-flight password change. Administrator resets need no old password.
+    """
+    guard = (verified_credentials(user_id, expected_password, keep_session)
+             if expected_password is not None else db.transaction())
+    with guard:
         db.execute("UPDATE users SET password=? WHERE id=?", (password_hash, user_id))
         revoke_sessions(user_id, except_hash=keep_session)
 
@@ -247,8 +279,14 @@ def refresh_session(session_row, days: int) -> None:
 
 
 def end_session(token: str) -> None:
-    if token:
-        db.execute("DELETE FROM auth_sessions WHERE id_hash=?", (_hash(token),))
+    """End one login session and retire the account's previous-release cookies."""
+    if not token:
+        return
+    id_hash = _hash(token)
+    with db.transaction():
+        row = db.one("SELECT user_id FROM auth_sessions WHERE id_hash=?", (id_hash,))
+        if row:
+            revoke_session(row["user_id"], id_hash)
 
 
 def session_hash(token: str) -> str:
@@ -262,7 +300,17 @@ def list_sessions(user_id: str):
 
 
 def revoke_session(user_id: str, id_hash: str) -> bool:
-    return db.execute("DELETE FROM auth_sessions WHERE user_id=? AND id_hash=?", (user_id, id_hash)).rowcount == 1
+    """End one session without letting an old cookie recreate it.
+
+    Old cookies have an account-wide version, so all unconverted cookies for
+    this account must be retired. Other server-side sessions stay valid.
+    """
+    with db.transaction():
+        removed = db.execute("DELETE FROM auth_sessions WHERE user_id=? AND id_hash=?",
+                             (user_id, id_hash)).rowcount == 1
+        if removed:
+            db.execute("UPDATE users SET session_version=session_version+1 WHERE id=?", (user_id,))
+        return removed
 
 
 def revoke_sessions(user_id: str, *, except_hash: str | None = None) -> None:

@@ -17,10 +17,10 @@
 {{ header("Invitations", "Invitation links let people create an account while sign-up is invite-only.") }}
 
 {% if settings.signup_mode != "invite" %}
-<div class="alert alert-info mb-3">{{ icon("info") }}<p>Sign-up is currently <strong>{{ "open to everyone" if settings.signup_mode == "open" else "disabled" }}</strong>, so invitations are {{ "not needed" if settings.signup_mode == "open" else "not accepted" }}. Change this in <a href="{{ url_for('admin.settings') }}">Settings</a>.</p></div>
+<div class="alert alert-info mb-3">{{ icon("info") }}<p>Sign-up is currently <strong>{{ "open to everyone" if settings.signup_mode == "open" else "disabled" }}</strong>, so invitations are {{ "not needed" if settings.signup_mode == "open" else "not accepted" }}. Change this in <a href="{{ url_for('admin.settings') }}">Site settings</a>.</p></div>
 {% endif %}
 
-<section class="card mb-3" aria-labelledby="create-title">
+<section class="settings-section mb-3" aria-labelledby="create-title">
   <h2 id="create-title">Create an invitation</h2>
   <form method="post" action="{{ url_for('admin.invite_create') }}" class="stack" data-busy>
     {{ csrf() }}

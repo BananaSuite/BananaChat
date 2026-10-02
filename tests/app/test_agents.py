@@ -584,7 +584,7 @@ def test_capability_gating_and_navigation(agents_app, fake_ollama):
     admin.login("admin", "admin-password")
 
     page = alice.get("/agents").get_data(as_text=True)
-    assert "An administrator has not enabled agents" in page or "non ha attivato" in page
+    assert "Cloud sessions are off" in page or "sessioni cloud sono disattivate" in page
     assert start(alice).status_code == 403
     assert 'href="/agents"' not in alice.get("/account").get_data(as_text=True)
 
@@ -753,8 +753,8 @@ def test_pages_render_in_both_languages(env, fake_ollama, language):
     with env.browser.client.session_transaction() as session:
         session["language"] = language
     page = env.browser.get("/agents").get_data(as_text=True)
-    assert ("New task" if language == "en" else "Nuovo compito") in page
-    assert ("Agents" if language == "en" else "Agenti") in page
+    assert ("New session" if language == "en" else "Nuova sessione") in page
+    assert ("Cloud sessions" if language == "en" else "Sessioni cloud") in page
     assert 'id="new-task-form"' in page and "<script>" not in page and "style=" not in page
     fake_ollama.tool_script = [{"content": "Thinking <b>aloud</b>", "tool_calls": [
         {"name": "bash", "arguments": {"command": "echo '<img src=x onerror=alert(1)>'"}}]},
@@ -800,7 +800,7 @@ def test_admin_settings_models_and_audit(env, fake_ollama):
     admin = Browser(env.app)
     admin.login("admin", "admin-password")
     page = admin.get("/admin/agents").get_data(as_text=True)
-    assert "Sandbox runner" in page and "podman" in page and "Stop all running tasks" in page
+    assert "Sandbox runner" in page and "podman" in page and "Stop all sessions" in page
     response = admin.post("/admin/agents/settings", {"enabled": "1", "max_steps": "100000", "max_minutes": "20"})
     assert response.status_code == 302
     set_values = {name: str(value) for name, value in FAST_SETTINGS.items() if name != "enabled"}
@@ -839,7 +839,7 @@ def test_admin_kill_switch_and_task_log(agents_app, runner, fake_ollama):
         wait_for(lambda task_id=task_id: task_row(app, task_id)["status"] == "running", message="running")
     admin = Browser(app)
     admin.login("admin", "admin-password")
-    assert "Running tasks" in admin.get("/admin/agents").get_data(as_text=True)
+    assert "Active sessions" in admin.get("/admin/agents").get_data(as_text=True)
     started = time.monotonic()
     assert admin.post("/admin/agents/stop-all").status_code == 302
     for task_id in ids:
@@ -847,7 +847,7 @@ def test_admin_kill_switch_and_task_log(agents_app, runner, fake_ollama):
         assert error_key(app, row["error"]) == "agents.stopped_admin"
     assert time.monotonic() - started < 6
     page = admin.get(f"/admin/agents/tasks/{ids[0]}").get_data(as_text=True)
-    assert "Build it" in page and "An administrator stopped the task." in page
+    assert "Build it" in page and "An administrator stopped the session." in page
     from bananachat import db
     with app.app_context():
         assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='admin.agents.stop_all'") == 1
