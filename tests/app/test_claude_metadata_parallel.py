@@ -57,7 +57,7 @@ def metadata_adapter(tmp_path, monkeypatch):
         path = tmp_path / "connector.json"
         path.write_text(json.dumps(manifest))
         path.chmod(0o600)
-        adapter = Adapter(SimpleNamespace(claude_code_config=str(path)))
+        adapter = Adapter(SimpleNamespace(environment="testing", claude_code_config=str(path)))
 
         def bindings():
             assert not threading.current_thread().name.startswith("bc-claude-metadata")

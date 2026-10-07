@@ -541,8 +541,14 @@ def check_customization(browser, base, app) -> list[str]:
         held.clear()
         page.locator("#font_scale").select_option("1.2")
         wait_for_writes(1)
-        page.locator('label:has(input[name="contrast"][value="3"])').click()
-        reset()
+        # Schedule the change and confirm reset in one browser task. Separate
+        # Playwright clicks can spend the debounce window waiting for scrolling
+        # and animations, leaving an already queued write instead of this race.
+        page.evaluate("""() => {
+            document.querySelector('input[name="contrast"][value="3"]').click();
+            document.querySelector('#reset-all').click();
+            document.querySelector('dialog[open] .btn-danger').click();
+        }""")
         page.wait_for_function("() => document.querySelector('#reset-all').disabled")
         page.wait_for_timeout(600)
         assert len(held) == 1, "preferences: reset left a pending appearance save"

@@ -329,9 +329,13 @@ def lane_count(task_id: str) -> int:
 
 # ----- follow-up messages -------------------------------------------------------------
 
-def add_message(task_id: str, user_id: str, content: str) -> int:
-    return db.execute("INSERT INTO agent_messages (task_id, user_id, content, created_at) VALUES (?,?,?,?)",
-                      (task_id, user_id, _clip(content, 50_000), db.now())).lastrowid
+def add_message(task_id: str, user_id: str, content: str, *, max_pending: int | None = None) -> int:
+    """Queue a follow-up, checking an optional pending bound atomically."""
+    with db.transaction():
+        if max_pending is not None and pending_messages(task_id) >= max_pending:
+            raise Busy("messages")
+        return db.execute("INSERT INTO agent_messages (task_id, user_id, content, created_at) VALUES (?,?,?,?)",
+                          (task_id, user_id, _clip(content, 50_000), db.now())).lastrowid
 
 
 def pending_messages(task_id: str) -> int:

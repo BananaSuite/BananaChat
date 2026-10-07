@@ -53,6 +53,7 @@ def metadata(tmp_path):
     binary.write_text(FAKE)
     binary.chmod(0o700)
     adapter = Adapter.__new__(Adapter)
+    adapter.sandboxed = False  # Explicit synthetic subprocess fixture; skips production setup.
     adapter.binary, adapter.timeout = str(binary), 30
     profile = {"home": str(home), "config_dir": str(home)}
     (home / "scenario.json").write_text(json.dumps({"models": CATALOG}))

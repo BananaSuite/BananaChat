@@ -62,6 +62,8 @@ class FakeOllama:
         self.fail_models: set[str] = set()
         self.hang_models: set[str] = set()
         self.omit_usage = False
+        self.json_overrides: dict[str, object] = {}
+        self.chat_records: list | None = None
         self.requests: list[tuple[str, dict]] = []
         self.pull_steps = 3
         self.deleted: list[str] = []
@@ -153,6 +155,9 @@ class FakeOllama:
             def do_GET(self):
                 if not self._authorized():
                     return
+                if self.path in fake.json_overrides:
+                    self._json(200, fake.json_overrides[self.path])
+                    return
                 if self.path == "/api/tags":
                     if fake.tags_status:
                         self._json(fake.tags_status, {"error": "listing failed"})
@@ -227,6 +232,18 @@ class FakeOllama:
                     return
                 if model in fake.hang_models:
                     time.sleep(30)
+                    return
+                if fake.chat_records is not None:
+                    self._stream_start()
+                    try:
+                        for record in fake.chat_records:
+                            if isinstance(record, bytes):
+                                self.wfile.write(record + b"\n")
+                                self.wfile.flush()
+                            else:
+                                self._line(record)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
                     return
                 if body.get("tools"):
                     self._tool_chat(model, body)

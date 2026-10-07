@@ -10,6 +10,33 @@ import pytest
 from tests.app.conftest import Browser, TEST_CSRF
 
 
+@pytest.mark.parametrize("new_mode", ["disabled", "invite"])
+def test_signup_rechecks_registration_policy_after_password_hashing(app, monkeypatch, new_mode):
+    from bananachat import security
+    from bananachat.db import settings, users
+
+    with app.app_context():
+        settings.update(signup_mode="open")
+    hash_password = security.hash_password
+
+    def hash_and_change_policy(password):
+        hashed = hash_password(password)
+        settings.update(signup_mode=new_mode)
+        return hashed
+
+    monkeypatch.setattr(security, "hash_password", hash_and_change_policy)
+    browser = Browser(app)
+    response = browser.post("/signup", {"username": "policy-race", "password": "new-password",
+                                        "confirm_password": "new-password"})
+    if new_mode == "disabled":
+        assert response.status_code == 302 and response.headers["Location"].endswith("/login")
+    else:
+        assert response.status_code == 400
+    with app.app_context():
+        assert users.get_by_username("policy-race") is None
+    assert browser.fetch("/api/preferences").status_code == 401
+
+
 @pytest.mark.parametrize("change", ["password", "revoke", "suspend"])
 def test_login_cannot_restore_access_revoked_during_password_check(app, make_user, monkeypatch, change):
     from bananachat import security

@@ -59,7 +59,7 @@ available; an administrator can still set an account's queue priority to slow.
 
 - [Deployment and updates](docs/deployment.md) · [Backups](docs/backups.md) · [Configuration](docs/configuration.md)
 - [API](docs/api.md) · [Image generation with ComfyUI](docs/comfyui.md) · [Compute node](docs/compute.md) · [Worker PCs](docs/workers.md)
-- [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Capacity](docs/capacity.md)
+- [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Capacity](docs/capacity.md) · [Production validation](docs/production-readiness.md)
 - [Contributing](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Security policy](SECURITY.md)
 
 ## Privacy

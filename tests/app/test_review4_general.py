@@ -80,24 +80,32 @@ def test_playground_limit_refusals_are_in_the_readers_language(app, alice):
 
 # ----- chat sidebar ------------------------------------------------------------------------------------
 
-def test_renaming_and_sharing_from_search_results_updates_the_result(chat_page):
+@pytest.mark.parametrize("language", ["en", "it"])
+def test_renaming_and_sharing_from_search_results_updates_the_result(app, chat_page, language):
     """The search results are entries of their own: after a rename or a share they show the new state."""
+    from bananachat.db import users
+    from bananachat.i18n import translate
     from tests.app.test_review2_chat import _send
 
+    with app.app_context():
+        users.save_preferences(users.get_by_username("alice")["id"], {"interface_language": language})
+    chat_page.reload()
+    chat_page.wait_for_selector("#chat-input")
+    assert chat_page.locator("html").get_attribute("lang") == language
     _send(chat_page, "Bananas are berries")
     chat_page.click("form[action$='/chat/new'] button[type=submit]")
     chat_page.wait_for_selector("#chat-input")
     chat_page.fill("#chat-search", "Bananas")
     result = chat_page.wait_for_selector("#search-results .session-item")
     result.query_selector(".session-menu-button").click()
-    chat_page.click("#popup-menu [role=menuitem]:has-text('Rename')")
+    chat_page.get_by_role("menuitem", name=translate(language, "js.chat_rename"), exact=True).click()
     chat_page.fill("dialog[open] input", "Fruit facts")
     chat_page.keyboard.press("Enter")
     chat_page.wait_for_function("() => document.querySelector('#search-results .session-item')?.dataset.title === 'Fruit facts'",
                                 timeout=5000)
     assert "Fruit facts" in result.inner_text()
     result.query_selector(".session-menu-button").click()
-    chat_page.click("#popup-menu [role=menuitem]:has-text('Share')")
+    chat_page.get_by_role("menuitem", name=translate(language, "js.chat_share"), exact=True).click()
     chat_page.wait_for_selector("dialog[open]")
     chat_page.keyboard.press("Escape")
     assert result.get_attribute("data-shared") == "1"

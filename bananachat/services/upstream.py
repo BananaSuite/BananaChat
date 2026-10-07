@@ -88,12 +88,18 @@ class CancelToken:
 
 
 def _connection(url: str, timeout: float):
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        raise UpstreamError("The backend URL is not configured correctly.") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise UpstreamError("The backend URL must be http:// or https://.")
     if parts.username or parts.password:
         raise UpstreamError("Do not put credentials in the backend URL; use the API key setting.")
-    port = parts.port or (443 if parts.scheme == "https" else 80)
+    if port == 0 or parts.query or parts.fragment or "\\" in url or parts.netloc.endswith(":"):
+        raise UpstreamError("The backend URL is not configured correctly.")
+    port = port or (443 if parts.scheme == "https" else 80)
     if parts.scheme == "https":
         return http.client.HTTPSConnection(parts.hostname, port, timeout=timeout,
                                            context=ssl.create_default_context()), parts
@@ -109,37 +115,50 @@ class Response:
     """An open streaming response. Always close it (use ``with``)."""
 
     def __init__(self, connection, response, *, read_timeout: float, deadline: float | None,
-                 max_bytes: int, cancel: CancelToken | None):
+                 max_bytes: int, cancel: CancelToken | None, response_socket=None,
+                 deadline_cancel: CancelToken | None = None, deadline_handle: int | None = None):
         self._connection = connection
         self._response = response
         self._read_timeout = read_timeout
         self._deadline = deadline
         self._remaining = max_bytes
         self._cancel = cancel
+        # HTTPConnection detaches its socket for Connection: close responses;
+        # the response's file still uses it until its body has been consumed.
+        self._socket = response_socket if response_socket is not None else connection.sock
+        self._deadline_cancel = deadline_cancel
+        self._deadline_handle = deadline_handle
         self.status = response.status
         self.headers = response.headers
         if cancel is not None:
             cancel.on_cancel(self._abort)
+        if deadline_cancel is not None:
+            deadline_cancel.on_cancel(self._abort)
 
     def _abort(self):
         try:
-            sock = self._connection.sock
+            sock = self._socket
             if sock is not None:
                 sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
 
-    def _prepare_read(self):
+    def _check_budget(self):
         if self._cancel is not None:
             self._cancel.check()
+        if self._deadline is not None and time.monotonic() >= self._deadline:
+            raise UpstreamError("The backend took too long to respond.", kind="timeout")
+
+    def _prepare_read(self):
+        self._check_budget()
         timeout = self._read_timeout
         if self._deadline is not None:
             left = self._deadline - time.monotonic()
             if left <= 0:
-                raise UpstreamError("The backend took too long to respond.")
+                raise UpstreamError("The backend took too long to respond.", kind="timeout")
             timeout = min(timeout, left)
-        sock = self._connection.sock
-        if sock is not None:
+        sock = self._socket
+        if sock is not None and sock.fileno() >= 0:
             sock.settimeout(timeout)
 
     def set_read_timeout(self, seconds: float) -> None:
@@ -154,15 +173,17 @@ class Response:
     def _call(self, function, *args):
         self._prepare_read()
         try:
-            return function(*args)
+            result = function(*args)
         except (socket.timeout, TimeoutError):
-            if self._cancel is not None and self._cancel.cancelled:
-                raise Cancelled(self._cancel.reason) from None
+            self._check_budget()
             raise UpstreamError("The backend stopped responding.", kind="timeout") from None
         except (OSError, http.client.HTTPException) as error:
-            if self._cancel is not None and self._cancel.cancelled:
-                raise Cancelled(self._cancel.reason) from None
+            self._check_budget()
             raise UpstreamError(f"The connection to the backend failed: {error}", kind="connect") from None
+        # shutdown() can return a short read or EOF instead of raising. Neither
+        # is a successful response after cancellation or the total deadline.
+        self._check_budget()
+        return result
 
     def read(self, size: int = -1) -> bytes:
         return self._account(self._call(self._response.read, size))
@@ -173,8 +194,8 @@ class Response:
             raise UpstreamError("The backend sent an oversized record.")
         return self._account(line)
 
-    def iter_json_lines(self):
-        """Yield decoded objects from an NDJSON body; malformed lines are skipped."""
+    def iter_json_lines(self, *, strict=False):
+        """Yield NDJSON values; strict streams refuse malformed or over-nested records."""
         while True:
             line = self.readline()
             if not line:
@@ -184,7 +205,9 @@ class Response:
                 continue
             try:
                 yield json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):
+                if strict:
+                    raise UpstreamError("The backend returned invalid stream JSON.") from None
                 continue
 
     def json(self, limit: int = 16 * 1024 * 1024):
@@ -193,12 +216,18 @@ class Response:
             raise UpstreamError("The backend response is too large.")
         try:
             return json.loads(data or b"null")
-        except ValueError:
+        except (ValueError, RecursionError):
             raise UpstreamError("The backend returned invalid JSON.") from None
 
     def close(self):
         if self._cancel is not None:
             self._cancel.remove(self._abort)
+        if self._deadline_cancel is not None:
+            self._deadline_cancel.remove(self._abort)
+        if self._deadline_handle is not None:
+            from bananachat.services import supervisor
+            supervisor.clear_deadline(self._deadline_handle)
+            self._deadline_handle = None
         try:
             self._response.close()
         finally:
@@ -219,6 +248,8 @@ def open_request(method: str, base_url: str, path: str, *, body=None, headers=No
     if cancel is not None:
         cancel.check()
     deadline = time.monotonic() + total_timeout if total_timeout else None
+    if deadline is not None:
+        connect_timeout = min(connect_timeout, total_timeout)
     connection, parts = (connection_factory or _connection)(base_url, connect_timeout)
     payload = None
     send_headers = {"Accept": "application/json", "Connection": "close", "User-Agent": "BananaChat"}
@@ -228,19 +259,30 @@ def open_request(method: str, base_url: str, path: str, *, body=None, headers=No
     send_headers.update(headers or {})
 
     aborter = None
-    if cancel is not None:
+    deadline_cancel = deadline_handle = None
+    if deadline is not None:
+        from bananachat.services import supervisor
+        deadline_cancel = CancelToken()
+        deadline_handle = supervisor.cancel_at(deadline, deadline_cancel)
+    if cancel is not None or deadline_cancel is not None:
         def aborter():
             try:
                 if connection.sock is not None:
                     connection.sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-        cancel.on_cancel(aborter)
+        if cancel is not None:
+            cancel.on_cancel(aborter)
+        if deadline_cancel is not None:
+            deadline_cancel.on_cancel(aborter)
     try:
         try:
             if cancel is not None:
                 cancel.check()
+            if deadline is not None and time.monotonic() >= deadline:
+                raise UpstreamError("The backend took too long to respond.", kind="timeout")
             connection.request(method, _target(parts, path), body=payload, headers=send_headers)
+            response_socket = connection.sock
             if connection.sock is not None:
                 wait = first_byte_timeout
                 if deadline is not None:
@@ -254,16 +296,24 @@ def open_request(method: str, base_url: str, path: str, *, body=None, headers=No
         except (OSError, http.client.HTTPException) as error:
             if cancel is not None and cancel.cancelled:
                 raise Cancelled(cancel.reason) from None
+            if deadline is not None and time.monotonic() >= deadline:
+                raise UpstreamError("The backend took too long to respond.", kind="timeout") from None
             raise UpstreamError(f"The backend could not be reached: {error}", kind="connect") from None
     except BaseException:
         connection.close()
+        if deadline_handle is not None:
+            supervisor.clear_deadline(deadline_handle)
         raise
     finally:
         if aborter is not None:
-            cancel.remove(aborter)
+            if cancel is not None:
+                cancel.remove(aborter)
+            if deadline_cancel is not None:
+                deadline_cancel.remove(aborter)
 
     response = Response(connection, raw, read_timeout=read_timeout, deadline=deadline, max_bytes=max_bytes,
-                        cancel=cancel)
+                        cancel=cancel, response_socket=response_socket,
+                        deadline_cancel=deadline_cancel, deadline_handle=deadline_handle)
     if not 200 <= raw.status < 300:
         try:
             message, code = _error_details(response)
@@ -275,8 +325,8 @@ def open_request(method: str, base_url: str, path: str, *, body=None, headers=No
 
 def _error_details(response: Response) -> tuple[str, str | None]:
     try:
-        data = response._response.read(16384)
-    except (OSError, http.client.HTTPException):
+        data = response.read(16384)
+    except (UpstreamError, OSError, http.client.HTTPException):
         return "", None
     try:
         parsed = json.loads(data)
@@ -288,7 +338,7 @@ def _error_details(response: Response) -> tuple[str, str | None]:
                 error = error.get("message")
             if isinstance(error, str):
                 return error[:500], (code[:64] if code else None)
-    except ValueError:
+    except (ValueError, RecursionError):
         pass
     return data.decode("utf-8", errors="replace").strip()[:300], None
 

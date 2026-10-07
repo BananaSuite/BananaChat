@@ -12,24 +12,43 @@ are required. API billing is deliberately not a fallback.
    service identity. Install the official Claude Code CLI using Anthropic's
    installation instructions. Pin and test the deployed version: it must
    support `auth status`, `--safe-mode`, `--system-prompt-file`, `--effort`,
-   `--include-partial-messages` and the other flags below.
+   `--include-partial-messages` and the other flags below. Production requires
+   Bubblewrap (`apt install bubblewrap` on Debian), with unprivileged user
+   namespaces available. Install the standalone native CLI in a root-owned,
+   non-writable directory such as `/opt/claude/bin/claude`. The executable and
+   its parent directories must belong to root and have no group/other writes.
+   The binary must be publicly readable/executable (`0755`), with searchable
+   parent directories (`0755`); root-only permissions refuse managed preflight.
 2. Create a private home and configuration directory for each subscription,
    owned by that identity, with mode `0700`. Keep them outside the repository,
    web root, uploads and source backups. Give each account a distinct directory;
-   do not point two profiles at the same authentication state.
+   do not point two profiles at the same authentication state. Their outer
+   parent directories must be root-owned and non-writable by the service user.
+   Keep them under `/srv`, outside the managed installation; `/home`, `/root`,
+   `/tmp` and system directories are refused. Account directories cannot
+   overlap. For a default managed installation, create the first profile with:
+
+   ```sh
+   sudo install -d -m 0755 /srv/bananachat-claude
+   sudo install -d -m 0700 -o bananachat -g bananachat \
+     /srv/bananachat-claude/account-one \
+     /srv/bananachat-claude/account-one/config
+   ```
 3. Authenticate each profile with the official login flow, as the service user:
 
    ```sh
-   HOME=/srv/bananachat-claude/account-one \
+   sudo -u bananachat env HOME=/srv/bananachat-claude/account-one \
    CLAUDE_CONFIG_DIR=/srv/bananachat-claude/account-one/config \
    /opt/claude/bin/claude auth login
    ```
 
    Log in with the intended subscription account, then verify with the same
-   environment and `claude auth status`. The connector requires `loggedIn: true`
+   environment and `claude auth status`. Replace `bananachat` with the service
+   name chosen at installation. The connector requires `loggedIn: true`
    and `authMethod: "claude.ai"`; API-key/helper/third-party/token-override
    authentication is rejected. Never upload these authentication files to Git.
-4. Create a private JSON manifest (`0600`, same service owner). See
+4. Create a readable private JSON manifest (`0600`, same service owner),
+   outside every profile, with parent directories the service can traverse. See
    [claude-code.example.json](claude-code.example.json). Set the actual executable
    path and profile directories. Automatic discovery asks the official CLI for its supported models and
    reasoning levels through the SDK control protocol, without generating a
@@ -43,8 +62,14 @@ are required. API billing is deliberately not a fallback.
    BC_CLAUDE_CODE_CONFIG=/srv/bananachat-claude/connector.json
    ```
 
-   Apply these as environment variables through your deployment's service or
-   container configuration. An unset extension leaves Claude disconnected.
+   For a managed installation, add these values to its private
+   `/opt/bananachat/config/app.env`, then run `sudo bananachat restart`.
+   Start/restart validates the manifest before stopping a healthy service and
+   regenerates only the profile directories' `ReadWritePaths`. It retains
+   `ProtectSystem=strict`, `ProtectHome=true` and `NoNewPrivileges=true`.
+   Other deployments must give the service write access to those same private
+   profiles and permit Bubblewrap's user, mount, PID, IPC, UTS and cgroup
+   namespaces. An unset extension leaves Claude disconnected.
    Manifest changes require restarting all application workers.
 6. In **Administration → Models → Claude**, add an account for each profile you
    want to use. Choose its profile, priority, five-hour token budget and optional
@@ -192,10 +217,29 @@ On Linux, cleanup also waits for non-zombie process-group descendants to stop.
 If shutdown cannot be confirmed, the pooled account is disabled for operator
 review before its lease is released.
 
-CLI flags are **not an operating-system sandbox**. For production, run this
-provider service in an OS/container sandbox without host/deployment secrets,
-repositories or user uploads. Mount only the needed private profiles and the
-connector configuration. Managed Claude Code policy can still add managed
+Production native calls run inside Bubblewrap with a fresh filesystem and PID
+namespace, no capabilities and no new privileges. Read-only system runtime,
+public DNS/CA files and the native executable are mounted; only the active
+profile is persistently writable. Chat's installation, data, uploads, connector
+manifest, other profiles and host process descriptors are absent. Sandbox setup
+failures refuse the native call; production never retries without isolation.
+All deployments must keep source, storage and the global connector manifest
+outside the exposed public runtime trees, including `/usr/local/bin` and
+`/usr/local/lib`. Profile paths are checked again before each invocation;
+a replaced nested configuration symlink refuses the call, and nested
+configuration uses only its enclosing home mount.
+Only explicit `BC_ENV=development` or `testing` permits the subprocess fixtures
+to run without Bubblewrap.
+
+Outbound networking and the operator's proxy settings remain available. Extra
+CA trust (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` or
+`CURL_CA_BUNDLE`) must name a root-owned, non-writable, world-readable regular
+file; that file alone is mounted read-only, including when outside `/etc`.
+`SSL_CERT_DIR` supports `/etc/ssl/certs` only. Copy custom public trust files to
+a root-owned location when necessary; arbitrary certificate parent directories
+are never mounted. Maintain the deployment's approved egress policy.
+
+CLI safe-mode flags add a separate restriction. Managed Claude Code policy can still add managed
 hooks; the operator must verify that policy before enabling the service. The
 manifest/executable/profile files are trusted operator configuration, not
 browser uploads. Separate OS identities/containers are preferable if stricter

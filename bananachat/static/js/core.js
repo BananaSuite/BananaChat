@@ -91,7 +91,9 @@ export function keepInitialFragmentVisible(target) {
     window.addEventListener("scroll", () => {
       const rect = target.getBoundingClientRect();
       const top = document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0;
-      if (rect.top >= window.innerHeight || rect.bottom <= top) {
+      const fitsViewport = rect.height <= window.innerHeight - top;
+      // Fields should fit completely; taller sections keep their leading edge visible.
+      if (rect.top < top || rect.top >= window.innerHeight || (fitsViewport && rect.bottom > window.innerHeight)) {
         cancel();
         target.scrollIntoView({ block: "start" });
       }

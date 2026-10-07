@@ -1,9 +1,10 @@
 """Runtime configuration read from ``BC_*`` environment variables.
 
 Every setting has a safe default, so an installation keeps working when an
-update introduces a new option. Invalid values never crash the server: they
-are replaced by the default (or clamped into range) and reported through
-``Config.warnings`` so the operator sees them in the log.
+update introduces a new option. Invalid values are replaced by the default
+(or clamped into range) and reported through ``Config.warnings``. Invalid
+backend endpoints are disabled so prompts and credentials cannot be sent to
+a different service while the operator corrects the configuration.
 """
 
 from __future__ import annotations
@@ -277,6 +278,35 @@ class Config:
         return dataclasses.replace(self, **changes)
 
 
+def _http_url_parts(value: str, *, parameters=False):
+    """Validate a configured HTTP URL before any hostname or port is used."""
+    if not value or len(value) > 4096 or "\\" in value or any(char.isspace() or ord(char) < 32
+                                                            or ord(char) == 127 for char in value):
+        raise ValueError("Invalid HTTP URL")
+    parts = urlsplit(value)
+    port = parts.port  # urlsplit alone accepts nonnumeric and out-of-range ports.
+    if (parts.scheme not in {"http", "https"} or not parts.hostname or parts.username is not None
+            or parts.password is not None or port == 0 or parts.netloc.endswith(":")
+            or not parameters and (parts.query or parts.fragment)):
+        raise ValueError("Invalid HTTP URL")
+    # The HTTP client accepts IDNA hostnames, but requires ASCII request paths.
+    # Reject such paths at startup instead of failing midway through inference.
+    parts.path.encode("ascii")
+    parts.hostname.encode("idna")
+    return parts
+
+
+def _backend_url(r: _Reader, name: str, default: str) -> str:
+    value = (r.text(name, default) or default).rstrip("/")
+    try:
+        _http_url_parts(value)
+    except (ValueError, UnicodeError):
+        r.warnings.append(f"{name} must be an HTTP(S) URL with a valid port and without credentials, "
+                          "spaces, query parameters or a fragment; this backend is disabled.")
+        return ""
+    return value
+
+
 def _fallback_url(r: _Reader, primary: str, mode: str) -> str:
     """``BC_INFERENCE_FALLBACK_URL`` checked; empty when fallback cannot be used.
 
@@ -286,13 +316,8 @@ def _fallback_url(r: _Reader, primary: str, mode: str) -> str:
     """
     value = r.text("BC_INFERENCE_FALLBACK_URL").rstrip("/")
     if value:
-        parts = urlsplit(value)
-        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password \
-                or parts.query or parts.fragment:
-            r.warnings.append("BC_INFERENCE_FALLBACK_URL must be an http(s) URL without credentials; "
-                              "fallback is disabled.")
-            value = ""
-        elif value == primary and mode == "fallback":
+        value = _backend_url(r, "BC_INFERENCE_FALLBACK_URL", "")
+        if value == primary and value and mode == "fallback":
             r.warnings.append("BC_INFERENCE_FALLBACK_URL is the same server as BC_OLLAMA_URL; fallback is disabled.")
             value = ""
     if mode == "fallback" and not value:
@@ -304,9 +329,14 @@ def _fallback_url(r: _Reader, primary: str, mode: str) -> str:
 def _bearer_token(r: _Reader, name: str, url: str) -> str:
     """The token for *url*; never sent in clear text to another machine (HTTPS, or loopback such as an SSH tunnel)."""
     value = r.text(name)
+    if not value or not url:
+        return ""
+    if len(value) > 4096 or not value.isascii() or any(ord(char) < 33 or ord(char) == 127 for char in value):
+        r.warnings.append(f"{name} must be an ASCII token without spaces or control characters; it is not sent.")
+        return ""
     parts = urlsplit(url)
     if value and parts.scheme == "http" and (parts.hostname or "").lower() not in LOOPBACK_HOSTS:
-        r.warnings.append(f"{name} is not sent over plain HTTP to another machine ({url}); use https:// or an SSH "
+        r.warnings.append(f"{name} is not sent over plain HTTP to another machine; use https:// or an SSH "
                           "tunnel to 127.0.0.1. That server will reject requests until this is fixed.")
         return ""
     return value
@@ -332,8 +362,9 @@ def load_config(environ=None, *, load_secret=True) -> Config:
     environment = r.text("BC_ENV", "production").lower() or "production"
 
     source_url = r.text("BC_SOURCE_URL") or DEFAULT_SOURCE_URL
-    parts = urlsplit(source_url)
-    if parts.scheme not in {"http", "https"} or not parts.netloc or parts.username or parts.password:
+    try:
+        _http_url_parts(source_url, parameters=True)
+    except (ValueError, UnicodeError):
         r.warnings.append("BC_SOURCE_URL must be an absolute HTTP(S) URL without credentials; using the default.")
         source_url = DEFAULT_SOURCE_URL
 
@@ -345,7 +376,7 @@ def load_config(environ=None, *, load_secret=True) -> Config:
     chat_max_request_bytes = r.integer("BC_CHAT_MAX_REQUEST_MB", 8, 1, 512) * 1024 * 1024
     maintenance = r.text("BANANA_MAINTENANCE_FILE") or r.text("BW_MAINTENANCE_FILE")
     default_language = r.choice("BC_DEFAULT_LANGUAGE", "it", SUPPORTED_LANGUAGES)
-    ollama_url = (r.text("BC_OLLAMA_URL", DEFAULT_OLLAMA_URL) or DEFAULT_OLLAMA_URL).rstrip("/")
+    ollama_url = _backend_url(r, "BC_OLLAMA_URL", DEFAULT_OLLAMA_URL)
     outage_mode = r.choice("BC_INFERENCE_OUTAGE_MODE", "shutdown", ("shutdown", "fallback"))
     fallback_url = _fallback_url(r, ollama_url, outage_mode)
     if outage_mode == "fallback" and not fallback_url:
@@ -431,7 +462,7 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         # Tokens charged per image; the previous release's setting in credits (1 credit = 1,000 tokens) is the default.
         image_tokens_per_generation=r.integer("BC_IMAGE_TOKENS_PER_GENERATION", int(round(image_credits * 1000)), 0,
                                               100_000_000),
-        comfyui_url=(r.text("BC_COMFYUI_URL", "http://127.0.0.1:8188") or "http://127.0.0.1:8188").rstrip("/"),
+        comfyui_url=_backend_url(r, "BC_COMFYUI_URL", "http://127.0.0.1:8188"),
         comfyui_timeout=r.number("BC_COMFYUI_TIMEOUT", 30, 1, 60),
         comfyui_generation_timeout=comfyui_generation_timeout,
         comfyui_queue_timeout=r.number("BC_COMFYUI_QUEUE_TIMEOUT", 300, 1, 600),

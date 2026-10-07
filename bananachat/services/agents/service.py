@@ -1,11 +1,9 @@
 """Agent tasks: starting, follow-ups, stopping, deleting, the workspace, and the periodic jobs.
 
-Starting a task (``start_task``) checks, cheapest first: the feature is on and
-the person holds the ``agents`` capability, the prompt, the per-user start
-rate (``starts_per_hour``, administrators exempt), the ``agent`` token limits,
-the model (tool-capable and usable by the person), that the sandbox runner is
-configured, the uploads, and finally - atomically with creating the task -
-the per-user and site-wide limits on active tasks. A task may start from a
+Starting a task (``start_task``) validates the feature, account, prompt,
+repository, model and uploads, then reads runner capacity outside the write
+lock. Fresh access and model checks, import/start rates, token admission and
+active-task capacity share the transaction that creates the task. A task may start from a
 public Git repository (checked here, downloaded and imported by the run: see
 ``gitfetch`` and ``gitrepo``); its changes can then be exported as a patch. Callers check
 ``status.guard()`` first (maintenance and outages refuse new tasks).
@@ -167,7 +165,7 @@ def parse_repository(user, url, ref, settings) -> gitfetch.Source | None:
     """The repository a new task starts from (None without one). Raises :class:`AgentError`.
 
     Checks that imports are enabled, the address and ref (strictly: see ``gitfetch.parse``) and the
-    per-user import rate (only peeked here; recorded once the task exists).
+    per-user import rate (peeked here; reserved atomically with creating the task).
     """
     url = url.strip() if isinstance(url, str) else ""
     ref = ref.strip() if isinstance(ref, str) else ""
@@ -199,18 +197,29 @@ def start_task(user, *, prompt: str, model_name: str | None, swarm: bool, files=
         raise AgentError("agents.error_swarm_disabled", 400, "swarm_disabled")
     source = parse_repository(user, repo_url, repo_ref, settings)
     model = choose_model(user, model_name, settings)
-    _check_start(user, settings, model)
     try:
         items = uploads.read_uploads(files or (), current_app.config["BC"].agents_max_upload_bytes)
     except uploads.UploadError as error:
         raise AgentError(error.key, 413 if error.key == "agents.upload_too_large" else 400, "bad_upload",
                          **error.params) from None
     task_id, token = uuid.uuid4().hex, uuid.uuid4().hex
+    max_site = site_limit(settings)  # HTTP health must not hold the write lock.
     try:
-        agents_db.create(task_id, user_id=user["id"], title=auto_title(prompt), prompt=prompt, model_id=model["id"],
-                         model_name=model["ollama_name"], swarm=swarm, owner_token=token,
-                         max_user=None if user["role"] == "admin" else settings.max_tasks_per_user,
-                         max_site=site_limit(settings))
+        with db.transaction():
+            user = users.get(user["id"])
+            check_access(user)
+            settings = agent_settings.current(fresh=True)
+            if swarm and not settings.swarms_enabled:
+                raise AgentError("agents.error_swarm_disabled", 400, "swarm_disabled")
+            source = parse_repository(user, repo_url, repo_ref, settings)
+            model = choose_model(user, model_name, settings)
+            if source is not None and not users.hit(import_rate_key(user), settings.git_imports_per_hour, 3600):
+                raise AgentError("agents.error_import_rate", 429, "rate_limited", retry_after=600)
+            _check_start(user, settings, model)
+            agents_db.create(task_id, user_id=user["id"], title=auto_title(prompt), prompt=prompt, model_id=model["id"],
+                             model_name=model["ollama_name"], swarm=swarm, owner_token=token,
+                             max_user=None if user["role"] == "admin" else settings.max_tasks_per_user,
+                             max_site=min(max_site, settings.max_tasks_total))
     except agents_db.Busy as busy:
         if busy.scope == "user":
             raise AgentError("agents.error_busy_user", 409, "busy", retry_after=30,
@@ -220,7 +229,6 @@ def start_task(user, *, prompt: str, model_name: str | None, swarm: bool, files=
         uploads.store(task_id, items)
         if source is not None:
             gitrepo.store_request(task_id, source)
-            users.hit(import_rate_key(user), settings.git_imports_per_hour + 1, 3600)
     except OSError:
         log.exception("Could not store the uploads of agent task %s", task_id)
         agents_db.finish(task_id, token, "failed", error=loop.message("agents.notice_upload_failed", error="storage"))
@@ -229,38 +237,63 @@ def start_task(user, *, prompt: str, model_name: str | None, swarm: bool, files=
     return Started(task_id, run)
 
 
-def follow_up(user, task, content: str) -> Started:
-    """Send a message to a task: queued for a running task, or starts a new run."""
+def _follow_up_state(user, task_id):
+    """Recheck account, audience and ownership inside the enqueue transaction."""
+    user = users.get(user["id"]) if user is not None else None
     check_access(user)
-    settings = agent_settings.current(fresh=True)
+    task = agents_db.get(task_id)
+    if task is None or task["user_id"] != user["id"]:
+        raise AgentError("agents.error_no_access", 404, "not_found")
+    return user, task, agent_settings.current(fresh=True)
+
+
+def _queue_follow_up(user, task_id, content):
+    agents_db.add_message(task_id, user["id"], content, max_pending=agent_settings.MAX_PENDING_FOLLOW_UPS)
+
+
+def follow_up(user, task, content: str) -> Started:
+    """Queue or resume atomically, preserving the pending-message and task bounds."""
+    check_access(user)
     content = (content or "").strip() if isinstance(content, str) else ""
     if not content:
         raise AgentError("agents.error_empty")
     if len(content) > agent_settings.MAX_FOLLOW_UP_CHARS:
         raise AgentError("agents.error_too_long", 413, "too_large", max=agent_settings.MAX_FOLLOW_UP_CHARS)
-    if agents_db.pending_messages(task["id"]) >= agent_settings.MAX_PENDING_FOLLOW_UPS:
-        raise AgentError("agents.error_too_many_messages", 429, "rate_limited", retry_after=30)
-    if is_active(task):
-        agents_db.add_message(task["id"], user["id"], content)
-        return Started(task["id"], queued_message=True)
-    model = catalog.get(task["model_id"]) if task["model_id"] else None
-    if model is None or not agent_settings.model_allowed(model, AccessContext.load(user), settings):
-        model = choose_model(user, None, settings)
-    _check_start(user, settings, model)
-    if task["swarm"] and not settings.swarms_enabled:
-        raise AgentError("agents.error_swarm_disabled", 400, "swarm_disabled")
-    token = uuid.uuid4().hex
     try:
-        started = agents_db.resume(task["id"], owner_token=token,
-                                   max_user=None if user["role"] == "admin" else settings.max_tasks_per_user,
-                                   max_site=site_limit(settings), model_id=model["id"],
-                                   model_name=model["ollama_name"])
+        with db.transaction():
+            user, task, settings = _follow_up_state(user, task["id"])
+            if is_active(task):
+                _queue_follow_up(user, task["id"], content)
+                return Started(task["id"], queued_message=True)
+            if agents_db.pending_messages(task["id"]) >= agent_settings.MAX_PENDING_FOLLOW_UPS:
+                raise agents_db.Busy("messages")
+        # Runner health can perform HTTP I/O. Keep it outside the write lock,
+        # then recheck state before selecting a model, debiting rates or resuming.
+        max_site = site_limit(settings)
+        token = uuid.uuid4().hex
+        with db.transaction():
+            user, task, settings = _follow_up_state(user, task["id"])
+            if is_active(task):
+                _queue_follow_up(user, task["id"], content)
+                return Started(task["id"], queued_message=True)
+            _queue_follow_up(user, task["id"], content)
+            model = catalog.get(task["model_id"]) if task["model_id"] else None
+            if model is None or not agent_settings.model_allowed(model, AccessContext.load(user), settings):
+                model = choose_model(user, None, settings)
+            _check_start(user, settings, model)
+            if task["swarm"] and not settings.swarms_enabled:
+                raise AgentError("agents.error_swarm_disabled", 400, "swarm_disabled")
+            started = agents_db.resume(task["id"], owner_token=token,
+                                       max_user=None if user["role"] == "admin" else settings.max_tasks_per_user,
+                                       max_site=min(max_site, settings.max_tasks_total), model_id=model["id"],
+                                       model_name=model["ollama_name"])
     except agents_db.Busy as busy:
+        if busy.scope == "messages":
+            raise AgentError("agents.error_too_many_messages", 429, "rate_limited", retry_after=30) from None
         if busy.scope == "user":
             raise AgentError("agents.error_busy_user", 409, "busy", retry_after=30,
                              max=settings.max_tasks_per_user) from None
         raise AgentError("agents.error_busy_site", 429, "busy", retry_after=60) from None
-    agents_db.add_message(task["id"], user["id"], content)
     if not started:  # a run began meanwhile: it will read the message
         return Started(task["id"], queued_message=True)
     run = _launch(task["id"], token, user, model, bool(task["swarm"]), settings)
@@ -281,16 +314,28 @@ def _after_run(run: loop.TaskRun) -> None:
             settings = agent_settings.current(fresh=True)
             if task["swarm"] and not settings.swarms_enabled:
                 return
-            if status.inference_block(user) is not None:
-                return
-            model = catalog.get(task["model_id"]) if task["model_id"] else None
-            if model is None or not agent_settings.model_allowed(model, AccessContext.load(user), settings):
-                return
-            _check_start(user, settings, model)  # a new run like any other: start rate, agent rate and tokens
+            max_site = site_limit(settings)
             token = uuid.uuid4().hex
-            if agents_db.resume(task["id"], owner_token=token,
-                                max_user=None if user["role"] == "admin" else settings.max_tasks_per_user,
-                                max_site=site_limit(settings)):
+            with db.transaction():
+                user, task, settings = _follow_up_state(user, run.task_id)
+                if task["status"] != "finished" or is_active(task) or not agents_db.pending_messages(run.task_id):
+                    return
+                if task["swarm"] and not settings.swarms_enabled:
+                    return
+                if status.inference_block(user) is not None:
+                    return
+                model = catalog.get(task["model_id"]) if task["model_id"] else None
+                if model is None or not agent_settings.model_allowed(model, AccessContext.load(user), settings):
+                    return
+                # A manual resume may win while health is read. Rates and the
+                # lease share this transaction, so a losing callback debits none.
+                started = agents_db.resume(task["id"], owner_token=token,
+                                           max_user=None if user["role"] == "admin" else settings.max_tasks_per_user,
+                                           max_site=min(max_site, settings.max_tasks_total))
+                if not started:
+                    return
+                _check_start(user, settings, model)
+            if started:
                 _launch(task["id"], token, user, model, bool(task["swarm"]), settings)
         except (AgentError, agents_db.Busy):
             return

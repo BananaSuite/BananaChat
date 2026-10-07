@@ -370,9 +370,14 @@ def _refresh_details(config, deadline: float) -> list[dict]:
 
 def _listing_item(tag: dict) -> dict:
     details = tag.get("details") if isinstance(tag.get("details"), dict) else {}
-    return {"name": tag["name"], "description": ollama.describe(tag), "digest": tag.get("digest"),
-            "size": tag.get("size"), "family": details.get("family"), "parameter_size": details.get("parameter_size"),
-            "quantization": details.get("quantization_level")}
+    def text(value, limit):
+        return value[:limit] if isinstance(value, str) else None
+
+    size = tag.get("size")
+    return {"name": tag["name"], "description": ollama.describe(tag), "digest": text(tag.get("digest"), 200),
+            "size": size if isinstance(size, int) and not isinstance(size, bool) and 0 <= size <= 10 ** 15 else None,
+            "family": text(details.get("family"), 80), "parameter_size": text(details.get("parameter_size"), 40),
+            "quantization": text(details.get("quantization_level"), 40)}
 
 
 def sync(config=None, *, source: str = "background") -> dict:

@@ -15,6 +15,7 @@ register here. Every second the supervisor:
 from __future__ import annotations
 
 import logging
+import itertools
 import threading
 import time
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ _lock = threading.Lock()
 _runs: dict[str, _Run] = {}
 _slots: dict[str, _Slot] = {}
 _deadlines: dict[int, tuple[float, CancelToken]] = {}
+_deadline_ids = itertools.count(1)
 _watches: dict[str, "_Watch"] = {}
 _thread: threading.Thread | None = None
 
@@ -108,8 +110,10 @@ def unregister_slot(request_id: str) -> None:
 
 def cancel_at(deadline: float, cancel: CancelToken) -> int:
     """Cancel *cancel* at monotonic time *deadline*. Returns a handle for :func:`clear_deadline`."""
-    handle = id(cancel) ^ int(deadline * 1000)
     with _lock:
+        # Nested requests may register the same token and millisecond. Each
+        # owner must be able to clear its deadline without clearing another's.
+        handle = next(_deadline_ids)
         _deadlines[handle] = (deadline, cancel)
         _ensure_thread()
     return handle

@@ -83,36 +83,43 @@ def describe_server(config=None) -> str:
 def version(config=None, timeout: float = 5, *, primary: bool = False) -> str:
     url, headers = endpoint(config, primary=primary)
     data = request_json("GET", url, "/api/version", headers=headers, timeout=timeout)
-    return str((data or {}).get("version") or "")
+    if not isinstance(data, dict) or not isinstance(data.get("version"), str) or not data["version"]:
+        raise UpstreamError("The model server returned invalid version information.")
+    return data["version"][:100]
 
 
 def list_tags(config=None, *, timeout: float = 15, primary: bool = False) -> list[dict]:
     url, headers = endpoint(config, primary=primary)
     data = request_json("GET", url, "/api/tags", headers=headers, timeout=timeout)
-    models = (data or {}).get("models") or []
-    # Harden detection: ignore malformed entries, over-long names and
-    # duplicates so one bad record never breaks a catalog sync (capped).
+    if not isinstance(data, dict) or not isinstance(data.get("models"), list):
+        # An unsuccessful inventory must never withdraw existing models.
+        raise UpstreamError("The model server returned an invalid model list.")
+    models = data["models"]
+    if len(models) > 5000:
+        raise UpstreamError("The model server returned too many models.")
+    # An incomplete inventory must not make installed models disappear.
+    # Duplicate valid records are harmless; malformed records fail the listing.
     seen: set[str] = set()
     result = []
     for model in models:
         if not isinstance(model, dict) or not isinstance(model.get("name"), str):
-            continue
+            raise UpstreamError("The model server returned an invalid model record.")
         name = model["name"].strip()
-        if not name or len(name) > 300 or "\x00" in name or name in seen:
-            continue
         if not MODEL_NAME_RE.fullmatch(name):
+            raise UpstreamError("The model server returned an invalid model name.")
+        if name in seen:
             continue
         seen.add(name)
-        result.append(model)
-        if len(result) >= 5000:
-            break
+        result.append({**model, "name": name})
     return result
 
 
 def list_running(config=None) -> list[dict]:
     url, headers = endpoint(config)
     data = request_json("GET", url, "/api/ps", headers=headers, timeout=8)
-    return [model for model in (data or {}).get("models") or [] if isinstance(model, dict)]
+    if not isinstance(data, dict) or not isinstance(data.get("models"), list):
+        raise UpstreamError("The model server returned an invalid running-model list.")
+    return [model for model in data["models"] if isinstance(model, dict)][:5000]
 
 
 def show(name: str, config=None, timeout: float = 15, *, primary: bool = False) -> dict:
@@ -148,14 +155,13 @@ def capabilities(name: str, config=None) -> list[str]:
 
 
 def describe(tag: dict) -> str:
-    details = tag.get("details") or {}
+    details = tag.get("details") if isinstance(tag.get("details"), dict) else {}
     parts = []
-    if details.get("parameter_size"):
-        parts.append(str(details["parameter_size"]))
-    if details.get("quantization_level"):
-        parts.append(str(details["quantization_level"]))
+    for key in ("parameter_size", "quantization_level"):
+        if isinstance(details.get(key), str) and details[key]:
+            parts.append(details[key][:40])
     size = tag.get("size")
-    if isinstance(size, (int, float)) and size > 0:
+    if isinstance(size, (int, float)) and not isinstance(size, bool) and 0 < size <= 10 ** 15:
         parts.append(f"{size / 1024 ** 3:.1f} GB")
     return " · ".join(parts)
 
@@ -243,16 +249,23 @@ def chat_stream(model: str, messages: list[dict], *, options: dict | None = None
                       total_timeout=total_timeout or config.generation_timeout,
                       max_bytes=budget, cancel=cancel) as response:
         first = True
-        for record in (_tool_records(response) if tools else response.iter_json_lines()):
+        for record in (_tool_records(response) if tools else response.iter_json_lines(strict=True)):
             if not isinstance(record, dict):
-                continue
+                raise UpstreamError("The model server returned an invalid stream record.")
             if record.get("error"):
                 raise UpstreamError(str(record["error"])[:500])
             if first:
                 response.set_read_timeout(read_timeout or config.inference_read_timeout)
                 first = False
-            message = record.get("message") or {}
-            chunk = Chunk(content=str(message.get("content") or ""), thinking=str(message.get("thinking") or ""))
+            message = record.get("message", {})
+            if not isinstance(message, dict) or not isinstance(record.get("done", False), bool):
+                raise UpstreamError("The model server returned an invalid message record.")
+            content, thinking = message.get("content"), message.get("thinking")
+            content = "" if content is None else content
+            thinking = "" if thinking is None else thinking
+            if not isinstance(content, str) or not isinstance(thinking, str):
+                raise UpstreamError("The model server returned an invalid message delta.")
+            chunk = Chunk(content=content, thinking=thinking)
             if tools:
                 chunk.tool_calls = _tool_calls(message.get("tool_calls"))
             if record.get("done"):
@@ -304,7 +317,7 @@ def _tool_records(response):
         try:
             yield json.loads(line)
         except ValueError:
-            continue
+            raise UpstreamError("The backend returned invalid stream JSON.") from None
         except RecursionError:
             yield {"message": {"tool_calls": [{_TOO_DEEP_MARKER: TOO_DEEP}]}}
 
@@ -337,7 +350,11 @@ def _tool_calls(value) -> list[dict]:
 
 
 def _count(value) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+    if value is None:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 1_000_000_000:
+        return value
+    raise UpstreamError("The model server returned invalid token usage.")
 
 
 # ----- model management -----------------------------------------------------

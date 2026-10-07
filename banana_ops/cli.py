@@ -393,6 +393,10 @@ def main(argv=None):
                 settings = manager.settings()
                 services = list(profile.service_commands(settings))
                 containers = manager.system.containers(settings)
+                if args.command in {"start", "restart"}:
+                    # Validate optional provider mounts before stopping a healthy
+                    # service, then regenerate its narrow writable allowances.
+                    manager.system.install_units(settings)
                 if args.command in {"stop", "restart"}:
                     manager.system.stop(services)
                     manager.system.stop_containers(containers)

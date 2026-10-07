@@ -7,6 +7,7 @@ import io
 import json
 import os
 import tarfile
+import threading
 import time
 import types
 import zipfile
@@ -476,7 +477,7 @@ def test_crash_recovery_marks_tasks_interrupted_and_cleans_up(env, runner):
 
 def test_swarm_runs_bounded_sub_agents_that_cannot_delegate(env, fake_ollama):
     set_settings(env.app, swarms_enabled=True, max_subagents=4, max_concurrent_subagents=2)
-    fake_ollama.tool_delay = 0.25
+    concurrent_lanes = threading.Barrier(2)
 
     def responder(body):
         messages = body["messages"]
@@ -485,6 +486,9 @@ def test_swarm_runs_bounded_sub_agents_that_cannot_delegate(env, fake_ollama):
             assert "delegate" not in names
             if messages[-1]["role"] == "tool":
                 return call("finish", summary="lane done")
+            # Hold each pair's actual HTTP requests until both lanes arrive.
+            # A fixed sleep only observed overlap when the scheduler was fast.
+            concurrent_lanes.wait(timeout=10)
             return call("delegate", tasks=[{"title": "deeper", "instructions": "recurse"}])
         assert "delegate" in names
         if messages[-1]["role"] == "tool":

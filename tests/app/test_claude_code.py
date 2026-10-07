@@ -68,7 +68,7 @@ def connector(tmp_path):
     manifest.write_text(json.dumps({"binary": str(binary), "profiles": {
         "primary": {"home": str(home), "config_dir": str(config_dir), "usage_source": "local", "models": [MODEL]}}}))
     manifest.chmod(0o600)
-    adapter = Adapter(SimpleNamespace(claude_code_config=str(manifest)))
+    adapter = Adapter(SimpleNamespace(environment="testing", claude_code_config=str(manifest)))
     # Unit subprocess tests avoid a database, while integration tests use the real bindings.
     adapter.bindings = lambda: {"1": "primary"}
     return adapter, home, manifest
@@ -163,13 +163,13 @@ def test_private_config_and_duplicate_auth_profiles_required(connector):
     _, _, manifest = connector
     manifest.chmod(0o644)
     with pytest.raises(ConnectorError, match="private"):
-        Adapter(SimpleNamespace(claude_code_config=str(manifest)))
+        Adapter(SimpleNamespace(environment="testing", claude_code_config=str(manifest)))
     manifest.chmod(0o600)
     data = json.loads(manifest.read_text())
     data["profiles"]["duplicate"] = data["profiles"]["primary"]
     manifest.write_text(json.dumps(data))
     with pytest.raises(ConnectorError, match="separate"):
-        Adapter(SimpleNamespace(claude_code_config=str(manifest)))
+        Adapter(SimpleNamespace(environment="testing", claude_code_config=str(manifest)))
 
 
 def test_text_only_rejects_unsupported_content(connector):

@@ -49,7 +49,7 @@ def automatic(tmp_path):
     def build():
         path.write_text(json.dumps(manifest))
         path.chmod(0o600)
-        adapter = Adapter(SimpleNamespace(claude_code_config=str(path)))
+        adapter = Adapter(SimpleNamespace(environment="testing", claude_code_config=str(path)))
         adapter.bindings = lambda: {"1": "primary", "2": "secondary"}
         return adapter
 

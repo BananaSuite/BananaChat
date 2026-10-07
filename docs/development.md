@@ -15,6 +15,22 @@ The tests need no Ollama or GPU: an imitation Ollama server
 (`tests/app/fake_ollama.py`) answers during the tests. The encrypted-backup
 tests also need Git and [age](https://age-encryption.org/) on `PATH`, and the
 signed-update tests need `ssh-keygen`.
+Node.js is needed for the JavaScript and Markdown regressions. Browser cases
+need `requirements-browser.txt` and an installed Playwright Chromium browser.
+The complete release check also runs the optional real Docker cases:
+
+```sh
+python -m pip install -r requirements-browser.txt
+python -m playwright install --with-deps chromium
+docker pull mirror.gcr.io/library/python:3.12-slim
+docker build -t bananachat-agent:1 compute/sandbox-image
+BC_SANDBOX_REQUIRE_DOCKER=1 BC_SANDBOX_REQUIRE_AGENT_IMAGE=1 python -m pytest -q -ra
+```
+
+Review skipped cases in that output: Docker requirements are enforced by the
+two flags, and browser cases still need a working Chromium installation. The
+token-file ownership regression needs root and can run in a disposable root
+container. Keep the normal development environment unprivileged.
 
 `make help` lists shortcuts (`make dev`, `make start`, `make test`,
 `make lint`, `make clean`).
@@ -56,7 +72,7 @@ rules for templates and scripts, translations and the inference pipeline.
 
 ## Browser check
 
-Keep ordinary pages and settings on the shared 1280 px `--content-width` frame.
+Keep ordinary pages and settings on the shared 1120 px `--content-width` frame.
 Use responsive form grids within it; avoid squeezing settings into a sidebar
 or a capped column. Use `page-narrow` only inside an existing page for a
 conversation transcript. Authentication uses its dedicated auth layout.

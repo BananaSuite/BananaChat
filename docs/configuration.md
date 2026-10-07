@@ -9,6 +9,11 @@ export them or use your process supervisor's environment file.
 Everything has a safe default, so an update never requires new settings. An
 invalid value does not stop the server: it is replaced by the default (or
 clamped into its range) and reported as a warning in the log at start-up.
+Malformed Ollama, ComfyUI and fallback URLs disable that endpoint instead of
+redirecting requests to a default server. Fix the named environment variable
+and restart to restore it. URLs require HTTP(S), a valid port, and no embedded
+credentials, whitespace, query or fragment; encode non-ASCII path characters.
+Invalid bearer tokens are omitted, and warnings never include their values.
 The database settings (`BC_DB_*`) are the exception: an invalid or
 out-of-range value stops the start with an error naming the variable.
 Booleans accept `1/0`, `true/false`, `yes/no` and `on/off`.
@@ -151,8 +156,11 @@ The pool stores account labels, local budgets and usage, not credentials.
 For the built-in official Claude Code subscription connector, set
 `BC_CLAUDE_EXTENSION=bananachat.services.claude_code` and
 `BC_CLAUDE_CODE_CONFIG` to an absolute path to its private JSON manifest.
-The server operator installs the official CLI and authenticates isolated
-profiles; web administrators choose profiles and budgets. Shared subscription
+The server operator installs a root-owned standalone CLI, Bubblewrap and
+authenticates private profiles outside the managed installation. Production
+native calls expose only the active profile and public runtime/trust files;
+managed start/restart regenerates the profile directories' narrow writable
+allowances. Web administrators choose profiles and budgets. Shared subscription
 routing requires provider approval. New profiles discover models and native
 subscription usage automatically. Explicit manual model lists and local-only
 usage remain available; failed automatic telemetry never silently selects

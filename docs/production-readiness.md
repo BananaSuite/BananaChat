@@ -1,4 +1,4 @@
-# Production validation — 2 October 2026
+# Production validation — 3 October 2026
 
 This assessment covers the current source, disposable local services and one
 operator-authorized paid Claude subscription. The changes have not been deployed
@@ -46,6 +46,8 @@ configured compute runner. Provider credentials stay outside workspaces.
 
 Sensitive account changes recheck credentials, revocation and account status
 inside the write transaction. Automatic password rehashing cannot undo a reset.
+Account creation rechecks the current sign-up policy inside its transaction,
+including a switch to invitations or disabled registration while hashing a password.
 Malformed CSRF/bot tokens produce controlled errors. JSON rejects non-finite
 numbers and excessive nesting; stored invalid preferences use safe defaults.
 Selecting the same database from another app instance no longer invalidates
@@ -60,6 +62,24 @@ parallel reservations as well as completed steps. Revocation stops subsequent
 work at the next safe checkpoint; repeated authorization does not debit another
 model request bucket. Stale leases cannot mutate a newer run. Cancellation retains
 usage and closes provider resources before releasing the account lease.
+
+Concurrent follow-ups cannot exceed the five-message pending bound. Enqueueing
+an active session's message checks the bound under the database write lock.
+Resuming a session atomically queues its message, rechecks the current account,
+audience, ownership and task state, and takes its rate admission and task lease.
+Refusals or storage failures roll back the message, rates and lease together.
+Runner health requests remain outside the database write lock.
+Automatic continuations also recheck the current terminal state: a callback
+from an older successful run cannot override a newer Stop or consume another
+start slot after a manual resume wins.
+
+New session starts recheck the account, audience, model and repository policy
+after runner health returns. Repository import limits apply to administrators
+as well as ordinary accounts. Import reservations, start/model/pool admission
+and task creation share one database transaction. Concurrent requests cannot
+exceed the import limit or hide accepted imports from its accounting; quota or
+capacity refusals and transaction failures leave no task, rate debit or launch.
+Runner health and upload reads remain outside the write lock.
 
 Hosted model publication preserves strict presets and custom limits. Hosted
 requests can proceed during local RAM pressure without waiting behind a blocked
@@ -90,6 +110,17 @@ Compute/checkpoint requests have hard header/body deadlines. Backup packages
 retain update signer trust, and failed restores restore repository credentials
 and trust settings. Sandbox capacity, isolation and cleanup remain covered.
 
+Malformed configured backend addresses disable the affected endpoint with a
+controlled error; pages and account access remain available. Credentials are
+omitted for invalid addresses and unsafe bearer-token syntax, with warnings that
+do not print token values. Incomplete or malformed Ollama inventory replies do
+not withdraw previously enrolled models. Invalid stream JSON, message fields
+and token counts fail without reporting a successful completion; partial output
+retains accounting. Cancellation, read-gap limits and total response deadlines
+reach the live socket after connection-close headers, including trickling headers,
+bodies and error replies. Each deadline has independent ownership and is cleared
+when its response closes.
+
 Static assets share a content revision, including relative JavaScript imports,
 so an ordinary reload after updating loads the current interface together.
 Older asset links remain supported and revalidate. Dynamic HTML, including
@@ -102,15 +133,40 @@ existing policy.
 
 ## Verification
 
-The final full Python suite passed **1,956 tests and 13 subtests**, with one
-ownership case skipped under the non-root test user. That same case passed
-separately in a disposable root container, validating **1,957 unique cases**.
+The final Python 3.14.4 full current-source run passed **2,097 tests and 13 subtests**,
+with one ownership case skipped under the non-root test user. The ownership
+case separately passed on Python 3.12 in a disposable root container. All
+**2,098 collected primary cases** were therefore exercised; all 466 recorded
+source hashes and the repository HEAD matched before and after the full run.
+This complete snapshot includes the native sandbox, follow-up admission and
+repository-import admission fixes described above.
 All configured Chromium regressions and required real Docker/agent-image
-checks ran in the full suite. The focused agent, Git, audience and runtime
-admission suite also passed **101 cases** before this run.
-Ruff, dependency compatibility and whitespace checks passed; all eleven
-changed or new JavaScript files passed syntax checks. No failures remain in
-these checks.
+checks ran in the full suite. A focused transport, malformed-protocol,
+accounting, image and streaming run passed **132 cases**. All nine real-socket
+deadline, cancellation, cleanup and ownership checks also passed separately
+with the production supervisor's one-second tick. The search-result rename
+and share regression now checks English and Italian explicitly; its related
+browser/chat regressions passed **42 cases**. Ruff, dependency compatibility
+and whitespace checks passed; all **19 JavaScript modules** passed syntax
+checks. No failures remain in these checks.
+
+The source contains **14 actual SQLite concurrency and admission cases** for
+follow-up bounds, rollback, eligibility, manual/automatic resume races and a
+newer Stop. A further challenge reproduced an import limit of one accepting
+three concurrent requests, creating three tasks but recording only two import
+hits. The final import/start admission repair adds **nine cases**, including
+ordinary/admin races, capacity refusal and transaction rollback, and policy
+changes during health checks. All affected current agent modules passed
+**135 cases** after that repair. The current collection is **2,098 primary
+cases**, all covered by the complete final-source run and separate ownership
+check. The swarm check holds pairs of actual HTTP requests at a bounded
+barrier, so its concurrency assertion does not depend on a timing-only overlap.
+
+The minimum Python **3.12** current-source selection passed **80 cases** in an
+unprivileged read-only, network-disabled container with fresh compatible
+runtime wheels. It includes every new start/follow-up case, runtime admission,
+production authentication, native sandbox validation and actual HTTP swarm
+concurrency. Dependency compatibility passed.
 
 Cloud-session regressions cover all audiences, legacy and malformed settings,
 queued revocation, live reductions to run budgets, provider retries, reasoning,
@@ -122,10 +178,12 @@ missing-runner behavior and cross-user workspace denial. The Git host, model
 services and account metadata in these checks are simulated; the application
 and browser interactions are real.
 
-A fresh audit of the installed Python environment found no known vulnerability
-findings. Dependency compatibility, Ruff and whitespace checks also passed.
-The separate Wiki image scan and its unresolved OS advisories are documented
-in BananaWiki's production assessment.
+A fresh Python **3.12** run passed **205 cases** for endpoint configuration,
+real-socket deadlines, Ollama protocol validation, authentication and Claude
+observations, including the final native sandbox and transport cases. Its
+wheels-only runtime dependency audit covered **13 packages,
+including pip, with no known vulnerability findings**. CI audits newly
+installed runtime dependencies.
 
 Offline-warning checks exercised global show/hide settings, original 24-hour
 expiry across reloads and unchanged or failed status polls, account isolation,
@@ -144,23 +202,47 @@ profiles, quota/model refresh and automatic enrollment, without overflow or
 JavaScript errors. External-provider creation, discovery, publication and
 connection editing were previously checked at both widths. English/Italian
 account, admin, selector, preference and quota forms passed browser checks.
-All 18 landing views decoded current images and passed layout/script checks;
+All 36 landing views decoded current images and passed layout/script checks;
 9 pages passed link, fragment, image dimensions, alt-text and cache-hash checks.
 
 The latest local Gunicorn run used a 25,000-message database and imitation model
-server. All **125 health probes returned HTTP 200** during request bursts.
+server. All **130 health probes returned HTTP 200** during request bursts.
 Excess requests returned controlled `503 server_busy` or `429` responses;
-no HTTP 500 occurred and database integrity was `ok`. This measures the local
+no HTTP 500 occurred and database integrity was `ok`. The web processes used
+**286 MiB** resident memory after the run. This measures the local
 web tier rather than real inference capacity on the deployment hardware.
 
-Earlier unchanged sandbox checks passed **121 tests** using disposable Docker
-containers. Dependency compatibility, Ruff, JavaScript syntax, ShellCheck,
-workflow YAML and lifecycle/backup manifests passed. The installed BananaChat
-environment audit covered **25 packages with no known vulnerability findings**;
-a fresh wheels-only runtime audit covered **12 third-party packages with no
-known findings**. CI audits newly installed runtime dependencies.
+The sandbox-runner suites passed **109 tests**, including required disposable
+Docker cases, and the real agent-image Git import and patch-export checks
+passed **two cases**. Lifecycle/backup source manifests passed. The real
+Gunicorn/Chromium upgrade check from the previous release passed **27 checks**,
+preserving accounts, passwords, sign-ins, chats, shares, API tokens,
+personalities, preferences and administration access. The standalone browser
+check also passed against a disposable current application instance.
 
-## Live Claude verification
+## Live Ollama verification
+
+Three complete smoke runs used official Ollama **0.35.1** and the official
+Qwen3 **0.6B** weight layer in a disposable localhost-only CPU container.
+A derived model set `num_thread=2` to match the two-CPU quota; its weight-layer
+checksum was identical to the base model. The container had a 2 GiB memory
+limit and was removed after verification. Automatic eight-thread selection
+previously caused long delays and a controlled backend timeout; see
+[CPU inference tuning](capacity.md#cpu-inference-in-containers).
+
+Real HTTP inventory, capability discovery and catalog synchronization passed.
+The public completion routes streamed and returned complete replies; one
+nonstream answer's **25 input + 21 output = 46 tokens** matched its ledger.
+Saved chats retained their messages and exact completed usage. Stop returned
+in **2–3 ms**, preserved the partial answer and recorded estimated interrupted
+usage. Closing an API stream released resources and charged its partial output
+once, including repeated close calls. The three runs recorded **15 matching
+ledger entries and request metrics**, left no queue entries or active leases,
+and retained SQLite integrity. Reusing the warm backend after cancellation
+also passed. These exercised Flask routes and background chat workers with a
+real Ollama service; the separate Gunicorn load run used an imitation backend.
+
+## Live Claude verification — 2 October 2026
 
 Official Claude Code **2.1.287** authenticated one native paid subscription.
 A minimal low-effort response passed through BananaChat's public
@@ -202,12 +284,49 @@ restored capacity. Neither metadata check generated a model answer.
 
 ## Deployment checks
 
+The actual generated systemd deployment was exercised on a disposable Debian
+13 host with Python 3.12. Three synthetic source revisions stayed isolated from
+the real repository history. Thirteen checks covered CLI install, disabled
+automatic updates, private portable backup, a successful update, a candidate
+that mutated SQLite then failed to boot, automatic code/data rollback, manual
+rollback and restore into a separate installation. The restore preserved
+database records, upload bytes and the private application secret key; installed source
+and virtual environments remained unwritable by the service identity. The
+Ollama endpoint was a synthetic local contract fixture in these lifecycle
+checks; live provider verification is reported separately above.
+
+Production native Claude calls now use Bubblewrap and permit only the active
+profile's persistent writes. An actual generated service, using a root-owned
+synthetic native CLI, verified profile/config writes, removal of Chat data,
+source, manifest, other profiles and host process descriptors, zero capabilities,
+no new privileges, external-file CA trust and proxy inheritance. Its timeout
+stopped a detached, SIGTERM-ignoring descendant before returning. Replacing a
+nested configuration directory with another profile's symlink refused the next
+call before any native process started. Overlapping profile configuration
+and a manifest stored within the active profile refused restart before stopping
+the healthy service; unmanaged production adapters reject that manifest layout
+too. Unreadable manifests, nonwritable profiles and root-only executable paths
+also refused restart while the service stayed active. These checks passed
+**29 cases**. The official publisher-verified Claude Code **2.1.287** binary
+passed **five** additional version, flag-parser and logged-out authentication
+checks under the actual systemd/Bubblewrap policy with an empty synthetic
+profile. The connector remains opt-in; no paid subscription request or real
+credential access occurred in these sandbox checks.
+
+Separate compute and web installations passed **11 checks** using the actual
+generated services and a synthetic local Ollama endpoint. They covered private
+pairing, rejection of missing/wrong gateway tokens, token rotation, stale-pair
+refusal and reconnect. The transport used loopback, corresponding to the
+documented supervised tunnel layout; target SSH transport remains an operator
+acceptance check.
+
 Verify HTTPS and trusted proxies, backend pairing, backup restore, managed
 update/rollback, hardware capacity and sustained provider load on the target
 installation. Keep compute/sandbox management listeners private. Run the
-Claude transport under an unprivileged identity in an OS/container sandbox
-without host secrets, repositories or uploads; CLI safe mode alone is not an
-OS sandbox. Review managed CLI hooks and authenticate each distinct profile.
+Claude transport under an unprivileged identity with the required Bubblewrap
+namespaces available. Review managed CLI hooks and authenticate each distinct
+profile. Filesystem isolation retains outbound networking and the operator's
+approved egress policy.
 
 Token limits govern admission and record completed/interrupted usage. An
 admitted response can finish past its remaining token allowance within the

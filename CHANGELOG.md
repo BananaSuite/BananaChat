@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Keep deep-linked settings fields fully visible after mobile browsers adjust
+  the initial scroll position, while allowing users to scroll away normally.
+
+- Production Claude Code calls now use an opt-in Bubblewrap filesystem/PID
+  sandbox. Managed services grant write access only to validated private
+  profile roots, retaining strict system protections. Unsafe overlaps,
+  service-writable executables and a manifest inside a profile fail closed;
+  custom public CA files remain available through exact read-only mounts.
+
 ### Cloud sessions and production hardening
 
 - Add explicit administrator-only, everyone-signed-in and existing-access-list
@@ -11,9 +20,30 @@
   runner limits in the existing isolated agent subsystem.
 - Recheck fresh account, audience, model and token permissions after queue waits,
   on each model attempt and before tool work; respect tightened run budgets.
+- Keep the five-message pending follow-up bound under concurrent requests.
+  Resuming a session queues its message, validates current access and takes its
+  lease/rate admission atomically; refusals and storage failures leave those
+  changes unapplied. Automatic continuations cannot debit a losing lease or
+  override a newer stopped or failed run.
+- Reserve repository imports under the same database transaction as fresh
+  access/model checks, start admission and task creation. Concurrent starts obey
+  the per-user import limit, including administrators; quota/capacity refusals
+  and failed task insertion leave no task or rate debit and launch no work.
 - Show enrolled external tool-capable models in cloud-session administration.
 - Reject IPv6 transition routes that could bypass provider metadata-address
   restrictions, including trusted-private provider configurations.
+- Keep invalid backend URL or bearer-token settings from crashing startup or
+  sending credentials to an unintended default service; pages remain usable
+  while an operator corrects the reported setting.
+- Recheck registration policy after password hashing so sign-up closure and
+  invitation requirements take effect before an in-flight account is created.
+- Refuse malformed or incomplete Ollama inventories without withdrawing existing
+  models, and reject corrupted streams or invalid usage as controlled backend
+  failures instead of reporting a completed answer.
+- Apply backend response deadlines, Stop cancellation and read-gap timeouts to
+  sockets retained by connection-close responses; trickling headers, bodies and
+  error replies cannot hold requests indefinitely. Nested deadlines keep
+  independent ownership.
 
 ### Model-server offline warnings
 

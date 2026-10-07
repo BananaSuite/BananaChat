@@ -50,13 +50,16 @@ def test_failed_report_only_withdraws_its_account_and_never_rewrites_budgets(app
 
 
 @pytest.mark.parametrize("values", [
-    {"observed_at": time.time() - 901}, {"observed_at": time.time() + 120},
-    {"window_resets_at": time.time() - 1}, {"weekly_resets_at": time.time() - 1},
+    {"observed_at": lambda: time.time() - 901}, {"observed_at": lambda: time.time() + 120},
+    {"window_resets_at": lambda: time.time() - 1}, {"weekly_resets_at": lambda: time.time() - 1},
     {"window_left": None}, {"window_left": 0}, {"weekly_left": 0},
     {"window_left": -1}, {"window_left": True}, {"window_left": float("nan")},
 ])
 def test_invalid_stale_or_exhausted_observation_skips_only_that_account(app, values):
     paused, ready = add("paused", priority=99), add("ready")
+    # Collection can precede this test by several minutes in the full suite.
+    # Resolve timestamps when reporting so the future case remains future.
+    values = {key: value() if callable(value) else value for key, value in values.items()}
     quota = reports({str(paused): observation(**values), str(ready): observation()})
     assert not quota["reporter_error"]
     assert [row["id"] for row in pool.accounts_in_order()] == [ready]

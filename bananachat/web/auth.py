@@ -176,8 +176,17 @@ def signup():
     password_hash = security.hash_password(password)
     try:
         with db.transaction():
+            # Hashing runs outside the write lock. The administrator may have
+            # closed registration or required invitations while it was running.
+            # Authorize the account using the policy protected by this lock.
+            mode = site_settings.get().get("signup_mode") or "invite"
+            if mode == "disabled":
+                flash(_t("auth.signup_closed"), "info")
+                return redirect(url_for("auth.login"))
             role, invite = "user", None
             if mode == "invite":
+                if not code:
+                    raise PermissionError
                 # Checked first, so visitors without an invitation cannot probe usernames.
                 invite = invites.find_usable(code)
                 if invite is None:
@@ -192,6 +201,8 @@ def signup():
                 invites.consume(code, user_id)
     except LookupError:
         return fail("auth.username_taken", 409)
+    except PermissionError:
+        return fail("auth.invite_required")
     except (ValueError, sqlite3.IntegrityError):
         return fail("auth.invite_invalid")
     user = users.get(user_id)

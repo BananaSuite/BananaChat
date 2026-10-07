@@ -26,6 +26,7 @@ from contextlib import contextmanager
 from bananachat.db import claude_pool as accounts
 from bananachat.db import settings
 from bananachat.services import claude_pool
+from bananachat.services import claude_sandbox
 from bananachat.services.upstream import CancelToken
 
 BINDINGS_KEY = "claude_code_profiles"
@@ -181,11 +182,25 @@ class Adapter:
         if len({p["config_dir"] for p in self.profiles.values()}) != len(self.profiles) \
                 or len({p["home"] for p in self.profiles.values()}) != len(self.profiles):
             raise ConnectorError("Each subscription needs a separate authentication directory.")
+        self.sandboxed = getattr(config, "environment", "production") not in ("development", "testing")
+        if self.sandboxed:
+            try:
+                if os.geteuid() == 0:
+                    raise claude_sandbox.SandboxError("Production native transport needs an unprivileged identity.")
+                self.binary = claude_sandbox.trusted_executable(self.binary)
+                claude_sandbox.trusted_executable("/usr/bin/bwrap")
+                forbidden = [Path(__file__).resolve().parents[2], Path(config.claude_code_config).resolve()]
+                forbidden += [getattr(config, name) for name in ("instance_dir", "database_path", "log_file", "maintenance_file")
+                              if getattr(config, name, None)]
+                claude_sandbox.private_roots(forbidden)
+                claude_sandbox.profile_paths(self.profiles, uid=os.getuid(), forbidden=forbidden)
+            except (OSError, claude_sandbox.SandboxError):
+                raise ConnectorError("The production Claude sandbox is not configured. Install Bubblewrap and use root-owned native executables with separate private profiles.") from None
 
     def _env(self, profile, *, usage_metadata=False):
         # Allowlist prevents inherited API keys, token overrides, hooks or provider switches.
         env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE",
-                                              "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+                                              "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
                                               "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
                                               "http_proxy", "https_proxy", "all_proxy", "no_proxy") if key in os.environ}
         env.update(HOME=profile["home"], CLAUDE_CONFIG_DIR=profile["config_dir"],
@@ -201,8 +216,16 @@ class Adapter:
         """Bounded nonblocking input/output; closes the whole process group on every exit."""
         if cancel is not None:
             cancel.check()
-        process = subprocess.Popen([self.binary, *arguments], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, cwd=cwd or profile["home"], env=self._env(profile, usage_metadata=usage_metadata),
+        environment = self._env(profile, usage_metadata=usage_metadata)
+        command = [self.binary, *arguments]
+        if self.sandboxed:
+            try:
+                command = claude_sandbox.command(self.binary, profile, arguments,
+                                                cwd=cwd or profile["home"], environment=environment)
+            except (OSError, claude_sandbox.SandboxError):
+                raise ConnectorError("The Claude sandbox could not be configured safely.") from None
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, cwd=cwd or profile["home"], env=environment,
                                    start_new_session=True, close_fds=True)
         deadline = time.monotonic() + (timeout or self.timeout)
         output = bytearray()

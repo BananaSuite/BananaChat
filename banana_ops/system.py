@@ -259,6 +259,16 @@ class System:
     def install_units(self, settings):
         root = Path(settings["root"])
         commands = profile.service_commands(settings)
+        native_paths = []
+        environment = read_environment(root / "config/app.env")
+        if (settings["product"] == "BananaChat" and settings["mode"] != "compute" and
+                environment.get("BC_CLAUDE_EXTENSION") == "bananachat.services.claude_code"):
+            from bananachat.services.claude_sandbox import managed_paths
+            try:
+                native_paths = managed_paths(environment.get("BC_CLAUDE_CODE_CONFIG", ""),
+                                             uid=pwd.getpwnam(settings["service"]).pw_uid, root=root)
+            except OSError:
+                raise ValueError("The native Claude manifest, private profiles or Bubblewrap executable is unavailable.") from None
         for name, command in commands.items():
             after = "network-online.target"
             extra = ""
@@ -267,6 +277,8 @@ class System:
                 extra = "SupplementaryGroups=docker\n"
             if name == settings["service"] and name + "-ollama" in commands:
                 after += " " + name + "-ollama.service"
+            if name == settings["service"]:
+                extra += "".join(f"ReadWritePaths={path}\n" for path in native_paths)
             unit = ("# Managed by BananaSuite\n[Unit]\nDescription=" + settings["product"] + " " + settings["mode"] + "\n"
                     f"After={after}\nWants=network-online.target\n\n[Service]\nUser={settings['service']}\nGroup={settings['service']}\n"
                     f"WorkingDirectory={root / 'current'}\nEnvironmentFile={root / 'config/app.env'}\n"
