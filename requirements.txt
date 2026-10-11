@@ -16,4 +16,4 @@ cryptography>=50.0.1,<51
 # QR codes for setting up two-step verification (pure Python; images through Pillow, as in BananaWiki).
 qrcode>=8.2,<9
 # Optional but recommended: memory and CPU figures for admission control and metrics.
-psutil>=6.0.0,<8
+psutil>=7.2.2,<8
