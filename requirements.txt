@@ -10,7 +10,7 @@ Werkzeug==3.1.9
 gunicorn>=26.2.0,<27
 filelock>=3.13,<4
 Pillow>=12.3.0,<13
-pypdf>=6.0.0,<7
+pypdf>=6.19.0,<7
 # Encrypts external API provider keys at rest (the same release line as BananaWiki).
 cryptography>=50.0.1,<51
 # QR codes for setting up two-step verification (pure Python; images through Pillow, as in BananaWiki).
