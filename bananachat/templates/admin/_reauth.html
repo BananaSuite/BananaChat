@@ -1,0 +1,12 @@
+{#- Confirmation before a high-impact action (web/admin/_reauth.py). Import it "with context": the field
+    renders only while this browser session has not signed in or confirmed in the last ten minutes.
+    With *needed_for*, the field is optional and its hint says when the action needs it. -#}
+{% macro reauth_field(id, needed_for=none) -%}
+{% if reauth_needed() %}
+<div class="field field-narrow">
+  <label for="{{ id }}"{% if not needed_for %} class="required"{% endif %}>Your password or authenticator code</label>
+  <input type="password" id="{{ id }}" name="reauth_secret"{% if not needed_for %} required{% endif %} maxlength="1024" autocomplete="current-password" spellcheck="false" aria-describedby="{{ id }}-hint">
+  <span class="hint" id="{{ id }}-hint">{% if needed_for %}Needed {{ needed_for }}. {% endif %}Confirms it is you; not asked again for 10 minutes.</span>
+</div>
+{% endif %}
+{%- endmacro %}

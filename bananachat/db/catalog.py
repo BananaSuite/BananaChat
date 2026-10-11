@@ -56,9 +56,20 @@ def options(model) -> dict:
     return {key: model[key] for key in OPTION_FIELDS if model[key] is not None}
 
 
+# Kept in capitals when a display name is made from a file or tag name ("sdxl_base" -> "SDXL Base").
+_ACRONYMS = frozenset({"sd", "sdxl", "xl", "lcm", "vae", "gguf", "llm", "api", "gpt", "moe", "hf", "ai"})
+
+
+def _title(stem: str) -> str:
+    """Words of a file or tag name with a capital first letter; acronyms in capitals, mixed case kept."""
+    words = stem.replace("-", " ").replace("_", " ").split()
+    return " ".join(word.upper() if word.lower() in _ACRONYMS else word if word != word.lower() else word[:1].upper() + word[1:]
+                    for word in words)
+
+
 def _display_name_from_tag(name: str) -> str:
     stem = name.split("/")[-1].split(":")[0]
-    return stem.replace("-", " ").replace("_", " ").strip().title() or name
+    return _title(stem) or name
 
 
 def _clip(value, limit: int) -> str:
@@ -197,11 +208,11 @@ def sync_comfyui(checkpoints: list[str]) -> None:
                                (checkpoint, now, existing["id"]))
                 continue
             stem = checkpoint.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
-            display = stem.replace("-", " ").replace("_", " ").strip().title() or checkpoint
+            display = _title(stem) or checkpoint
             db.execute(
                 "INSERT INTO ai_models (ollama_name, backend, provider, backend_model_name, backend_available, "
                 "backend_last_seen_at, display_name, description, is_rolled_out, is_image_generation, "
-                "sort_order, created_at, updated_at) VALUES (?, 'comfyui', 'comfyui', ?, 1, ?, ?, 'ComfyUI checkpoint', "
+                "sort_order, created_at, updated_at) VALUES (?, 'comfyui', 'comfyui', ?, 1, ?, ?, '', "
                 "0, 1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM ai_models), ?, ?)",
                 (public_id, checkpoint, now, display, now, now))
 
@@ -252,7 +263,7 @@ def set_lifecycle(model_id: int, **fields) -> None:
     if not fields:
         return
     if "enrollment" in fields and fields["enrollment"] not in ENROLLMENTS:
-        raise ValueError("Unknown enrollment state.")
+        raise ValueError("Unknown enrolment state.")
     now = db.now()
     if "state_reason" in fields:
         fields["state_changed_at"] = now
@@ -274,13 +285,6 @@ def with_enrollment(*enrollments: str):
     marks = ",".join("?" for _ in enrollments)
     return db.query(f"SELECT * FROM ai_models WHERE enrollment IN ({marks}) "
                     "ORDER BY sort_order, display_name COLLATE NOCASE", enrollments)
-
-
-def needing_attention():
-    """Models an administrator should look at: enabled automatically, missing, failing, deprecated, being deleted."""
-    return db.query("SELECT * FROM ai_models WHERE enrollment='auto' OR missing_at IS NOT NULL OR failing_at IS NOT NULL "
-                    "OR deprecated_at IS NOT NULL OR delete_requested_at IS NOT NULL "
-                    "ORDER BY sort_order, display_name COLLATE NOCASE")
 
 
 def record_failure(model_id: int, error: str, *, window_start: str, now: str):
@@ -317,10 +321,6 @@ def missing_before(cutoff: str):
 
 def pending_deletes():
     return db.query("SELECT * FROM ai_models WHERE delete_requested_at IS NOT NULL ORDER BY delete_requested_at")
-
-
-def replaced_by(model_id: int):
-    return db.query("SELECT * FROM ai_models WHERE replacement_id=?", (model_id,))
 
 
 def in_use(name: str, lease_seconds: float) -> int:

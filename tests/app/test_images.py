@@ -323,6 +323,8 @@ def test_image_rate_limit(make_app, comfy):
     ({"size": "4096x4096"}, "size"),
     ({"size": "128x128"}, "size"),
     ({"size": "big"}, "size"),
+    ({"size": "\u00b2x\u00b2"}, "size"),
+    ({"size": "\u0663\u0660\u0660x\u0663\u0660\u0660"}, "size"),
     ({"n": 2}, "n"),
     ({"response_format": "url"}, "response_format"),
 ])
@@ -476,3 +478,35 @@ def test_images_are_paused_during_maintenance(image_app, artist, artist_token, c
     response = browser.post_json("/images/generate", {"prompt": "A cat"})
     assert response.status_code == 503 and response.json["error"]["code"] == "maintenance"
     assert comfy.prompts == [] and reservations(image_app) == 0
+
+
+def test_deprecated_checkpoints_leave_the_picker_and_the_automatic_choice(image_app, comfy, artist, artist_token):
+    from bananachat import db
+    from bananachat.db import catalog
+    from bananachat.services import comfyui, images, model_lifecycle
+
+    other_id = "comfyui:flux_dev.safetensors"
+    comfy.checkpoints = [CHECKPOINT, "flux_dev.safetensors"]
+    with image_app.app_context():
+        comfyui.sync_models()
+        db.execute("UPDATE ai_models SET enrollment='enabled' WHERE ollama_name=?", (other_id,))
+        catalog.set_rollout(catalog.get_by_name(other_id)["id"], True)
+        first = images.image_models(artist)[0]["ollama_name"]
+        second = other_id if first == MODEL_ID else MODEL_ID
+        assert {model["ollama_name"] for model in images.image_models(artist)} == {MODEL_ID, other_id}
+        model_lifecycle.deprecate(catalog.get_by_name(first), None)
+        # Left out of the picker and of "auto" while another checkpoint is available ...
+        assert [model["ollama_name"] for model in images.image_models(artist)] == [second]
+        assert images.resolve_model(artist, "auto")["ollama_name"] == second
+        # ... and still served to requests that name it until it is retired.
+        assert images.resolve_model(artist, first)["ollama_name"] == first
+        model_lifecycle.deprecate(catalog.get_by_name(second), None)
+        assert {model["ollama_name"] for model in images.image_models(artist)} == {MODEL_ID, other_id}
+        checkpoint_id = catalog.get_by_name(first)["id"]
+    # The administration says what deprecation does to a checkpoint, not what it does to chats.
+    admin = Browser(image_app)
+    admin.login("admin", "admin-password")
+    page = admin.get(f"/admin/models/{checkpoint_id}/edit").get_data(as_text=True)
+    assert "A deprecated checkpoint is left out of the image picker" in page
+    assert "chats move" not in page and 'id="replacement"' not in page
+    assert "It is hidden from users and requests that name it are refused." in page

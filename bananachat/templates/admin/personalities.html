@@ -8,20 +8,20 @@
 <input type="hidden" name="q" value="{{ search }}"><input type="hidden" name="page" value="{{ page.number }}"><input type="hidden" name="kind" value="{{ kind }}">
 {%- endmacro %}
 {% block admin_content %}
-{% call header("Personalities", "Moderate the personalities users create and publish featured ones for everyone.") %}
+{% call header("Personalities", "Moderate the personalities users create, and publish featured ones for everyone.") %}
 <a class="btn btn-primary" href="{{ url_for('admin.personality_featured_new') }}">{{ icon("plus") }}New featured personality</a>
 {% endcall %}
 
 <div class="alert alert-info mb-2">
   {{ icon("sparkles") }}
   <div>
-    <p><strong>Featured personalities</strong> are written here and shown to every user who may use personalities (the <em>custom personalities</em> access policy), read-only, with a “Duplicate to my personalities” action. None exist until you create one; drafts stay hidden until you publish them.</p>
+    <p><strong>Featured personalities</strong> are written here and shown to every user who may use personalities (the <em>custom personalities</em> access policy), read-only, with a “Copy to my personalities” action.{% if not featured_count %} None exist until you create one.{% endif %} Drafts stay hidden until you publish them.</p>
     <p>Their instructions are layered below each model's system prompt, like users' own personalities. {{ featured_count }} of {{ max_featured }} featured personalities exist.</p>
   </div>
 </div>
 
 <nav class="tabs" aria-label="Filter personalities">
-  {% for key, label in [("", "All"), ("user", "Users'"), ("featured", "Featured"), ("shared", "Shared by link")] %}
+  {% for key, label in [("", "All"), ("user", "By users"), ("featured", "Featured"), ("shared", "Shared by link")] %}
   <a href="{{ url_for('admin.personalities', kind=key or None, q=search or None) }}"{% if kind == key %} aria-current="page"{% endif %}>{{ label }}</a>
   {% endfor %}
 </nav>
@@ -55,28 +55,28 @@
 
 {% if rows %}
 <div class="table-wrap">
-  <table class="table">
-    <thead><tr><th scope="col">Personality</th><th scope="col">Owner</th><th scope="col">Status</th><th scope="col">Updated</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+  <table class="table table-stack table-stack-md admin-persona-table">
+    <thead><tr><th scope="col">Personality</th><th scope="col">Owner</th><th scope="col">Status</th><th scope="col" class="col-lg">Updated</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
     <tbody>
     {% for row in rows %}
       {% set featured = row.kind == "featured" %}
       <tr>
-        <td class="cell-wide">
+        <td class="cell-wide cell-full">
           <div class="admin-persona">
             {{ avatar(row, "sm") }}
             <div class="grow">
               <strong>{{ row.name }}</strong>
               {% if row.description %}<div class="small muted">{{ row.description }}</div>{% endif %}
-              <details class="inline-details"><summary>Instructions</summary><div class="pre-wrap small">{{ row.instructions }}</div></details>
+              <details class="inline-details"><summary class="nowrap">Instructions{{ icon("chevron-down") }}</summary><div class="pre-wrap small">{{ row.instructions }}</div></details>
             </div>
           </div>
         </td>
-        <td>
+        <td data-label="Owner:">
           {% if featured %}<span class="badge badge-primary">{{ icon("sparkles") }}Featured</span><div class="small muted">by {{ row.username }}</div>
           {% else %}<a href="{{ url_for('admin.user_detail', user_id=row.user_id) }}">{{ row.username }}</a>{% endif %}
           {% if row.share_token %}<div><span class="badge badge-info">{{ icon("share") }}Shared by link</span></div>{% endif %}
         </td>
-        <td>
+        <td class="cell-full" data-label="Status:">
           {% if is_blocked(row) %}
           <span class="badge badge-danger">Disabled{% if row.disabled_until %} until {{ row.disabled_until | datetime }}{% endif %}</span>
           {% if row.disabled_reason %}<div class="small muted">{{ row.disabled_reason }}</div>{% endif %}
@@ -86,8 +86,10 @@
           {% elif not row.is_enabled %}<span class="badge">Turned off by owner</span>
           {% else %}<span class="badge badge-success">Active</span>{% endif %}
         </td>
-        <td class="nowrap">{{ when(row.updated_at) }}</td>
+        <td class="nowrap col-lg" data-label="Updated:">{{ when(row.updated_at) }}</td>
         <td class="actions">
+          {#- One wrapping group with a gap both ways, so buttons on a second line do not touch the first. -#}
+          <div class="row-end admin-persona-actions">
           {% if featured %}
           <a class="btn btn-sm" href="{{ url_for('admin.personality_featured_edit', personality_id=row.id) }}" aria-label="Edit {{ row.name }}">{{ icon("edit") }}</a>
           <form method="post" action="{{ url_for('admin.personality_publish', personality_id=row.id) }}">
@@ -123,6 +125,7 @@
             {{ csrf() }}{{ keep() }}
             <button type="submit" class="btn btn-sm btn-danger" aria-label="Delete {{ row.name }}">{{ icon("trash") }}</button>
           </form>
+          </div>
         </td>
       </tr>
     {% endfor %}

@@ -13,6 +13,11 @@
 {{ parts | join(" · ") }}
 {%- endmacro %}
 {% block title %}Models{% endblock %}
+{% macro server_badges(model) -%}
+<span class="badge">{{ {"comfyui": "ComfyUI", "external": "External API", "ollama": "Ollama"}.get(model.backend, model.backend | capitalize) }}</span>
+{% if model.backend_available %}<span class="badge badge-success">Available</span>
+{% else %}<span class="badge badge-danger" title="Last seen {{ model.backend_last_seen_at | datetime }}">Not installed</span>{% endif %}
+{%- endmacro %}
 {% block admin_content %}
 {% call header("Models", "Publish models to users, review new ones, retire old ones and tune their defaults.") %}
   <form method="post" action="{{ url_for('admin.models_sync') }}" data-busy>
@@ -30,7 +35,7 @@
   </p>
   {% if sync.errors %}
   <details class="inline-details small">
-    <summary>{{ sync.errors | length }} model{{ "s" if sync.errors | length != 1 }} could not be inspected</summary>
+    <summary>{{ sync.errors | length }} model{{ "s" if sync.errors | length != 1 }} could not be inspected{{ icon("chevron-down") }}</summary>
     <ul class="plain-list">{% for item in sync.errors %}<li><span class="mono">{{ item.model }}</span> <span class="muted">— {{ item.error }}</span></li>{% endfor %}</ul>
   </details>
   {% endif %}
@@ -107,7 +112,7 @@
         <div class="small muted">{{ facts(model) or "Details not read yet." }}</div>
         <div class="badge-row">
           {% for capability in caps.get(model.id, []) %}<span class="badge">{{ capability }}</span>{% endfor %}
-          <span class="badge badge-info" title="Suggested from the parameter size">{{ presets[suggested[model.id]] }} limits</span>
+          {% if not model.embedding_only %}<span class="badge badge-info" title="Suggested from the parameter size">{{ presets[suggested[model.id]] }} limits</span>{% endif %}
           {% if model.embedding_only %}<span class="badge">Embeddings only</span>{% endif %}
         </div>
         {% if model.details_error %}<p class="danger-text small mb-0">Details could not be read: {{ model.details_error }}</p>{% endif %}
@@ -170,15 +175,15 @@
 
 <section aria-labelledby="catalog-title" class="mb-3">
   <div class="row-between mb-1">
-    <h2 id="catalog-title" class="mb-0">Catalog</h2>
+    <h2 id="catalog-title" class="mb-0">Catalogue</h2>
     <p class="muted small mb-0">Users only see <strong>published</strong> models that are <strong>available</strong> and that their access rules allow. The order here is the order users see.</p>
   </div>
   {% if rows %}
   <div class="table-wrap">
-    <table class="table catalog-table">
+    <table class="table table-stack catalog-table">
       <thead><tr>
         <th scope="col"><span class="visually-hidden">Order</span></th>
-        <th scope="col">Model</th><th scope="col">Server</th><th scope="col">Features</th>
+        <th scope="col">Model</th><th scope="col" class="col-optional catalog-server">Server</th><th scope="col" class="col-optional">Features</th>
         <th scope="col">Published</th><th scope="col"><span class="visually-hidden">Actions</span></th>
       </tr></thead>
       <tbody>
@@ -191,18 +196,16 @@
               <button type="submit" name="direction" value="down" class="icon-btn icon-flip" aria-label="Move {{ model.display_name }} down"{% if loop.last %} disabled{% endif %}>{{ icon("arrow-up") }}</button>
             </form>
           </td>
-          <td>
-            <strong>{{ model.display_name }}</strong>
+          <td class="catalog-name">
+            <a href="{{ url_for('admin.model_edit', model_id=model.id) }}"><strong>{{ model.display_name }}</strong></a>
             <div class="mono small muted truncate cell-wide">{{ model.ollama_name }}</div>
             {% set model_categories = categories.get(model.id, []) %}
             {% if model_categories or states.get(model.id) %}<div class="badge-row">{{ state_badges(model) }}{% for category in model_categories %}<span class="badge">{{ category.name }}</span>{% endfor %}</div>{% endif %}
+            {#- Where the Server column does not fit (small laptops, tablets, phones), its badges follow the name. -#}
+            <div class="badge-row catalog-server-inline">{{ server_badges(model) }}</div>
           </td>
-          <td>
-            <span class="badge">{{ "ComfyUI" if model.backend == "comfyui" else "Ollama" }}</span>
-            {% if model.backend_available %}<span class="badge badge-success">Available</span>
-            {% else %}<span class="badge badge-danger" title="Last seen {{ model.backend_last_seen_at | datetime }}">Not installed</span>{% endif %}
-          </td>
-          <td>
+          <td class="col-optional catalog-server">{{ server_badges(model) }}</td>
+          <td class="col-optional">
             <div class="badge-row">
               {% if model.is_image_generation %}<span class="badge badge-info">Images</span>{% endif %}
               {% if model.supports_vision %}<span class="badge badge-info">Vision</span>{% endif %}
@@ -212,14 +215,16 @@
               {% if model.limit_preset %}<span class="badge" title="Limit preset">{{ presets.get(model.limit_preset, model.limit_preset) }} limits</span>{% endif %}
             </div>
           </td>
-          <td>
+          <td class="catalog-publish">
             <form method="post" action="{{ url_for('admin.model_rollout', model_id=model.id) }}">
               {{ csrf() }}
               <input type="hidden" name="enabled" value="{{ 0 if model.is_rolled_out else 1 }}">
               {% if model.is_rolled_out %}
               <button type="submit" class="btn btn-sm btn-published" aria-label="{{ model.display_name }} is published. Hide it from users">{{ icon("check") }}Published</button>
+              {% elif model.embedding_only %}
+              <span class="badge" title="Embedding models cannot answer chats, so they cannot be published">Hidden</span>
               {% else %}
-              <button type="submit" class="btn btn-sm" aria-label="{{ model.display_name }} is hidden. Publish it to users">Hidden · Publish</button>
+              <span class="badge">Hidden</span> <button type="submit" class="btn btn-sm" aria-label="{{ model.display_name }} is hidden. Publish it to users">Publish</button>
               {% endif %}
             </form>
           </td>
@@ -231,8 +236,8 @@
                 <form method="post" action="{{ url_for('admin.model_ignore', model_id=model.id) }}" data-confirm="Ignore {{ model.ollama_name }}? It is hidden from users and never offered again until you restore it in Settings.">
                   {{ csrf() }}<button type="submit">{{ icon("close") }}Ignore</button>
                 </form>
-                <form method="post" action="{{ url_for('admin.model_remove', model_id=model.id) }}" data-confirm="Remove {{ model.display_name }} from the catalog? Its settings and access rules are lost; the files stay on the server.">
-                  {{ csrf() }}<button type="submit">{{ icon("close") }}Remove from catalog</button>
+                <form method="post" action="{{ url_for('admin.model_remove', model_id=model.id) }}" data-confirm="Remove {{ model.display_name }} from the catalogue? Its settings and access rules are lost; the files stay on the server.">
+                  {{ csrf() }}<button type="submit">{{ icon("close") }}Remove from catalogue</button>
                 </form>
                 {% if model.backend == "ollama" %}
                 <form method="post" action="{{ url_for('admin.model_delete_server', model_id=model.id) }}" data-confirm="Delete {{ model.ollama_name }} from the Ollama server? Its files are removed and must be downloaded again to use it. Refused while requests are using it." data-confirm-danger>

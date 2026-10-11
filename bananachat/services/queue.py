@@ -5,7 +5,9 @@ runs when fewer than ``BC_MAX_CONCURRENT`` are running and it is the first
 waiting row in (priority, arrival) order whose owner has nothing running
 (at most three requests per owner, one of them running). Rows carry a heartbeat
 renewed by the supervisor; rows of crashed processes expire after
-``LEASE_SECONDS`` and are removed.
+``LEASE_SECONDS`` and are removed. A worker process that exits frees its rows
+at once (:func:`release_process`), and the gunicorn master lets those of a
+worker that died expire within seconds (:func:`expire_process`).
 
 Usage::
 
@@ -40,7 +42,12 @@ MAX_PER_OWNER = 3
 # Longest pause between admission checks; requests in this process are also
 # woken as soon as a slot here is released.
 MAX_POLL_SECONDS = 0.3
+# A row of a process that exited stops counting this long after expire_process(); a live process renews its
+# rows (supervisor.LEASE_INTERVAL) well before.
+ORPHAN_GRACE_SECONDS = 15
 _released = threading.Condition()
+_held: set[str] = set()  # request ids of the rows this process holds
+_held_lock = threading.Lock()
 
 
 class QueueFull(RuntimeError):
@@ -69,9 +76,8 @@ def _memory_ok() -> bool:
 
 def _model_memory_ok(name):
     if name:
-        row = db.one("SELECT backend FROM ai_models WHERE backend IN ('external', 'claude') AND "
-                     "(ollama_name=? OR (backend='claude' AND backend_model_name=?))", (name, name))
-        if row is not None and row["backend"] in ("external", "claude"):
+        row = db.one("SELECT backend FROM ai_models WHERE backend='external' AND ollama_name=?", (name,))
+        if row is not None:
             return True  # Hosted inference does not allocate a local model.
     return _memory_ok()
 
@@ -110,6 +116,8 @@ class Slot:
                        "owner_key, model_name) VALUES (?,?,'waiting',?,?,?,?,?)",
                        (self.request_id, self.priority, os.getpid(), now, now, self.owner_key, self.model))
         supervisor.register_slot(self.request_id)
+        with _held_lock:
+            _held.add(self.request_id)
         self._entered = True
         return self
 
@@ -132,6 +140,8 @@ class Slot:
             return
         self._entered = False
         supervisor.unregister_slot(self.request_id)
+        with _held_lock:
+            _held.discard(self.request_id)
         try:
             db.execute("DELETE FROM inference_queue WHERE req_id=?", (self.request_id,))
         except Exception:  # noqa: BLE001 - the lease expires on its own
@@ -172,9 +182,8 @@ class Slot:
         if not _memory_ok():
             # A local request waiting for model memory must not stall hosted
             # requests. Priority/arrival order still applies to eligible work.
-            memory_filter = "AND EXISTS (SELECT 1 FROM ai_models m WHERE m.backend IN ('external','claude') " \
-                            "AND (m.ollama_name=w.model_name OR " \
-                            "(m.backend='claude' AND m.backend_model_name=w.model_name))) "
+            memory_filter = "AND EXISTS (SELECT 1 FROM ai_models m WHERE m.backend='external' " \
+                            "AND m.ollama_name=w.model_name) "
         first = db.one(
             "SELECT w.req_id FROM inference_queue w WHERE w.status='waiting' AND w.heartbeat_at>=? AND "
             "(w.owner_key IS NULL OR NOT EXISTS (SELECT 1 FROM inference_queue r WHERE r.status='running' "
@@ -218,7 +227,8 @@ class Slot:
                     yield position
                 if time.monotonic() >= deadline:
                     raise QueueTimeout("The request waited too long for a free slot. Please try again.")
-                pause = min(delay * random.uniform(0.8, 1.2), max(0.05, deadline - time.monotonic()))
+                jitter = random.uniform(0.8, 1.2)  # noqa: S311 - spreads polling, not a secret
+                pause = min(delay * jitter, max(0.05, deadline - time.monotonic()))
                 with _released:
                     if cancel is None or not cancel.cancelled:
                         _released.wait(pause)
@@ -231,6 +241,31 @@ class Slot:
     def wait_ms(self) -> int:
         end = self.started_at or time.time()
         return max(0, int((end - self.enqueued_at) * 1000))
+
+
+def release_process() -> int:
+    """Free every place this process holds, without waiting for the leases to expire (it is exiting)."""
+    with _held_lock:
+        held = sorted(_held)
+        _held.clear()
+    for request_id in held:
+        supervisor.unregister_slot(request_id)
+    try:
+        db.executemany("DELETE FROM inference_queue WHERE req_id=?", [(request_id,) for request_id in held])
+    except Exception:  # noqa: BLE001 - the leases still expire on their own
+        db.close_thread_connection()
+        raise
+    _wake_waiters()
+    return len(held)
+
+
+def expire_process(pid: int) -> int:
+    """Let the places of an exited process (the gunicorn master names its worker) stop counting within
+    :data:`ORPHAN_GRACE_SECONDS`. Rows are matched by process number only, so a live process with the same
+    number (another container on the same database) keeps its own by renewing them meanwhile."""
+    stamp = time.time() - LEASE_SECONDS + ORPHAN_GRACE_SECONDS
+    return db.execute("UPDATE inference_queue SET heartbeat_at=? WHERE owner_pid=? AND heartbeat_at>?",
+                      (stamp, int(pid), stamp)).rowcount
 
 
 def stats() -> dict:

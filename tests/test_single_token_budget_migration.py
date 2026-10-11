@@ -173,7 +173,7 @@ def test_capped_conversion_keeps_history_schema_and_is_idempotent(old_db):
     assert _upgraded_policy(old_db)["window"]["tokens"] == 1_800_000_000
     assert old_db.execute("SELECT window_tokens FROM user_limit_overrides").fetchone()[0] == 1_800_000_000
     assert {row["name"] for row in old_db.execute("PRAGMA table_info(site_settings)")} == columns | {
-        "music_bonus_fixed_weekly_tokens", "worker_offline_warning_enabled",
+        "music_bonus_fixed_weekly_tokens", "worker_offline_warning_enabled", "admin_two_step_required",
     }
     for table, rows in history.items():
         assert [tuple(row) for row in old_db.execute(f'SELECT * FROM "{table}"')] == rows

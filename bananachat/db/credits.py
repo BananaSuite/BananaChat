@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -44,10 +45,6 @@ class InsufficientCredits(ValueError):
     def __init__(self, message: str, *, weekly: bool = False):
         super().__init__(message)
         self.weekly = weekly
-
-
-class ReservationLost(RuntimeError):
-    """An image reservation expired before the charge could be recorded."""
 
 
 def tokens_to_credits(tokens: float) -> float:
@@ -268,9 +265,19 @@ def charge(user_id: str, tokens_in: int, tokens_out: int, *, request_type: str, 
     return counted_tokens, False
 
 
+# Chinese, Japanese and Korean characters (and full-width forms): about one token each.
+_WIDE = re.compile("[\u1100-\u11ff\u2e80-\u9fff\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff\uff00-\uffef"
+                   "\U00020000-\U0003ffff]")
+# What a model is charged for an image when the backend reports no usage: about what OpenAI and Anthropic bill
+# for a picture of about a megapixel.
+IMAGE_TOKEN_ESTIMATE = 765
+
+
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate (four characters per token) when a backend reports none."""
-    return math.ceil(len(text or "") / 4)
+    """Rough token estimate when a backend reports none: four characters per token, one per CJK character."""
+    text = text or ""
+    wide = len(_WIDE.findall(text))
+    return wide + math.ceil((len(text) - wide) / 4)
 
 
 def history(user_id: str, *, pool: str = "api", limit: int = 200):

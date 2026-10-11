@@ -15,7 +15,7 @@ from bananachat.services import limits
 
 from ._helpers import FormError, integer
 
-POOL_LABELS = {"api": "API, playground and images", "chat": "Chat", "agent": "Agents"}
+POOL_LABELS = {"api": "API, playground and images", "chat": "Chat", "agent": "Cloud sessions"}
 UNIT_LABELS = {"second": "second", "minute": "minute", "hour": "hour", "day": "day"}
 RULE_ROWS = limits_db.RULES_MAX
 

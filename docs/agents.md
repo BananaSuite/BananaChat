@@ -11,9 +11,8 @@ stored audience disables the feature rather than granting broader access.
 
 Sessions use the existing `/agents` routes and retain their history. Model
 policies, five-hour token budgets, optional weekly limits and per-model rates
-remain independent of the audience. Native Claude Code subscription profiles
-serve chat; cloud sessions require an Ollama or external API model with tool
-support. Configure the sandbox runner on the compute host before enabling
+remain independent of the audience. Cloud sessions require an Ollama or
+external API model with tool support. Configure the sandbox runner on the compute host before enabling
 sessions. Provider credentials stay on the web server and are not copied into
 workspaces.
 
@@ -176,8 +175,8 @@ The engine must be able to enforce limits: on start the runner checks that the
 engine reports memory, pids and CPU control (cgroup v2 with those controllers
 delegated to the runner account for rootless engines) and refuses to start
 otherwise. After creating each sandbox it inspects the container and removes it
-if any restriction (read-only root, memory, pids, network, capabilities, user)
-was not applied.
+if any restriction (read-only root, memory, pids, network, capabilities,
+no-new-privileges, user) was not applied, on Docker and Podman alike.
 
 ### Images
 
@@ -255,7 +254,7 @@ The first image in the list is the default.
 | `BC_SANDBOX_ALLOW_ROOTFUL` | `0` | `1` accepts a rootful engine (read [choosing an engine](#choosing-an-engine) first). |
 | `BC_SANDBOX_INSTANCE` | `default` | Name stored in a container label. The runner only reaps containers carrying its own name, so two runners (or a test run) on one host leave each other alone. |
 | `BC_SANDBOX_MAX_CONNECTIONS` | `32` | HTTP requests handled at once; more get a JSON 503. |
-| `BC_SANDBOX_TRUSTED_PEERS` | `127.0.0.1,::1` | Addresses or networks the web server connects from (the local Caddy or SSH tunnel), or `none`. Other peers get at most `BC_SANDBOX_MAX_CONNECTIONS_PER_PEER` connections each and, together, never the last quarter of `BC_SANDBOX_MAX_CONNECTIONS`, which stays free for trusted peers. If the web server connects directly (for example over Tailscale), add its address. |
+| `BC_SANDBOX_TRUSTED_PEERS` | `127.0.0.1,::1` | Addresses or networks the web server connects from (the local Caddy or SSH tunnel), or `none`. Other peers get at most `BC_SANDBOX_MAX_CONNECTIONS_PER_PEER` connections each and, together, never the last quarter of `BC_SANDBOX_MAX_CONNECTIONS`, which stays free for trusted peers. If the web server connects directly (for example over a LAN or a VPN), add its address. |
 | `BC_SANDBOX_MAX_CONNECTIONS_PER_PEER` | `4` | Connections at once from one untrusted address. |
 
 Callers can lower `memory_mb`, `cpus` and `workspace_mb` per sandbox, never
@@ -427,6 +426,13 @@ web server fetches the whole archive before passing it to the browser.
 Alternatively, an SSH tunnel from the web server:
 `ssh -N -L 127.0.0.1:11436:127.0.0.1:11436 tunnel@cluster` (run it as a
 systemd service with `Restart=always`) and `BC_AGENTS_RUNNER_URL=http://127.0.0.1:11436`.
+Or, on a private network between the two machines (a LAN, WireGuard,
+Tailscale), plain HTTP to the runner's address: set `BC_SANDBOX_HOST` to that
+address (the runner logs a warning that it listens without TLS), add the web
+server's address to `BC_SANDBOX_TRUSTED_PEERS`, firewall the port to the web
+server, and list the network in the web server's
+`BC_AGENTS_RUNNER_INSECURE_NETWORKS` (see
+[plain HTTP on private networks](configuration.md#plain-http-on-private-networks)).
 
 ### Pairing with the web server
 
@@ -544,17 +550,28 @@ users' sandboxes, the runner token, and the availability of the service.
 - **Images.** A malicious or vulnerable image runs with the same restrictions,
   but you choose and update them; pin digests.
 - **Plain HTTP.** The runner speaks HTTP; the token and all data are only
-  protected in transit by the HTTPS proxy or SSH tunnel you put in front.
+  protected in transit by the HTTPS proxy, SSH tunnel or VPN you put in front.
 - **Durability.** Workspaces live in memory and disappear on removal, idle
   timeout, maximum age, restart or reboot.
 
 ### Tested environments
 
-The unit tests use a recording fake engine; the integration tests
-(`tests/test_sandbox_runner_docker.py`, run in CI by the `sandbox` job) use
-real rootful Docker with runc. The Podman and gVisor code paths (flags,
-`podman info` parsing) are covered by unit tests only; verify a new
-installation with a quick agent task and `journalctl` before opening it to
+The unit tests use a recording fake engine (with Docker- and Podman-shaped
+`inspect` output). The integration tests (`tests/test_sandbox_runner_docker.py`)
+run in CI against real engines: rootful Docker with runc (`sandbox` job) and
+rootful Podman with crun (`sandbox-podman` job, `BC_SANDBOX_TEST_ENGINE=podman`),
+covering Podman's flags, `podman info` parsing and the `inspect` fields the
+post-start verification reads. Two production setups are not exercised in CI:
+**rootless** Podman (hosted CI runners have no systemd user session to delegate
+memory and pids limits to) and gVisor (`runsc`). On such an installation, run
+the integration tests yourself once as the runner's account, after pulling the
+image:
+
+```bash
+BC_SANDBOX_TEST_ENGINE=podman BC_SANDBOX_REQUIRE_DOCKER=1 python -m pytest -q tests/test_sandbox_runner_docker.py
+```
+
+and verify with a quick agent task and `journalctl` before opening it to
 users.
 
 ## Using agents
@@ -633,7 +650,7 @@ delete them.
 
 ## Git repositories
 
-A task can start from a **public** Git repository, like Claude Code on the web,
+A task can start from a **public** Git repository, like hosted coding agents,
 while sandboxes keep having no network: the web server downloads the source
 archive and the runner unpacks it into the sandbox. When the image has Git,
 the person can download everything the agent changed as a `.patch`.
@@ -811,7 +828,16 @@ checked before a task starts and before every step; a task stops with *Limit
 reached* when the owner runs out. Task starts also obey the agent pool's
 request-rate rules, the model's own rate and *Starts per user per hour*.
 Agents think at the reasoning effort the owner may use (medium, or less when
-the owner has not unlocked medium for the model).
+the owner has not unlocked medium for the model). With a Claude model (an
+Anthropic provider) each step's signed thinking goes back unchanged with its
+tool results, so Claude keeps thinking through a tool round instead of only at
+its first step. When that is not possible (older steps were shortened to fit
+the context, the model or its tools changed, or the round's thinking passed
+300,000 characters) the round continues at the same effort without a thinking
+request; see [external providers](external-providers.md#reasoning-output-limits-and-streaming).
+A message from the owner starts a new round. The signatures stay in the
+running task's memory and are never stored, so a continued task starts a new
+round too.
 Agent model calls go through the normal inference queue with the lowest
 priority (people waiting for a chat answer go first) and are never sent to
 volunteer worker PCs.

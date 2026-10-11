@@ -1,4 +1,17 @@
-"""Fetch a configured Git source, including private forks, without URL credentials."""
+"""Fetch a configured Git source, including private forks, without URL credentials.
+
+A source follows release tags (``"track": "tags"``, the default for sources
+configured by 1.7 and later): the highest ``vX.Y.Z`` tag is deployed, never
+work pushed after it. ``"track": "branch"`` (what a source configured earlier
+says by saying nothing) follows a branch's latest commit.
+
+When the operator requires signatures, a release is an annotated tag signed
+(SSH) by an allowed signer for exactly its own name: a tag name alone is
+whatever whoever can push tags says it is, so a signed commit under an
+unsigned or lightweight tag releases nothing. The highest release that
+verifies is deployed; higher tags that do not are skipped and reported.
+A branch-tracking source needs the commit itself signed.
+"""
 
 import os
 from pathlib import Path
@@ -40,6 +53,24 @@ def redact(text, secrets=(), limit=600):
     return text[-limit:]
 
 
+RELEASE_TAG = re.compile(r"v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})")
+TRACKS = ("tags", "branch")
+# Release tags tried, highest first, before an update gives up on finding one that verifies.
+MAX_RELEASE_CANDIDATES = 20
+
+
+def valid_track(value):
+    if value not in TRACKS:
+        raise ValueError("Choose what updates track: tags (releases) or branch.")
+    return value
+
+
+def release_version(tag):
+    """``(major, minor, patch)`` of a release tag ``vX.Y.Z``; None for any other tag (pre-releases included)."""
+    match = RELEASE_TAG.fullmatch(tag)
+    return (int(match[1]), int(match[2]), int(match[3])) if match else None
+
+
 def valid_branch(value):
     if (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./-]*", value)
             or ".." in value or any(part in {"", ".", ".."} or part.endswith((".lock", ".")) for part in value.split("/"))):
@@ -73,6 +104,8 @@ class GitSource:
     def __init__(self, root, source):
         self.root, self.source = Path(root), source
         self.git_dir = self.root / "repository.git"
+        # Release tags higher than the one resolve() chose that did not verify (the newest first).
+        self.skipped_releases = []
 
     def environment(self):
         values = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8", "GIT_TERMINAL_PROMPT": "0",
@@ -202,9 +235,148 @@ class GitSource:
             )
         return revision
 
+    def verify_release(self, tag, revision, tag_object):
+        """Refuse a release unless it is an annotated tag SSH-signed for its own name (when signatures are required).
+
+        *tag_object* must be a tag named *tag* for commit *revision*, signed
+        by a key in the allowed signers file. A signed commit is not enough:
+        it says nothing about which version it is, so anyone who can push tags
+        could release any signed work in progress under a higher version
+        number. Likewise a signed tag object pushed under another name
+        releases nothing.
+        """
+        if self.source.get("signing", "none") != "ssh":
+            return None
+        signers = self.root / "config" / "repo.allowed_signers"
+        self.private_file(signers)
+        if self.git("cat-file", "-t", tag_object).stdout.strip() != "tag":
+            raise RuntimeError("Release " + tag + " is not a signed tag: with signatures required, a release is an "
+                               "annotated tag signed with an allowed SSH key (git tag -s). Nothing was fetched into "
+                               "a release.")
+        body = self.git("cat-file", "tag", tag_object).stdout
+        header = body.split("\n\n", 1)[0].splitlines()
+        if "tag " + tag not in header or "object " + revision not in header or "type commit" not in header:
+            raise RuntimeError("Release " + tag + " is a tag object made for another name or commit, so it "
+                               "releases nothing. Nothing was fetched into a release.")
+        if "BEGIN SSH SIGNATURE" not in body:
+            detail = ("carries an OpenPGP signature, which is not accepted" if "BEGIN PGP SIGNATURE" in body
+                      else "is not signed")
+            raise RuntimeError("Release " + tag + " " + detail + ": with signatures required, a release is an "
+                               "annotated tag signed with an allowed SSH key (git tag -s). Nothing was fetched into "
+                               "a release.")
+        result = self.git("-c", "gpg.format=ssh", "-c", "gpg.ssh.allowedSignersFile=" + str(signers),
+                          "verify-tag", tag_object, check=False)
+        if result.returncode:
+            raise RuntimeError("Release " + tag + " is not signed by a key in the allowed signers file. Nothing "
+                               "was fetched into a release.")
+        return revision
+
+    def release_tags(self, url):
+        """``(release tag, commit)`` of every release tag (``vX.Y.Z``) of the source at *url*, highest first."""
+        listing = self.git("ls-remote", "--tags", "--", url, "refs/tags/v*").stdout
+        objects, commits = {}, {}
+        for line in listing.splitlines():
+            sha, _, ref = line.partition("\t")
+            if not ref.startswith("refs/tags/") or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+                continue
+            name = ref[len("refs/tags/"):]
+            if name.endswith("^{}"):
+                commits[name[:-3]] = sha
+            else:
+                objects[name] = sha
+        releases = sorted(((release_version(name), name) for name in objects if release_version(name) is not None),
+                          reverse=True)
+        return [(name, commits.get(name, objects[name])) for _version, name in releases]
+
+    def latest_release(self, url):
+        """The highest release tag (``vX.Y.Z``) of the source at *url*."""
+        releases = self.release_tags(url)
+        if not releases:
+            raise RuntimeError("The update source has no release tag (vX.Y.Z), so there is nothing to update to. "
+                               "Updates wait for the next release; 'source set --track branch' follows a branch's "
+                               "latest commit instead.")
+        return releases[0][0]
+
+    def verify_restorable(self, revision):
+        """Refuse to restore *revision* unless it is signed (when signatures are required); it is fetched already.
+
+        Either the commit itself is SSH-signed by an allowed signer, or a
+        release tag of the update source names it and verifies as
+        :meth:`verify_release` requires: the signatures updates accept.
+        """
+        if self.source.get("signing", "none") != "ssh":
+            return
+        try:
+            self.verify(revision)
+            return
+        except RuntimeError:
+            pass
+        url = valid_url(self.source["url"], allow_local=Path(self.source["url"]).is_absolute())
+        for name, commit in self.release_tags(url):
+            if commit != revision:
+                continue
+            self.git("fetch", "--no-tags", "--", url, "refs/tags/" + name)
+            if self._fetched("^{commit}") != revision:
+                continue
+            try:
+                self.verify_release(name, revision, self._fetched())
+                return
+            except RuntimeError:
+                continue
+        raise RuntimeError("Revision " + revision[:12] + " is neither signed itself nor released under a tag signed "
+                           "by a key in the allowed signers file.")
+
+    def _verified_release(self, url):
+        """Fetch the highest release that verifies; return ``(tag, commit)``.
+
+        Higher tags that do not verify (anyone who can push tags can push
+        one) are skipped, so they cannot hold back a signed release such as a
+        security fix; :attr:`skipped_releases` names them.
+        """
+        releases = [name for name, _commit in self.release_tags(url)]
+        if not releases:
+            self.latest_release(url)  # raises: no release at all
+        self.skipped_releases = []
+        reasons = []
+        for release in releases[:MAX_RELEASE_CANDIDATES]:
+            self.git("fetch", "--no-tags", "--", url, "refs/tags/" + release)
+            sha = self._fetched("^{commit}")
+            try:
+                self.verify_release(release, sha, self._fetched())
+            except RuntimeError as error:
+                self.skipped_releases.append(release)
+                reasons.append(str(error))
+                continue
+            return release, sha
+        more = len(releases) > MAX_RELEASE_CANDIDATES
+        raise RuntimeError("None of the " + ("highest " if more else "") + str(min(len(releases), MAX_RELEASE_CANDIDATES))
+                           + " release tags of the update source verifies: " + reasons[0]
+                           + (" Remove the tags that are not releases from the update source." if more else ""))
+
+    def _ancestor(self, older, newer):
+        return (bool(re.fullmatch(r"[0-9a-f]{40,64}", str(older))) and bool(re.fullmatch(r"[0-9a-f]{40,64}", str(newer)))
+                and self.git("merge-base", "--is-ancestor", older, newer, check=False).returncode == 0)
+
+    def _fetched(self, peel=""):
+        sha = self.git("rev-parse", "FETCH_HEAD" + peel).stdout.strip()
+        if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+            raise RuntimeError("Git did not return a valid source revision.")
+        return sha
+
     def resolve(self, current):
+        """Fetch what the source tracks; return ``(revision, release tag or branch used, fast-forward from current)``.
+
+        Tracking tags, a server whose revision already contains the latest
+        release (installed from a newer checkout) gets *current* back: there
+        is nothing to deploy and nothing diverges.
+        """
         self.initialize()
         url = valid_url(self.source["url"], allow_local=Path(self.source["url"]).is_absolute())
+        if valid_track(self.source.get("track", "branch")) == "tags":
+            release, sha = self._verified_release(url)
+            if current and sha != current and self._ancestor(sha, current):
+                return current, release, True
+            return sha, release, sha == current or self._ancestor(current, sha)
         chosen = valid_branch(self.source["branch"])
         result = self.git("ls-remote", "--heads", "--", url, "refs/heads/" + chosen)
         if not result.stdout.strip():
@@ -216,13 +388,9 @@ class GitSource:
             if not result.stdout.strip():
                 raise RuntimeError("Both the selected branch and its configured fallback are missing. Nothing was updated.")
         self.git("fetch", "--no-tags", "--", url, "refs/heads/" + chosen)
-        sha = self.git("rev-parse", "FETCH_HEAD").stdout.strip()
-        if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
-            raise RuntimeError("Git did not return a valid source revision.")
+        sha = self._fetched()
         self.verify(sha)
-        forward = sha == current or (bool(re.fullmatch(r"[0-9a-f]{40,64}", str(current)))
-                                     and self.git("merge-base", "--is-ancestor", current, sha, check=False).returncode == 0)
-        return sha, chosen, forward
+        return sha, chosen, sha == current or self._ancestor(current, sha)
 
     def archive(self, revision, destination):
         if not re.fullmatch(r"[0-9a-f]{40,64}", str(revision)):

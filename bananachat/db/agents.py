@@ -323,10 +323,6 @@ def lanes(task_id: str):
     return db.query("SELECT * FROM agent_lanes WHERE task_id=? ORDER BY agent", (task_id,))
 
 
-def lane_count(task_id: str) -> int:
-    return db.scalar("SELECT COUNT(*) FROM agent_lanes WHERE task_id=?", (task_id,), 0)
-
-
 # ----- follow-up messages -------------------------------------------------------------
 
 def add_message(task_id: str, user_id: str, content: str, *, max_pending: int | None = None) -> int:
@@ -370,9 +366,16 @@ def known_sandboxes() -> dict[str, str]:
             db.query("SELECT id, sandbox_id FROM agent_tasks WHERE sandbox_id IS NOT NULL")}
 
 
+_OLD = "owner_token IS NULL AND COALESCE(finished_at, updated_at)<?"
+
+
 def old_tasks(cutoff: str, limit: int = 200):
-    return db.query("SELECT id, sandbox_id FROM agent_tasks WHERE owner_token IS NULL AND "
-                    "COALESCE(finished_at, updated_at)<? LIMIT ?", (cutoff, limit))
+    return db.query(f"SELECT id, sandbox_id FROM agent_tasks WHERE {_OLD} LIMIT ?", (cutoff, limit))
+
+
+def delete_if_old(task_id: str, cutoff: str) -> bool:
+    """Delete a task listed by old_tasks unless it was resumed since."""
+    return db.execute(f"DELETE FROM agent_tasks WHERE id=? AND {_OLD}", (task_id, cutoff)).rowcount == 1
 
 
 # ----- workspace archive downloads (one per person, across processes) -----------------------

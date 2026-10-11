@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from bananachat import db
 
-CUSTOM_CODE_RE = re.compile(r"^[A-Za-z0-9-]{4,32}$")
+# Codes are compared without case and can be guessed through the sign-up form,
+# so a chosen code needs about as many possibilities as a random one (40 bits).
+CUSTOM_CODE_RE = re.compile(r"^[A-Za-z0-9-]{12,32}$")
+CUSTOM_CODE_MIN_CHARACTERS = 12  # letters and digits, hyphens not counted
+CUSTOM_CODE_MIN_DISTINCT = 6
+# An invitation that creates administrators must expire within this time and
+# have a limited number of uses (one unless chosen otherwise).
+ADMIN_INVITE_MAX_LIFETIME = timedelta(days=30)
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I look-alikes
 
 
@@ -23,9 +30,17 @@ def create(created_by: str, *, max_uses: int = 1, expires_at: datetime | None = 
         raise ValueError("Uses must be between 0 (unlimited) and 100000.")
     if assigned_role not in (None, "user", "admin"):
         raise ValueError("Unknown role.")
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if assigned_role == "admin":
+        if not max_uses:
+            raise ValueError("Administrator invitations need a limited number of uses.")
+        if expires_at is None or expires_at - datetime.now(timezone.utc) > ADMIN_INVITE_MAX_LIFETIME:
+            raise ValueError(f"Administrator invitations must expire within {ADMIN_INVITE_MAX_LIFETIME.days} days.")
     if code:
-        if not CUSTOM_CODE_RE.match(code):
-            raise ValueError("Custom codes use 4-32 letters, digits or hyphens.")
+        problem = custom_code_problem(code)
+        if problem:
+            raise ValueError(problem)
         code = code.upper()
     with db.transaction():
         for _ in range(10):
@@ -41,6 +56,34 @@ def create(created_by: str, *, max_uses: int = 1, expires_at: datetime | None = 
                    (candidate, created_by, db.now(), db.timestamp(expires_at) if expires_at else None,
                     max_uses, assigned_role))
     return candidate
+
+
+def custom_code_problem(code: str) -> str | None:
+    """Why a chosen invitation code is not accepted, or None."""
+    characters = code.replace("-", "").upper()
+    if (not CUSTOM_CODE_RE.match(code) or len(characters) < CUSTOM_CODE_MIN_CHARACTERS
+            or len(set(characters)) < CUSTOM_CODE_MIN_DISTINCT):
+        return (f"Custom codes need at least {CUSTOM_CODE_MIN_CHARACTERS} letters or digits, of which at least "
+                f"{CUSTOM_CODE_MIN_DISTINCT} different (hyphens allowed, at most 32 characters), so they cannot "
+                "be guessed. Leave the field empty for a random code.")
+    return None
+
+
+_RANDOM_CODE_RE = re.compile(f"^[{_ALPHABET}]{{4}}-[{_ALPHABET}]{{4}}$")
+
+
+def weaknesses(row) -> list[str]:
+    """What makes an invitation created under earlier, looser rules risky (it keeps working)."""
+    found = []
+    code = row["code"] or ""
+    if not _RANDOM_CODE_RE.match(code.upper()) and custom_code_problem(code):
+        found.append("The code is easy to guess.")
+    if row["assigned_role"] == "admin":
+        open_ended = [text for missing, text in ((not row["expires_at"], "never expires"),
+                                                 (not row["max_uses"], "has unlimited uses")) if missing]
+        if open_ended:
+            found.append(f"This administrator invitation {' and '.join(open_ended)}.")
+    return found
 
 
 def _usable(row) -> bool:

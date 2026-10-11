@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import math
 import secrets
@@ -17,7 +18,7 @@ from bananachat import PRODUCT_NAME, __version__, assets, db
 from bananachat.config import Config, load_config, log_warnings
 from bananachat.db import settings as site_settings
 from bananachat.db import users
-from bananachat.i18n import LANGUAGE_NAMES, browser_catalog, negotiate, translate
+from bananachat.i18n import LANGUAGE_NAMES, browser_catalog, negotiate, translate, translate_html
 from bananachat import security
 from bananachat.logs import configure_logging, record_exception
 
@@ -96,10 +97,12 @@ def create_app(config: Config | None = None, *, testing: bool = False) -> Flask:
     if not config.secret_key:
         raise RuntimeError("A secret key is required.")
     if config.proxy_mode:
-        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=config.proxy_hops, x_proto=1, x_host=1)
+        app.wsgi_app = _trust_local_proxy(ProxyFix(app.wsgi_app, x_for=config.proxy_hops, x_proto=1, x_host=1),
+                                          app.wsgi_app)
 
     db.configure(config.database_path)
     db.init_db()
+    security.install_session_interface(app)
     _announce_setup(config)
 
     _install_hooks(app)
@@ -110,9 +113,6 @@ def create_app(config: Config | None = None, *, testing: bool = False) -> Flask:
     from bananachat.services import housekeeping  # noqa: F401  (registers core background jobs)
     from bananachat.services import limits  # noqa: F401  (registers the limit jobs)
     from bananachat.services import community  # noqa: F401  (registers the community-consent job)
-    from bananachat.services import claude_extension, claude_pool
-    claude_extension.configure(app)
-    claude_pool.ensure_registered()
     register_blueprints(app)
     # Never hand a connection opened here to forked worker processes.
     db.close_thread_connection()
@@ -123,6 +123,22 @@ def start_background_services(app: Flask) -> None:
     """Run periodic jobs in this process if it wins leadership (see services.background)."""
     from bananachat.services import background
     background.start(app)
+
+
+def _trust_local_proxy(with_proxy_headers, direct):
+    """Read X-Forwarded-* only on connections that come from this machine.
+
+    A client that reaches the port directly could otherwise choose its own
+    address and sidestep every per-address limit.
+    """
+    def dispatch(environ, start_response):
+        peer = environ.get("REMOTE_ADDR", "")
+        try:
+            local = ipaddress.ip_address(peer).is_loopback
+        except ValueError:
+            local = False
+        return (with_proxy_headers if local else direct)(environ, start_response)
+    return dispatch
 
 
 def _announce_setup(config: Config) -> None:
@@ -232,6 +248,10 @@ def _install_template_helpers(app: Flask) -> None:
     app.jinja_env.filters.update(
         timeago=formatting.timeago,
         datetime=formatting.datetime_text,
+        datetime_html=formatting.datetime_html,
+        time_html=formatting.time_html,
+        pretty_json=formatting.pretty_json,
+        break_points=formatting.break_points,
         number=formatting.number,
         credits=formatting.credits,
         tokens=formatting.tokens,
@@ -239,6 +259,7 @@ def _install_template_helpers(app: Flask) -> None:
         token_input=formatting.token_input,
         time_text=formatting.time_text,
         time_left=formatting.time_left,
+        time_left_html=formatting.time_left_html,
         filesize=formatting.filesize,
         primary_foreground=formatting.primary_foreground,
     )
@@ -261,6 +282,9 @@ def _install_template_helpers(app: Flask) -> None:
         def t(key, **params):
             return translate(language, key, **params)
 
+        def t_html(key, **params):
+            return translate_html(language, key, **params)
+
         return {
             "config": config,
             "settings": settings,
@@ -269,6 +293,7 @@ def _install_template_helpers(app: Flask) -> None:
             "is_admin": bool(user and user["role"] == "admin"),
             "lang": language,
             "t": t,
+            "t_html": t_html,
             "js_strings": browser_catalog(language),
             "csp_nonce": getattr(g, "csp_nonce", ""),
             "prefs": prefs,

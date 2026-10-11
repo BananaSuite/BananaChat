@@ -9,6 +9,12 @@ packages). Environment:
   (http://127.0.0.1:11434);
 * ``BC_COMPUTE_TOKEN_FILE`` - the bearer token, a private (0600) regular file
   holding at least 32 characters;
+* ``BC_COMPUTE_MANAGEMENT_TOKEN_FILE`` (optional) - a second token, required for
+  model management (``/api/pull``, ``/api/create``, ``/api/copy``,
+  ``/api/delete``) and good for nothing else; the web server sends it as
+  ``BC_OLLAMA_MANAGEMENT_API_KEY``. Without it the main token may manage models;
+* ``BC_COMPUTE_MODEL_MANAGEMENT`` (1) - 0 refuses model management with any
+  token (models are then pulled on this machine with ``ollama pull``);
 * ``BANANA_MAINTENANCE_FILE`` - while this file exists, model requests get 503;
 * ``BC_SOURCE_URL`` - the corresponding source (AGPL), offered at ``/source``;
 * ``BC_COMPUTE_MAX_CONNECTIONS`` (32), ``BC_COMPUTE_UPSTREAM_TIMEOUT`` (900 s).
@@ -19,7 +25,9 @@ Endpoints:
   answers ``/api/version``; the lifecycle manager checks ``/healthz``;
 * ``GET /source`` (no authentication): the source URL (JSON, or a redirect for browsers);
 * the Ollama and OpenAI-compatible paths in ``ALLOWED`` with
-  ``Authorization: Bearer <token>``; responses are streamed through.
+  ``Authorization: Bearer <token>``; responses are streamed through. After
+  ``AUTH_FAILURES_PER_MINUTE`` wrong tokens from one address, further wrong
+  tokens get 429 for a minute (the right token keeps working).
 
 Bodies are limited to 32 MB and need ``Content-Length`` (chunked uploads are
 refused). Every connection has socket timeouts, at most
@@ -43,7 +51,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .http_limits import ConnectionDeadlines
+from .http_limits import ConnectionDeadlines, FailureLimiter
 
 DEFAULT_SOURCE_URL = "https://github.com/BananaSuite/BananaChat"
 MAX_BODY = 32 * 1024 * 1024
@@ -57,6 +65,7 @@ HEALTH_CACHE_SECONDS = 1.0
 # answer instead of a connection reset (closing with unread data resets it).
 DRAIN_SECONDS = 10.0
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+AUTH_FAILURES_PER_MINUTE = 20
 
 # Method -> paths forwarded to Ollama. The web server uses tags, ps, version,
 # show, chat, generate, pull and delete; the rest serve API clients.
@@ -68,6 +77,9 @@ ALLOWED = {
     "DELETE": frozenset({"/api/delete"}),
 }
 ALL_PATHS = frozenset().union(*ALLOWED.values())
+# Model management: downloads from any registry, new models and deletions. A
+# leaked inference token should not be enough for these (see the management token).
+MANAGEMENT_PATHS = frozenset({"/api/pull", "/api/create", "/api/copy", "/api/delete"})
 
 
 def _json_bytes(payload) -> bytes:
@@ -141,11 +153,16 @@ class ComputeServer(ThreadingHTTPServer):
     request_queue_size = 64
     allow_reuse_address = True
 
-    def __init__(self, address, *, upstream, token, maintenance="", source=DEFAULT_SOURCE_URL, max_connections=32,
-                 upstream_timeout=900.0, client_timeout=CLIENT_TIMEOUT,
+    def __init__(self, address, *, upstream, token, management_token=None, model_management=True, maintenance="",
+                 source=DEFAULT_SOURCE_URL, max_connections=32, upstream_timeout=900.0, client_timeout=CLIENT_TIMEOUT,
                  header_deadline=HEADER_DEADLINE, body_deadline=BODY_DEADLINE):
         self.upstream = check_upstream(upstream)
         self.token = check_token(token).encode("utf-8")
+        self.management_token = check_token(management_token).encode("utf-8") if management_token else None
+        if self.management_token is not None and hmac.compare_digest(self.management_token, self.token):
+            raise ValueError("The compute management token must differ from the compute API token.")
+        self.model_management = bool(model_management)
+        self.limiter = FailureLimiter(AUTH_FAILURES_PER_MINUTE)
         self.maintenance = maintenance or ""
         self.source = source or DEFAULT_SOURCE_URL
         self.upstream_timeout = float(upstream_timeout)
@@ -239,16 +256,22 @@ class ComputeServer(ThreadingHTTPServer):
         return ok
 
     def authorized(self, header) -> bool:
+        return self.credential(header) == "inference"
+
+    def credential(self, header) -> str | None:
+        """Which token the request carries: ``"inference"``, ``"management"`` or None."""
         scheme, _, credential = (header or "").strip().partition(" ")
         if scheme.lower() != "bearer":
-            return False
+            return None
         try:
             # http.server decodes headers as ISO-8859-1, so this never fails for
             # what arrived on the wire; compare bytes in constant time.
             supplied = credential.strip().encode("latin-1")
         except UnicodeEncodeError:
-            return False
-        return hmac.compare_digest(supplied, self.token)
+            return None
+        inference = hmac.compare_digest(supplied, self.token)
+        management = self.management_token is not None and hmac.compare_digest(supplied, self.management_token)
+        return "inference" if inference else "management" if management else None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -332,8 +355,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return None
             return self.reply(200, {"source": self.server.source, "license": "AGPL-3.0-only"})
-        if not self.server.authorized(self.headers.get("Authorization")):
+        role = self.server.credential(self.headers.get("Authorization"))
+        if role is None:
             self.discard_body()
+            peer = str(self.client_address[0])
+            if self.server.limiter.blocked(peer):
+                return self.reply(429, {"error": "Too many requests with a wrong compute API token."},
+                                  {"Retry-After": "60"})
+            self.server.limiter.failed(peer)
             return self.reply(401, {"error": "A valid compute API token is required."},
                               {"WWW-Authenticate": 'Bearer realm="bananachat-compute"'})
         if path not in ALL_PATHS:
@@ -343,10 +372,25 @@ class Handler(BaseHTTPRequestHandler):
             allowed = ", ".join(sorted(method for method, paths in ALLOWED.items() if path in paths))
             self.discard_body()
             return self.reply(405, {"error": "Method not allowed."}, {"Allow": allowed})
+        refusal = self.management_refusal(path, role)
+        if refusal:
+            self.discard_body()
+            return self.reply(403, {"error": refusal})
         if self.server.in_maintenance():
             self.discard_body()
             return self.reply(503, {"error": "Maintenance is in progress. Retry shortly."}, {"Retry-After": "60"})
         return self.forward()
+
+    def management_refusal(self, path: str, role: str) -> str:
+        """Why this token may not use this path (model management rules), or ""."""
+        if path not in MANAGEMENT_PATHS:
+            return "The compute management token can only be used for model management." \
+                if role == "management" else ""
+        if not self.server.model_management:
+            return "Model management is switched off on this compute server (BC_COMPUTE_MODEL_MANAGEMENT=0)."
+        if self.server.management_token is not None and role != "management":
+            return "Model management needs the compute management token."
+        return ""
 
     def discard_body(self) -> None:
         """Read and drop the body of a request answered without it.
@@ -412,7 +456,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(response.status)
             self.send_header("Content-Type", response.getheader("Content-Type", "application/json"))
             length = response.getheader("Content-Length")
-            if length is not None and length.isdigit():
+            if length is not None and length.isascii() and length.isdigit():
                 self.send_header("Content-Length", length)
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -459,10 +503,16 @@ def create_server(environ=None) -> ComputeServer:
         raise ValueError("BC_COMPUTE_TOKEN_FILE is required.")
     host = (environ.get("BC_COMPUTE_HOST") or "127.0.0.1").strip()
     port = _integer(environ, "BC_COMPUTE_PORT", 11435, 1, 65535)
+    management_file = (environ.get("BC_COMPUTE_MANAGEMENT_TOKEN_FILE") or "").strip()
+    management = (environ.get("BC_COMPUTE_MODEL_MANAGEMENT") or "1").strip().lower()
+    if management not in ("1", "true", "yes", "on", "0", "false", "no", "off"):
+        raise ValueError("BC_COMPUTE_MODEL_MANAGEMENT must be 1 or 0.")
     return ComputeServer(
         (host, port),
         upstream=(environ.get("BC_COMPUTE_UPSTREAM") or "http://127.0.0.1:11434").strip(),
         token=read_token_file(token_file),
+        management_token=read_token_file(management_file) if management_file else None,
+        model_management=management in ("1", "true", "yes", "on"),
         maintenance=(environ.get("BANANA_MAINTENANCE_FILE") or "").strip(),
         source=(environ.get("BC_SOURCE_URL") or DEFAULT_SOURCE_URL).strip(),
         max_connections=_integer(environ, "BC_COMPUTE_MAX_CONNECTIONS", 32, 1, 1024),

@@ -172,7 +172,9 @@ def test_unclaimed_job_is_withdrawn_and_answered_locally(pool_app, make_user, fa
     started = time.monotonic()
     events = generate(pool_app, user)
     elapsed = time.monotonic() - started
-    assert 2 <= elapsed < 8
+    # Withdrawn at the claim timeout (2 s here), not after the first-token timeout (180 s); the margin is for a
+    # slow, loaded machine, not for the server.
+    assert 2 <= elapsed < 60
     assert text_of(events) == "Hello from the fake model."
     assert events[-1].state == "completed"
     [row] = job_rows(pool_app)

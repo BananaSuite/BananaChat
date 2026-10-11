@@ -6,6 +6,7 @@ from flask import abort, flash, redirect, render_template, request, url_for
 
 from bananachat import security
 from bananachat.db import chats, users
+from bananachat.numbers import ascii_int
 from bananachat.security import admin_required
 from bananachat.web.chat import messages_json
 
@@ -17,7 +18,7 @@ VIEW_LIMIT = 500
 
 def _page() -> int:
     value = request.args.get("page", "1")
-    return max(1, min(int(value), 100_000)) if value.isdigit() else 1
+    return max(1, min(ascii_int(value) or 1, 100_000))
 
 
 def _user_filter():
@@ -75,6 +76,44 @@ def chat_delete(session_id):
                                              "no_history": bool(session["is_incognito"])})
     flash("The chat was permanently deleted.", "success")
     return redirect(url_for("admin.chats"))
+
+
+@bp.post("/chats/<session_id>/unshare", endpoint="chat_unshare")
+@admin_required
+def chat_unshare(session_id):
+    """Take a chat's share link offline (moderation) and keep the chat. Its owner cannot share it again until an
+    administrator allows it (:func:`chat_allow_share`). The block applies whether or not the chat is shared at that
+    moment, so an owner who turns sharing off just before the click cannot share it again right after."""
+    session = chats.admin_get(session_id)
+    if session is None:
+        abort(404)
+    if not session["share_blocked_at"] and not session["is_incognito"] and not session["deleted_at"]:
+        was_shared = bool(session["shared_token"])
+        chats.revoke_share(session_id, block=True)
+        _audit("chat.admin_unshare", session_id, {"owner": session["username"], "title": session["title"],
+                                                  "was_shared": was_shared})
+        if was_shared:
+            flash("The chat is no longer shared. Its link now shows “not found”, and its owner cannot share it "
+                  "again until you allow it.", "success")
+        else:
+            flash("Sharing is blocked. The chat was not shared, and its owner cannot share it until you allow it.",
+                  "success")
+    if request.form.get("next") == "list":
+        return redirect(url_for("admin.chats"))
+    return redirect(url_for("admin.chat_view", session_id=session_id))
+
+
+@bp.post("/chats/<session_id>/allow-share", endpoint="chat_allow_share")
+@admin_required
+def chat_allow_share(session_id):
+    """Let the owner share a chat again after an administrator stopped sharing it."""
+    session = chats.admin_get(session_id)
+    if session is None:
+        abort(404)
+    if chats.allow_share(session_id):
+        _audit("chat.admin_allow_share", session_id, {"owner": session["username"], "title": session["title"]})
+        flash("The owner can share this chat again. It stays private until they do.", "success")
+    return redirect(url_for("admin.chat_view", session_id=session_id))
 
 
 @bp.get("/incognito", endpoint="incognito")

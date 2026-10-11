@@ -102,6 +102,18 @@ def _many_chats(app, username, count):
         return ids
 
 
+def test_conversation_container_is_a_labelled_region(alice):
+    html = alice.get(f"/chat/{new_chat(alice)}").get_data(as_text=True)
+    container = html.split('id="chat-messages"', 1)[1].split(">", 1)[0]
+    assert 'role="region"' in container and "aria-label=" in container
+
+
+def test_search_is_limited_per_account(app, alice):
+    statuses = [alice.fetch("/chat/search?q=topic").status_code for _ in range(61)]
+    assert statuses[:60] == [200] * 60
+    assert statuses[60] == 429
+
+
 def test_search_covers_every_chat_not_just_the_loaded_ones(app, alice):
     ids = _many_chats(app, "alice", 70)
     page = page_data(alice.get(f"/chat/{ids[-1]}").get_data(as_text=True))

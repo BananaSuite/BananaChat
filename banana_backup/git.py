@@ -65,7 +65,8 @@ def check_private(config, token_file):
     if not token or any(char.isspace() or ord(char) < 32 for char in token):
         raise ValueError("The repository token file must contain one token.")
     target = location(config["url"], config["forge"])
-    request = urllib.request.Request(target["api"] + "/repos/" + target["repository"], headers={
+    request = urllib.request.Request(  # noqa: S310 - https forge API built by location()
+        target["api"] + "/repos/" + target["repository"], headers={
         "Authorization": ("Bearer " if target["forge"] == "github" else "token ") + token,
         "Accept": "application/json", "User-Agent": "BananaSuite-Backups/1",
     })
@@ -195,6 +196,26 @@ class Git:
         if total > self.maximum or len(entries) > 36 or "index.json" not in entries:
             raise ValueError("The backup exceeds its configured size or file limit.")
         return entries
+
+    def index(self, ref, expected):
+        """The object ID of ``index.json`` in snapshot branch *ref* (head *expected*), fetching as little as possible.
+
+        Where the repository allows partial fetches, its encrypted parts stay
+        on the server (retention checks every snapshot it keeps); elsewhere
+        the whole snapshot is fetched. Only trees and the index are read, so
+        nothing missing is ever fetched later.
+        """
+        self.run("fetch", "--no-tags", "--depth=1", "--filter=blob:limit=129k", "--", self.url, ref, bounded=True)
+        sha = self.run("rev-parse", "FETCH_HEAD").decode().strip()
+        if sha != expected:
+            raise ValueError("The backup branch changed while reading it. Retry after reviewing the repository.")
+        raw = self.run("ls-tree", "-z", "--full-tree", sha)
+        for entry in raw[:128 * 1024].split(b"\0"):
+            info, _, name = entry.decode(errors="replace").partition("\t")
+            parts = info.split()
+            if name == "index.json" and len(parts) == 3 and parts[:2] == ["100644", "blob"] and SHA.fullmatch(parts[2]):
+                return parts[2]
+        raise ValueError("The backup branch has no index.")
 
     def remove(self, ref, sha):
         self.run("push", "--porcelain", "--force-with-lease=" + ref + ":" + sha, "--", self.url, ":" + ref)

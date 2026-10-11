@@ -1,6 +1,8 @@
 """User management: search, create, roles, suspension, passwords, sessions, exports, deletion.
 
-An account's limits have their own page (:mod:`.limits`)."""
+An account's limits have their own page (:mod:`.limits`), its two-step verification reset
+:mod:`.two_step`. Creating an administrator, role changes, password resets, and suspending,
+reinstating or deleting an administrator need a recent confirmation (:mod:`._reauth`)."""
 
 from __future__ import annotations
 
@@ -11,11 +13,11 @@ from datetime import datetime, timezone
 from flask import Response, flash, render_template, request
 
 from bananachat import db, security
-from bananachat.db import credits, users
+from bananachat.db import credits, tokens, users
 from bananachat.db import limits as limits_db
 from bananachat.security import admin_required
-from bananachat.services import limits
-from . import bp
+from bananachat.services import limits, two_step
+from . import _reauth, bp
 
 from ._helpers import FormError, audit, back, choice, me, page, text, user_or_404, utc_datetime, utc_input_min
 from ._quota_ui import POOL_LABELS
@@ -31,7 +33,7 @@ def list_users():
     rows = users.list_page(PAGE_SIZE, current.offset, search)
     return render_template("admin/users.html", section="users", rows=rows, search=search, page=current,
                            defaults=credits.site_defaults(), min_password=security.PASSWORD_MIN,
-                           now=db.now())
+                           now=db.now(), two_step_required=two_step.required_for_admins())
 
 
 @bp.post("/users/create", endpoint="user_create")
@@ -48,6 +50,8 @@ def create_user():
         role = choice("role", users.ROLES, label="Role", default="user")
     except FormError as error:
         flash(str(error), "error")
+        return back("admin.users")
+    if role == "admin" and not _reauth.confirmed():
         return back("admin.users")
     try:
         with db.transaction():
@@ -72,9 +76,10 @@ def user_detail(user_id):
         "admin/user_detail.html", section="users", user=user, usage=usage, limit_summary=_limit_summary(user),
         limit_settings=limit_settings, limit_tier=limits.resolve_tier(limit_settings.tier_id),
         sessions=users.list_sessions(user_id), is_self=user_id == me()["id"],
+        two_step=two_step.state(user_id), two_step_required=two_step.required_for_admins(),
         current_session=security.current_session_hash(), min_password=security.PASSWORD_MIN,
         suspended_now=users.is_suspended(user), min_datetime=utc_input_min(),
-        api_tokens=db.scalar("SELECT COUNT(*) FROM api_tokens WHERE user_id=? AND revoked=0", (user_id,), 0),
+        api_tokens=tokens.count_active(user_id),
         chats=db.scalar("SELECT COUNT(*) FROM chat_sessions WHERE user_id=? AND deleted_at IS NULL", (user_id,), 0),
     )
 
@@ -104,6 +109,8 @@ def change_role(user_id):
     try:
         _guard_self(user, "change the role of")
         role = choice("role", users.ROLES, label="Role")
+        if role != user["role"] and not _reauth.confirmed():
+            return back("admin.user_detail", user_id=user_id)
         users.set_role(user_id, role)
     except (FormError, ValueError) as error:
         flash(str(error), "error")
@@ -120,6 +127,8 @@ def suspend(user_id):
     try:
         _guard_self(user, "suspend")
         until = utc_datetime("until", label="Suspended until")
+        if user["role"] == "admin" and not _reauth.confirmed():
+            return back("admin.user_detail", user_id=user_id)
         users.suspend(user_id, until)
     except (FormError, ValueError) as error:
         flash(str(error), "error")
@@ -133,6 +142,8 @@ def suspend(user_id):
 @admin_required
 def unsuspend(user_id):
     user = user_or_404(user_id)
+    if user["role"] == "admin" and not _reauth.confirmed():
+        return back("admin.user_detail", user_id=user_id)
     users.unsuspend(user_id)
     audit("user_unsuspend", user["username"])
     flash(f"{user['username']} can sign in again.", "success")
@@ -152,9 +163,12 @@ def reset_password(user_id):
     except FormError as error:
         flash(str(error), "error")
         return back("admin.user_detail", user_id=user_id)
+    if not _reauth.confirmed():
+        return back("admin.user_detail", user_id=user_id)
     users.set_password(user_id, security.hash_password(password))
+    tokens.revoke_all(user_id)
     audit("user_password", user["username"])
-    flash(f"Password of {user['username']} changed. They have been signed out everywhere.", "success")
+    flash(f"Password of {user['username']} changed. Their sessions and API tokens no longer work.", "success")
     return back("admin.user_detail", user_id=user_id)
 
 
@@ -181,7 +195,22 @@ def revoke_all_sessions(user_id):
     users.revoke_sessions(user_id, except_hash=keep)
     audit("user_sessions_revoke_all", user["username"])
     flash(f"{user['username']} has been signed out everywhere" + (" else." if keep else "."), "success")
+    revoke_api_tokens_if_asked(user)
     return back("admin.user_detail", user_id=user_id)
+
+
+def revoke_api_tokens_if_asked(user) -> None:
+    """Revoke the account's API keys when the form asked to (the box is ticked by default).
+
+    Someone who held one of its sessions may have created a key; ending the sessions leaves it working.
+    """
+    if request.form.get("revoke_api_tokens") != "1":
+        return
+    revoked = tokens.revoke_all(user["id"])
+    if revoked:
+        audit("user_api_tokens_revoke_all", user["username"], {"count": revoked})
+        flash(f"{revoked} API key{'s' if revoked != 1 else ''} of {user['username']} "
+              f"{'were' if revoked != 1 else 'was'} revoked.", "success")
 
 
 @bp.get("/users/<user_id>/export/<kind>", endpoint="user_export")
@@ -214,6 +243,8 @@ def delete(user_id):
         _guard_self(user, "delete")
         if (request.form.get("confirm_username") or "").strip() != user["username"]:
             raise FormError("Type the username exactly to confirm the deletion.")
+        if user["role"] == "admin" and not _reauth.confirmed():
+            return back("admin.user_detail", user_id=user_id)
         users.delete(user_id)
     except (FormError, ValueError) as error:
         flash(str(error), "error")

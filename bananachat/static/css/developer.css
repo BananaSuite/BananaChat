@@ -3,11 +3,24 @@
 .dev-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--border); }
 .dev-summary > section { min-width: 0; padding-block: 0; border-bottom: 0; }
 .dev-summary > section + section { border-inline-start: 1px solid var(--border); padding-inline-start: 2rem; }
-.dev-summary .secret-box input { flex: 1 1 0; min-width: 0; }
+/* The address stays readable: Copy moves under it when the column is too narrow for both. */
+.dev-summary .secret-box { flex-wrap: wrap; }
+.dev-summary .secret-box input { flex: 1 1 18rem; min-width: 0; }
+.dev-endpoint-url { flex: 1 1 18rem; min-width: 0; display: flex; align-items: center; min-height: var(--control-height); padding: .45rem .75rem;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--text);
+  font-size: .88rem; line-height: 1.35; overflow-wrap: anywhere; user-select: all; }
 .dev-summary .secret-box .btn { flex: none; }
 .dev-summary .muted { max-width: 62ch; }
 .dev-note svg { width: 1em; height: 1em; vertical-align: -.15em; }
 .dev-meter { display: flex; flex-direction: column; gap: .3rem; }
+/* A value that wraps under its label stays at the right, like the values that fit beside it. */
+.dev-meter .row-between > :last-child { margin-inline-start: auto; text-align: end; }
+/* Narrow column: every value under its label (see .usage-meter in account.css). */
+.dev-meter { container-type: inline-size; }
+@container (max-width: 30rem) {
+  .dev-meter .row-between { flex-direction: column; align-items: flex-start; gap: .05rem; }
+  .dev-meter .row-between > :last-child { margin-inline-start: 0; text-align: start; }
+}
 .dev-limit-details { margin-block: .65rem; }
 .dev-limit-details > summary { display: flex; align-items: center; gap: .5rem; width: fit-content; min-height: var(--control-compact); color: var(--text-muted); font-size: .875rem; cursor: pointer; list-style: none; }
 .dev-limit-details > summary::-webkit-details-marker { display: none; }
@@ -20,7 +33,20 @@
 .dev-tokens th[scope="row"] { font-weight: 550; overflow-wrap: break-word; min-width: 7rem; }
 .dev-tokens td code { white-space: nowrap; }
 .dev-create { display: flex; align-items: flex-end; gap: .75rem; flex-wrap: wrap; max-width: 38rem; }
+/* Wide screens: name, access, expiry and the button on one row, inputs aligned. */
+@media (min-width: 900px) {
+  .dev-create { display: grid; grid-template-columns: minmax(12rem, 1fr) auto auto auto; align-items: end; max-width: 60rem; }
+  .dev-create .field { min-width: 0; }
+  .dev-create .hint { grid-column: 1 / -1; }
+}
 .dev-create .field { min-width: min(100%, 240px); }
+.dev-create select { min-width: 10rem; }
+.dev-create .hint { flex-basis: 100%; }
+.dev-tokens .actions .row-end { flex-wrap: nowrap; }
+/* The key actions are icons with a tooltip (the page column is the same width on every desktop, and labels
+   would squeeze the key names); the label stays the button's accessible name. */
+.dev-tokens .actions .btn > span:not(.visually-hidden) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.dev-tokens .actions .btn { padding-inline: .5rem; }
 /* The rename fallback form (no JavaScript) opens inside the row instead of floating over the table. */
 .dev-rename > summary { display: inline-flex; }
 .dev-rename[open] .menu-panel { position: static; margin-top: .4rem; min-width: 220px; box-shadow: none; text-align: left; }
@@ -51,6 +77,9 @@
 .dev-parameters > fieldset { border: 0; border-radius: 0; margin: 0; padding: .25rem 0 0; }
 .dev-params { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
 .dev-small-textarea { min-height: 64px; }
+/* The limits close the page: a rule above them, none hanging under them above the footer. */
+.dev-playground-credits { margin-top: 1.5rem; border-top: 1px solid var(--border); }
+.dev-playground-credits > .settings-section { border-bottom: 0; padding-bottom: 0; }
 .dev-conversation { display: flex; flex-direction: column; min-width: 0; min-height: 520px; padding-inline-start: 2rem; border-inline-start: 1px solid var(--border); }
 .dev-log {
   flex: 1 1 auto; display: flex; flex-direction: column; gap: .75rem; min-height: 240px; max-height: 62vh; overflow-y: auto;
@@ -71,19 +100,40 @@
 .dev-status { min-height: 1.4em; margin: .6rem 0 .3rem; }
 .dev-composer { border-top: 1px solid var(--border); padding-top: .75rem; display: flex; flex-direction: column; gap: .6rem; }
 .dev-role { width: auto; }
-.dev-request > summary { cursor: pointer; color: var(--text-muted); font-size: .9rem; }
+.dev-request > summary { display: flex; align-items: center; gap: .5rem; width: fit-content; min-height: var(--control-compact); cursor: pointer; color: var(--text-muted); font-size: .9rem; list-style: none; }
+.dev-request > summary::-webkit-details-marker { display: none; }
+.dev-request > summary:hover { color: var(--text); }
+.dev-request > summary svg { width: 14px; height: 14px; flex: none; }
+.dev-request[open] > summary svg { transform: rotate(180deg); }
+.dev-params label code { background: none; padding: 0; font-size: .95em; }
 .dev-request pre { max-height: 320px; }
 
+/* Just above the card breakpoint the key table is tight: its actions sit closer together, so the table
+   never scrolls sideways (they wrap only in the cards). */
+@media (min-width: 901px) and (max-width: 960px) {
+  .dev-tokens .actions .row-end { gap: .25rem; }
+  .dev-tokens .actions .btn { padding-inline: .4rem; }
+}
 @media (max-width: 900px) {
-  .dev-playground { grid-template-columns: 1fr; }
+  .dev-tokens .actions .row-end { flex-wrap: wrap; }
+  /* The usage log is cards up to 900px (.table-stack-md), all of the same shape: date, source, model,
+     then the three numbers in even columns with the values on one line under their labels. */
+  .dev-usage .cell-lead { flex: 1 1 auto; }
+  .dev-usage td.dev-usage-source { flex-basis: 100%; }
+  .dev-usage td.dev-usage-number { flex: 1 1 0; align-self: stretch; display: flex; flex-direction: column; justify-content: flex-end; }
+  .dev-usage td.dev-usage-number::before { margin: 0; }
+  .dev-playground { grid-template-columns: 1fr; gap: 1.25rem; }
   .dev-settings { position: static; }
   .dev-conversation { min-height: 0; padding: 1.5rem 0 0; border-inline-start: 0; border-top: 1px solid var(--border); }
   .dev-log { max-height: none; }
 }
 @media (max-width: 640px) {
+  /* Stacked fields share one right edge. */
+  .dev-create > .field { flex: 1 1 100%; }
   .dev-summary { grid-template-columns: 1fr; gap: 1.5rem; }
   .dev-summary > section + section { border-inline-start: 0; border-top: 1px solid var(--border); padding: 1.5rem 0 0; }
-  .dev-tokens .actions .btn span:not(.visually-hidden) { display: none; }
+  .dev-models .dev-model-id { min-width: 0; }
+  .dev-models .dev-model-id code { overflow-wrap: anywhere; }
   .dev-params { grid-template-columns: 1fr 1fr; }
 }
 

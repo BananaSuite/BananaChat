@@ -26,7 +26,7 @@ CAPABILITY_HELP = {
     "uncensored": "Models marked “Uncensored” on their edit page.",
     "image_generation": "Creating images with ComfyUI models.",
     "custom_personality": "Creating and using custom personalities in the chat.",
-    "agents": "Running coding agents in cloud sandboxes (Agents). Also needs the feature enabled in Admin → Agents.",
+    "agents": "Running coding agents in isolated cloud workspaces. Also needs the feature turned on in Admin → Cloud sessions.",
 }
 
 
@@ -82,8 +82,10 @@ def detail(scope, resource_id):
         lists[row["list_type"]].append({"row": row, "expired": bool(row["expires_at"] and row["expires_at"] <= now)})
     return render_template("admin/access_detail.html", section="access", resource=resource,
                            policy=access_db.get_policy(scope, resource["id"]), lists=lists,
-                           requests=[row for row in access_db.list_requests(status=None, limit=500)
-                                     if row["scope"] == scope and row["resource_id"] == resource["id"]][:50],
+                           # Pending requests (the ones to act on) first; newest first within each group.
+                           requests=sorted([row for row in access_db.list_requests(status=None, limit=500)
+                                            if row["scope"] == scope and row["resource_id"] == resource["id"]][:50],
+                                           key=lambda row: row["status"] != "pending"),
                            mode_labels=MODE_LABELS, mode_help=MODE_HELP, min_datetime=utc_input_min())
 
 

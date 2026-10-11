@@ -1,5 +1,5 @@
-"""The account page: profile, usage, password, sign-in sessions, personal data,
-quota and access requests, and account deletion.
+"""The account page: profile, usage, password, two-step verification, sign-in
+sessions, personal data, quota and access requests, and account deletion.
 """
 
 from __future__ import annotations
@@ -8,17 +8,18 @@ import json
 import logging
 import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 
-from flask import Blueprint, current_app, flash, g, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, session, url_for
 
-from bananachat import db, security
+from bananachat import PRODUCT_NAME, db, security, totp
 from bananachat.db import access as access_db
-from bananachat.db import catalog, credits, users
+from bananachat.db import catalog, credits, tokens, users
 from bananachat.db import limits as limits_db
 from bananachat.formatting import parse_amount, tokens_text
 from bananachat.i18n import translate
-from bananachat.services import community, exports, limits
+from bananachat.services import community, exports, limits, two_step
 from bananachat.services.access import AccessContext, is_image_model, is_text_model
 
 bp = Blueprint("account", __name__)
@@ -90,11 +91,6 @@ def limits_summary(user) -> list[dict]:
     return result
 
 
-def usage_summary(user, settings: dict | None = None) -> list[dict]:
-    """Kept for callers of the previous release's helper: see :func:`limits_summary`."""
-    return limits_summary(user)
-
-
 def model_summary(user) -> list[dict]:
     """Models the account can use that have something to say: a weight, their own limits, a lock, or reasoning
     effort levels (with what is unlocked and how to ask for more)."""
@@ -132,6 +128,7 @@ def model_summary(user) -> list[dict]:
             entry["effort_allowed"] = [level["label"] for level in effort["levels"] if level["allowed"]
                                        and level["value"] != "off"]
             entry["effort_locked"] = [level for level in effort["levels"] if not level["allowed"]]
+            entry["effort_binary"] = {level["value"] for level in effort["levels"]} == {"off", "on"}
         result.append(entry)
     return result
 
@@ -150,6 +147,10 @@ def describe_grant(grant) -> str:
         where = _t("account.grant_model", model=grant["model_name"] or "—")
     else:
         where = _t(f"account.pool_{grant['pool']}") if grant["pool"] else _t("account.grant_pool_all")
+    if kind not in ("unlimited", "multiplier") and grant["scope"] in ("window", "weekly"):
+        # "+50k tokens per 5 hours · Chat": the amount names its unit once.
+        return _t("account.grant_line_amount", what=what, period=_t(f"account.grant_period_{grant['scope']}"),
+                  pool=where)
     return _t("account.grant_line", what=what, scope=scope, pool=where)
 
 
@@ -320,6 +321,9 @@ def _page(draft: dict | None = None):
         if user["role"] != "admin" else [],
         quota_history=[{"row": row, "summary": request_summary(row)} for row in credits.user_requests(user["id"])],
         sessions=_sessions(user["id"]),
+        two_step_state=two_step.state(user["id"]),
+        two_step_required=two_step.required(user),
+        api_token_count=tokens.count_active(user["id"]),
         access=access,
         requestable=[{"value": f"{scope}:{resource_id}", "label": gate.label,
                       "kind": _t(f"account.scope_kind_{scope}")}
@@ -348,10 +352,12 @@ def _effort_targets(user) -> list[dict]:
         if not summary or not summary["locked"]:
             continue
         top_rank = max(top_rank, max(limits_db.effort_rank(level["value"]) for level in summary["levels"]))
-        targets.append({"value": model["ollama_name"], "label": model["display_name"],
+        # Off/on models are asked for as "On" (stored as the medium level), the word the account page uses.
+        binary = {level["value"] for level in summary["levels"]} == {"off", "on"}
+        targets.append({"value": model["ollama_name"], "label": model["display_name"], "binary": binary,
                         "levels": [level for level in summary["levels"] if not level["allowed"]
                                    and level["value"] not in ("off", "on")]
-                        or [{"value": "medium", "label": limits.effort_label("medium", g.lang)}]})
+                        or [{"value": "medium", "label": limits.effort_label("on" if binary else "medium", g.lang)}]})
     if targets:
         own = limits_db.effort_levels(user["id"]).get(None)
         current = own.level if own else limits.effort_settings()["default"]
@@ -439,6 +445,8 @@ def request_summary(row) -> str:
         pool = _t("account.quota_target_model", model=row["model_name"] or "—")
     if kind == "effort":
         model = row["model_name"] or (_t("account.effort_all_models") if row["effort_all_models"] else "—")
+        if limits.effort_is_binary(row["model_id"]):
+            return _t("account.quota_summary_effort_on", model=model)
         return _t("account.quota_summary_effort", level=limits.effort_label(row["effort_level"] or "medium", g.lang),
                   model=model)
     if kind == "weekly":
@@ -487,7 +495,23 @@ def change_password():
         return _authentication_changed()
     users.audit(user, "account.password_change", user["id"], ip_address=security.client_ip())
     flash(_t("account.password_changed"), "success")
+    _revoke_api_tokens_if_asked(user)
     return _back("password")
+
+
+def _revoke_api_tokens_if_asked(user) -> None:
+    """Revoke the account's API tokens when the form asked to (the box is ticked by default).
+
+    Someone who briefly held a session may have created a token; signing that
+    session out alone would leave the token working.
+    """
+    if request.form.get("revoke_api_tokens") != "1":
+        return
+    revoked = tokens.revoke_all(user["id"])
+    if revoked:
+        users.audit(user, "account.api_tokens_revoke_all", user["id"], {"count": revoked},
+                    ip_address=security.client_ip())
+        flash(_t("account.api_tokens_revoked", count=revoked), "success")
 
 
 @bp.post("/account/sessions/<id_hash>/revoke", endpoint="revoke_session")
@@ -518,7 +542,122 @@ def revoke_other_sessions():
         users.revoke_sessions(user["id"], except_hash=current)
         users.audit(user, "account.sessions_revoke_others", user["id"], ip_address=security.client_ip())
     flash(_t("account.sessions_revoked"), "success")
+    _revoke_api_tokens_if_asked(user)
     return _back("sessions")
+
+
+# ----- two-step verification ------------------------------------------------
+# The secret offered for set-up waits in the session cookie, encrypted, while
+# the person scans it; turning it on proves the app has it (see services.two_step).
+
+ENROLMENT_KEY = "two_step_enrolment"
+ENROLMENT_SECONDS = 10 * 60
+TWO_STEP_ACTIONS = ("enable", "disable", "renew")
+
+
+def _stored_enrolment_secret() -> str:
+    stored = session.get(ENROLMENT_KEY)
+    if not isinstance(stored, dict):
+        return ""
+    try:
+        age = time.time() - float(stored.get("at", 0))
+    except (TypeError, ValueError):
+        return ""
+    return two_step.decrypt_secret(stored.get("secret")) if 0 <= age <= ENROLMENT_SECONDS else ""
+
+
+def _enrolment_secret() -> str:
+    """The secret to set up, the same for ten minutes while the person scans it."""
+    secret = _stored_enrolment_secret()
+    if not secret:
+        secret = totp.generate_secret()
+        session[ENROLMENT_KEY] = {"secret": two_step.encrypt_secret(secret), "at": time.time()}
+    return secret
+
+
+@bp.get("/account/two-step", endpoint="two_step")
+@security.login_required
+def two_step_page():
+    """Set up, make new recovery codes or turn off; also where required administrators are sent."""
+    user = security.current_user()
+    state = two_step.state(user["id"])
+    secret = "" if state else _enrolment_secret()
+    issuer = g.settings.get("site_name") or PRODUCT_NAME
+    return render_template("account/two_step.html", user=user, state=state, secret=secret,
+                           required=two_step.required(user), api_token_count=tokens.count_active(user["id"]),
+                           qr=two_step.provisioning_qr(secret, user["username"], issuer) if secret else "")
+
+
+def _show_codes(codes: list[str]):
+    """The recovery codes, once: never cached, never shown again."""
+    response = current_app.make_response(render_template("account/two_step_codes.html", codes=codes))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _two_step_back(key: str, category: str = "error"):
+    flash(_t(key), category)
+    return redirect(url_for("account.two_step"))
+
+
+@bp.post("/account/two-step", endpoint="two_step_change")
+@security.login_required
+@security.rate_limit("account-two-step", 20, 900, per_user=True)
+def two_step_change():
+    """Turn it on, off, or make new recovery codes. Every change takes the password."""
+    user = security.current_user()
+    action = request.form.get("action", "")
+    if action not in TWO_STEP_ACTIONS:
+        abort(400)
+    if not security.verify_password(user["password"], request.form.get("password") or ""):
+        return _two_step_back("account.password_wrong")
+    code = (request.form.get("code") or "")[:128]
+    current = security.current_session_hash()
+    if action == "enable":
+        secret = _stored_enrolment_secret()
+        if not secret:
+            return _two_step_back("two_step.setup_expired")
+        counter = totp.matching_counter(secret, code)
+        if counter is None:
+            return _two_step_back("two_step.invalid_code")
+        try:
+            with users.verified_credentials(user["id"], user["password"], current):
+                codes = two_step.enable(user["id"], secret, counter)
+                if codes is not None:
+                    # Sessions signed in with the password alone end; this one stays.
+                    users.revoke_sessions(user["id"], except_hash=current)
+        except users.AuthenticationChanged:
+            return _authentication_changed()
+        if codes is None:
+            return _two_step_back("two_step.already_on", "info")
+        session.pop(ENROLMENT_KEY, None)
+        users.audit(user, "account.two_step_enable", user["id"], ip_address=security.client_ip())
+        flash(_t("two_step.enabled"), "success")
+        _revoke_api_tokens_if_asked(user)
+        return _show_codes(codes)
+    if not two_step.enabled(user["id"]):
+        return _two_step_back("two_step.not_on")
+    try:
+        method = two_step.check_code(user, code)
+    except two_step.Refused as refusal:
+        return _two_step_back(refusal.key)
+    try:
+        with users.verified_credentials(user["id"], user["password"], current):
+            if action == "renew":
+                codes = two_step.renew_codes(user["id"])
+            elif two_step.disable(user["id"]):
+                users.revoke_sessions(user["id"], except_hash=current)
+    except users.AuthenticationChanged:
+        return _authentication_changed()
+    if action == "renew":
+        if codes is None:
+            return _two_step_back("two_step.not_on")
+        users.audit(user, "account.two_step_codes_renew", user["id"], {"method": method}, security.client_ip())
+        flash(_t("two_step.renewed"), "success")
+        return _show_codes(codes)
+    users.audit(user, "account.two_step_disable", user["id"], {"method": method}, security.client_ip())
+    flash(_t("two_step.disabled"), "success")
+    return redirect(url_for("account.index", _anchor="two-step"))
 
 
 # ----- personal data --------------------------------------------------------

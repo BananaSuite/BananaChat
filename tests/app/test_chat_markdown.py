@@ -1,8 +1,15 @@
-"""The shared Markdown renderer (static/js/markdown.js), run with Node when it is installed."""
+"""The shared Markdown renderer (static/js/markdown.js), run with Node.
+
+These tests guard the sanitizer for all model output and shared chats. They
+are skipped when Node is not installed, except where ``BC_REQUIRE_NODE=1``
+(set in CI): there a missing Node fails the run instead of hiding the suite.
+"""
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -12,15 +19,41 @@ import pytest
 
 MODULE = Path(__file__).resolve().parents[2] / "bananachat" / "static" / "js" / "markdown.js"
 NODE = shutil.which("node")
-pytestmark = pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+
+
+def node_required() -> bool:
+    return os.environ.get("BC_REQUIRE_NODE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def require_node() -> None:
+    """Skip the calling test without Node, or fail it where Node is required."""
+    if NODE is None:
+        if node_required():
+            pytest.fail("Node.js is required (BC_REQUIRE_NODE=1) to test the Markdown renderer, "
+                        "but it is not installed")
+        pytest.skip("Node.js is not installed")
+
+
+@pytest.fixture(autouse=True)
+def _node():
+    require_node()
+
+
+def module_url() -> str:
+    """markdown.js as a data: URL, so Node always loads it as an ES module.
+
+    Node before 22 loads a .js file outside a ``"type": "module"`` package as
+    CommonJS, and the named imports would fail.
+    """
+    return "data:text/javascript;base64," + base64.b64encode(MODULE.read_bytes()).decode()
 
 
 def render(*texts: str, inline: bool = False) -> list[str]:
     renderer = "renderInline" if inline else "renderMessage"
-    script = (f"import {{ {renderer} }} from {json.dumps(MODULE.as_uri())};\n"
+    script = (f"import {{ {renderer} }} from {json.dumps(module_url())};\n"
               f"const inputs = JSON.parse({json.dumps(json.dumps(list(texts)))});\n"
               f"console.log(JSON.stringify(inputs.map((text) => {renderer}(text))));\n")
-    result = subprocess.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=30,
+    result = subprocess.run([NODE, "--input-type=module"], input=script, capture_output=True, text=True, timeout=30,
                             check=True)
     return json.loads(result.stdout)
 
@@ -129,6 +162,11 @@ def test_heading_prefixes_closing_hashes_and_escaping():
     ]
 
 
+def test_code_blocks_can_be_scrolled_with_the_keyboard():
+    (html,) = render("```python\nprint('a very long line that will not fit on a phone screen')\n```")
+    assert "<pre tabindex=\"0\"><code" in html
+
+
 def test_fences_keep_the_first_language_token_and_require_matching_closers():
     normal, shorter, invalid = render("~~~ python extra\n<unsafe>\n~~~~",
                                       "````js\none\n```\ntwo\n````", "~~~ invalid`")
@@ -160,7 +198,7 @@ def test_long_unmatched_markdown_delimiters_render_promptly_without_losing_text_
     # each suffix of an unmatched run, freezing the browser even at 64 KiB.
     script = rf"""
 import assert from "node:assert/strict";
-import {{ renderInline, renderMessage }} from {json.dumps(MODULE.as_uri())};
+import {{ renderInline, renderMessage }} from {json.dumps(module_url())};
 const run = "`".repeat(1024 * 1024);
 const differentRuns = Array.from({{ length: 512 }}, (_, index) => "`".repeat(index + 1)).join("x");
 const underscores = "__a ".repeat(256 * 1024);
@@ -188,6 +226,119 @@ assert.equal(renderMessage("a|b\n" + spaces + "x"), "<p>a|b<br>x</p>");
 assert.equal(renderMessage("- " + spaces + "a\u2028x"), "<p>- " + spaces + "a\u2028x</p>");
 console.log(JSON.stringify({{ elapsed: performance.now() - started }}));
 """
-    result = subprocess.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True,
+    result = subprocess.run([NODE, "--input-type=module"], input=script, capture_output=True, text=True,
                             timeout=10, check=True)
     assert json.loads(result.stdout)["elapsed"] < 5000
+
+
+def test_links_whose_label_names_another_site_show_the_real_host():
+    spoofed, userinfo, code_label, idn, honest, www, words, mail = render(
+        "[https://chat.example.org/login](https://chat-example.evil/login)",
+        "[chat.example.org](https://chat.example.org@evil.example/)",
+        "[`bank.example`](https://phish.example/)",
+        "[bücher.example](https://xn--bcher-kva.example/)",
+        "[https://example.com/docs](https://example.com/other)",
+        "[www.example.com](https://example.com/)",
+        "[the documentation](https://evil.example/)",
+        "[help@example.org](mailto:help@example.org)",
+        inline=True,
+    )
+    assert 'title="chat-example.evil"' in spoofed
+    assert '<span class="link-host">(chat-example.evil)</span></a>' in spoofed
+    assert '<span class="link-host">(evil.example)</span>' in userinfo
+    assert '<code>bank.example</code> <span class="link-host">(phish.example)</span>' in code_label
+    for html in (idn, honest, www, words, mail):  # idn: the same host, spelled in Unicode
+        assert "link-host" not in html, html
+
+
+def test_a_site_named_anywhere_in_the_label_or_with_look_alike_dots_still_shows_the_real_host():
+    """FNU-1: extra words, dots of other scripts and widths, and invisible characters do not hide a site."""
+    spoofs = [
+        "[https://bank.example/login Sign in](https://evil.example/)",
+        "[bank.example - official](https://evil.example/)",
+        "[Sign in at bank.example](https://evil.example/)",
+        "[Sign in (bank.example)](https://evil.example/)",
+        "[Log in:bank.example/login](https://evil.example/)",
+        "[bank\u2024example](https://evil.example/)",  # one dot leader
+        "[bank\uff0eexample](https://evil.example/)",  # fullwidth full stop
+        "[bank\u3002example](https://evil.example/)",  # ideographic full stop
+        "[bank.example\u200b](https://evil.example/)",  # zero-width space
+        "[bank\u00ad.example](https://evil.example/)",  # soft hyphen
+        "[bank\u0660example](https://evil.example/)",  # Arabic-Indic digit zero, drawn as a dot
+        "[bank\u06f0example](https://evil.example/)",  # its Persian form
+        "[\uff42\uff41\uff4e\uff4b.\uff45\uff58\uff41\uff4d\uff50\uff4c\uff45](https://evil.example/)",  # fullwidth letters
+        "[bank.github.io](https://evil.github.io/)",  # another site on a shared hosting domain
+        "[bank.example](https://bank.example.evil.example/)",
+    ]
+    for html in render(*spoofs, inline=True):
+        assert '<span class="link-host">' in html, html
+    honest = render(
+        "[Read the docs on docs.python.org](https://docs.python.org/3/)",
+        "[bank.example](https://login.bank.example/)",
+        "[login.bank.example](https://bank.example/)",
+        "[https://github.com/user/repo.git](https://github.com/user/repo.git)",
+        "[the guide, e.g. part 2](https://example.com/guide)",
+        "[GPT-4.1 notes](https://example.com/notes)",
+        inline=True,
+    )
+    for html in honest:
+        assert "link-host" not in html, html
+
+
+def test_combining_marks_and_address_literals_in_a_label_still_show_the_real_host():
+    """FNU-1 (final verification): a mark that does not compose, drawn into the underline or over a dot,
+    does not hide the site a label names, and neither does an IPv4 address."""
+    spoofs = [
+        "[https://bank\u0332.example/login](https://evil.example/)",  # combining low line, merges with the underline
+        "[bank.\u0301example](https://evil.example/)",  # acute accent right after the dot
+        "[bank.\u0307example](https://evil.example/)",  # dot above
+        "[ba\u0332nk.example](https://evil.example/)",
+        "[b\u0430nk\u0332.example](https://evil.example/)",  # after a Cyrillic letter
+        "[\u0332bank.example](https://evil.example/)",
+        "[https://192.0.2.10/login](https://evil.example/)",
+        "[Sign in at 192.0.2.10:8443](https://evil.example/)",
+        "[bank\u06d4example](https://evil.example/)",  # Arabic full stop
+    ]
+    for html in render(*spoofs, inline=True):
+        assert '<span class="link-host">(evil.example)</span>' in html, html
+    honest = render(
+        "[\u0939\u093f\u0928\u094d\u0926\u0940.\u092d\u093e\u0930\u0924](https://\u0939\u093f\u0928\u094d\u0926\u0940"
+        ".\u092d\u093e\u0930\u0924/)",  # a name whose script needs its marks
+        "[cafe\u0301.example](https://xn--caf-dma.example/)",  # a mark that composes
+        "[https://192.0.2.10/login](https://192.0.2.10/login)",
+        "[Python 3.12.1 notes](https://docs.python.org/3/)",
+        "[\u0646\u0648\u0679\u0633 \u062f\u06cc\u06a9\u06be\u06cc\u06ba\u06d4 \u0634\u06a9\u0631\u06cc\u06c1](https://example.com/)",
+        "[Sa\u0303o Paulo, e\u0301te\u0301 2026](https://example.com/)",  # marks in ordinary words
+        inline=True,
+    )
+    for html in honest:
+        assert "link-host" not in html, html
+
+
+def test_node_is_required_where_the_environment_says_so(monkeypatch):
+    """CI sets BC_REQUIRE_NODE so a missing Node fails the run instead of skipping these tests."""
+    monkeypatch.setenv("BC_REQUIRE_NODE", "1")
+    assert node_required()
+    monkeypatch.setenv("BC_REQUIRE_NODE", "0")
+    assert not node_required()
+
+
+def test_tex_keeps_its_backslashes_and_dollar_amounts_stay_text():
+    inline, display, money = render(r"Energy $E_k = \frac{1}{2} m v^2$ here.", r"$$\int_0^{T} P(t)\,dt$$",
+                                    "Costs $5 and $10, or $HOME/$USER.", inline=True)
+    assert inline == r'Energy <code class="math">$E_k = \frac{1}{2} m v^2$</code> here.'
+    assert display == r'<code class="math">$$\int_0^{T} P(t)\,dt$$</code>'
+    assert money == "Costs $5 and $10, or $HOME/$USER."
+
+
+def test_task_list_items_show_a_box_instead_of_the_bracket_text():
+    (html,) = render("- [x] Laptop\n- [ ] Cable\n- plain")
+    assert html == ('<ul><li class="task-item"><span class="task-mark">☑</span> Laptop</li>'
+                    '<li class="task-item"><span class="task-mark">☐</span> Cable</li><li>plain</li></ul>')
+
+
+def test_code_block_labels_use_display_names_and_keep_the_fence_language_for_downloads():
+    named, plain, unknown = render("```javascript\nx\n```", "```text\nx\n```", "```zig\nx\n```")
+    assert '<span class="code-lang">JavaScript</span>' in named and 'data-lang="javascript"' in named
+    assert '<span class="code-lang">Code</span>' in plain  # the caller's translated fallback label
+    assert '<span class="code-lang">zig</span>' in unknown

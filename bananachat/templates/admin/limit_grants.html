@@ -5,18 +5,18 @@
 {% block admin_content %}
 {% macro grant_table(items, caption, revocable) -%}
 <div class="table-wrap">
-  <table class="table">
+  <table class="table table-stack table-stack-md">
     <caption class="visually-hidden">{{ caption }}</caption>
     <thead><tr><th scope="col">For</th><th scope="col">Grant</th><th scope="col">From</th><th scope="col">Until</th><th scope="col">Reason</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
     <tbody>
     {% for item in items %}
       {% set grant = item.row %}
       <tr id="grant-{{ grant.id }}"{% if not revocable %} class="row-muted"{% endif %}>
-        <td>{% if grant.user_id %}<a href="{{ url_for('admin.user_limits', user_id=grant.user_id) }}">{{ item.target }}</a>{% else %}<span class="badge badge-primary">Everyone</span>{% endif %}</td>
-        <td><strong>{{ item.what }}</strong> · {{ item.scope }} · {{ item.pool }}</td>
-        <td class="nowrap">{{ grant.starts_at | datetime }}</td>
-        <td class="nowrap">{% if grant.revoked_at %}revoked {{ when(grant.revoked_at) }}{% if grant.revoked_by_name %} by {{ grant.revoked_by_name }}{% endif %}{% elif grant.ends_at %}{{ grant.ends_at | datetime }}{% else %}forever{% endif %}</td>
-        <td class="break-anywhere small">{{ grant.reason or "—" }}{% if grant.created_by_name %} <span class="faint">({{ grant.created_by_name }})</span>{% endif %}</td>
+        <td class="cell-full">{% if grant.user_id %}<a href="{{ url_for('admin.user_limits', user_id=grant.user_id) }}">{{ item.target }}</a>{% else %}<span class="badge badge-primary">Everyone</span>{% endif %}</td>
+        <td class="cell-full grant-what"><strong>{{ item.what }}</strong>{% if item.scope %} · {{ item.scope }}{% endif %} · {{ item.pool }}</td>
+        <td data-label="From:">{{ grant.starts_at | datetime_html }}</td>
+        <td data-label="Until:">{% if grant.revoked_at %}Revoked <span class="nowrap">{{ when(grant.revoked_at) }}</span>{% if grant.revoked_by_name %} <span class="nowrap">by {{ grant.revoked_by_name }}</span>{% endif %}{% elif grant.ends_at %}{{ grant.ends_at | datetime_html }}{% else %}Forever{% endif %}</td>
+        <td class="break-anywhere small cell-full">{{ grant.reason or "—" }}{% if grant.created_by_name %} <span class="faint">({{ grant.created_by_name }})</span>{% endif %}</td>
         <td class="actions">
           {% if revocable %}
           <form method="post" action="{{ url_for('admin.limit_grant_revoke', grant_id=grant.id) }}" data-confirm="Revoke grant #{{ grant.id }} for {{ item.target }}?">
@@ -40,7 +40,7 @@
   <p class="muted small mb-0">Examples: unlimited use for 24 hours for someone who explained why; ×2 tokens for everyone during a coding jam; +500k tokens per 5 hours with one heavy model. Several grants add up: any unlimited grant wins, then multipliers multiply, then extras are added.</p>
   <div class="grid grid-2">
     <fieldset class="admin-fieldset stack">
-      <legend>For</legend>
+      <legend class="required">For</legend>
       {#- Nothing is chosen by default: one click must never lift the limits of every account. -#}
       {% set target = form.get("target") if form else ("user" if prefill else "") %}
       <label class="check"><input type="radio" name="target" value="user"{% if target == "user" %} checked{% endif %} required><span>One account</span></label>
@@ -64,7 +64,7 @@
         <div class="field">
           <label for="grant-amount">Amount</label>
           <input type="text" id="grant-amount" name="amount" inputmode="decimal" autocomplete="off" maxlength="20" aria-describedby="grant-amount-hint" value="{{ form.get('amount', '') if form else '' }}">
-          <span class="hint" id="grant-amount-hint">A factor above 1 (e.g. 2), or extra tokens for a 5-hour or weekly limit (e.g. 100k). The request rate takes multipliers only. Not used for unlimited.</span>
+          <span class="hint" id="grant-amount-hint">A factor above 1 (e.g. 2), or extra tokens for a 5‑hour or weekly limit (e.g. 100k). The request rate takes multipliers only. Not used for unlimited.</span>
         </div>
         <div class="field">
           <label for="grant-pool">Where</label>
@@ -85,7 +85,7 @@
         <div class="field">
           <label for="grant-scope">Limit</label>
           <select id="grant-scope" name="scope">
-            {% for value, label in [("", "All limits"), ("window", "5-hour tokens"), ("weekly", "Weekly tokens"), ("rate", "Request rate")] %}
+            {% for value, label in [("", "All limits"), ("window", "5‑hour tokens"), ("weekly", "Weekly tokens"), ("rate", "Request rate")] %}
             <option value="{{ value }}"{% if form and form.get("scope") == value and value %} selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
@@ -102,7 +102,7 @@
       {{ utc_input("ends_at", "grant-ends", "Ends (for “Until a date”)", "Coordinated Universal Time.", form.get("ends_at", "") if form else "", min_datetime) }}
       {{ utc_input("starts_at", "grant-starts", "Starts (optional)", "Coordinated Universal Time. Leave empty to start now.", form.get("starts_at", "") if form else "", min_datetime) }}
     </fieldset>
-    <div class="field">
+    <div class="field grid-full">
       <label for="grant-reason">Reason</label>
       <textarea id="grant-reason" name="reason" maxlength="1000" rows="4" aria-describedby="grant-reason-hint">{{ form.get("reason", "") if form else "" }}</textarea>
       <span class="hint" id="grant-reason-hint">Shown to the people who receive the grant.</span>
@@ -120,7 +120,7 @@
   {% if upcoming %}{{ grant_table(upcoming, "Upcoming grants", true) }}{% else %}<p class="muted">No grants start later.</p>{% endif %}
 </section>
 <section class="mt-3" aria-labelledby="ended-title">
-  <h2 id="ended-title">Ended or revoked</h2>
-  {% if ended %}{{ grant_table(ended, "Ended grants", false) }}<p class="hint">The latest 50.</p>{% else %}<p class="muted">None yet.</p>{% endif %}
+  <h2 id="ended-title">Ended or revoked <span class="badge">{{ ended | length }}</span></h2>
+  {% if ended %}{{ grant_table(ended, "Ended grants", false) }}{% if ended | length >= 50 %}<p class="hint mt-1">Showing the latest 50.</p>{% endif %}{% else %}<p class="muted">None yet.</p>{% endif %}
 </section>
 {% endblock %}

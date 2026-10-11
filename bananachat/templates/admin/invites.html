@@ -1,5 +1,6 @@
 {% extends "admin/_layout.html" %}
 {% from "admin/_macros.html" import header, csrf, when, empty %}
+{% from "admin/_reauth.html" import reauth_field with context %}
 {% from "partials/icons.html" import icon %}
 {% block title %}Invitations{% endblock %}
 {% block admin_content %}
@@ -7,12 +8,12 @@
 {% set used = usage.get(row.id, []) %}
 {% if used %}
 <details class="inline-details">
-  <summary>{{ row.use_count }} of {{ row.max_uses or "∞" }} used</summary>
+  <summary class="nowrap">{{ row.use_count }} of {{ row.max_uses or "∞" }} used{{ icon("chevron-down") }}</summary>
   <ul class="plain-list small">
     {% for item in used[:50] %}<li>{{ item.username }} · {{ item.used_at | datetime }}</li>{% endfor %}
   </ul>
 </details>
-{% else %}{{ row.use_count }} of {{ row.max_uses or "∞" }} used{% endif %}
+{% else %}<span class="nowrap">{{ row.use_count }} of {{ row.max_uses or "∞" }} used</span>{% endif %}
 {%- endmacro %}
 {{ header("Invitations", "Invitation links let people create an account while sign-up is invite-only.") }}
 
@@ -47,14 +48,16 @@
       </div>
       <div class="field">
         <label for="invite-role">New accounts become</label>
-        <select id="invite-role" name="role"><option value="user">Users</option><option value="admin">Administrators</option></select>
+        <select id="invite-role" name="role" aria-describedby="invite-role-hint"><option value="user">Users</option><option value="admin">Administrators</option></select>
+        <span class="hint" id="invite-role-hint">Administrator invitations must expire within 30 days and cannot have unlimited uses.</span>
       </div>
       <div class="field">
         <label for="invite-code">Custom code (optional)</label>
-        <input type="text" id="invite-code" name="code" maxlength="32" pattern="[A-Za-z0-9\-]{4,32}" autocomplete="off" aria-describedby="invite-code-hint">
-        <span class="hint" id="invite-code-hint">4-32 letters, digits or hyphens. Leave empty for a random code.</span>
+        <input type="text" id="invite-code" name="code" maxlength="32" minlength="12" pattern="[A-Za-z0-9\-]{12,32}" autocomplete="off" aria-describedby="invite-code-hint">
+        <span class="hint" id="invite-code-hint">12-32 letters, digits or hyphens, hard to guess (codes can be tried on the sign-up page). Leave empty for a random code.</span>
       </div>
     </div>
+    {{ reauth_field("invite-reauth", needed_for="for an administrator invitation") }}
     <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Create invitation</button></div>
   </form>
 </section>
@@ -63,16 +66,17 @@
   <h2 id="active-title">Active invitations</h2>
   {% if active %}
   <div class="table-wrap">
-    <table class="table">
-      <thead><tr><th scope="col">Code</th><th scope="col">Role</th><th scope="col">Usage</th><th scope="col">Expires</th><th scope="col">Created</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+    <table class="table table-stack table-stack-md">
+      <thead><tr><th scope="col">Code</th><th scope="col">Role</th><th scope="col">Usage</th><th scope="col">Expires</th><th scope="col" class="col-lg">Created</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
       <tbody>
       {% for row in active %}
         <tr>
-          <td><code class="invite-code">{{ row.code }}</code></td>
-          <td>{% if row.assigned_role == "admin" %}<span class="badge badge-warning">Administrator</span>{% else %}User{% endif %}</td>
-          <td>{{ usage_list(row) }}</td>
-          <td class="nowrap">{{ row.expires_at | datetime if row.expires_at else "Never" }}</td>
-          <td class="nowrap">{{ row.created_at | datetime(true) }}{% if row.created_by_name %} · {{ row.created_by_name }}{% endif %}</td>
+          <td class="cell-full"><code class="invite-code">{{ row.code }}</code>{% if weak[row.id] %} <span class="badge badge-danger invite-weak">Weak</span>
+            <div class="hint invite-weak-hint">{{ weak[row.id] | join(" ") }} Created under earlier rules; delete it and create a new one.</div>{% endif %}</td>
+          <td data-label="Role:">{% if row.assigned_role == "admin" %}<span class="badge badge-warning">Administrator</span>{% else %}User{% endif %}</td>
+          <td data-label="Usage:">{{ usage_list(row) }}</td>
+          <td data-label="Expires:">{{ row.expires_at | datetime_html if row.expires_at else "Never" }}</td>
+          <td class="col-lg" data-label="Created:"><span class="nowrap">{{ row.created_at | datetime(true) }}</span>{% if row.created_by_name %} <span class="nowrap muted">by {{ row.created_by_name }}</span>{% endif %}</td>
           <td class="actions">
             <button type="button" class="btn btn-sm" data-copy="{{ links[row.id] }}" aria-label="Copy the sign-up link for {{ row.code }}">{{ icon("copy") }}Copy link</button>
             <form method="post" action="{{ url_for('admin.invite_delete', invite_id=row.id) }}" data-confirm="Delete invitation {{ row.code }}? Its link stops working." data-confirm-danger>
@@ -94,18 +98,18 @@
 <section aria-labelledby="inactive-title">
   <h2 id="inactive-title">Used up or expired</h2>
   <div class="table-wrap">
-    <table class="table">
-      <thead><tr><th scope="col">Code</th><th scope="col">Usage</th><th scope="col">Expired</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+    <table class="table table-stack">
+      <thead><tr><th scope="col">Code</th><th scope="col">Usage</th><th scope="col">Ended</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
       <tbody>
       {% for row in inactive %}
         <tr class="row-muted">
-          <td><code>{{ row.code }}</code></td>
-          <td>{{ usage_list(row) }}</td>
-          <td class="nowrap">{% if row.expires_at and row.expires_at <= now %}{{ row.expires_at | datetime }}{% else %}—{% endif %}</td>
+          <td class="cell-full"><code class="invite-code">{{ row.code }}</code></td>
+          <td data-label="Usage:">{{ usage_list(row) }}</td>
+          <td class="nowrap" data-label="Ended:">{% if row.expires_at and row.expires_at <= now %}Expired {{ row.expires_at | datetime }}{% else %}Used up{% endif %}</td>
           <td class="actions">
             <form method="post" action="{{ url_for('admin.invite_delete', invite_id=row.id) }}" data-confirm="Remove invitation {{ row.code }} from this list?">
               {{ csrf() }}
-              <button type="submit" class="btn btn-sm btn-ghost" aria-label="Remove invitation {{ row.code }}">{{ icon("trash") }}</button>
+              <button type="submit" class="btn btn-sm btn-danger" aria-label="Remove invitation {{ row.code }}">{{ icon("trash") }}</button>
             </form>
           </td>
         </tr>

@@ -1,8 +1,5 @@
 """Admission boundaries shared by model lifecycle and reasoning controls."""
 
-import sys
-from types import ModuleType, SimpleNamespace
-
 import pytest
 
 from bananachat import db
@@ -60,33 +57,26 @@ def test_extra_keeps_ollama_within_its_supported_think_levels():
     assert inference.think_for(model, "extra") == "high"
 
 
-def test_configured_adapter_routes_api_extra_and_shares_account_rate_between_keys(make_app, monkeypatch):
-    from bananachat import security
-    from bananachat.db import claude_pool as accounts, limits as store, users
-    from bananachat.services import claude_pool, limits
+def test_hosted_model_routes_api_extra_and_shares_account_rate_between_keys(app, make_user, monkeypatch):
+    from bananachat.db import external_providers as provider_store, limits as store
+    from bananachat.services import external_providers, limits
+    from bananachat.services.ollama import Chunk
     from tests.app.test_api import assert_error, chat, token_for
 
     calls = []
 
-    def provider_chat(account, model, messages, options, *, cancel):
+    def provider_stream(model, messages, *, options=None, effort=None, tools=None, cancel=None):
         cancel.check()
-        calls.append((account["id"], model, options["effort"]))
-        yield {"text": "Hello", "tokens_in": 4, "tokens_out": 6, "done": True}
+        calls.append((model["backend_model_name"], effort))
+        yield Chunk(content="Hello", done=True, finish_reason="stop", prompt_tokens=4, completion_tokens=6)
 
-    module = ModuleType("bc_api_provider_fixture")
-    module.create_adapter = lambda config: SimpleNamespace(
-        chat=provider_chat,
-        discover=lambda: [{"name": "claude-test-sonnet", "reasoning": ["low", "medium", "high", "xhigh"]}],
-        quota=lambda: {"window_left": 1.0, "weekly_left": None},
-    )
-    monkeypatch.setitem(sys.modules, module.__name__, module)
-    app = make_app(CLAUDE_EXTENSION=module.__name__)
+    monkeypatch.setattr(external_providers, "stream", provider_stream)
+    user = make_user("hosted-api")
     with app.app_context():
-        users.create("adapter-api", security.hash_password("adapter-api-password"), role="user")
-        user = users.get_by_username("adapter-api")
-        account_id = accounts.add_account("provider-fixture", window_limit=100_000)
-        claude_pool.sync_catalog(selected=["claude-test-sonnet"], source="test")
-        model = catalog.get_by_name("claude-test-sonnet")
+        provider_id = provider_store.save(name="Effort fixture", protocol="openai",
+                                          base_url="https://provider.invalid/v1")
+        model = external_providers.enroll(provider_store.get(provider_id), "effort-test-model", manual=True,
+                                          reasoning=["low", "medium", "high", "extra"])
         catalog.set_rollout(model["id"], True)
         catalog.set_lifecycle(model["id"], enrollment="reviewed")
         store.set_effort_level(user["id"], model["id"], "extra", source="admin")
@@ -98,11 +88,9 @@ def test_configured_adapter_routes_api_extra_and_shares_account_rate_between_key
     assert response.status_code == 200, response.get_data(as_text=True)
     assert response.json["choices"][0]["message"]["content"] == "Hello"
     assert response.json["usage"]["total_tokens"] == 10
-    assert calls == [(account_id, model["ollama_name"], "extra")]
+    assert calls == [("effort-test-model", "extra")]
     with app.app_context():
-        assert accounts.get(account_id)["window_used"] == 10
-        assert db.scalar("SELECT COUNT(*) FROM claude_account_leases") == 0
-        assert limits.effective(user, "api").window.used == 0
         assert limits.model_limits(user, catalog.get(model["id"])).window.used == 10
+        assert db.scalar("SELECT COUNT(*) FROM inference_queue") == 0
     assert_error(chat(app, second, model=model["ollama_name"]), 429, "rate_limit_error")
     assert len(calls) == 1

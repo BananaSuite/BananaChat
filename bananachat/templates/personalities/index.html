@@ -76,6 +76,7 @@
   </section>
   {% endif %}
 
+  {% if allowed or items %}
   <section class="mb-3" aria-labelledby="list-title">
     <div class="section-head">
       <h2 id="list-title">{{ t("personality.yours") }}</h2>
@@ -118,7 +119,7 @@
           {% endif %}
           {{ traits(item) }}
           <details class="persona-instructions">
-            <summary>{{ t("personality.show_instructions") }}</summary>
+            <summary>{{ t("personality.show_instructions") }}{{ icon("chevron-down") }}</summary>
             <pre class="instructions">{{ row.instructions }}</pre>
           </details>
           {% if item.share_url %}
@@ -177,6 +178,7 @@
     </div>
     {% endif %}
   </section>
+  {% endif %}
 
   {% if featured %}
   <section class="mb-3" aria-labelledby="featured-title">
@@ -203,7 +205,7 @@
           {% endif %}
           {{ traits(item) }}
           <details class="persona-instructions">
-            <summary>{{ t("personality.show_instructions") }}</summary>
+            <summary>{{ t("personality.show_instructions") }}{{ icon("chevron-down") }}</summary>
             <pre class="instructions">{{ row.instructions }}</pre>
           </details>
         </div>

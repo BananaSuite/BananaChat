@@ -6,7 +6,9 @@ The export is a gzip-compressed tar archive holding exactly two files:
 "schema_version"}``). ``bananachat restore --legacy-database FILE`` imports it.
 The archive is streamed while it is compressed, so memory use stays small
 whatever the size of the database; the snapshot lives in a private temporary
-directory under the instance directory and is removed afterwards.
+directory under the instance directory and is removed afterwards. It holds
+every account's password hash and chats, so it needs a recent confirmation
+(:mod:`._reauth`).
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from flask import Response, current_app, flash, render_template
 from bananachat import db
 from bananachat.security import admin_required
 
-from . import bp
+from . import _reauth, bp
 from ._helpers import audit, back
 
 log = logging.getLogger("bananachat.admin")
@@ -121,6 +123,8 @@ def _remove_stale_exports(instance_dir: Path, max_age: float = 6 * 3600) -> None
 def export():
     import sqlite_snapshot
 
+    if not _reauth.confirmed():
+        return back("admin.migration")
     config = current_app.config["BC"]
     config.instance_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     _remove_stale_exports(config.instance_dir)

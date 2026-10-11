@@ -117,8 +117,16 @@ def installed(tmp_path, checkout, product='BananaWiki', mode='wiki'):
     model_binary = tmp_path / 'ollama'
     model_binary.write_text('fixture')
     manager.install(checkout, mode=mode, backend_url='https://compute.example.org' if mode == 'web' else '',
-                    ollama_binary=str(model_binary), source_options={'url': str(checkout), 'allow_local': True})
+                    ollama_binary=str(model_binary),
+                    # These tests follow the fixture's branch; release tags: test_release_tracking.py.
+                    source_options={'url': str(checkout), 'allow_local': True, 'track': 'branch'})
     return manager, services
+
+
+def bundled(archive):
+    """The source revision a package bundles: what an operator confirms with --trust-source on a new server."""
+    with tarfile.open(archive) as package:
+        return json.load(package.extractfile('manifest.json'))['revision']
 
 
 def populate(manager):
@@ -189,7 +197,7 @@ def test_remote_backup_restores_each_deployment_into_a_new_root(tmp_path, checko
     destination.configure(**settings)
     destination.set_schedule(True)
     cli.handle(SimpleNamespace(backup_action='restore', snapshot=result['snapshot']), destination,
-               create_package=None, restore_package=lambda path, _: restored.restore(path))
+               create_package=None, restore_package=lambda path, _: restored.restore(path, trust_source=bundled(path)))
     assert restored.settings()['mode'] == mode
     assert not restored.policy()['enabled'] and not destination.schedule()['enabled']
     with sqlite3.connect(restored.root / 'data' / database.name) as connection:
@@ -236,7 +244,7 @@ def test_weight_free_restore_preserves_data_and_waits_for_model_consent(tmp_path
         assert read_json(extracted / 'model-inventory.json')['ollama'] == ['tiny:latest']
         assert not (extracted / 'config/remote-backup').exists()
     restored = Manager(tmp_path / 'restored-weight-free', product='BananaChat', system=Services())
-    restored.restore(archive, new=True)
+    restored.restore(archive, new=True, trust_source=bundled(archive))
     pending = read_json(restored.root / 'data/.model-recovery.json')
     assert pending['state'] == 'pending'
     assert pending['inventory']['ollama'] == ['tiny:latest']
@@ -271,9 +279,32 @@ def test_restored_download_queue_uses_the_configured_database_path(tmp_path, che
     write_environment(manager.config_dir / 'app.env', environment)
     archive = manager.backup(exclude_model_weights=True)
     restored = Manager(tmp_path / 'custom-restored', product='BananaChat', system=Services())
-    restored.restore(archive, new=True)
+    restored.restore(archive, new=True, trust_source=bundled(archive))
     with sqlite3.connect(restored.root / 'data/custom-chat.db') as connection:
         assert connection.execute('SELECT status FROM model_pull_jobs').fetchone()[0] == 'cancelled'
+
+
+def test_failed_update_rolls_back_with_a_database_outside_the_data_directory(tmp_path, checkout):
+    manager, services = installed(tmp_path, checkout, product='BananaChat', mode='web')
+    database = tmp_path / 'external/chat.db'
+    database.parent.mkdir()
+    with sqlite3.connect(database) as connection:
+        connection.executescript('''
+            CREATE TABLE model_pull_jobs (status TEXT, error_message TEXT, finished_at TEXT);
+            INSERT INTO model_pull_jobs VALUES ('queued', NULL, NULL);
+        ''')
+    environment = read_environment(manager.config_dir / 'app.env')
+    environment['BC_DATABASE_PATH'] = str(database)
+    write_environment(manager.config_dir / 'app.env', environment)
+    old = manager.settings()['revision']
+    services.fail_revision = revision(checkout)
+    with pytest.raises(RuntimeError, match='readiness'):
+        manager.update()
+    assert manager.settings()['revision'] == old
+    assert not (manager.config_dir / 'transaction.json').exists()
+    assert not (manager.root / 'data/.banana-maintenance').exists()
+    with sqlite3.connect(database) as connection:
+        assert connection.execute('SELECT status FROM model_pull_jobs').fetchone()[0] == 'queued'
 
 
 def test_backup_schedule_is_separate_and_uninstall_removes_its_units(tmp_path, checkout, monkeypatch):
@@ -300,7 +331,7 @@ def test_update_is_backed_up_and_preserves_data(tmp_path, checkout):
     populate(manager)
     old = manager.settings()['revision']
     new = revision(checkout)
-    manager.set_updates(True)
+    manager.set_updates(True, allow_unsigned=True)
     result = manager.update(automatic=True)
     assert result['outcome'] == 'complete'
     assert manager.settings()['revision'] == new
@@ -331,7 +362,7 @@ def test_failed_health_rolls_back_both_code_and_database(tmp_path, checkout):
     with sqlite3.connect(database) as connection:
         assert connection.execute('SELECT value FROM records').fetchone()[0] == 'customer content'
     assert not (manager.root / 'data/.banana-maintenance').exists()
-    manager.set_updates(True)
+    manager.set_updates(True, allow_unsigned=True)
     assert manager.update(automatic=True)['outcome'] == 'paused'
 
 
@@ -353,7 +384,7 @@ def test_unrelated_fallback_never_silently_replaces_source(tmp_path, checkout):
     revision(checkout)
     git('-C', checkout, 'branch', '-D', 'main')
     manager.configure_source(fallback='different')
-    manager.set_updates(True)
+    manager.set_updates(True, allow_unsigned=True)
     assert manager.update(automatic=True, allow_divergent=True)['outcome'] == 'paused'
 
 
@@ -363,11 +394,11 @@ def test_migration_package_restores_code_data_credentials_and_disables_sync(tmp_
     token = tmp_path / 'token'
     token.write_text('fixture-private-repository-token')
     manager.configure_source(url='https://forge.example/private/BananaWiki.git', token_file=token, username='bot')
-    manager.set_updates(True)
+    manager.set_updates(True, allow_unsigned=True)
     archive = manager.backup()
     assert archive.stat().st_mode & 0o777 == 0o600
     restored = Manager(tmp_path / 'other-server', product='BananaWiki', system=Services())
-    restored.restore(archive, new=True)
+    restored.restore(archive, new=True, trust_source=bundled(archive))
     assert restored.settings()['mode'] == 'wiki'
     assert restored.settings()['revision'] == manager.settings()['revision']
     assert (restored.root / 'data/private.key').read_text() == 'private fixture key'
@@ -415,7 +446,7 @@ def test_hosting_storage_aliases_survive_update_and_portable_restore(tmp_path, c
     manager.update()
     assert (tenant / 'attachments/customer.txt').read_text() == 'portable customer attachment'
     restored = Manager(tmp_path / 'restored-hosting', product='BananaWiki', system=Services())
-    restored.restore(archive, new=True)
+    restored.restore(archive, new=True, trust_source=bundled(archive))
     restored_tenant = restored.root / 'data/instances/customer'
     assert (restored_tenant / 'attachments').is_symlink()
     assert (restored_tenant / 'attachments').resolve() == restored_tenant / 'storage/attachments'
@@ -519,6 +550,15 @@ def test_hosting_readiness_allows_configured_recovery_waves(tmp_path, checkout):
     assert 3 * 2 * 300 <= deadline <= 7200
 
 
+def test_environment_files_accept_quoted_values_and_a_literal_apostrophe(tmp_path):
+    path = tmp_path / 'app.env'
+    path.write_text('BC_A="two words"\nBC_B=it\'s\nBC_C=plain\n# comment\n')
+    assert read_environment(path) == {'BC_A': 'two words', 'BC_B': "it's", 'BC_C': 'plain'}
+    path.write_text('not an assignment\n')
+    with pytest.raises(ValueError):
+        read_environment(path)
+
+
 @pytest.mark.parametrize('unsafe', ['absolute', 'relative', 'storage-parent', 'storage-target', 'unknown-alias'])
 def test_hosting_packages_reject_links_other_than_internal_storage_aliases(tmp_path, checkout, unsafe):
     manager, _ = installed(tmp_path, checkout, mode='hosting')
@@ -551,7 +591,8 @@ def test_restore_can_change_hostname_port_and_service_identity(tmp_path, checkou
     populate(manager)
     archive = manager.backup()
     restored = Manager(tmp_path / 'new-host', product='BananaWiki', system=Services())
-    restored.restore(archive, new=True, name='bananawiki-new', domain='wiki.example.org', port=5002)
+    restored.restore(archive, new=True, name='bananawiki-new', domain='wiki.example.org', port=5002,
+                     trust_source=bundled(archive))
     values = read_environment(restored.config_dir / 'app.env')
     assert values['BW_PORT'] == '5002'
     assert values['BW_PROXY_MODE'] == '1' and values['BW_PREFERRED_URL_SCHEME'] == 'https'
@@ -563,7 +604,7 @@ def test_backup_failure_during_restore_restores_running_services(tmp_path, check
     manager, services = installed(tmp_path, checkout)
     populate(manager)
     archive = manager.backup()
-    def cannot_backup(*_):
+    def cannot_backup(*_, **__):
         raise OSError('fixture disk failure')
     manager.package = cannot_backup
     with pytest.raises(OSError, match='disk failure'):
@@ -614,7 +655,7 @@ def test_interrupted_update_recovers_from_durable_journal(tmp_path, checkout):
 
 def test_opt_out_during_preparation_survives_inflight_update(tmp_path, checkout):
     manager, services = installed(tmp_path, checkout)
-    manager.set_updates(True)
+    manager.set_updates(True, allow_unsigned=True)
     revision(checkout)
     previous = services.prepare_release
     def prepare(settings, release):
@@ -678,7 +719,7 @@ def test_secrets_are_quoted_as_data_and_not_executed(tmp_path):
 def test_wal_database_validation_does_not_modify_the_restoration_payload(tmp_path):
     data = tmp_path / 'data'
     data.mkdir()
-    database = data / 'example.db'
+    database = data / 'bananachat.db'
     with sqlite3.connect(database) as connection:
         connection.execute('PRAGMA journal_mode=WAL')
         connection.execute('CREATE TABLE notes (body TEXT)')
@@ -690,7 +731,7 @@ def test_wal_database_validation_does_not_modify_the_restoration_payload(tmp_pat
         with read_package(archive, 'BananaWiki', tmp_path) as (extracted, manifest):
             for name, record in manifest['files'].items():
                 assert digest_file(extracted / name) == record['sha256']
-            with sqlite3.connect(extracted / 'data/example.db') as restored:
+            with sqlite3.connect(extracted / 'data/bananachat.db') as restored:
                 assert restored.execute('SELECT body FROM notes').fetchone()[0] == 'saved in the WAL'
 
 
@@ -733,7 +774,7 @@ def test_a_revision_that_empties_the_repository_is_rolled_back(tmp_path, checkou
     assert (manager.root / 'data/private.key').read_text() == 'private fixture key'
     with sqlite3.connect(database) as connection:
         assert connection.execute('SELECT value FROM records').fetchone()[0] == 'customer content'
-    manager.set_updates(True)
+    manager.set_updates(True, allow_unsigned=True)
     assert manager.update(automatic=True)['outcome'] == 'paused'
 
 
@@ -789,7 +830,7 @@ def test_migration_preserves_required_update_signers(tmp_path, checkout, product
     manager.configure_source(signers_file=signers)
     archive = manager.backup()
     restored = Manager(tmp_path / 'restored-signed', product=product, system=Services())
-    restored.restore(archive, new=True)
+    restored.restore(archive, new=True, trust_source=bundled(archive))
     trust = restored.config_dir / 'repo.allowed_signers'
     assert trust.read_text() == allowed
     assert trust.stat().st_mode & 0o777 == 0o600
@@ -914,3 +955,226 @@ def test_an_openpgp_signature_does_not_satisfy_the_allowed_signers_file(tmp_path
         manager.update()
     assert manager.settings()['revision'] == old
     assert (manager.root / 'current/version.txt').read_text() == 'one\n'
+
+
+def repack(archive, destination, edit):
+    """Rewrite a package and its (unsigned) manifest, as anyone who can replace the file could."""
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        with tarfile.open(archive) as source:
+            source.extractall(root, filter='data')
+        manifest = json.loads((root / 'manifest.json').read_text())
+        (root / 'manifest.json').unlink()
+        edit(root, manifest)
+        manifest = {key: value for key, value in manifest.items() if key not in {'files', 'schema'}}
+        inputs = [(path, path.relative_to(root).as_posix()) for path in sorted(root.rglob('*')) if path.is_file()]
+        return write_package(destination, manifest, inputs)
+
+
+def foreign_source(root, version='attacker'):
+    """Replace the bundled source with code the server never fetched from its update source."""
+    with tempfile.TemporaryDirectory() as directory:
+        for name, text in (('banana', '# not the reviewed entry point\n'), ('LICENSE', 'x\n'),
+                           ('version.txt', version + '\n')):
+            Path(directory, name).write_text(text)
+        (root / 'source.tar.gz').unlink()
+        with tarfile.open(root / 'source.tar.gz', 'w:gz') as output:
+            for name in ('banana', 'LICENSE', 'version.txt'):
+                output.add(Path(directory, name), arcname=name)
+
+
+def unknown_revision(root, manifest, value='f' * 40):
+    foreign_source(root)
+    manifest['revision'] = value
+    settings = json.loads((root / 'config/installation.json').read_text())
+    (root / 'config/installation.json').write_text(json.dumps({**settings, 'revision': value}))
+
+
+def test_restore_never_deploys_bundled_source_it_cannot_verify(tmp_path, checkout):
+    """A package's own source tree runs as the service and, through the wrapper, as root."""
+    manager, services = installed(tmp_path, checkout)
+    populate(manager)
+    forged = repack(manager.backup(), tmp_path / 'forged.tar.gz', unknown_revision)
+    with pytest.raises(ValueError, match='--trust-source ' + 'f' * 40):
+        manager.restore(forged)
+    assert 'f' * 40 not in services.prepared
+    assert (manager.root / 'current/version.txt').read_text() == 'one\n'
+    assert not list((manager.root / 'backups').glob('before-restore-*'))
+    with pytest.raises(ValueError, match='--trust-source'):
+        manager.restore(forged, trust_source='e' * 40)
+    manager.restore(forged, trust_source='f' * 40)
+    assert (manager.root / 'current/version.txt').read_text() == 'attacker\n'
+
+
+def test_a_new_server_shows_the_bundled_revision_and_requires_confirmation(tmp_path, checkout):
+    manager, _ = installed(tmp_path, checkout)
+    populate(manager)
+    archive = manager.backup()
+    expected = manager.settings()['revision']
+    restored = Manager(tmp_path / 'other-server', product='BananaWiki', system=Services())
+    with pytest.raises(ValueError, match=f'revision {expected}.*--trust-source {expected}'):
+        restored.restore(archive, new=True)
+    assert not (restored.config_dir / 'installation.json').exists()
+    restored.restore(archive, new=True, trust_source=expected)
+    assert restored.settings()['revision'] == expected
+
+
+def test_a_known_revision_is_taken_from_the_update_source_not_the_package(tmp_path, checkout):
+    manager, _ = installed(tmp_path, checkout)
+    populate(manager)
+    old = manager.settings()['revision']
+    archive = manager.backup()
+    revision(checkout)
+    manager.update()
+    shutil.rmtree(manager.root / 'releases' / old)
+    shutil.rmtree(manager.root / 'repository.git')  # also when it has to be fetched again
+    tampered = repack(archive, tmp_path / 'tampered.tar.gz', lambda root, _: foreign_source(root))
+    manager.restore(tampered)
+    assert manager.settings()['revision'] == old
+    assert (manager.root / 'current/version.txt').read_text() == 'one\n'
+
+
+def test_required_signatures_also_apply_to_restored_source(tmp_path, checkout):
+    manager, services = installed(tmp_path, checkout)
+    _, allowed = signing_key(tmp_path, 'maintainer')
+    signers = tmp_path / 'allowed_signers'
+    signers.write_text(allowed)
+    archive = manager.backup()
+    manager.configure_source(signers_file=signers)
+    old = manager.settings()['revision']
+    forged = repack(archive, tmp_path / 'forged.tar.gz', unknown_revision)
+    with pytest.raises(ValueError, match='requires signed revisions'):
+        manager.restore(forged, trust_source='f' * 40)
+    unsigned = revision(checkout)
+    known = repack(archive, tmp_path / 'unsigned.tar.gz', lambda root, manifest: unknown_revision(root, manifest, unsigned))
+    with pytest.raises(ValueError, match='neither signed itself.*requires signed revisions'):
+        manager.restore(known, trust_source=unsigned)
+    assert manager.settings()['revision'] == old and unsigned not in services.prepared
+
+
+def test_uploads_named_like_databases_are_packaged_as_plain_files(tmp_path, checkout):
+    """A user's 'notes.db' (or Thumbs.db) must not make every backup and rollback package unrestorable."""
+    manager, _ = installed(tmp_path, checkout, 'BananaChat', 'single')
+    uploads = manager.root / 'data/uploads'
+    uploads.mkdir(parents=True)
+    names = {'0123456789abcdef.db': os.urandom(4096), 'thumbs.sqlite3': b'OLE not sqlite', 'empty.sqlite': b'',
+             'notes.db-wal': b'not a sidecar of anything'}
+    for name, content in names.items():
+        (uploads / name).write_bytes(content)
+    with sqlite3.connect(manager.root / 'data/bananachat.db') as connection:
+        connection.execute('CREATE TABLE notes (body TEXT)')
+    archive = manager.backup()
+    with read_package(archive, 'BananaChat', manager.root / 'staging') as (extracted, _):
+        for name, content in names.items():
+            assert (extracted / 'data/uploads' / name).read_bytes() == content
+    manager.restore(archive)
+    assert (uploads / '0123456789abcdef.db').read_bytes() == names['0123456789abcdef.db']
+    # The application's own database is still checked before anything is restored.
+    (manager.root / 'data/bananachat.db').write_bytes(b'damaged' * 1000)
+    broken = manager.backup()
+    with pytest.raises(ValueError, match='integrity check'):
+        with read_package(broken, 'BananaChat', manager.root / 'staging'):
+            pass
+
+
+def model_library(manager, value=b'model weights'):
+    data = manager.root / 'data'
+    blob = data / 'models/blobs/sha256-fixture'
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(value)
+    listing = data / 'models/manifests/registry.ollama.ai/library/tiny/latest'
+    listing.parent.mkdir(parents=True, exist_ok=True)
+    listing.write_text('{}')
+    return blob
+
+
+def test_pre_update_packages_leave_model_weights_in_place_and_rollback_keeps_them(tmp_path, checkout):
+    """Weights are re-downloadable and updates never change them: gzipping them into every package costs
+    downtime and disk, and a rollback must not need room for further copies."""
+    manager, services = installed(tmp_path, checkout, 'BananaChat', 'single')
+    blob = model_library(manager)
+    populate(manager)
+    good = revision(checkout)
+    result = manager.update()
+    with read_package(result['backup'], 'BananaChat', manager.root / 'staging') as (extracted, metadata):
+        assert metadata['model_weights_excluded'] is True
+        assert not (extracted / 'data/models').exists()
+        assert (extracted / 'data/private.key').exists()
+    bad = revision(checkout, 'three')
+    services.fail_revision = bad
+    copies = []
+    real_copytree = shutil.copytree
+    shutil.copytree = lambda *args, **kwargs: copies.append(args) or real_copytree(*args, **kwargs)
+    try:
+        with pytest.raises(RuntimeError):
+            manager.update()
+    finally:
+        shutil.copytree = real_copytree
+    assert manager.settings()['revision'] == good
+    assert blob.read_bytes() == b'model weights'
+    assert (manager.root / 'data/private.key').read_text() == 'private fixture key'
+    assert not (manager.root / 'data/.model-recovery.json').exists(), 'nothing to download again'
+    assert copies == [], 'the rollback moves the extracted data instead of copying it again'
+
+
+def test_a_failed_restore_puts_back_the_model_weights_it_replaced(tmp_path, checkout):
+    manager, services = installed(tmp_path, checkout, 'BananaChat', 'single')
+    blob = model_library(manager, b'weights in the package')
+    archive = manager.backup()
+    old = manager.settings()['revision']
+    revision(checkout)
+    manager.update()
+    blob.write_bytes(b'weights downloaded since')
+    services.fail_revision = old
+    with pytest.raises(RuntimeError, match='readiness'):
+        manager.restore(archive)
+    assert blob.read_bytes() == b'weights downloaded since'
+    (before,) = (manager.root / 'backups').glob('before-restore-*.tar.gz')
+    with read_package(before, 'BananaChat', manager.root / 'staging') as (extracted, _):
+        assert not (extracted / 'data/models').exists()
+    assert not [path for path in manager.root.iterdir() if path.name.startswith('.')], 'no stash is left behind'
+    services.fail_revision = None
+    manager.restore(archive)
+    assert blob.read_bytes() == b'weights in the package'
+
+
+def test_restoring_a_weight_free_package_on_the_same_server_keeps_its_downloaded_models(tmp_path, checkout):
+    manager, _ = installed(tmp_path, checkout, 'BananaChat', 'single')
+    blob = model_library(manager)
+    archive = manager.backup(exclude_model_weights=True)
+    manager.restore(archive)
+    assert blob.read_bytes() == b'model weights'
+    assert read_json(manager.root / 'data/.model-recovery.json')['state'] == 'pending'
+
+
+def test_an_update_without_room_for_its_rollback_stops_nothing(tmp_path, checkout, monkeypatch):
+    from banana_ops import manager as manager_module
+    manager, services = installed(tmp_path, checkout, 'BananaChat', 'single')
+    model_library(manager, b'w' * 400_000)
+    (manager.root / 'data/large.bin').write_bytes(b'x' * 300_000)
+    running = set(services.running)
+    old = manager.settings()['revision']
+    revision(checkout)
+    real = shutil.disk_usage
+    monkeypatch.setattr(manager_module.shutil, 'disk_usage', lambda path: real(path)._replace(free=128 * 1024 ** 2 + 400_000))
+    with pytest.raises(ValueError, match='free space'):
+        manager.update()
+    assert services.running == running and manager.settings()['revision'] == old
+    assert not (manager.root / 'config/transaction.json').exists()
+    assert not (manager.root / 'data/.banana-maintenance').exists()
+    assert not read_json(manager.root / 'config/failed-revision.json', {}), 'not the revision\'s fault'
+    monkeypatch.setattr(manager_module.shutil, 'disk_usage', lambda path: real(path)._replace(free=128 * 1024 ** 2 + 700_000))
+    assert manager.update()['outcome'] == 'complete', 'the weights left in place need no room'
+
+
+def test_a_failed_weight_free_restore_keeps_the_models_it_had_taken_over(tmp_path, checkout):
+    manager, services = installed(tmp_path, checkout, 'BananaChat', 'single')
+    blob = model_library(manager)
+    archive = manager.backup(exclude_model_weights=True)
+    old = manager.settings()['revision']
+    revision(checkout)
+    manager.update()
+    services.fail_revision = old
+    with pytest.raises(RuntimeError, match='readiness'):
+        manager.restore(archive)
+    assert blob.read_bytes() == b'model weights'

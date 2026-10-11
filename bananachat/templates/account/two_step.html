@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ t("two_step.title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/account.css') }}">{% endblock %}
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
+{#- The password and a code from the app (or a recovery code) confirm every change; *id* keeps the fields apart. -#}
+{% macro confirm_fields(id, code_label) -%}
+<input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
+<div class="form-grid">
+  <div class="field">
+    <label for="{{ id }}-code">{{ code_label }}</label>
+    <input type="text" id="{{ id }}-code" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" required maxlength="64">
+  </div>
+  <div class="field">
+    <label for="{{ id }}-password">{{ t("auth.password") }}</label>
+    <input type="password" id="{{ id }}-password" name="password" autocomplete="current-password" required maxlength="1024">
+  </div>
+</div>
+{%- endmacro %}
+{% block content %}
+<div class="page page-narrow account-page">
+  <p class="account-back"><a href="{{ url_for('account.index') }}#two-step">{{ icon("chevron-left") }}{{ t("two_step.back") }}</a></p>
+  <header class="page-header">
+    <div>
+      <h1>{{ t("two_step.title") }}</h1>
+      <p>{{ t("two_step.intro") }}</p>
+    </div>
+  </header>
+
+  {% if required and not state %}
+  <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("two_step.required_notice") }}</p></div>
+  {% endif %}
+
+  <div class="section-stack account-sections">
+    {% if state %}
+    <section class="settings-section" aria-labelledby="two-step-status">
+      <h2 id="two-step-status">{{ t("two_step.status_title") }} <span class="badge badge-success">{{ t("two_step.on") }}</span></h2>
+      <p class="mb-0">{{ t("two_step.on_since", when=(state.enabled_at | datetime)) }} {{ t("two_step.codes_left", count=state.codes_left) }}</p>
+      {% if not state.readable %}
+      <div class="alert alert-warning mt-2">{{ icon("alert") }}<p>{{ t("two_step.unreadable") }}</p></div>
+      {% endif %}
+    </section>
+
+    <section class="settings-section" aria-labelledby="two-step-renew">
+      <h2 id="two-step-renew">{{ t("two_step.renew") }}</h2>
+      <p class="muted">{{ t("two_step.renew_help") }}</p>
+      <form method="post" action="{{ url_for('account.two_step_change') }}" class="stack" data-busy>
+        {{ csrf() }}
+        <input type="hidden" name="action" value="renew">
+        {{ confirm_fields("renew", t("two_step.code_or_recovery")) }}
+        <div class="form-actions"><button type="submit" class="btn">{{ t("two_step.renew") }}</button></div>
+      </form>
+    </section>
+
+    <section class="settings-section settings-section-danger" aria-labelledby="two-step-disable">
+      <h2 id="two-step-disable">{{ t("two_step.disable_title") }}</h2>
+      <p class="muted">{{ t("two_step.disable_help") }}</p>
+      <form method="post" action="{{ url_for('account.two_step_change') }}" class="stack" data-confirm="{{ t('two_step.disable_confirm') }}" data-confirm-danger>
+        {{ csrf() }}
+        <input type="hidden" name="action" value="disable">
+        {{ confirm_fields("disable", t("two_step.code_or_recovery")) }}
+        <div class="form-actions"><button type="submit" class="btn btn-danger">{{ t("two_step.disable") }}</button></div>
+      </form>
+    </section>
+    {% else %}
+    <section class="settings-section" aria-labelledby="two-step-setup">
+      <h2 id="two-step-setup">{{ t("two_step.setup_title") }}</h2>
+      <ol class="two-step-steps">
+        <li>
+          <p>{{ t("two_step.step_scan") }}</p>
+          <img class="two-step-qr" src="{{ qr }}" alt="{{ t('two_step.qr_alt') }}" width="200" height="200">
+          <p class="mb-0">{{ t("two_step.manual_key") }}</p>
+          <p class="mb-0 row"><code class="mono two-step-key" id="two-step-key">{{ secret | batch(4) | map("join") | join(" ") }}</code>
+            <button type="button" class="btn btn-sm" data-copy="{{ secret }}">{{ icon("copy") }}{{ t("two_step.copy_key") }}</button></p>
+        </li>
+        <li>
+          <p>{{ t("two_step.step_confirm") }}</p>
+          <form method="post" action="{{ url_for('account.two_step_change') }}" class="stack" data-busy>
+            {{ csrf() }}
+            <input type="hidden" name="action" value="enable">
+            {{ confirm_fields("enable", t("two_step.app_code")) }}
+            {% if api_token_count %}
+            <label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>{{ t("account.revoke_api_tokens", count=api_token_count) }}</span></label>
+            {% endif %}
+            <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("two_step.enable") }}</button></div>
+          </form>
+        </li>
+      </ol>
+    </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

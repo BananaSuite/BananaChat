@@ -200,6 +200,24 @@ def create(server, **body):
 
 # ----- configuration and start-up ---------------------------------------------------------------------------
 
+def test_a_runner_on_another_address_says_how_to_run_it_without_tls(tmp_path, caplog, monkeypatch):
+    """On a private network between the two machines plain HTTP is a documented setup (docs/agents.md):
+    the start-up warning names what that setup needs instead of only "keep it on loopback"."""
+    class Stop(Exception):
+        pass
+
+    def refuse(*args, **kwargs):
+        raise Stop
+
+    monkeypatch.setattr(sr, "RunnerServer", refuse)
+    environ = {"BC_SANDBOX_TOKEN_FILE": str(tmp_path / "token"), "BC_SANDBOX_HOST": "10.0.0.5"}
+    with caplog.at_level("WARNING", logger="compute.sandbox_runner"), pytest.raises(Stop):
+        sr.create_server(environ, engine=FakeEngine())
+    [message] = [record.getMessage() for record in caplog.records if "without TLS" in record.getMessage()]
+    assert "10.0.0.5" in message and "loopback" in message
+    assert "BC_SANDBOX_TRUSTED_PEERS" in message and "BC_AGENTS_RUNNER_INSECURE_NETWORKS" in message
+
+
 def test_configuration_defaults_and_validation(tmp_path):
     config = sr.Config.from_env({"BC_SANDBOX_TOKEN_FILE": str(tmp_path / "t")})
     assert (config.host, config.port, config.engine, config.network) == ("127.0.0.1", 11436, "podman", "none")
@@ -358,6 +376,21 @@ def test_podman_and_gvisor_flags():
     manager.preflight()
     args = manager.create_args("0" * 32, "bc-sandbox-x", "s", sr.DEFAULT_IMAGE, manager.default_limits())
     assert "--read-only-tmpfs=false" in args and args[args.index("--runtime") + 1] == "runsc"
+    # Podman refuses uid=/gid= on a tmpfs ("unknown mount option"); its U option mounts it as the user.
+    assert "/workspace:rw,exec,nosuid,nodev,size=512m,U,mode=0700" in args
+    assert not [arg for arg in args if "uid=" in arg or "gid=" in arg]
+
+
+def test_podman_removes_a_sandbox_without_waiting_for_the_stop_signal():
+    """Podman's rm -f first waits ten seconds for the stop signal; the runner removes at once, as on Docker."""
+    engine = FakeEngine("podman", info={"host": {"security": {"rootless": True},
+                                                 "cgroupControllers": ["cpu", "memory", "pids"]}})
+    manager = sr.SandboxManager(make_config(engine="podman"), engine)
+    manager.preflight()
+    box = manager.create({"session": "s"})
+    manager.delete(box.id)
+    rm = engine.commands("rm")[-1]
+    assert rm[:4] == ["rm", "-f", "--time", "0"] and rm[-1] == sr.NAME_PREFIX + box.id
 
 
 def test_verification_rejects_an_engine_that_ignores_flags(manager, engine):
@@ -368,6 +401,75 @@ def test_verification_rejects_an_engine_that_ignores_flags(manager, engine):
         manager.create({"session": "s"})
     assert caught.value.code == "engine_error" and engine.containers == {}
     assert manager.list() == []
+
+
+PODMAN_DEFAULT_CAPS = ["CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_FSETID", "CAP_KILL",
+                       "CAP_NET_BIND_SERVICE", "CAP_SETFCAP", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID",
+                       "CAP_SYS_CHROOT"]
+
+
+def podman_manager(**changes):
+    """A manager on a fake Podman whose inspect output has Podman's shape, with *changes* applied."""
+    engine = FakeEngine("podman", info={"host": {"security": {"rootless": True},
+                                                 "cgroupControllers": ["cpu", "memory", "pids"]}})
+    original = engine.inspect
+
+    def inspect(args):
+        data = original(args)
+        # Podman lists the dropped default capabilities instead of "ALL", reports the
+        # capability sets the process really has, and the no-new-privileges flag by name.
+        data["HostConfig"].update(CapDrop=list(PODMAN_DEFAULT_CAPS), CapAdd=[], SecurityOpt=["no-new-privileges"])
+        data.update(EffectiveCaps=None, BoundingCaps=None)
+        for key, value in changes.items():
+            if key in ("EffectiveCaps", "BoundingCaps"):
+                data[key] = value
+            elif key == "User":
+                data["Config"][key] = value
+            else:
+                data["HostConfig"][key] = value
+        return data
+
+    engine.inspect = inspect
+    manager = sr.SandboxManager(make_config(engine="podman"), engine)
+    manager.preflight()
+    return manager, engine
+
+
+def test_podman_sandboxes_are_verified_like_docker_ones():
+    manager, engine = podman_manager()
+    assert manager.create({"session": "s"}).keeper == "7"
+    for changes in ({"CapAdd": ["CAP_SYS_ADMIN"]}, {"EffectiveCaps": ["CAP_NET_RAW"]},
+                    {"BoundingCaps": ["CAP_CHOWN"]}, {"SecurityOpt": []},
+                    {"SecurityOpt": ["no-new-privileges:false"]}, {"User": "0:0"}, {"User": ""}):
+        manager, engine = podman_manager(**changes)
+        with pytest.raises(sr.ApiError) as caught:
+            manager.create({"session": "s"})
+        assert caught.value.code == "engine_error" and engine.containers == {}, changes
+
+
+def test_podman_without_the_capability_sets_must_drop_every_default():
+    manager, _engine = podman_manager()
+    original = manager.engine.inspect
+
+    def without_effective(args):
+        data = original(args)
+        del data["EffectiveCaps"], data["BoundingCaps"]
+        return data
+
+    manager.engine.inspect = without_effective
+    assert manager.create({"session": "s"})
+    manager.engine.inspect = lambda args: dict(without_effective(args), HostConfig=dict(
+        without_effective(args)["HostConfig"], CapDrop=PODMAN_DEFAULT_CAPS[:-1]))
+    with pytest.raises(sr.ApiError):
+        manager.create({"session": "t"})
+
+
+def test_docker_refuses_no_new_privileges_switched_off(manager, engine):
+    original = engine.inspect
+    engine.inspect = lambda args: dict(original(args), HostConfig=dict(original(args)["HostConfig"],
+                                                                        SecurityOpt=["no-new-privileges:false"]))
+    with pytest.raises(sr.ApiError):
+        manager.create({"session": "s"})
 
 
 def test_create_validates_session_image_and_limits(manager, engine):
@@ -1236,6 +1338,8 @@ def test_bodies_are_limited_and_validated(server):
     assert raw_request(server, (head + f"Content-Length: {sr.MAX_JSON_BODY + 1}\r\n\r\n").encode()
                        ).startswith(b"HTTP/1.1 413")
     assert raw_request(server, (head + "Content-Length: -5\r\n\r\n").encode()).startswith(b"HTTP/1.1 400")
+    assert raw_request(server, (head + "Content-Length: \u00b2\r\n\r\n").encode("latin-1")
+                       ).startswith(b"HTTP/1.1 400")
     assert raw_request(server, (head + "\r\n").encode()).startswith(b"HTTP/1.1 411")
     put = f"PUT {base}/files?path=a HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n"
     assert raw_request(server, (put + f"Content-Length: {sr.MAX_FILE_BODY + 1}\r\n\r\n").encode()

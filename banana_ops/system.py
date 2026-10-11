@@ -146,6 +146,25 @@ class System:
             raise RuntimeError(f"{Path(str(command[0])).name} {command[1] if len(command) > 1 else ''} failed (exit {result.returncode})." + detail)
         return result
 
+    def application_command(self, settings, arguments, *, timeout=300):
+        """Run the current release's Python with *arguments* as the service, the way its unit runs it.
+
+        The service account, working directory, environment file and private umask match the systemd
+        unit. The environment (it holds secrets) reaches the process through its environment, never
+        its command line, which every local user can read. Returns standard output; a failure raises
+        ValueError with the command's last line of standard error.
+        """
+        root = Path(settings["root"])
+        environment = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8",
+                       **read_environment(root / "config/app.env")}
+        result = subprocess.run(["runuser", "-u", settings["service"], "--", str(root / "current/.venv/bin/python"),
+                                 *arguments], capture_output=True, text=True, timeout=timeout, cwd=root / "current",
+                                env=environment, umask=0o077, stdin=subprocess.DEVNULL)
+        if result.returncode:
+            lines = result.stderr.strip().splitlines()
+            raise ValueError(lines[-1] if lines else f"The application command failed (exit {result.returncode}).")
+        return result.stdout
+
     def account(self, settings):
         name = settings["service"]
         try:
@@ -242,15 +261,21 @@ class System:
                 path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
         self.run(["python3", "-m", "venv", str(release / ".venv")])
         set_release_owner(release / ".venv", identity.pw_uid, identity.pw_gid)
+        pip = ["runuser", "-u", settings["service"], "--", str(release / ".venv/bin/python"), "-m", "pip", "install",
+               "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:"]
+        # Releases with hash-pinned locks (scripts/lock_requirements.py) install exactly the files they were
+        # tested with, the installer included; an older release (a rollback) resolves its ranges. Either way
+        # only wheels: no package build script runs on the server.
+        build_lock, lock = release / "requirements-build.lock", release / "requirements.lock"
+        locked = build_lock.is_file() and lock.is_file()
         # Distribution-provided ensurepip wheels can predate security fixes.
         # Bootstrap only the installer wheel before it handles application packages.
-        self.run(["runuser", "-u", settings["service"], "--", str(release / ".venv/bin/python"), "-m", "pip", "install",
-                  "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:", "--no-deps",
-                  "--upgrade", "pip>=26.2.1"], timeout=600, cwd=release)
+        self.run([*pip, "--no-deps", "--upgrade",
+                  *(["--require-hashes", "-r", str(build_lock)] if locked else ["pip>=26.2.1"])], timeout=600, cwd=release)
         if settings["mode"] != "compute":
             print("Installing Python dependencies; this may take several minutes.", file=sys.stderr, flush=True)
-            self.run(["runuser", "-u", settings["service"], "--", str(release / ".venv/bin/python"), "-m", "pip", "install",
-                      "--disable-pip-version-check", "--no-cache-dir", "-r", str(release / "requirements.txt")], timeout=1800, cwd=release)
+            self.run([*pip, *(["--require-hashes", "-r", str(lock)] if locked else ["-r", str(release / "requirements.txt")])],
+                     timeout=1800, cwd=release)
         if settings["mode"] == "hosting":
             print("Building the tenant image from this source revision.", file=sys.stderr, flush=True)
             self.run(["docker", "build", "-f", str(release / "Dockerfile.tenant"), "-t", "bananawiki-tenant:" + settings["revision"], str(release)], timeout=1800)
@@ -259,16 +284,6 @@ class System:
     def install_units(self, settings):
         root = Path(settings["root"])
         commands = profile.service_commands(settings)
-        native_paths = []
-        environment = read_environment(root / "config/app.env")
-        if (settings["product"] == "BananaChat" and settings["mode"] != "compute" and
-                environment.get("BC_CLAUDE_EXTENSION") == "bananachat.services.claude_code"):
-            from bananachat.services.claude_sandbox import managed_paths
-            try:
-                native_paths = managed_paths(environment.get("BC_CLAUDE_CODE_CONFIG", ""),
-                                             uid=pwd.getpwnam(settings["service"]).pw_uid, root=root)
-            except OSError:
-                raise ValueError("The native Claude manifest, private profiles or Bubblewrap executable is unavailable.") from None
         for name, command in commands.items():
             after = "network-online.target"
             extra = ""
@@ -277,8 +292,6 @@ class System:
                 extra = "SupplementaryGroups=docker\n"
             if name == settings["service"] and name + "-ollama" in commands:
                 after += " " + name + "-ollama.service"
-            if name == settings["service"]:
-                extra += "".join(f"ReadWritePaths={path}\n" for path in native_paths)
             unit = ("# Managed by BananaSuite\n[Unit]\nDescription=" + settings["product"] + " " + settings["mode"] + "\n"
                     f"After={after}\nWants=network-online.target\n\n[Service]\nUser={settings['service']}\nGroup={settings['service']}\n"
                     f"WorkingDirectory={root / 'current'}\nEnvironmentFile={root / 'config/app.env'}\n"

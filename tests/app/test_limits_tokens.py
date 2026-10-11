@@ -959,9 +959,9 @@ def test_admins_change_effort_settings(app, admin):
 
 @pytest.mark.parametrize(("language", "texts"), [
     ("en", ["Tokens in this 5-hour window", "Your next request starts a new 5-hour window.", "counts ×3",
-            "Reasoning effort you can use", "Ask for High"]),
-    ("it", ["Token in questa finestra di 5 ore", "La tua prossima richiesta apre una nuova finestra di 5 ore.",
-            "conta ×3", "Livelli di ragionamento che puoi usare", "Chiedi Alto"]),
+            "Reasoning effort you can use", "Ask for the High level"]),
+    ("it", ["Token in questa finestra di 5\u00a0ore", "La tua prossima richiesta apre una nuova finestra di 5\u00a0ore.",
+            "conta ×3", "Livelli di ragionamento disponibili", "Richiedi il livello Alto"]),
 ])
 def test_the_account_page_explains_tokens_windows_models_and_effort(app, make_user, language, texts):
     from bananachat import db
@@ -987,7 +987,7 @@ def test_the_account_page_shows_when_an_open_window_resets(app, make_user):
         credits.charge(users.get_by_username("rhea")["id"], 1000, 500, request_type="api")
     page = _signed_in(app, "rhea").get("/account").get_data(as_text=True)
     assert "1.5k tokens of 30k tokens" in page or "1.5k tokens" in page
-    assert "Full again at" in page and "UTC" in page
+    assert "Refills at" in page and "UTC" in page
 
 
 def test_the_developer_pages_show_tokens(app, make_user):
@@ -1013,7 +1013,7 @@ def test_effort_requests_cost_the_same_queries_for_one_or_many(app, admin, make_
         db.execute("UPDATE ai_models SET is_reasoning=1, reasoning_levels='[\"low\",\"medium\",\"high\"]' WHERE id=?",
                    (models["qwen3:4b"]["id"],))
 
-    def queries() -> int:
+    def page_queries() -> int:
         statements = []
         db.conn().set_trace_callback(statements.append)
         try:
@@ -1022,11 +1022,16 @@ def test_effort_requests_cost_the_same_queries_for_one_or_many(app, admin, make_
             db.conn().set_trace_callback(None)
         return len(statements)
 
+    def queries() -> int:
+        # Short per-process caches (agent settings, service health: a few seconds) refresh with extra queries
+        # when a page load happens to cross their expiry, which a slow machine makes likely: count the
+        # fewest of three loads. A query per request would show in every load.
+        return min(page_queries() for _ in range(3))
+
     with app.app_context():
         first = make_user("thinker0")
         credits.submit_request(first["id"], kind="effort", model_id=models["qwen3:4b"]["id"], level="high",
                                reason="Harder problems")
-    queries()
     one = queries()
     with app.app_context():
         for number in range(1, 5):

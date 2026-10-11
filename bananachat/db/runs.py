@@ -1,4 +1,5 @@
-"""Chat generation runs: one lease per session in ``active_streams``.
+"""Generation runs: chat runs (one lease per session in ``active_streams``) and API answers
+(``completion_leases``).
 
 A run starts with :func:`begin` (the user's message, its attachments and the
 lease are stored together), saves checkpoints of the partial answer while it
@@ -9,6 +10,19 @@ Leases are renewed by ``services.supervisor`` (``heartbeat_at``, epoch
 seconds). A lease not renewed for :data:`LEASE_SECONDS` belongs to a process
 that died; :func:`recover_stale` turns its last checkpoint into a saved
 answer in the ``interrupted`` state.
+
+A lease names its account (``user_id``, ``is_incognito``) and outlives its
+chat: erasing a chat while it answers only asks the run to stop
+(``bananachat.db.chats``), so the run, or recovery, still charges what was
+generated. Nothing is stored for an erased chat.
+
+API and playground answers (``services.completions``) hold a lease in
+``completion_leases`` from their first output on, which records what they would
+be charged if they ended now (renewed every few seconds by the supervisor).
+The answer itself charges and drops its lease in one transaction
+(:func:`close_completion`); a lease not renewed for :data:`LEASE_SECONDS`
+belongs to a process that died, and :func:`recover_completions` charges its last
+record instead. Either happens once.
 """
 
 from __future__ import annotations
@@ -46,9 +60,11 @@ def _cutoff() -> float:
 
 
 def user_busy(user_id: str) -> bool:
-    """True when one of the user's chats has a live run."""
-    return db.one("SELECT 1 FROM active_streams a JOIN chat_sessions s ON s.id=a.session_id "
-                  "WHERE s.user_id=? AND a.heartbeat_at>=? LIMIT 1", (user_id, _cutoff())) is not None
+    """True when the user has a live run, also one whose chat was erased while it answers (its lease names the
+    account until the run has charged what it generated)."""
+    return db.one("SELECT 1 FROM active_streams a LEFT JOIN chat_sessions s ON s.id=a.session_id "
+                  "WHERE COALESCE(a.user_id, s.user_id)=? AND a.heartbeat_at>=? LIMIT 1",
+                  (user_id, _cutoff())) is not None
 
 
 def session_busy(session_id: str) -> bool:
@@ -79,7 +95,8 @@ def begin(session, user, *, content: str, attachments: list[dict], title: str | 
         token = uuid.uuid4().hex
         now = time.time()
         db.execute("INSERT INTO active_streams (session_id, owner_token, stop_requested, heartbeat_at, started_at, "
-                   "user_message_id) VALUES (?,?,0,?,?,?)", (session_id, token, now, now, message_id))
+                   "user_message_id, user_id, is_incognito) VALUES (?,?,0,?,?,?,?,?)",
+                   (session_id, token, now, now, message_id, user["id"], int(bool(current["is_incognito"]))))
         db.execute("UPDATE chat_sessions SET generation_state='queued', generation_error='', "
                    "generation_message_id=NULL WHERE id=?", (session_id,))
     return Begun(token, message_id, applied, current["title"])
@@ -120,11 +137,23 @@ def mark_running(session_id: str, token: str, model_id) -> bool:
     return updated == 1
 
 
-def checkpoint(session_id: str, token: str, content: str, model_id) -> bool:
-    """Save the partial answer. False when the lease was lost (stop generating)."""
+def checkpoint(session_id: str, token: str, content: str, model_id, *, tokens_in: int = 0,
+               tokens_out: int = 0) -> bool:
+    """Save the partial answer and the usage so far (charged if the run is recovered).
+
+    False when the lease was lost (stop generating).
+    """
     with db.transaction():
-        return db.execute("UPDATE active_streams SET partial_content=?, model_id=? WHERE session_id=? AND "
-                          "owner_token=?", (content, _existing_model(model_id), session_id, token)).rowcount == 1
+        return db.execute("UPDATE active_streams SET partial_content=?, model_id=?, tokens_in=?, tokens_out=? "
+                          "WHERE session_id=? AND owner_token=?",
+                          (content, _existing_model(model_id), max(0, int(tokens_in)), max(0, int(tokens_out)),
+                           session_id, token)).rowcount == 1
+
+
+def expire(session_id: str, token: str) -> bool:
+    """Give up a run's lease now (its process is exiting): recovery saves its last checkpoint at once."""
+    return db.execute("UPDATE active_streams SET heartbeat_at=0 WHERE session_id=? AND owner_token=?",
+                      (session_id, token)).rowcount == 1
 
 
 def request_stop(session_id: str) -> bool:
@@ -144,19 +173,23 @@ def finish(session_id: str, token: str, *, user_id: str, content: str, state: st
     if state not in TERMINAL_STATES:
         raise ValueError("Unknown generation state.")
     with db.transaction():
-        lease = db.one("SELECT 1 FROM active_streams WHERE session_id=? AND owner_token=?", (session_id, token))
+        lease = db.one("SELECT is_incognito FROM active_streams WHERE session_id=? AND owner_token=?",
+                       (session_id, token))
         if lease is None:
             return None
         return _commit(session_id, user_id=user_id, content=content, state=state, error=error, model_id=model_id,
                        tokens_in=tokens_in, tokens_out=tokens_out, usage_estimated=usage_estimated,
-                       duration_ms=duration_ms, queue_wait_ms=queue_wait_ms, charge=charge)
+                       duration_ms=duration_ms, queue_wait_ms=queue_wait_ms, charge=charge,
+                       incognito=bool(lease["is_incognito"]))
 
 
 def _commit(session_id, *, user_id, content, state, error, model_id, tokens_in, tokens_out, usage_estimated,
-            duration_ms, queue_wait_ms, charge) -> Outcome:
+            duration_ms, queue_wait_ms, charge, incognito=False) -> Outcome:
+    """Store the outcome and charge it. A chat erased meanwhile stores nothing; *incognito* (from the lease)
+    then names the request type."""
     model_id = _existing_model(model_id)
     session = db.one("SELECT user_id, title, is_incognito, deleted_at FROM chat_sessions WHERE id=?", (session_id,))
-    incognito = bool(session and session["is_incognito"])
+    incognito = bool(session["is_incognito"]) if session is not None else bool(incognito)
     message_id = None
     if session is not None and session["deleted_at"] is None:
         if content:
@@ -228,14 +261,78 @@ def recover_stale(session_id: str | None = None) -> int:
 def _recover(rows) -> int:
     for row in rows:
         session = db.one("SELECT user_id FROM chat_sessions WHERE id=?", (row["session_id"],))
-        if session is None:
+        user_id = session["user_id"] if session is not None else row["user_id"]
+        if user_id is None:  # a lease from before leases named their account, of an erased chat
             db.execute("DELETE FROM active_streams WHERE session_id=?", (row["session_id"],))
             continue
         content = row["partial_content"] or ""
+        # The last checkpoint's usage (the whole prompt, provider counts), at least an estimate of what was saved.
         prompt = db.scalar("SELECT length(content) FROM chat_messages WHERE id=?", (row["user_message_id"],), 0)
-        _commit(row["session_id"], user_id=session["user_id"], content=content, state="interrupted", error="",
-                model_id=row["model_id"], tokens_in=(prompt + 3) // 4 if content else 0,
-                tokens_out=estimate_tokens(content), usage_estimated=True,
+        tokens_in = max(row["tokens_in"] or 0, (prompt + 3) // 4)
+        tokens_out = max(row["tokens_out"] or 0, estimate_tokens(content))
+        charge = bool(content) or bool(row["tokens_out"])
+        _commit(row["session_id"], user_id=user_id, content=content, state="interrupted", error="",
+                model_id=row["model_id"], tokens_in=tokens_in if charge else 0,
+                tokens_out=tokens_out, usage_estimated=True,
                 duration_ms=int(max(0.0, row["heartbeat_at"] - (row["started_at"] or row["heartbeat_at"])) * 1000),
-                queue_wait_ms=0, charge=bool(content))
+                queue_wait_ms=0, charge=charge, incognito=bool(row["is_incognito"]))
+    return len(rows)
+
+
+# ----- API and playground answers ------------------------------------------------------------------------------
+
+def open_completion(user_id: str, *, request_type: str, token_id=None, model_id=None, queue_wait_ms: int = 0) -> str:
+    """Record an API answer that started; returns its lease id (known only to its process)."""
+    lease_id = uuid.uuid4().hex
+    now = time.time()
+    db.execute("INSERT INTO completion_leases (id, user_id, token_id, request_type, model_id, queue_wait_ms, "
+               "started_at, heartbeat_at) VALUES (?,?,?,?,?,?,?,?)",
+               (lease_id, user_id, token_id, request_type, _existing_model(model_id), max(0, int(queue_wait_ms)),
+                now, now))
+    return lease_id
+
+
+def checkpoint_completion(lease_id: str, *, model_id, tokens_in: int, tokens_out: int) -> bool:
+    """Renew the lease with the usage to charge if the answer ended now. False when it was recovered elsewhere."""
+    return db.execute("UPDATE completion_leases SET heartbeat_at=?, model_id=?, tokens_in=?, tokens_out=? WHERE id=?",
+                      (time.time(), _existing_model(model_id), max(0, int(tokens_in)), max(0, int(tokens_out)),
+                       lease_id)).rowcount == 1
+
+
+def close_completion(lease_id: str) -> bool:
+    """Drop the lease of an answer that is being charged (join the charge's transaction). False when recovery
+    already charged it."""
+    return db.execute("DELETE FROM completion_leases WHERE id=?", (lease_id,)).rowcount == 1
+
+
+def expire_completion(lease_id: str) -> bool:
+    """Give the lease up now (its process is exiting): recovery charges its last record at once."""
+    return db.execute("UPDATE completion_leases SET heartbeat_at=0 WHERE id=?", (lease_id,)).rowcount == 1
+
+
+def recover_completions() -> int:
+    """Charge the last record of API answers whose process died, and record their metrics."""
+    if db.one("SELECT 1 FROM completion_leases WHERE heartbeat_at<? LIMIT 1", (_cutoff(),)) is None:
+        return 0
+    with db.transaction():
+        rows = db.query("SELECT * FROM completion_leases WHERE heartbeat_at<? LIMIT 200", (_cutoff(),))
+        for row in rows:
+            db.execute("DELETE FROM completion_leases WHERE id=?", (row["id"],))
+            user_exists = db.one("SELECT 1 FROM users WHERE id=?", (row["user_id"],)) is not None
+            if not user_exists:
+                continue
+            model_id = _existing_model(row["model_id"])
+            token_id = row["token_id"]
+            if token_id is not None and not db.one("SELECT 1 FROM api_tokens WHERE id=?", (token_id,)):
+                token_id = None
+            tokens_in, tokens_out = row["tokens_in"] or 0, row["tokens_out"] or 0
+            if tokens_in or tokens_out:
+                credits.charge(row["user_id"], tokens_in, tokens_out, request_type=row["request_type"],
+                               model_id=model_id, token_id=token_id, usage_estimated=True)
+            ended = max(row["heartbeat_at"], row["started_at"] or 0)
+            metrics.record_request(row["request_type"], model_id=model_id, user_id=row["user_id"],
+                                   tokens_in=tokens_in, tokens_out=tokens_out,
+                                   duration_ms=int(max(0.0, ended - (row["started_at"] or ended)) * 1000),
+                                   queue_wait_ms=row["queue_wait_ms"] or 0,
+                                   status="stopped" if tokens_out else "error", usage_estimated=True)
     return len(rows)

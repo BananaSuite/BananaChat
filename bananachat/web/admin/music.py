@@ -1,4 +1,4 @@
-"""Administration of the music program: settings, tracks and participants."""
+"""Administration of the music programme: settings, tracks and participants."""
 
 from __future__ import annotations
 
@@ -163,7 +163,7 @@ def music_settings():
         return _redirect("settings")
     site_settings.update(**values)
     _audit("settings", details=values)
-    flash("Music program settings saved.", "success")
+    flash("Music programme settings saved.", "success")
     return _redirect("settings")
 
 
@@ -172,7 +172,7 @@ def music_settings():
 def music_hide():
     site_settings.update(music_visible=0)
     _audit("hide")
-    flash("The program is hidden. Participants keep their bonus and can still leave from the Free quota page.", "info")
+    flash("The programme is hidden. Participants keep their bonus and can still leave from the Free quota page.", "info")
     return _redirect("settings")
 
 
@@ -181,7 +181,7 @@ def music_hide():
 def music_remove():
     count = music_db.remove_program()
     _audit("remove", details={"opted_out": count})
-    flash(f"Program removed: it is disabled and {count} account(s) were opted out.", "info")
+    flash(f"Programme removed: it is disabled and {count} account(s) were opted out.", "info")
     return _redirect("settings")
 
 
@@ -291,10 +291,10 @@ def music_participant(user_id, action):
         message = f"{target['username']} is enrolled and cannot leave by themselves."
     elif action == "release":
         music_db.set_participation(user_id, bool(target["music_opted_in"]), forced=False)
-        message = f"{target['username']} can now leave the program by themselves."
+        message = f"{target['username']} can now leave the programme by themselves."
     else:
         music_db.set_participation(user_id, False)
-        message = f"{target['username']} was removed from the program."
+        message = f"{target['username']} was removed from the programme."
     _audit(action.replace("-", "_"), user_id, {"username": target["username"]})
     flash(message, "success")
     return _participants_redirect()
@@ -306,7 +306,7 @@ def music_opt_in_all():
     with db.transaction():
         count = music_db.opt_in_everyone()
     _audit("opt_in_all", details={"count": count})
-    flash(f"{count} account(s) joined the program. They can leave again while leaving is allowed.", "success")
+    flash(f"{count} account(s) joined the programme. They can leave again while leaving is allowed.", "success")
     return _redirect("participants")
 
 
@@ -315,5 +315,5 @@ def music_opt_in_all():
 def music_opt_out_all():
     count = music_db.opt_out_everyone()
     _audit("opt_out_all", details={"count": count})
-    flash(f"{count} account(s) left the program.", "success")
+    flash(f"{count} account(s) left the programme.", "success")
     return _redirect("participants")

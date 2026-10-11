@@ -22,6 +22,11 @@ from .v17_claude_pool_safety import upgrade as v17_claude_pool_safety
 from .v18_limit_controls import upgrade as v18_limit_controls
 from .v19_external_providers import upgrade as v19_external_providers
 from .v20_worker_offline_warning import upgrade as v20_worker_offline_warning
+from .v21_remove_claude_connector import upgrade as v21_remove_claude_connector
+from .v22_api_token_scopes import upgrade as v22_api_token_scopes
+from .v23_external_provider_presets import upgrade as v23_external_provider_presets
+from .v24_two_step import upgrade as v24_two_step
+from .v25_run_owner_worker_backoff import upgrade as v25_run_owner_worker_backoff
 
 # The on-disk identity of BananaChat databases. The value is ASCII "BAIA" and
 # dates from when the project was named BananaAI; every existing database
@@ -49,6 +54,11 @@ MIGRATIONS = (
     v18_limit_controls,
     v19_external_providers,
     v20_worker_offline_warning,
+    v21_remove_claude_connector,
+    v22_api_token_scopes,
+    v23_external_provider_presets,
+    v24_two_step,
+    v25_run_owner_worker_backoff,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

@@ -165,10 +165,6 @@ def validate_rules(rules) -> list[dict]:
     return sorted(clean, key=lambda rule: UNITS[rule["per"]])
 
 
-def rule_per_second(rule: dict) -> float:
-    return float(rule["requests"]) / UNITS[rule["per"]]
-
-
 def validate_policy(config: dict) -> dict:
     """A complete, normalised copy of *config*. Raises ValueError with a readable message."""
     if not isinstance(config, dict):
@@ -485,14 +481,6 @@ def overrides_of(user_ids) -> dict[tuple[str, str], Override]:
         f"{_OVERRIDE_SELECT} WHERE user_id IN ({','.join('?' for _ in user_ids)})", user_ids)}
 
 
-def tier_ids_of(user_ids) -> dict[str, int | None]:
-    user_ids = list(user_ids)
-    if not user_ids:
-        return {}
-    return {row["user_id"]: row["tier_id"] for row in db.query(
-        f"SELECT user_id, tier_id FROM user_limits WHERE user_id IN ({','.join('?' for _ in user_ids)})", user_ids)}
-
-
 def validate_override(values: dict) -> dict:
     """Check custom limit values (None clears one; an empty rule list clears the rate)."""
     clean = {}
@@ -704,13 +692,6 @@ def set_effort_level(user_id: str, model_id: int | None, level: str | None, *, p
             db.execute("INSERT INTO user_effort_levels (user_id, model_id, level, pinned, source, updated_at, "
                        "updated_by) VALUES (?,?,?,?,?,?,?)",
                        (user_id, model_id, level, int(bool(pinned)), source, db.now(), updated_by))
-
-
-def clear_effort_levels(model_id: int | None = None, *, everyone: bool = False) -> int:
-    """Remove the effort levels of every account for one model (or for all models with *everyone*)."""
-    if everyone:
-        return db.execute("DELETE FROM user_effort_levels").rowcount
-    return db.execute("DELETE FROM user_effort_levels WHERE IFNULL(model_id, 0)=?", (model_id or 0,)).rowcount
 
 
 def effort_candidates(since: str, clean_since: str):
@@ -973,13 +954,6 @@ def clear_buckets(user_id: str | None = None) -> None:
         db.execute("DELETE FROM rate_buckets WHERE key LIKE ? ESCAPE '\\'", (f"%:{pattern}:%",))
 
 
-def custom_rule_sets() -> list[list[dict]]:
-    """Every custom rate-rule list (per pool and per model), to know how long buckets take to refill."""
-    rows = db.query("SELECT rate_rules FROM user_limit_overrides WHERE rate_rules IS NOT NULL UNION ALL "
-                    "SELECT rate_rules FROM user_model_limits WHERE rate_rules IS NOT NULL")
-    return [list(rules) for rules in (_rules_column(row[0]) for row in rows) if rules]
-
-
 def purge_buckets(idle_seconds: float, now: float) -> int:
     """Forget buckets idle long enough to be full again (a missing bucket counts as full)."""
     return db.execute("DELETE FROM rate_buckets WHERE updated_at<?", (now - idle_seconds,)).rowcount
@@ -1041,11 +1015,6 @@ def close_windows(user_id: str | None, *, weekly: bool) -> None:
         db.execute(f"UPDATE limit_windows SET {assignment}")
     else:
         db.execute(f"UPDATE limit_windows SET {assignment} WHERE user_id=?", (user_id,))
-
-
-def global_resets() -> tuple[str | None, str | None]:
-    row = db.one("SELECT limits_usage_reset_at, limits_weekly_reset_at FROM site_settings WHERE id=1")
-    return (row[0], row[1]) if row else (None, None)
 
 
 def reset_usage(user_id: str | None, *, weekly: bool, updated_by: str | None) -> None:

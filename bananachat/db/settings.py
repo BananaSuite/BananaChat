@@ -43,6 +43,8 @@ COLUMNS = frozenset({
     "community_max_pledge_percent", "quota_fallback_to_local", "quota_fallback_to_cloud",
     # Chat usage can be recorded without consuming token limits (schema version 15).
     "chat_local_token_consumption", "chat_cloud_token_consumption",
+    # Administrators must use two-step verification (schema version 24).
+    "admin_two_step_required",
 })
 
 # Retained schema columns are accepted for older callers but cannot restore a

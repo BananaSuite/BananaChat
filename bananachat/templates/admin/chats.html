@@ -44,25 +44,34 @@
 {% else %}
 <p class="muted">{{ total | number }} chat{{ "" if total == 1 else "s" }}</p>
 <div class="table-wrap">
-  <table class="table">
+  <table class="table table-stack table-stack-md">
     <thead><tr><th scope="col">Title</th><th scope="col">User</th><th scope="col">Messages</th><th scope="col">Updated</th><th scope="col">Status</th><th scope="col" class="actions">Actions</th></tr></thead>
     <tbody>
       {% for row in rows %}
       <tr>
-        <td><a href="{{ url_for('admin.chat_view', session_id=row.id) }}">{{ row.title if row.title and row.title != "New Chat" else "Untitled chat" }}</a></td>
-        <td>{{ row.username }}</td>
-        <td>{{ row.message_count | number }}</td>
-        <td><time datetime="{{ row.updated_at }}" title="{{ row.updated_at | datetime }}">{{ row.updated_at | timeago }}</time></td>
+        {%- set chat_title = row.title if row.title and row.title != "New Chat" else "Untitled chat" %}
+        <td class="cell-full"><a href="{{ url_for('admin.chat_view', session_id=row.id) }}">{{ chat_title }}</a></td>
+        <td data-label="User:">{{ row.username }}</td>
+        <td data-label="Messages:">{{ row.message_count | number }}</td>
+        <td class="nowrap" data-label="Updated:"><time datetime="{{ row.updated_at }}" title="{{ row.updated_at | datetime }}">{{ row.updated_at | timeago }}</time></td>
         <td>
           {% if row.deleted_at %}<span class="badge badge-danger">Deleted</span>{% endif %}
           {% if row.is_incognito %}<span class="badge badge-info">No history</span>{% endif %}
           {% if row.shared %}<span class="badge badge-primary">Shared</span>{% endif %}
+          {% if row.share_blocked %}<span class="badge badge-warning">Sharing blocked</span>{% endif %}
           {% if row.generation_state in ("queued", "running") %}<span class="badge badge-warning">Generating</span>{% endif %}
         </td>
         <td class="actions">
+          {% if row.shared %}
+          <form method="post" action="{{ url_for('admin.chat_unshare', session_id=row.id) }}" data-confirm="Stop sharing this chat? Its public link stops working and its owner cannot share it again until you allow it; the chat itself is kept." data-confirm-label="Stop sharing">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" value="list">
+            <button type="submit" class="btn btn-sm" aria-label="Stop sharing {{ row.title if row.title and row.title != 'New Chat' else 'Untitled chat' }}">{{ icon("share") }}Stop sharing</button>
+          </form>
+          {% endif %}
           <form method="post" action="{{ url_for('admin.chat_delete', session_id=row.id) }}" data-confirm="Permanently delete this chat and its messages? This cannot be undone." data-confirm-label="Delete" data-confirm-danger>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-danger btn-sm">{{ icon("trash") }}Delete</button>
+            <button type="submit" class="btn btn-danger btn-sm" aria-label="Delete {{ chat_title }}">{{ icon("trash") }}Delete</button>
           </form>
         </td>
       </tr>

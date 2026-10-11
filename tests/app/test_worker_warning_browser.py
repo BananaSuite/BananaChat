@@ -14,7 +14,7 @@ from tests.app.fixtures import Browser
 from tests.app.test_chat import setup_models
 from tests.app.test_review2_chat import _chromium
 
-MODEL = "warning-test-sonnet"
+MODEL = "warning-test-model"
 DAY_MS = 24 * 60 * 60 * 1000
 WORKER = "#status-region [data-worker-warning='1']"
 HIDE = "#status-region [data-hide-worker-status]"
@@ -34,11 +34,12 @@ def chromium():
 
 @pytest.fixture
 def worker_browser(app, make_user, monkeypatch, chromium):
-    """An actual HTTP server and browser with synthetic Claude and offline compute."""
+    """An actual HTTP server and browser with a synthetic hosted provider and offline compute."""
     from werkzeug.serving import make_server
 
-    from bananachat.db import catalog, claude_pool as accounts
-    from bananachat.services import claude_pool, health
+    from bananachat.db import catalog, external_providers as provider_store
+    from bananachat.services import external_providers, health
+    from bananachat.services.ollama import Chunk
 
     setup_models(app)
     make_user("alice")
@@ -47,14 +48,17 @@ def worker_browser(app, make_user, monkeypatch, chromium):
     state = {"down": True}
     monkeypatch.setattr(health, "inference_down", lambda *args: state["down"])
     monkeypatch.setattr(health, "status", lambda: {"since": None})
-    monkeypatch.setattr(claude_pool, "_site_discovery", lambda: [
-        {"name": MODEL, "display": "Claude Sonnet", "family": "sonnet", "reasoning": ["low", "medium"]}])
-    monkeypatch.setattr(claude_pool, "_site_chat", lambda *args: iter([
-        {"text": "Hosted Claude still answers.", "tokens_in": 8, "tokens_out": 5, "done": True}]))
+    monkeypatch.setattr(external_providers, "stream", lambda *args, **kwargs: iter([
+        Chunk(content="The hosted model still answers.", done=True, finish_reason="stop", prompt_tokens=8,
+              completion_tokens=5)]))
     with app.app_context():
-        accounts.add_account("Synthetic account", window_limit=100_000)
-        claude_pool.sync_catalog(selected=[MODEL], source="admin")
-        catalog.set_rollout(catalog.get_by_name(MODEL)["id"], True)
+        provider_id = provider_store.save(name="Synthetic provider", protocol="openai",
+                                          base_url="https://provider.invalid/v1")
+        model = external_providers.enroll(provider_store.get(provider_id), MODEL, display="Hosted model",
+                                          reasoning=["low", "medium"], manual=True)
+        catalog.set_lifecycle(model["id"], enrollment="reviewed")
+        catalog.set_rollout(model["id"], True)
+        model_name = model["ollama_name"]
     server = make_server("127.0.0.1", 0, app, threaded=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -72,7 +76,7 @@ def worker_browser(app, make_user, monkeypatch, chromium):
         contexts.append(context)
         if username is not None:
             authenticate(context, username)
-        context.add_init_script(f"try {{ localStorage.setItem('bc-chat-model', {json.dumps(MODEL)}); }} catch {{}}")
+        context.add_init_script(f"try {{ localStorage.setItem('bc-chat-model', {json.dumps(model_name)}); }} catch {{}}")
         if init_script:
             context.add_init_script(init_script)
         page = context.new_page()
@@ -81,7 +85,8 @@ def worker_browser(app, make_user, monkeypatch, chromium):
         page.wait_for_selector("#chat-input" if username is not None else "#username")
         return page
 
-    yield SimpleNamespace(app=app, state=state, base=base, open_page=open_page, authenticate=authenticate)
+    yield SimpleNamespace(app=app, state=state, base=base, open_page=open_page, authenticate=authenticate,
+                          model=model_name)
     for context in contexts:
         context.close()
     server.shutdown()
@@ -173,7 +178,7 @@ def test_hiding_blocking_outage_does_not_enable_sending_or_bypass_http_guard(wor
     from bananachat.db import catalog, settings
 
     with worker_browser.app.app_context():
-        catalog.set_rollout(catalog.get_by_name(MODEL)["id"], False)
+        catalog.set_rollout(catalog.get_by_name(worker_browser.model)["id"], False)
     page = worker_browser.open_page()
     assert _status(page)["can_send"] is False
     assert page.locator("#send-button").is_disabled()
@@ -196,7 +201,7 @@ def test_hiding_blocking_outage_does_not_enable_sending_or_bypass_http_guard(wor
     assert result["status"] == 503 and result["body"]["error"]["code"] == "outage"
 
 
-def test_hosted_claude_can_answer_while_worker_notice_is_hidden(worker_browser):
+def test_hosted_model_can_answer_while_worker_notice_is_hidden(worker_browser):
     page = worker_browser.open_page()
     assert _status(page)["can_send"] is True
     assert page.locator("#chat-input").is_enabled()
@@ -204,7 +209,7 @@ def test_hosted_claude_can_answer_while_worker_notice_is_hidden(worker_browser):
     page.fill("#chat-input", "Can you answer with all workers offline?")
     page.click("#send-button")
     page.wait_for_selector(".message-assistant:not(.is-pending)", timeout=15000)
-    assert "Hosted Claude still answers." in page.inner_text("#chat-messages")
+    assert "The hosted model still answers." in page.inner_text("#chat-messages")
     assert not _visible(page)
 
 
@@ -325,3 +330,30 @@ def test_worker_hide_button_is_translated_keyboard_accessible_and_fits(worker_br
     page.keyboard.press("Enter")
     assert not _visible(page)
     assert page.locator("#chat-input").is_enabled()
+
+
+_CENTRES = """banner => {
+    const middle = element => { const box = element.getBoundingClientRect(); return box.top + box.height / 2; };
+    const title = banner.querySelector('.status-title'), text = banner.querySelector('.status-text');
+    return {
+        title: middle(title), text: middle(text), icon: middle(banner.querySelector('.status-icon svg')),
+        buttons: [...banner.querySelectorAll('.status-actions > .btn')].map(middle),
+        one_line: text.getBoundingClientRect().top < title.getBoundingClientRect().bottom,
+    };
+}"""
+
+
+@pytest.mark.parametrize("username, scale", [("admin", 1), ("alice", 1), ("admin", 1.35)])
+def test_a_one_line_worker_notice_is_centred_on_its_buttons(worker_browser, username, scale):
+    """Desktop: the notice text, its icon and the Details / Hide buttons share one centre line."""
+    page = worker_browser.open_page(username, width=1440)
+    if scale != 1:  # the largest text size in Customize, with a line short enough to stay on one row
+        page.evaluate(f"document.documentElement.style.setProperty('--font-scale', '{scale}')")
+        page.locator(f"{WORKER} .status-text").evaluate("element => { element.textContent = 'Hosted models answer.'; }")
+    centres = page.locator(WORKER).evaluate(_CENTRES)
+    assert centres["one_line"]
+    assert len(centres["buttons"]) == (2 if username == "admin" else 1)
+    for button in centres["buttons"]:
+        assert abs(centres["title"] - button) <= 1, centres
+        assert abs(centres["text"] - button) <= 1.5, centres  # baseline-aligned, so a font may shift it
+    assert abs(centres["icon"] - centres["title"]) <= 1, centres

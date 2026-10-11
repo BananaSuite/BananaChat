@@ -32,7 +32,7 @@ SCOPE_LABELS = {
     "uncensored": "Uncensored models",
     "image_generation": "Image generation",
     "custom_personality": "Custom personalities",
-    "agents": "Agents",
+    "agents": "Cloud sessions",
     "category": "Category",
     "model": "Model",
 }

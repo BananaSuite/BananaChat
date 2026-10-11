@@ -42,6 +42,11 @@
       <label class="check"><input type="checkbox" name="is_reasoning" value="1"{{ checked('is_reasoning') }}><span>Reasoning model<small>Shows its thinking separately and gets a reasoning toggle.</small></span></label>
       {% endif %}
       <label class="check"><input type="checkbox" name="is_uncensored" value="1"{{ checked('is_uncensored') }}><span>Uncensored<small>Only users allowed by the “Uncensored models” access rule can use it.</small></span></label>
+      {% if model.backend == "external" %}
+      <p class="hint mt-1 mb-0">Images, tools and reasoning levels of this model are set with its provider on the <a href="{{ url_for('admin.external_providers') }}">External APIs</a> page.{% if limits_url %} <a href="{{ limits_url }}">Fine-tune this model's limits</a>.{% endif %}</p>
+      {% elif model.is_image_generation %}
+      <p class="hint mt-1 mb-0">Categories and access rules decide who may generate images with this checkpoint.</p>
+      {% endif %}
     </fieldset>
   </section>
 
@@ -97,6 +102,9 @@
     <div class="badge-row">{% for badge in badges %}<span class="badge{% if badge.tone %} badge-{{ badge.tone }}{% endif %}"{% if badge.title %} title="{{ badge.title }}"{% endif %}>{{ badge.label }}</span>{% else %}<span class="badge badge-success">Active</span>{% endfor %}</div>
   </div>
   {% if model.state_reason %}<p class="small muted mb-0">{{ model.state_reason }}{% if model.state_changed_at %} <span class="faint">({{ when(model.state_changed_at) }})</span>{% endif %}</p>{% endif %}
+  {% if not text_model %}
+  <p class="small muted mb-0">{{ "Checkpoint on ComfyUI" if model.backend == "comfyui" else "Model of an external API provider" }} · {{ "available" if model.backend_available else "not available" }}{% if model.backend_last_seen_at %}, last seen {{ when(model.backend_last_seen_at) }}{% endif %}.</p>
+  {% endif %}
 
   {% if text_model %}
   <dl class="command-list">
@@ -153,18 +161,29 @@
   <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" class="stack">
     {{ csrf() }}
     {% if model.retired_at %}
+    {% if model.is_image_generation %}
+    <p class="small mb-0">Retired {{ when(model.retired_at) }}. It is hidden from users and requests that name it are refused.</p>
+    {% else %}
     <p class="small mb-0">Retired {{ when(model.retired_at) }}{% if replacement %}; chats move to <strong>{{ replacement.display_name }}</strong>{% endif %}. The API refuses it.</p>
+    {% endif %}
     <div class="form-actions form-actions-start"><button type="submit" name="action" value="undeprecate" class="btn btn-sm">Restore</button></div>
     {% else %}
+    {% if model.is_image_generation %}
+    <p class="small muted mb-0">A deprecated checkpoint is left out of the image picker and of the automatic choice while another checkpoint is available. Requests that name it keep working until it is retired.</p>
+    {% else %}
     <p class="small muted mb-0">A deprecated model is hidden from the chat picker; chats that select it move to the replacement with a notice. The API keeps serving it until it is retired.</p>
+    {% endif %}
     <div class="form-grid">
+      {#- Chats and personalities move to a replacement; image requests never do, so checkpoints have none. -#}
+      {% if not model.is_image_generation %}
       <div class="field">
         <label for="replacement">Replacement</label>
         <select id="replacement" name="replacement_id">
-          <option value="">No replacement (best available model)</option>
+          <option value="">Best available model</option>
           {% for other in replacements %}<option value="{{ other.id }}"{% if other.id == model.replacement_id %} selected{% endif %}>{{ other.display_name }} ({{ other.ollama_name }})</option>{% endfor %}
         </select>
       </div>
+      {% endif %}
       {{ utc_input("retire_at", "retire-at", "Retire on", "After this moment it is retired automatically. Leave empty to retire it by hand.", (model.retire_at | replace(" ", "T"))[:16] if model.retire_at else "", utc_min) }}
       <div class="field">
         <label for="deprecation-note">Note</label>
@@ -173,13 +192,15 @@
     </div>
     <div class="form-actions form-actions-start">
       <button type="submit" name="action" value="deprecate" class="btn btn-sm">{{ "Save deprecation" if model.deprecated_at else "Deprecate" }}</button>
-      {% if model.deprecated_at %}<button type="submit" name="action" value="undeprecate" class="btn btn-sm btn-ghost" formnovalidate>No longer deprecated</button>{% endif %}
+      {% if model.deprecated_at %}<button type="submit" name="action" value="undeprecate" class="btn btn-sm" formnovalidate>Undo deprecation</button>{% endif %}
+      {#- Its own (hidden) form, for its confirmation; the button sits with the other lifecycle actions. -#}
+      <button type="submit" form="retire-{{ model.id }}" name="action" value="retire" class="btn btn-sm btn-danger">Retire now</button>
     </div>
     {% endif %}
   </form>
   {% if not model.retired_at %}
-  <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" data-confirm="Retire {{ model.display_name }} now? It is hidden, chats move to its replacement and the API refuses it." data-confirm-danger>
-    {{ csrf() }}<button type="submit" name="action" value="retire" class="btn btn-sm btn-danger">Retire now</button>
+  <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" id="retire-{{ model.id }}" hidden data-confirm="Retire {{ model.display_name }} now? {% if model.is_image_generation %}It is hidden from users and requests that name it are refused.{% else %}It is hidden, chats move to its replacement and the API refuses it.{% endif %}" data-confirm-danger>
+    {{ csrf() }}
   </form>
   {% endif %}
   </div>
@@ -206,7 +227,7 @@
   </div>
   {% endif %}
 
-  <div>
+  <div class="sub-card stack">
     <h3>History</h3>
     {% if events %}
     <ul class="plain-list event-list divider-list">

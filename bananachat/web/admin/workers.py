@@ -1,4 +1,7 @@
-"""Workers: register volunteer worker PCs, watch them, enable, disable and remove them."""
+"""Workers: register volunteer worker PCs, watch them, enable, disable and remove them.
+
+Registering one issues a lasting token whose worker reads the prompts routed to it, so it needs a
+recent confirmation (:mod:`._reauth`), as creating an administrator does."""
 
 from __future__ import annotations
 
@@ -10,7 +13,7 @@ from bananachat.db import workers as store
 from bananachat.security import admin_required
 from bananachat.services import remote
 
-from . import bp
+from . import _reauth, bp
 
 
 def _audit(action: str, target: str, details=None) -> None:
@@ -59,7 +62,14 @@ def workers_data():
 @admin_required
 def workers_register():
     payload = request.get_json(silent=True) if request.is_json else None
-    name = (payload or {}).get("name") if payload is not None else request.form.get("name")
+    fields = payload if isinstance(payload, dict) else {}
+    name = fields.get("name") if payload is not None else request.form.get("name")
+    problem = _reauth.refusal(fields.get("reauth_secret") if payload is not None else None)
+    if problem:
+        if security.wants_json():
+            return security.json_error(problem, 403, "reauth_required")
+        flash(problem, "error")
+        return redirect(url_for("admin.workers"))
     try:
         with db.transaction():
             worker_id, token = remote.register_worker(name)

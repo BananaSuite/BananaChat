@@ -750,6 +750,33 @@ def test_retention_deletes_old_tasks_and_their_sandboxes(env, runner):
     assert sandbox["id"] in runner.deleted
 
 
+def test_retention_keeps_a_task_resumed_after_it_was_listed(env, runner, monkeypatch):
+    from bananachat import db
+    from bananachat.db import agents as agents_db
+    from bananachat.services.agents import runner as runner_mod
+    from bananachat.services.agents import service
+
+    task_id = "e" * 32
+    with env.app.app_context():
+        sandbox = runner_mod.client().create(task_id)
+        agents_db.create(task_id, user_id=env.user["id"], title="t", prompt="p", model_id=None, model_name="m",
+                         swarm=False, owner_token="token", max_user=9, max_site=9)
+        agents_db.finish(task_id, "token", "finished")
+        db.execute("UPDATE agent_tasks SET finished_at=?, sandbox_id=? WHERE id=?",
+                   (db.now(-timedelta(days=40)), sandbox["id"], task_id))
+        listed = agents_db.old_tasks
+
+        def listed_then_resumed(cutoff, limit=200):
+            rows = listed(cutoff, limit)
+            db.execute("UPDATE agent_tasks SET owner_token='follow-up' WHERE id=?", (task_id,))
+            return rows
+
+        monkeypatch.setattr(agents_db, "old_tasks", listed_then_resumed)
+        assert service.purge_old_tasks() == 0
+        assert agents_db.get(task_id) is not None
+    assert sandbox["id"] not in runner.deleted
+
+
 # ----- pages ------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("language", ["en", "it"])
@@ -776,8 +803,9 @@ def test_pages_render_in_both_languages(env, fake_ollama, language):
     assert [step["kind"] for step in events["steps"]][0] == "user"
     last = events["steps"][-1]["id"]
     assert env.browser.get(f"/agents/{task_id}/events?after={last}").get_json()["steps"] == []
+    assert env.browser.get(f"/agents/{task_id}/events?after={'9' * 30}").status_code == 200
     listing = env.browser.get("/agents").get_data(as_text=True)
-    assert ("Finished" if language == "en" else "Completato") in listing
+    assert ("Finished" if language == "en" else "Completata") in listing
 
 
 def test_i18n_catalog_has_identical_keys():
@@ -852,6 +880,7 @@ def test_admin_kill_switch_and_task_log(agents_app, runner, fake_ollama):
     assert time.monotonic() - started < 6
     page = admin.get(f"/admin/agents/tasks/{ids[0]}").get_data(as_text=True)
     assert "Build it" in page and "An administrator stopped the session." in page
+    assert admin.get(f"/admin/agents/tasks/{ids[0]}?after={'9' * 30}").status_code == 200
     from bananachat import db
     with app.app_context():
         assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='admin.agents.stop_all'") == 1

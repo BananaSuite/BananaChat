@@ -4,7 +4,9 @@ BananaChat reads its configuration from environment variables when it
 starts. Managed installations keep them in `/opt/bananachat/config/app.env`
 (apply changes with `sudo bananachat restart`); for a manual installation,
 export them or use your process supervisor's environment file.
-[`.env.sample`](../.env.sample) lists every variable with its default.
+[`.env.example`](../.env.example) lists every variable of the web server and
+the compute gateway with its default (the sandbox runner and the worker
+daemon are described in [agents](agents.md) and [workers](workers.md)).
 
 Everything has a safe default, so an update never requires new settings. An
 invalid value does not stop the server: it is replaced by the default (or
@@ -19,7 +21,7 @@ out-of-range value stops the start with an error naming the variable.
 Booleans accept `1/0`, `true/false`, `yes/no` and `on/off`.
 
 Settings that administrators change in the browser (site name, sign-up,
-maintenance mode, theme, quotas, access policies, the music program) are
+maintenance mode, theme, quotas, access policies, the music programme) are
 stored in the database, not here. Maintenance mode and AI-server outages never
 close the site: users can sign in and read their chats. Maintenance pauses new
 answers; a local model-server outage still permits accessible hosted models.
@@ -39,7 +41,7 @@ that the choice lasts for the current page only.
 
 Hiding a notice does not change `/status`, maintenance, access checks, quotas or
 model availability. An unavailable local backend still refuses generation;
-published, accessible Claude or external models can continue answering.
+published, accessible external API models can continue answering.
 
 ### Limits
 
@@ -65,7 +67,7 @@ Usage limits have no environment variables: administrators set them in
     service, shared by every API key, the playground, chat and agents;
   * **tokens per 5 hours**: a window opens with the account's first request
     and lasts 5 hours, then the single allowance is full again. Once it is
-    spent, further requests that count toward it are refused until the reset
+    spent, further requests that count towards it are refused until the reset
     or an approved increase; there is no slow-token spillover;
   * **tokens per week** (off by default): a rolling week that starts with the
     first request after the previous week ended. Both enabled token limits
@@ -80,7 +82,7 @@ Usage limits have no environment variables: administrators set them in
   (bursts of 10), without token limits.
 * **Models** - each model has a **weight** (usage counts tokens × weight
   against the service limits: a heavy model ×3 uses the allowance three times
-  as fast), whether it **counts toward the service limits** (on by default for
+  as fast), whether it **counts towards the service limits** (on by default for
   models served here, off by default for models of other providers), and
   optional limits of its own (request-rate rules, tokens per 5 hours and per
   week, counted over every service, with a demand *sensitivity*: 2 doubles
@@ -88,7 +90,7 @@ Usage limits have no environment variables: administrators set them in
   *light* (×0.5, no model limits), *standard* (×1) and *heavy* (×3, 6
   requests a minute and 200 a day, 200k tokens per 5 hours, sensitivity 2,
   reasoning up to Low). A model nobody configured follows the preset the
-  catalog gives it (`ai_models.limit_preset`), else *standard*.
+  catalogue gives it (`ai_models.limit_preset`), else *standard*.
 * **Reasoning effort** - levels `off < low < medium < high < extra < max`, as each
   model supports them. Everyone may use up to the default (Medium, or the
   model's own default); higher levels are unlocked for one account (one model
@@ -109,7 +111,7 @@ Usage limits have no environment variables: administrators set them in
   everyone, for one service, all services or one model, for 1 hour, 24 hours,
   7 days, until a date, or forever. Unlimited use for every service also lifts
   the models' own limits; other grants for services leave them alone.
-* **Music program** - Admin → Music can offer participants a token multiplier
+* **Music programme** - Admin → Music can offer participants a token multiplier
   or fixed extra tokens. Fixed bonuses for the five-hour and weekly allowances
   can be set independently. An unset weekly bonus follows seven times the
   five-hour bonus; upgrades preserve the previous weekly bonus separately,
@@ -141,35 +143,9 @@ request rates. A per-account model exemption removes only that model's own
 token or rate limits; the service allowance and request rate still apply.
 Models also have independent token/rate switches globally. Exemptions preserve
 usage recording, access rules, model locks, reasoning controls and provider
-availability: they never create capacity on an exhausted Claude subscription.
+availability: they never create capacity on an exhausted provider.
 Request-rate exemptions cover these quota policy rules; image generation's
 separate safety RPM cap, queue capacity and execution timeouts still apply.
-
-### Claude provider extension
-
-`BC_CLAUDE_EXTENSION` names an operator-installed Python module exporting
-`create_adapter(config)` with cancellable chat, discovery and quota callbacks.
-It is empty by default, leaving Claude disconnected. Invalid configuration or
-adapter initialization clears every callback and keeps the provider disabled.
-The pool stores account labels, local budgets and usage, not credentials.
-
-For the built-in official Claude Code subscription connector, set
-`BC_CLAUDE_EXTENSION=bananachat.services.claude_code` and
-`BC_CLAUDE_CODE_CONFIG` to an absolute path to its private JSON manifest.
-The server operator installs a root-owned standalone CLI, Bubblewrap and
-authenticates private profiles outside the managed installation. Production
-native calls expose only the active profile and public runtime/trust files;
-managed start/restart regenerates the profile directories' narrow writable
-allowances. Web administrators choose profiles and budgets. Shared subscription
-routing requires provider approval. New profiles discover models and native
-subscription usage automatically. Explicit manual model lists and local-only
-usage remain available; failed automatic telemetry never silently selects
-local-only mode. Claude has its own enrollment setting, and unchecked existing
-models stay excluded when automatic enrollment is enabled.
-See [Claude Code setup](claude-code.md)
-for credentials, supported flags, text-only chat and usage observations, and
-[router design](claude-router.md) for the extension contract. Enabling the
-module alone does not prove live authentication or model access.
 
 An account's **slow**, **normal** or **fast** speed setting controls queue
 priority separately from its token allowance. Slow accounts can still be
@@ -183,7 +159,7 @@ usage count together, and open five-hour and weekly windows keep their
 start times: the upgrade does not refill or reset usage. Legacy slow-token
 columns remain as compatibility data for rollback and are inactive in the
 current release. Request rates, weekly and model limits, tiers, dynamic
-adjustment, grants, reasoning settings and other customization are preserved.
+adjustment, grants, reasoning settings and other customisation are preserved.
 
 Automatic approval now compares the requested total against one ceiling.
 The upgrade adds the old configured regular and active slow approval caps;
@@ -212,12 +188,17 @@ See [Architecture → Limits](architecture.md#limits) for the details.
 | --- | --- | --- |
 | `BC_HOST` | `127.0.0.1` | Address the web server listens on. |
 | `BC_PORT` | `8000` | Port the web server listens on. |
-| `BC_PROXY_MODE` | `0` | Trust `X-Forwarded-*` headers from a reverse proxy on the same host. Enable only behind a proxy. |
+| `BC_PROXY_MODE` | `0` | Trust `X-Forwarded-*` headers from a reverse proxy on the same host. They are read only on connections from a loopback address; any other peer keeps its own address. Without it, every visitor behind a same-host proxy shares the proxy's address for sign-in and other per-address limits; a warning is logged once when such forwarded requests arrive. |
 | `BC_PROXY_HOPS` | `1` | Number of trusted proxies in front of the application (1–5). |
-| `BC_SECURE_COOKIES` | same as `BC_PROXY_MODE` | Send the session cookie over HTTPS only. |
-| `BC_SESSION_COOKIE_NAME` | `bc_session` | Session cookie name (change it when sharing a domain). |
+| `BC_SECURE_COOKIES` | same as `BC_PROXY_MODE` | Send the session cookie over HTTPS only. Secure cookies get the `__Host-` prefix (`__Host-bc_session`), so other subdomains of the same domain (such as hosted wikis) cannot set a session for this site. Sessions signed in before the prefix was introduced move to the new cookie on their first visit within a day of the switch, in the browser that signed in, one per account and browser type (User-Agent); after that day, from another browser, or from a second browser of the same type, people sign in again. A warning is logged when proxy mode is on but secure cookies are off. |
+| `BC_SESSION_COOKIE_NAME` | `bc_session` | Session cookie name (change it when sharing a domain). Do not include `__Host-`: it is added for secure cookies. |
+| `BC_LOGIN_ATTEMPTS_PER_MINUTE` | `60` | Sign-in requests per client address (an IPv4 address or an IPv6 /64) and minute. A browser that signed in to the account before has its own allowance. |
+| `BC_LOGIN_FAILURES_PER_ADDRESS` | `20` | Failed sign-ins per client address in 15 minutes before that address is paused. Browsers that signed in to the account before are not affected, so strangers on a shared network (a school or office NAT, mobile CGNAT, a VPN) cannot lock their owners out. Raise it when many people share one public address. |
+| `BC_LOGIN_FAILURES_PER_ACCOUNT` | `10` | Failed sign-ins per account in 15 minutes (counted apart for each browser that signed in to it before). Successful sign-ins never count. |
+| `BC_SIGNUPS_PER_HOUR` | `30` | Accounts created per client address and hour. Raise it when a whole class signs up from one network. |
+| `BC_SIGNUP_FAILURES_PER_HOUR` | `20` | Failed sign-up attempts (wrong invitation code, taken name) per client address and hour. |
 | `BC_SESSION_DAYS` | `7` | Days of inactivity before a sign-in expires. |
-| `BC_SECRET_KEY` / `SECRET_KEY` | generated | Signs session cookies. By default a random key is created once in `<instance>/.secret_key` (mode 0600). Changing it signs everyone out. |
+| `BC_SECRET_KEY` / `SECRET_KEY` | generated | Signs session cookies, and derives the keys that encrypt external provider API keys and authenticator-app secrets. By default a random key is created once in `<instance>/.secret_key` (mode 0600). Changing it signs everyone out, makes stored provider keys unreadable (enter them again) and stops authenticator-app codes from working (those accounts sign in with a recovery code and set two-step verification up again); keep it with the instance data in backups. |
 | `BC_SETUP_TOKEN` | derived from the key | Token required to create the first administrator. Without it, the token is printed in the log until setup is complete. |
 | `BC_PASSWORD_HASH_METHOD` | `auto` | Werkzeug hashing method; `auto` uses scrypt. Older hashes are upgraded at sign-in. |
 | `BC_MIN_FORM_SECONDS` | `0.4` | Sign-in and sign-up forms submitted faster than this are treated as bots. |
@@ -233,6 +214,7 @@ See [Architecture → Limits](architecture.md#limits) for the details.
 | `BC_DATABASE_PATH` | `<instance>/bananachat.db` | SQLite database. |
 | `BC_LOG_FILE` | `<instance>/bananachat.log` | Application log (also written to standard error). |
 | `BC_LOGGING_LEVEL` | `verbose` | `off`, `minimal` (errors), `medium` (warnings), `verbose`, `debug`. |
+| `BC_LOG_FORMAT` | `text` | `text`, or `json` for one JSON object per line with `time`, `level`, `logger`, `message` and, for errors, `exception`. |
 | `BC_DB_BUSY_TIMEOUT_MS` | `5000` | How long a write waits for the database lock (100–30000). |
 | `BC_DB_CACHE_KIB` | `4096` | SQLite page cache per connection (256–65536). |
 | `BC_DB_SYNCHRONOUS` | `FULL` | `FULL` or `NORMAL` durability. |
@@ -243,6 +225,7 @@ See [Architecture → Limits](architecture.md#limits) for the details.
 | --- | --- | --- |
 | `BC_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama server (or a BananaChat compute node). On a managed web server `bananachat backend connect` sets it. |
 | `BC_OLLAMA_API_KEY` | empty | Bearer token for an authenticated compute node or compatible proxy. Sent only over HTTPS or to a loopback address (an SSH tunnel): with a plain `http://` address of another machine it is not sent and a warning is logged. |
+| `BC_OLLAMA_MANAGEMENT_API_KEY` | empty | Sent instead of `BC_OLLAMA_API_KEY` for model downloads and deletions, when the compute gateway requires a separate management token (`BC_COMPUTE_MANAGEMENT_TOKEN_FILE`, see [compute/README.md](../compute/README.md)). On a managed web server, `install --pair` and `bananachat backend connect` set it from the pairing code after checking it against the gateway, and remove it when the code has none. Same HTTPS-or-loopback rule. |
 | `BC_INFERENCE_LOCAL` | automatic | Whether Ollama runs on this machine. Automatically, a URL with `BC_OLLAMA_API_KEY` (a compute gateway, also through an SSH tunnel on `127.0.0.1`) or a non-loopback host is remote, and only a loopback URL without a key is local. Local means: free memory gates requests, the model folder's free space is checked, GPU statistics come from `nvidia-smi` and no outage probing; remote means the opposite. Set `1` or `0` only for unusual setups, such as a local authenticating proxy. |
 | `BC_OLLAMA_SYNC_INTERVAL` | `60` | Seconds between model-list refreshes. |
 | `BC_KEEP_ALIVE` | `0` | How long Ollama keeps a model loaded after a request (seconds, `-1` forever). |
@@ -273,10 +256,12 @@ See [Architecture → Limits](architecture.md#limits) for the details.
 | `BC_CHAT_MAX_FILES` | `4` | Attachments per message. |
 | `BC_CHAT_MAX_REQUEST_MB` | `8` | Largest message upload. |
 | `BC_CHAT_MAX_IMAGE_MB` / `BC_CHAT_MAX_IMAGE_PIXELS` | `5` / `20000000` | Image attachment limits. |
+| `BC_CHAT_MAX_IMAGE_DIMENSION` | `2048` | Longest side, in pixels, an image attachment is stored and sent at; larger images are scaled down (large photos are decoded at a reduced scale, which bounds the memory an upload takes). |
 | `BC_CHAT_MAX_DOCUMENT_MB` | `5` | PDF attachment limit. |
 | `BC_CHAT_MAX_TEXT_KB` | `1024` | Text/code attachment limit. |
 | `BC_CHAT_MAX_EXTRACTED_CHARS` | `200000` | Text kept from one document. |
-| `BC_CHAT_MAX_SESSION_ATTACHMENT_MB` | `40` | Total attachments per chat. |
+| `BC_CHAT_MAX_SESSION_ATTACHMENT_MB` | `40` | Total attachments per chat, counted as stored: a document counts the text extracted from it (a small compressed PDF can hold far more), an image its stored size. |
+| `BC_CHAT_MAX_ACCOUNT_ATTACHMENT_MB` | `1024` | Total attachments one account may store across its chats, counted as stored (as above); deleted chats count until they are erased. Administrators are exempt. |
 | `BC_CHAT_MAX_CONTEXT_CHARS` | `300000` | History characters sent to the model. |
 | `BC_CHAT_MAX_CONTEXT_IMAGES` | `8` | Images sent to the model. |
 | `BC_CHAT_MAX_HISTORY_MESSAGES` | `100` | Messages sent to the model. |
@@ -304,8 +289,9 @@ See [Architecture → Limits](architecture.md#limits) for the details.
 | `BC_IMAGE_TOKENS_PER_GENERATION` | `5000` | Tokens charged per image (× the image model's weight). Defaults to `BC_IMAGE_CREDITS_PER_GENERATION` × 1,000 when only that setting of the previous release is present. |
 | `BC_IMAGE_CREDITS_PER_GENERATION` | `5` | The previous release's setting in credits; still read as the default of the one above. |
 | `BC_IMAGE_CREDIT_RESERVATION_TTL`, `…_HEARTBEAT` | `1200`, `30` | How long an image job holds its reserved tokens. |
-| `BC_CHECKPOINT_AGENT_URL`, `BC_CHECKPOINT_AGENT_TOKEN_FILE` | empty | Optional [checkpoint downloader](compute.md) on the compute host. |
-| `BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE` | `0` | Permit plain HTTP to the agent over Tailscale. |
+| `BC_CHECKPOINT_AGENT_URL`, `BC_CHECKPOINT_AGENT_TOKEN_FILE` | empty | Optional [checkpoint downloader](compute.md) on the compute host. HTTPS is required unless it is on this host or its address is in the next setting. |
+| `BC_CHECKPOINT_AGENT_INSECURE_NETWORKS` | empty | Comma-separated private networks (CIDR, or single addresses) where plain HTTP to the agent is accepted, e.g. `192.168.10.0/24`. See [plain HTTP on private networks](#plain-http-on-private-networks). |
+| `BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE` | `0` | Deprecated alias: `1` adds Tailscale's ranges (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`) to `BC_CHECKPOINT_AGENT_INSECURE_NETWORKS` and also accepts MagicDNS names ending in `.ts.net`. |
 
 ## Agents
 
@@ -316,12 +302,57 @@ administrator enables it in Admin → Agents; limits are set there too. See
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BC_AGENTS_RUNNER_URL` | empty | The sandbox runner, e.g. `https://runner.example.org` or `http://127.0.0.1:11436` through an SSH tunnel. HTTPS is required unless it is on this host. |
+| `BC_AGENTS_RUNNER_URL` | empty | The sandbox runner, e.g. `https://runner.example.org` or `http://127.0.0.1:11436` through an SSH tunnel. HTTPS is required unless it is on this host or its address is in `BC_AGENTS_RUNNER_INSECURE_NETWORKS`. |
 | `BC_AGENTS_RUNNER_TOKEN_FILE` | empty | File (mode 0600) holding the runner's bearer token. Preferred over the next variable. |
 | `BC_AGENTS_RUNNER_TOKEN` | empty | The runner's bearer token, when a file is not practical. |
-| `BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE` | `0` | Permit plain HTTP to the runner over Tailscale. |
+| `BC_AGENTS_RUNNER_INSECURE_NETWORKS` | empty | Comma-separated private networks (CIDR, or single addresses) where plain HTTP to the runner is accepted. See [plain HTTP on private networks](#plain-http-on-private-networks). |
+| `BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE` | `0` | Deprecated alias: `1` adds Tailscale's ranges to `BC_AGENTS_RUNNER_INSECURE_NETWORKS` and also accepts MagicDNS names ending in `.ts.net`. |
 | `BC_AGENTS_MAX_UPLOAD_MB` | `20` | Largest upload (files or an archive) copied into a task's workspace (1–200). |
 | `BC_AGENTS_GIT_PROXY` | `0` | Send Git repository downloads through `HTTPS_PROXY` (the proxy is asked to connect to the address BananaChat checked). Hosts and limits are set in Admin → Agents. |
+
+## Plain HTTP on private networks
+
+The checkpoint agent and the sandbox runner receive a bearer token with every
+request, so BananaChat only sends it over HTTPS, to a service on this host
+(`localhost` or a loopback address, such as an SSH tunnel), or over plain HTTP
+to an address inside a network you list in
+`BC_CHECKPOINT_AGENT_INSECURE_NETWORKS` or `BC_AGENTS_RUNNER_INSECURE_NETWORKS`.
+Each service has its own list. Use it when the compute host is reached over a
+network you trust or that encrypts traffic itself, for example `192.168.10.0/24`
+for a LAN, `10.8.0.0/24` for a WireGuard tunnel,
+`100.64.0.0/10,fd7a:115c:a1e0::/48` for Tailscale or `172.18.0.0/16` for a
+Docker network:
+
+```sh
+BC_AGENTS_RUNNER_URL=http://10.8.0.2:11436
+BC_AGENTS_RUNNER_INSECURE_NETWORKS=10.8.0.0/24
+```
+
+- Only an IP address in the URL can match (`http://192.168.10.5:8765`). Host
+  names are not resolved for this check, so a DNS change cannot move the token
+  onto another network: use the address, or HTTPS with the name.
+- Entries must lie inside loopback (`127.0.0.0/8`, `::1`), the private ranges
+  `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16`, the shared address space
+  `100.64.0.0/10` (carrier-grade NAT and overlay VPNs such as Tailscale) or
+  IPv6 unique local addresses (`fc00::/7`). Public ranges, `0.0.0.0/0`,
+  `::/0` and link-local ranges are refused: an IPv6 link-local address needs a
+  zone index that these URLs cannot carry, and `169.254.0.0/16` is rarely a
+  network chosen for a service (cloud metadata services answer there). Write
+  networks without host bits (`10.0.0.0/8`, not `10.0.0.1/8`), and list the
+  narrowest one that holds the compute host (its own address is enough, such
+  as `100.101.102.103` rather than all of `100.64.0.0/10`, where some cloud
+  and VPN services answer too). A refused or malformed entry is logged as a warning at
+  start-up and ignored; the other entries still apply.
+- BananaChat adds no encryption of its own. A WireGuard or Tailscale tunnel
+  encrypts the traffic; a LAN or a container network does not, so anyone on it
+  can read the token. Restrict the service's port to the web server with a
+  firewall either way.
+- `BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE=1` and
+  `BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE=1`, the settings of earlier
+  releases, still work as deprecated aliases: they add Tailscale's ranges to
+  the list and keep accepting MagicDNS names ending in `.ts.net`, which the
+  list alone does not. Replace them with the networks when you can (and use
+  the address, or HTTPS, instead of a MagicDNS name).
 
 ## Managed installations
 
@@ -338,8 +369,12 @@ neither. A web server's compute connection is managed with
 `bananachat backend status|test|connect` (see [deployment](deployment.md#check-or-change-the-connection-later)).
 
 The compute node reads `BC_COMPUTE_HOST`, `BC_COMPUTE_PORT`,
-`BC_COMPUTE_UPSTREAM` and `BC_COMPUTE_TOKEN_FILE`; the worker daemon has its
-own variables (see [workers](workers.md)).
+`BC_COMPUTE_UPSTREAM`, `BC_COMPUTE_TOKEN_FILE`, the model management settings
+`BC_COMPUTE_MANAGEMENT_TOKEN_FILE` (created by the installer on new compute
+servers) and `BC_COMPUTE_MODEL_MANAGEMENT`, and its connection limits; see
+[compute/README.md](../compute/README.md). The sandbox runner reads
+`BC_SANDBOX_*` (see [agents](agents.md)) and the worker daemon has its own
+variables (see [workers](workers.md)).
 
 ### External API providers
 
@@ -347,6 +382,17 @@ Configure hosted providers through **Administration → Models → External APIs
 no environment change is required. OpenAI-compatible and native Anthropic
 formats support operator-owned base URLs and private server API keys. Model
 selection, publication, capabilities and quota controls remain explicit.
-Keys live under `BC_INSTANCE_DIR/.provider-keys` and must be preserved with the
-instance data during updates/restores. Public endpoints require HTTPS; trusted
+Keys live under `BC_INSTANCE_DIR/.provider-keys`, encrypted with a key derived
+from `BC_SECRET_KEY` (or `.secret_key`); preserve both with the instance data
+during updates/restores. Changing the instance secret makes stored provider keys
+unreadable, so they must be entered again. Public endpoints require HTTPS; trusted
 private gateways need explicit permission. See [external provider setup](external-providers.md).
+
+## Removed settings
+
+`BC_CLAUDE_EXTENSION`, `BC_CLAUDE_CODE_CONFIG` and any other `BC_CLAUDE_*`
+variable belonged to the Claude subscription connector, which was removed
+because it pooled consumer subscriptions. They are ignored; BananaChat starts
+normally and logs one warning until they are deleted from the configuration.
+Offer Anthropic models through an [external API provider](external-providers.md)
+with an Anthropic API key instead.

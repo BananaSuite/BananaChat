@@ -13,6 +13,27 @@ import tarfile
 import tempfile
 
 
+# The SQLite databases the applications keep, as package entries, and the
+# settings that can move them. Only these are integrity-checked as databases:
+# anything else, such as a user's upload that happens to be called *.db, is an
+# opaque file whose checksum the manifest already covers.
+APPLICATION_DATABASES = ("data/bananachat.db", "data/bananawiki.db", "data/hosting.db")
+DATABASE_SETTINGS = ("BC_DATABASE_PATH", "BW_DATABASE_PATH", "HOSTING_DATABASE_PATH")
+
+
+def application_databases(tree, old_root):
+    """Package entry names of the application databases in an extracted package or snapshot *tree*."""
+    names = set(APPLICATION_DATABASES)
+    environment = Path(tree) / "config" / "app.env"
+    values = read_environment(environment) if environment.is_file() and not environment.is_symlink() else {}
+    data = PurePosixPath(str(old_root or "/")) / "data"
+    for key in DATABASE_SETTINGS:
+        value = PurePosixPath(values.get(key) or "/")
+        if value.is_relative_to(data) and value != data:
+            names.add("data/" + value.relative_to(data).as_posix())
+    return names
+
+
 def absolute_path(value):
     path = Path(value).absolute()
     if not re.fullmatch(r"/[A-Za-z0-9_./-]+", str(path)) or ".." in path.parts or len(path.parts) < 3:
@@ -69,8 +90,11 @@ def read_environment(path):
         key, separator, value = line.partition("=")
         if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
             raise ValueError("Environment files use one NAME=value assignment per line.")
-        parsed = shlex.split(value, comments=False)
-        output[key] = " ".join(parsed)
+        try:
+            output[key] = " ".join(shlex.split(value, comments=False))
+        except ValueError:
+            # systemd reads an unquoted value literally, so an apostrophe is not an error.
+            output[key] = value.strip()
     return output
 
 
@@ -220,23 +244,22 @@ def read_package(path, product, staging_parent):
         # Even a read-only SQLite connection may rewrite a WAL shared-memory
         # index. Validate copies after checking every hash, keeping the archived
         # payload unchanged for restoration and its manifest still verifiable.
-        for name in declared:
+        for name in sorted(application_databases(root, manifest.get("old_root")) & set(declared)):
             file = root / name
-            if file.suffix in {".db", ".sqlite", ".sqlite3"}:
-                with tempfile.TemporaryDirectory(prefix="database-check-", dir=staging_parent) as directory:
-                    copy = Path(directory) / file.name
-                    inputs = [file, *(Path(str(file) + suffix) for suffix in ("-wal", "-shm", "-journal"))]
-                    size = sum(item.stat().st_size for item in inputs if item.is_file())
-                    if shutil.disk_usage(directory).free < size + 64 * 1024 * 1024:
-                        raise ValueError("Not enough free space to validate a packaged database.")
-                    for item in inputs:
-                        if item.is_file():
-                            shutil.copyfile(item, Path(directory) / item.name)
-                    try:
-                        with sqlite3.connect(copy.as_uri() + "?mode=ro", uri=True) as database:
-                            database.execute("PRAGMA trusted_schema=OFF")
-                            if database.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-                                raise ValueError("A packaged database failed its integrity check.")
-                    except sqlite3.Error:
-                        raise ValueError(f"A packaged database failed its integrity check: {name!r}.") from None
+            with tempfile.TemporaryDirectory(prefix="database-check-", dir=staging_parent) as directory:
+                copy = Path(directory) / file.name
+                inputs = [file, *(Path(str(file) + suffix) for suffix in ("-wal", "-shm", "-journal"))]
+                size = sum(item.stat().st_size for item in inputs if item.is_file())
+                if shutil.disk_usage(directory).free < size + 64 * 1024 * 1024:
+                    raise ValueError("Not enough free space to validate a packaged database.")
+                for item in inputs:
+                    if item.is_file():
+                        shutil.copyfile(item, Path(directory) / item.name)
+                try:
+                    with sqlite3.connect(copy.as_uri() + "?mode=ro", uri=True) as database:
+                        database.execute("PRAGMA trusted_schema=OFF")
+                        if database.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                            raise ValueError("A packaged database failed its integrity check.")
+                except sqlite3.Error:
+                    raise ValueError(f"A packaged database failed its integrity check: {name!r}.") from None
         yield root, manifest

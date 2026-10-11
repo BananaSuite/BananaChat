@@ -41,7 +41,7 @@
 {%- set kinds = {"done": "success", "ok": "success", "approved": "success", "active": "success", "pulling": "info",
                  "queued": "primary", "pending": "warning", "failed": "danger", "error": "danger", "denied": "danger",
                  "cancelled": "", "expired": "", "stopped": "warning"} -%}
-<span class="badge{% if kinds.get(status) %} badge-{{ kinds.get(status) }}{% endif %}">{{ status | replace("_", " ") }}</span>
+<span class="badge{% if kinds.get(status) %} badge-{{ kinds.get(status) }}{% endif %}">{{ (status | replace("_", " ")) | capitalize }}</span>
 {%- endmacro %}
 
 {% macro yes_no(value, yes="Yes", no="No") -%}
@@ -49,7 +49,7 @@
 {%- endmacro %}
 
 {% macro when(value) -%}
-{% if value %}<time datetime="{{ value | replace(' ', 'T') }}Z" title="{{ value | datetime }}">{{ value | timeago }}</time>{% else %}<span class="faint">—</span>{% endif %}
+{% if value %}<time class="nowrap" datetime="{{ value | replace(' ', 'T') }}Z" title="{{ value | datetime }}">{{ value | timeago }}</time>{% else %}<span class="faint">—</span>{% endif %}
 {%- endmacro %}
 
 {% macro utc_input(name, id, label, hint=None, value="", min=None) -%}

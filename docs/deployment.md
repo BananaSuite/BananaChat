@@ -2,7 +2,7 @@
 
 BananaChat uses one `banana` command for installation, updates, backup, migration, restoration, and uninstall. It remembers the server's role. After installation the command is available globally as `bananachat`.
 
-**Automatic repository updates are optional and off by default.** Enabling them authorizes deployment of future changes from the selected branch, including changes that may remove features. Keep manual updates or choose a controlled fork/branch when you need a fixed feature set.
+**Automatic repository updates are optional and off by default.** Enabling them authorises deployment of future changes from the selected branch, including changes that may remove features. Keep manual updates or choose a controlled fork/branch when you need a fixed feature set.
 
 ## Choose a layout
 
@@ -33,7 +33,7 @@ sudo ./banana install --mode compute --domain compute.example.org
 sudo bananachat proxy --install
 ```
 
-This runs a managed Ollama on `127.0.0.1:11434` (its models under `/opt/bananachat/data/models`) and the authenticated gateway on `127.0.0.1:11435`, which the HTTPS proxy publishes. Ollama has no authentication of its own, so it is never exposed: the gateway checks a generated token (stored in `/opt/bananachat/data/.compute-api-token`), forwards only the Ollama/OpenAI API calls BananaChat and API clients use, and streams the answers.
+This runs a managed Ollama on `127.0.0.1:11434` (its models under `/opt/bananachat/data/models`) and the authenticated gateway on `127.0.0.1:11435`, which the HTTPS proxy publishes. Ollama has no authentication of its own, so it is never exposed: the gateway checks a generated token (stored in `/opt/bananachat/data/.compute-api-token`), forwards only the Ollama/OpenAI API calls BananaChat and API clients use, and streams the answers. Downloading, creating, copying and deleting models needs a second generated token (`/opt/bananachat/data/.compute-management-token`), so the first one alone cannot change the models; see [compute servers](compute.md).
 
 At the end the installer prints a **pairing code**, one line starting with `bcpair1.`. It contains the gateway's address and token, so treat it like a password. Show it again at any time with `sudo bananachat compute pairing-code`.
 
@@ -58,13 +58,13 @@ sudo bananachat proxy --install
 
 `--pair` asks for the pairing code (the input is hidden) and implies `--mode web`; `--pair-file FILE` reads it from a private file instead, and `--pair CODE` takes it directly (visible in the shell history and process list). It then shows the gateway address in the code and asks you to confirm it before the token is sent anywhere; `--yes` confirms without asking and is needed without a terminal. Before anything is installed, the web server connects to the compute server exactly as it will later (`GET /api/version` through the gateway, with the token) and stops with an explanation if the address cannot be reached, the certificate is not accepted, the token is rejected or Ollama is not ready. `--skip-connection-check` installs anyway, for a compute server that is not reachable yet.
 
-The address and token are stored in the web server's private `config/app.env` as `BC_OLLAMA_URL` and `BC_OLLAMA_API_KEY`. A web installation without a compute server is refused: a web server never uses an Ollama on its own machine, and `--ollama-binary`/`--ollama-url` are rejected in web mode. The older form, `--mode web --backend-url https://compute.example.org --backend-token-file /root/banana-compute.token`, keeps working and is tested the same way.
+The address and tokens are stored in the web server's private `config/app.env` as `BC_OLLAMA_URL`, `BC_OLLAMA_API_KEY` and, when the code carries one, the model management token `BC_OLLAMA_MANAGEMENT_API_KEY` (checked against the gateway too). A web installation without a compute server is refused: a web server never uses an Ollama on its own machine, and `--ollama-binary`/`--ollama-url` are rejected in web mode. The older form, `--mode web --backend-url https://compute.example.org --backend-token-file /root/banana-compute.token`, keeps working and is tested the same way; add `--backend-management-token-file FILE` for a compute server that keeps model management for its own token.
 
-The installer ends with what to do next: point DNS at the server, install the HTTPS proxy, and read the first-administrator setup token privately with `sudo grep BC_SETUP_TOKEN /opt/bananachat/config/app.env`. The token only works until the first administrator exists; you may remove it afterwards (updates do not add it back). Then download and enable a model in Admin → Models (downloads run on the compute server; new models wait for your review unless you switch Admin → Models → Settings to automatic enrollment) and review sign-up, model access and quotas before inviting users.
+The installer ends with what to do next: point DNS at the server, install the HTTPS proxy, and read the first-administrator setup token privately with `sudo grep BC_SETUP_TOKEN /opt/bananachat/config/app.env`. The token only works until the first administrator exists; you may remove it afterwards (updates do not add it back). Then download and enable a model in Admin → Models (downloads run on the compute server; new models wait for your review unless you switch Admin → Models → Settings to automatic enrolment) and review sign-up, model access and quotas before inviting users.
 
 ### Models on the compute server
 
-The web server manages the compute server's models through the gateway: it lists them (`/api/tags`), reads their details (`/api/show`), downloads (`/api/pull`) and deletes them (`/api/delete`); it never runs Ollama itself. Downloads queue in Admin → Models → Downloads (one at a time by default, several at once from a list), survive restarts of either server and are retried after network errors. The web server cannot see the compute server's disk: keep enough free space under `/opt/bananachat/data/models`; a download that runs out of space fails with Ollama's "no space left on device" message and can be retried after you free space. Models that disappear from the compute server are marked missing after a few syncs and hidden (their chats stay); a compute server that is unreachable changes nothing in the catalog.
+The web server manages the compute server's models through the gateway: it lists them (`/api/tags`), reads their details (`/api/show`), downloads (`/api/pull`) and deletes them (`/api/delete`); it never runs Ollama itself. Downloads queue in Admin → Models → Downloads (one at a time by default, several at once from a list), survive restarts of either server and are retried after network errors. The web server cannot see the compute server's disk: keep enough free space under `/opt/bananachat/data/models`; a download that runs out of space fails with Ollama's "no space left on device" message and can be retried after you free space. Models that disappear from the compute server are marked missing after a few syncs and hidden (their chats stay); a compute server that is unreachable changes nothing in the catalogue.
 
 ### Check or change the connection later
 
@@ -74,9 +74,9 @@ sudo bananachat backend test            # connect now, as the chat service does
 sudo bananachat backend connect         # paste a new pairing code (hidden)
 ```
 
-`backend connect` also accepts `CODE` (visible in the shell history and process list, like `--pair CODE`), `--pair-file FILE`, or `--url URL --token-file FILE`; `--url` next to a pairing code overrides its address (for an SSH tunnel on another port). It asks to confirm the address in a code like `install --pair` (`--yes` skips the question), tests the connection before changing anything, writes `app.env` and restarts the web service if it runs; if that restart fails its readiness checks, the previous connection is put back. `sudo bananachat status` shows the same summary, and the compute server's `status` shows its token fingerprint so the two can be compared.
+`backend connect` also accepts `CODE` (visible in the shell history and process list, like `--pair CODE`), `--pair-file FILE`, or `--url URL --token-file FILE` (add `--management-token-file FILE` when the compute server keeps model management for its own token; a pairing code carries both); `--url` next to a pairing code overrides its address (for an SSH tunnel on another port). It asks to confirm the address in a code like `install --pair` (`--yes` skips the question), tests the connection before changing anything, writes `app.env` and restarts the web service if it runs; if that restart fails its readiness checks, the previous connection is put back. `sudo bananachat status` shows the same summary, and the compute server's `status` shows its token fingerprint so the two can be compared.
 
-**Rotating the token.** On the compute server run `sudo bananachat compute rotate-token`: it writes a new token, restarts the gateway (the old token stops working at once) and prints a new pairing code. On the web server run `sudo bananachat backend connect` and paste it. Doing it by hand works too: write a new random value (`openssl rand -hex 32`) into the compute token file with mode 0600, restart the compute service, then on the web server run `backend connect --url https://compute.example.org --token-file FILE` (or edit `BC_OLLAMA_API_KEY` in its `app.env` and restart). The web server keeps its copy of the token in `app.env`, not in a token file.
+**Rotating the tokens.** On the compute server run `sudo bananachat compute rotate-token`: it writes new tokens (the gateway token and the model management token; a compute server installed before 1.7 gets its management token now), restarts the gateway (the old tokens stop working at once) and prints a new pairing code. On the web server run `sudo bananachat backend connect` and paste it; update the web server first, since a release before 1.7 ignores the management token and then cannot download or delete models. Doing it by hand works too: write new random values (`openssl rand -hex 32`) into the token files with mode 0600, restart the compute service, then on the web server run `backend connect --url https://compute.example.org --token-file FILE --management-token-file FILE` (or edit `BC_OLLAMA_API_KEY` and `BC_OLLAMA_MANAGEMENT_API_KEY` in its `app.env` and restart). The web server keeps its copies of the tokens in `app.env`, not in token files.
 
 ### Without a public name: SSH tunnel
 
@@ -104,17 +104,19 @@ The chat service and Ollama bind to loopback. Model files are stored under `/opt
 ```sh
 sudo bananachat source check
 sudo bananachat update
-sudo bananachat updates enable --interval 60
+sudo bananachat updates enable --require-signatures /root/allowed_signers --interval 60
 sudo bananachat updates status
 sudo bananachat updates disable
 ```
 
-`source check` checks the configured repository/branch without deployment. Automatic checking uses a systemd timer with a small randomized delay. Disabling updates prevents the next update; an already applying transaction finishes safely. An intentionally stopped application is not restarted by the updater.
+`source check` shows what an update would deploy, without deploying it. By default (installations made by 1.7 and later) updates follow **release tags**: the highest `vX.Y.Z` tag of the source, never work pushed after it; until the source has one, an update reports that there is nothing to update to. A source configured before 1.7 keeps following its branch until `source set --track tags`. Automatic checking uses a systemd timer with a small randomised delay. Disabling updates prevents the next update; an already applying transaction finishes safely. An intentionally stopped application is not restarted by the updater.
 
-Choose your own source, branch, and optional fallback:
+An automatic update installs new code as root with nobody reviewing it, so `updates enable` requires signature checks (`--require-signatures`, now or configured before; see [below](#what-a-bad-commit-can-and-cannot-do)). `--allow-unsigned` turns automatic updates on without them anyway: then anyone who can push to the source can run code on your server, and `status` warns about it. Clearing the requirement while automatic updates are on (`source set --clear-signatures`) needs `--allow-unsigned` too. Automatic updates enabled before 1.7 keep running as they were.
+
+To follow a branch's latest commit instead (your own fork, for example), with an optional fallback:
 
 ```sh
-sudo bananachat source set --repo https://forge.example.org/team/BananaChat.git --branch stable --fallback-branch main
+sudo bananachat source set --repo https://forge.example.org/team/BananaChat.git --track branch --branch stable --fallback-branch main
 ```
 
 A fallback is used only when the selected branch has been deleted. Without one, updates pause and the running version stays in place. Rewritten or unrelated history also pauses updates. A reviewed manual `update --allow-divergent` can make an intentional source switch; automatic runs always require ancestry. Remove the fallback with `source set --clear-fallback`.
@@ -137,28 +139,30 @@ sudo bananachat source check
 
 Obtain and verify the forge's SSH host key through a trusted channel first. Strict host checking is enforced. Repository credentials are stored as root-private files under `config/`, kept out of URLs and Git configuration, and passed only to the updater's Git process. They are separate from compute API credentials and BananaVibe bot credentials. Repeat `source set` with a new credential file to rotate access; `source set --clear-credentials` removes it. Changing hosts without a replacement credential disables authentication.
 
-Each update prepares the new release, stops the remembered services, creates a complete backup, switches source, and checks readiness before allowing traffic. Failed readiness restores the old code and data together. A failed revision is not retried, automatically or manually, until you correct the problem and run `update --retry-failed` (or publish a newer corrected commit). For each kind of package the tool creates by itself (`auto`, `before-update`, `before-restore`, `before-legacy-import`, `remote`), the newest three are retained by default; set `--keep-backups` on `updates enable` to change that policy. Packages you create with `backup`/`migrate` are never removed, and neither is the package needed for `rollback`. Prepared releases use the same retention count, always preserving the active and previous releases.
+Each release installs its Python dependencies from `requirements.lock`: every package, dependencies included, at the version and file hashes the release was tested with, wheels only (`pip install --require-hashes --only-binary=:all:`), so nothing is resolved anew on your server and no package build script runs there. A release without a lock (a rollback to an older one) installs its ranges, still wheels only.
+
+Each update prepares the new release, checks that there is disk space for its rollback package and for a rollback, stops the remembered services, creates a backup (model weights stay in place rather than being copied into it), switches source, and checks readiness before allowing traffic. Failed readiness restores the old code and data together. A failed revision is not retried, automatically or manually, until you correct the problem and run `update --retry-failed` (or publish a newer corrected commit). For each kind of package the tool creates by itself (`auto`, `before-update`, `before-restore`, `before-legacy-import`, `remote`), the newest three are retained by default; set `--keep-backups` on `updates enable` to change that policy. Packages you create with `backup`/`migrate` are never removed, and neither is the package needed for `rollback`. Prepared releases use the same retention count, always preserving the active and previous releases.
 
 ## Updating from the previous release
 
-The rewrite is delivered through the normal update path:
+Read [UPGRADING.md](../UPGRADING.md) before updating from 1.6: it lists every change that needs a decision or an action. The update itself takes the normal path:
 
 ```sh
 sudo bananachat source check
 sudo bananachat update
 ```
 
-The previous release's updater prepares the new code, backs everything up, starts it and checks `/health` before letting users back in; if anything fails it restores the old code together with the old database. On first start the database is upgraded in place (schema version 20): accounts and content are kept, sign-ins stay valid, API tokens keep working, and a site still named "BananaAI" from the project's earlier name is renamed to BananaChat (custom names are kept). No configuration change is needed; new optional settings are listed in [configuration](configuration.md) and in the [changelog](../CHANGELOG.md). After updating, reload open browser tabs to load the current interface; versioned static asset URLs refresh scripts and styles together without requiring a hard refresh. The optional Claude extension stays disconnected until configured; subscription pooling needs provider approval and private authenticated profiles and live validation as described in [Claude connector setup](claude-code.md).
+The previous release's updater prepares the new code, backs everything up, starts it and checks `/health` before letting users back in; if anything fails it restores the old code together with the old database. On first start the database is upgraded in place (schema version 25): accounts and content are kept, sign-ins stay valid, API tokens keep working, and a site still named "BananaAI" from the project's earlier name is renamed to BananaChat (custom names are kept). No configuration change is needed; new optional settings are listed in [configuration](configuration.md) and in the [changelog](../CHANGELOG.md). After updating, reload open browser tabs to load the current interface; versioned static asset URLs refresh scripts and styles together without requiring a hard refresh. The Claude subscription connector was removed: the upgrade retires the models it served (chat history keeps them) and drops its account pool, and leftover `BC_CLAUDE_*` settings are ignored with one startup warning; offer Anthropic models through an [external API provider](external-providers.md) instead. External API provider keys are encrypted at rest with the instance secret key the first time they are used after the update; keep `BC_SECRET_KEY` (or `.secret_key`) together with the instance directory in backups. Accounts can now turn on [two-step verification](two-step-verification.md); it stays off until someone chooses it, and administrators are asked to confirm their password again (at most every ten minutes) before exporting the database, resetting a password, changing a role or changing provider keys. Each account may now store at most `BC_CHAT_MAX_ACCOUNT_ATTACHMENT_MB` (1 GB by default) of chat attachments, counted as stored (a document counts the text extracted from it, measured for existing attachments during the upgrade), and new image attachments are stored at most `BC_CHAT_MAX_IMAGE_DIMENSION` (2048) pixels on their longest side; raise either setting before updating if your users need more.
 
 The five-hour token allowance combines the old regular amount and the slow
 amount when slow tokens were enabled; disabled sites keep the regular amount.
 Existing regular and slow usage count together without resetting windows or
-refilling tokens. Weekly limits and other customization are preserved. The
+refilling tokens. Weekly limits and other customisation are preserved. The
 managed updater's backup keeps the original code and database together for
 rollback; for a manual installation, take a complete backup before starting
 the new release and restore its matching code and database if you roll back.
 
-Update the compute server as well if you use a split deployment; either order works.
+Update the compute server as well if you use a split deployment; either order works. Rotate the compute token (`compute rotate-token`, which also adds the separate model management token) only after the web server runs 1.7: an older web server ignores the management token and then cannot download or delete models.
 
 Two behaviours changed for split deployments. A web server that reaches its compute server through an SSH tunnel (`BC_OLLAMA_URL=http://127.0.0.1:…` with `BC_OLLAMA_API_KEY`) is now treated as remote: it no longer waits for its own free memory, and it probes the compute server so an outage shows a banner. And `BC_INFERENCE_OUTAGE_MODE=fallback` needs an explicit `BC_INFERENCE_FALLBACK_URL`; it no longer defaults to the web server's own port 11434, and without one the server logs a warning and pauses new answers during an outage instead.
 
@@ -197,12 +201,24 @@ The file is an SSH allowed-signers file, one line per key you trust:
 you@example.org namespaces="git" ssh-ed25519 AAAAC3Nza...
 ```
 
-With it in place, every revision must carry a valid SSH signature from a listed
-key before anything is fetched into a release. An unsigned commit, or one
-signed by a key you have not listed, stops the update and leaves the running
-version alone. Sign your releases with `git commit -S` after setting
-`gpg.format=ssh` and `user.signingkey`. `source set --clear-signatures` returns
-to unsigned updates.
+With it in place, a server that follows release tags deploys only an
+annotated tag (`git tag -s vX.Y.Z`) signed by a listed key for its own name.
+A signed commit under an unsigned or lightweight tag, or a signed tag object
+pushed under another name, releases nothing: anyone who can push tags could
+otherwise release any signed work in progress under a higher version. The
+highest release that verifies is deployed; higher tags that do not are
+skipped, listed in the update result (`skipped_releases`) and in a warning,
+so a stray tag never holds back a security release. Only the 20 highest tags
+are tried: anyone who can push tags can still hold updates back with 20 tags
+that do not verify (as by deleting the release tags), so let only
+maintainers create `v*` tags on the update source. A server that follows a
+branch needs every commit signed by a listed key. Anything else stops the
+update before anything is fetched into a release and leaves the running
+version alone. Sign releases with `git tag -s` (commits, for servers that
+follow a branch, with `git commit -S`) after setting `gpg.format=ssh` and
+`user.signingkey`. A restore accepts the same signatures: the commit's own,
+or a signed release tag of the update source naming it.
+`source set --clear-signatures` returns to unsigned updates.
 
 This checks SSH signatures only. An OpenPGP-signed commit is refused, and
 the message says so. That is deliberate: Git picks its verifier from the
@@ -232,15 +248,17 @@ On a new server with the prerequisites and a compatible clean checkout:
 
 ```sh
 sudo ./banana install --restore /root/bananachat-migration.tar.gz
+# It stops before changing anything and shows the package's source revision; if you made the package:
+sudo ./banana install --restore /root/bananachat-migration.tar.gz --trust-source REVISION
 sudo bananachat status
 sudo bananachat proxy
 ```
 
-This restores the saved mode, compute connection and exact bundled source without fetching the update repository (`--mode`, `--pair`, `--backend-url` and `--skip-connection-check` are refused here; change the connection afterwards with `backend connect`). Installing Python dependencies still needs package-registry access. `single` and `compute` also need Ollama installed locally; add `--ollama-url http://127.0.0.1:11434` to restore onto an Ollama that already runs on the new machine instead of a managed one. Add `--domain new.example.org` when changing the public hostname, then configure the proxy and review integration URLs.
+This restores the saved mode, compute connection and exact bundled source without fetching the update repository. The bundled source runs with root privileges for maintenance, so a new server deploys it only once you confirm its revision with `--trust-source` (see [Restore or move servers](backups.md#restore-or-move-servers)) (`--mode`, `--pair`, `--backend-url` and `--skip-connection-check` are refused here; change the connection afterwards with `backend connect`). Installing Python dependencies still needs package-registry access. `single` and `compute` also need Ollama installed locally; add `--ollama-url http://127.0.0.1:11434` to restore onto an Ollama that already runs on the new machine instead of a managed one. Add `--domain new.example.org` when changing the public hostname, then configure the proxy and review integration URLs.
 
-To restore after installing an empty matching mode, run `sudo bananachat restore PACKAGE`. It saves a `before-restore` package before replacement and keeps this server's Ollama choice: a managed Ollama stays managed and an existing one (`--ollama-url`) stays in use, whichever the package came from. Restore cannot convert `web`, `single`, and `compute` modes; use a separate root and a deliberate data/backend migration for a role change. Restore packages only from trusted operators: they include executable source and secrets. If readiness checks fail, the previous repository URL, credentials and update signer trust are restored with the previous data.
+To restore after installing an empty matching mode, run `sudo bananachat restore PACKAGE`. It saves a `before-restore` package before replacement and keeps this server's Ollama choice: a managed Ollama stays managed and an existing one (`--ollama-url`) stays in use, whichever the package came from. Restore cannot convert `web`, `single`, and `compute` modes; use a separate root and a deliberate data/backend migration for a role change. Restore packages only from trusted operators: they include executable source and secrets. An installed server takes the code from a release it already prepared or from its own update source (signature-checked when signatures are required), and asks for `--trust-source REVISION` only when neither has the package's revision. A server whose update source requires signatures never deploys the package's own source, even with `--trust-source`: the refusal says how to allow it once. An installed server also keeps its own update source settings, repository credentials and allowed signers (the code it runs was checked against them); the result's `source_warning` says when the package's differ, and `source set` changes them. A new server takes the package's. If readiness checks fail, the previous data is put back.
 
-New packages include `config/repo.allowed_signers` when SSH signatures are required for updates. Packages made by earlier releases may omit it; recover the operator's original allowed signers file and configure `source set --require-signatures FILE` before updating that restored installation. Signature verification fails closed while the trust file is missing.
+New packages include `config/repo.allowed_signers` when SSH signatures are required for updates. Packages made by earlier releases may omit it; after restoring one onto a new server, recover the operator's original allowed signers file and configure `source set --require-signatures FILE` before updating that installation. Signature verification fails closed while the trust file is missing.
 
 **Automatic updates are disabled after every restore.** Verify login, chat history, attachments, models, and a streaming reply before enabling them again. For a split deployment, create a separate package for each server; after moving either one, run `sudo bananachat backend test` on the web server, and `backend connect` with a fresh pairing code if the compute address or token changed.
 
@@ -256,6 +274,8 @@ Volunteer [worker PCs](workers.md) are configured separately. Dedicated inferenc
 
 Use `sudo bananachat status` and `sudo journalctl -u bananachat` for the current revision and service logs. `status` also summarises inference: the compute address and token fingerprint on a web server, the gateway address, token fingerprint and Ollama (managed or existing) on a compute server, and any model list waiting after a restore. `start`, `stop`, and `restart` manage the remembered service set, including a managed Ollama; an existing Ollama chosen with `--ollama-url` is never touched, and neither does `uninstall` remove it. Configuration is under `/opt/bananachat/config`, runtime data under `data`, prepared code under `releases`, and `current` selects the active source. Keep mutable data there instead of editing installed source. Operation results are saved privately in `config/history.jsonl`.
 
+When someone lost both their authenticator app and their recovery codes and no administrator can reset it in Admin → Users (for example the only administrator), `sudo bananachat reset-two-step USERNAME` on the single or web server turns off that account's two-step verification, signs it out everywhere and records the reset in the audit log; see [two-step verification](two-step-verification.md).
+
 `sudo bananachat uninstall` disables updates and backup scheduling and removes managed services and the command while retaining files. An unchanged Caddyfile installed by this command is reverted to its prior configuration; a later operator edit is retained for manual adjustment. Shared packages, system accounts, and other services are retained. Reinstall preserved data from a clean checkout with the same root/mode/name and `install --reuse-data`; this is also how a compute server switches between a managed Ollama and an existing one (`--ollama-url`).
 
 Permanent deletion requires `sudo bananachat uninstall --purge --confirm bananachat`. This also removes local backups under the installation root; copy the migration package elsewhere first. For multiple installations use separate `--root`, `--name`, and `--port` values and merge proxy configuration deliberately.
@@ -266,4 +286,4 @@ Volunteer PCs can contribute their Ollama capacity to the web server. Read [work
 
 ## Source availability
 
-AGPL-3.0-only permits personal and commercial use. Keep `BC_SOURCE_URL` pointing to corresponding source users can obtain. A private update repository does not remove the source-offer requirement for a modified network service; provide an accessible corresponding-source copy or authorized access. The updater preserves explicitly customized source-offer URLs.
+AGPL-3.0-only permits personal and commercial use. Keep `BC_SOURCE_URL` pointing to corresponding source users can obtain. A private update repository does not remove the source-offer requirement for a modified network service; provide an accessible corresponding-source copy or authorised access. The updater preserves explicitly customised source-offer URLs.

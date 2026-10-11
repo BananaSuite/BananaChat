@@ -28,3 +28,21 @@ if (form) {
     }
   }, true);
 }
+
+// Bonus type: show the fields of the chosen type (all stay visible without this script).
+const modes = [...document.querySelectorAll('input[name="music_bonus_mode"]')];
+const bonusFields = { multiplier: ["music_credit_multiplier"], fixed: ["music_bonus_fixed_tokens", "music_bonus_fixed_weekly_tokens"] };
+function syncBonus() {
+  const mode = modes.find((input) => input.checked)?.value;
+  if (!mode) return;
+  for (const [key, ids] of Object.entries(bonusFields)) {
+    for (const id of ids) {
+      const input = document.getElementById(id);
+      const field = input?.closest(".field");
+      // A field with an invalid value stays visible, so the browser can point at it when saving.
+      if (field) field.hidden = key !== mode && input.checkValidity();
+    }
+  }
+}
+for (const input of modes) input.addEventListener("change", syncBonus);
+syncBonus();

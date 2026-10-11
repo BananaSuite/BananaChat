@@ -129,6 +129,10 @@ def authenticated(view):
             return response
         if users.is_suspended(user):
             return api_error("This account is suspended.", 403, "account_suspended")
+        # Read-only keys may only read (list models); anything that generates needs full access.
+        if token["scope"] != "full" and request.method not in ("GET", "HEAD"):
+            return api_error("This API key is read-only. Create a key with full access to use this endpoint.",
+                             403, "insufficient_scope")
         if user["suspended"] and users.lift_expired_suspension(user):
             user = users.get(user["id"])
         decision = limits.check_rate(user, "api")

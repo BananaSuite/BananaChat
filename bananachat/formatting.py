@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timezone
 
 from flask import g
+from markupsafe import Markup
 
 from bananachat import db
 from bananachat.i18n import translate
@@ -38,11 +41,11 @@ def _display_language() -> str:
 
 
 def timeago(value) -> str:
+    language = _display_language()
     moment = db.parse_timestamp(value)
     if moment is None:
-        return translate(_language(), "time.never")
+        return translate(language, "time.never")
     seconds = int((datetime.now(timezone.utc) - moment).total_seconds())
-    language = _language()
     if seconds < 0:
         return datetime_text(value)
     if seconds < 60:
@@ -63,11 +66,41 @@ def datetime_text(value, date_only: bool = False) -> str:
     return moment.strftime("%Y-%m-%d" if date_only else "%Y-%m-%d %H:%M UTC")
 
 
+def datetime_html(value) -> Markup:
+    """:func:`datetime_text` for page text: the date and the time never break inside (``2026-`` / ``10-09``)."""
+    text = datetime_text(value)
+    date, _, clock = text.partition(" ")
+    if not clock:
+        return Markup('<span class="nowrap">{}</span>').format(text)
+    return Markup('<span class="nowrap">{}</span> <span class="nowrap">{}</span>').format(date, clock)
+
+
+def time_html(value) -> Markup:
+    """:func:`time_text` for page text: ``21:01 UTC`` and ``2026-10-16`` never break inside."""
+    text = time_text(value)
+    parts = text.split(" ", 1)
+    if len(parts) == 2 and "-" in parts[0]:
+        return Markup('<span class="nowrap">{}</span> <span class="nowrap">{}</span>').format(*parts)
+    return Markup('<span class="nowrap">{}</span>').format(text)
+
+
+def break_points(value) -> Markup:
+    """An identifier for page text (``account.two_step_enable``) that may wrap only after its dots and
+    underscores (``<wbr>``), never in the middle of a word; the text is escaped."""
+    return Markup("<wbr>").join(re.split(r"(?<=[._])", str(value or "")))
+
+
+def pretty_json(value) -> str:
+    """JSON for reading in a <pre> (autoescaped by the template): real characters, not the HTML-safe
+    \\u0026-style escapes of Flask's ``tojson``, which is meant for <script> blocks."""
+    return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+
+
 def number(value, digits: int = 0) -> str:
     if value is None:
         return "—"
     text = f"{float(value):,.{digits}f}"
-    if _language() == "it":
+    if _display_language() == "it":
         text = text.replace(",", " ").replace(".", ",")
     return text
 
@@ -105,8 +138,6 @@ def parse_amount(text) -> float | None:
     A separator followed by exactly three digits groups thousands unless a
     suffix (k, M, B) follows; otherwise it is the decimal separator.
     """
-    import re
-
     if text is None:
         return None
     raw = "".join(str(text).split()).replace("_", "").replace("\u202f", "").replace("'", "").lower()
@@ -182,16 +213,25 @@ def time_left(value, lang: str | None = None) -> str:
     days, rest = divmod(minutes, 1440)
     hours, minutes = divmod(rest, 60)
     if days:
+        if not hours:
+            return translate(lang, "time.duration_days", days=days)
         return translate(lang, "time.duration_days_hours", days=days, hours=hours)
     if hours:
+        if not minutes:
+            return translate(lang, "time.duration_hours", hours=hours)
         return translate(lang, "time.duration_hours_minutes", hours=hours, minutes=minutes)
     return translate(lang, "time.duration_minutes", minutes=minutes)
+
+
+def time_left_html(value, lang: str | None = None) -> Markup:
+    """:func:`time_left` for page text: ``6 d 23 h`` never breaks inside."""
+    return Markup('<span class="nowrap">{}</span>').format(time_left(value, lang))
 
 
 def filesize(value) -> str:
     size = float(value or 0)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if size < 1024 or unit == "TB":
-            return f"{number(size, 0 if unit == 'B' else 1)} {unit}"
+            return f"{number(size, 0 if unit in ('B', 'KB') else 1)} {unit}"
         size /= 1024
     return f"{size} B"

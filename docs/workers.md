@@ -11,8 +11,8 @@ server's own Ollama, which answers whenever no worker does.
 Administrators can hide model-server offline notices in **Site settings →
 Maintenance and announcements → Model-server status**. Users can also hide a
 notice for 24 hours in their browser. These controls affect presentation only:
-offline models stay unavailable and health reporting stays accurate. Hosted
-Claude and external API models do not use the volunteer worker pool.
+offline models stay unavailable and health reporting stays accurate. External
+API models do not use the volunteer worker pool.
 
 ## Privacy: read this first
 
@@ -58,7 +58,10 @@ tokens are kept.
 ## Registering a worker
 
 Open **Admin → Workers**, enter a name and choose *Register and create
-token*. The token is shown once, in a dialog; copy it to the worker's owner
+token*. Unless you signed in or confirmed in the last ten minutes, enter your
+password (or an authenticator code) with it: the token keeps working after
+your session ends (see [two-step verification](two-step-verification.md#recent-confirmation)).
+The token is shown once, in a dialog; copy it to the worker's owner
 over a private channel. The server stores only its SHA-256 digest, so a lost
 token cannot be recovered: remove the worker and register it again.
 
@@ -97,7 +100,10 @@ model)`. A request goes to the worker pool only when:
    another job — advertises the model (`name` and `name:latest` count as the
    same), and there are more such idle workers than jobs already waiting for
    that model;
-4. no worker failed to pick up that model in the last minute.
+4. no worker failed to pick up that model in the last minute;
+5. no failure of the requester's jobs counted against a worker in the last
+   30 minutes, and a worker on which one of its jobs failed in that time does
+   not count as idle for it (see below).
 
 The request keeps its place in the server's queue while a worker handles it.
 If no worker claims the job within `BC_WORKER_CLAIM_TIMEOUT` seconds, or the
@@ -110,7 +116,39 @@ Stop requests reach the worker on its next chunk (and through its heartbeat).
 When the owner starts gaming before the first words, the worker hands the job
 back (`fail` with `requeue`) and another worker — or, after the claim timeout,
 the local server — takes it. Older daemons that silently keep a job while
-gaming have it taken back when their heartbeat reports `busy`/`gaming`.
+gaming have it taken back when their heartbeat reports `busy`/`gaming`. A job
+is never offered again to the worker that handed it back, and goes back to the
+pool at most three times; without any text, the pool has
+`BC_WORKER_CLAIM_TIMEOUT` + `BC_FIRST_TOKEN_TIMEOUT` seconds in all before the
+local server answers.
+
+A worker that times out (no first chunk within `BC_FIRST_TOKEN_TIMEOUT` of
+claiming the job, or silent past its lease; not when it last spoke before the
+server started, as during an update), reports a failure or breaks the
+protocol is **paused**: it gets no job and no request is routed to it for a
+minute, twice as long after each further failure (up to an hour), and a
+completed job clears the record. The administrator page marks it "paused after
+failures"; disabling and then enabling the worker clears the pause.
+
+Requests can make a worker fail too, so one account cannot pause the pool:
+
+- a failure that follows from the request does not count against the worker:
+  input its model cannot read, a request its Ollama refused (HTTP 4xx), and
+  memory the request needs that the PC does not have (a large `num_ctx` or a
+  long conversation);
+- an account's jobs hold at most one worker responsible per 30 minutes;
+- after a failure of one of its jobs counted against a worker, the account's
+  requests are answered by the server for 30 minutes; after one counted
+  against the request, they are not sent to that worker for 30 minutes, and
+  the other workers keep serving them;
+- a worker that took over a job late (another worker handed it back) is not
+  blamed when the pool's time runs out before it answered.
+
+The reason for a failure comes from the worker, so it is not taken on trust
+for ever: a worker on which the jobs of three different accounts failed for
+their requests' sake within 30 minutes, without an answered job in between,
+cannot run what it advertises (or misreports it) and is paused like any
+failing worker.
 
 ## Protocol
 

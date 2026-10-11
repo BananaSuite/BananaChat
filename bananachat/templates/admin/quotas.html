@@ -20,7 +20,7 @@
     <li><strong>Weekly tokens</strong> are off by default. When enabled, the first request opens a 7-day window. Exhausted allowances become available at reset.</li>
     <li><strong>Model rules</strong> can add separate limits and multiply service token usage by a model's weight. Configure them under <a href="{{ url_for('admin.limit_models') }}">Models</a>.</li>
   </ul>
-  <p class="muted small mb-0">Account overrides replace service defaults. Otherwise, tier and demand adjustments apply before music bonuses and grants. Custom limits are never reduced by demand. {{ custom_count }} account(s) have custom limits, exemptions or queue settings; {{ grant_count }} grant(s) are active.</p>
+  <p class="muted small mb-0">Account overrides replace service defaults. Otherwise, tier and demand adjustments apply before music bonuses and grants. Custom limits are never reduced by demand. {{ custom_count }} account{{ " has" if custom_count == 1 else "s have" }} custom limits, exemptions or queue settings; {{ grant_count }} grant{{ " is" if grant_count == 1 else "s are" }} active.</p>
 </div>
 </details>
 
@@ -130,7 +130,7 @@
         {{ csrf() }}
         <p class="muted small mb-0">If a model reaches its token limit or fails before answering, try another available model. Similar models are tried first; these options allow switching between local and cloud models. Chat identifies the model that answered.</p>
         {{ toggle("quota_fallback_to_local", "Use local models when cloud models are unavailable", s.quota_fallback_to_local if s.quota_fallback_to_local is not none else 1, "When a cloud model's quota runs out, answer with a local model.") }}
-        {{ toggle("quota_fallback_to_cloud", "Use cloud models when local models are unavailable", s.quota_fallback_to_cloud if s.quota_fallback_to_cloud is not none else 1, "When the service tokens of local models run out, answer with a cloud model that does not count toward them.") }}
+        {{ toggle("quota_fallback_to_cloud", "Use cloud models when local models are unavailable", s.quota_fallback_to_cloud if s.quota_fallback_to_cloud is not none else 1, "When the service tokens of local models run out, answer with a cloud model that does not count towards them.") }}
         <div class="form-actions"><button type="submit" class="btn btn-primary">Save model fallback</button></div>
       </form>
     </details>
@@ -150,7 +150,7 @@
           </form>
         </div>
         <p class="muted small mb-0">Restore defaults removes service and model overrides, model locks, token and rate exemptions, and queue settings. Tiers, grants and reasoning unlocks are kept.</p>
-        <form method="post" action="{{ url_for('admin.quotas_restore_defaults') }}" data-confirm="Remove custom limits, token/rate exemptions and speed settings from {{ custom_count }} account(s) and apply the policies to everyone?" data-confirm-danger>
+        <form method="post" action="{{ url_for('admin.quotas_restore_defaults') }}" data-confirm="Remove custom limits, token/rate exemptions and speed settings from {{ custom_count }} account{{ "" if custom_count == 1 else "s" }} and apply the policies to everyone?" data-confirm-danger>
           {{ csrf() }}
           <button type="submit" class="btn btn-danger">Restore default limits for all accounts</button>
         </form>

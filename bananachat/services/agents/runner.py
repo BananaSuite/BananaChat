@@ -6,8 +6,8 @@ engine) enforces the sandbox limits on its side.
 
 Configuration: ``BC_AGENTS_RUNNER_URL`` plus ``BC_AGENTS_RUNNER_TOKEN_FILE``
 (a regular mode-0600 file) or ``BC_AGENTS_RUNNER_TOKEN``. HTTPS is required
-unless the runner is on this host (for example through an SSH tunnel); plain
-HTTP over Tailscale needs ``BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE=1``.
+unless the runner is on this host (for example through an SSH tunnel) or its
+address is inside a private network listed in ``BC_AGENTS_RUNNER_INSECURE_NETWORKS``.
 
 Errors are :class:`RunnerError` with the HTTP status (None when the runner
 could not be reached) and two hints for retrying: ``transient`` (worth trying
@@ -87,10 +87,12 @@ class Runner:
             raise RunnerUnavailable("The sandbox runner is not configured.")
         try:
             self.base_url = checkpoint_agent.validate_base_url(
-                config.agents_runner_url, allow_insecure_tailscale=config.agents_runner_allow_insecure_tailscale)
+                config.agents_runner_url, insecure_networks=config.agents_runner_insecure_networks,
+                allow_insecure_tailscale=config.agents_runner_allow_insecure_tailscale)
         except ValueError:
-            raise RunnerUnavailable("The sandbox runner URL is invalid (HTTPS is required unless it runs on this "
-                                    "host).") from None
+            raise RunnerUnavailable("The sandbox runner URL is invalid (HTTPS is required unless it runs on this host "
+                                    "or on a private network listed in BC_AGENTS_RUNNER_INSECURE_NETWORKS).") from None
+        checkpoint_agent.warn_plain_http("The sandbox runner", self.base_url)
         if config.agents_runner_token_file:
             try:
                 self.token = checkpoint_agent.read_token(config.agents_runner_token_file)
@@ -265,7 +267,8 @@ _health: dict = {"at": 0.0, "value": None, "key": None}
 def health(config=None, *, fresh: bool = False) -> dict:
     """``{"ok": bool, "error": str, ...runner fields}``, cached for HEALTH_TTL seconds."""
     config = _config(config)
-    key = (config.agents_runner_url, config.agents_runner_token_file, bool(config.agents_runner_token))
+    key = (config.agents_runner_url, config.agents_runner_token_file, bool(config.agents_runner_token),
+           config.agents_runner_insecure_networks, config.agents_runner_allow_insecure_tailscale)
     now = time.monotonic()
     with _health_lock:
         if not fresh and _health["value"] is not None and _health["key"] == key and now - _health["at"] < HEALTH_TTL:

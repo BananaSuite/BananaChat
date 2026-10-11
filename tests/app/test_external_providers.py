@@ -132,7 +132,7 @@ def test_admin_provider_keys_are_private_and_never_rendered(app, external_api):
         row = store.list_providers()[0]
         assert KEY not in str(dict(row))
         path = app.config['BC'].instance_dir / '.provider-keys' / row['secret_ref']
-        assert path.read_text() == KEY and path.stat().st_mode & 0o777 == 0o600
+        assert KEY.encode() not in path.read_bytes() and path.stat().st_mode & 0o777 == 0o600
         assert provider_secrets.load(row['secret_ref']) == KEY
     page = browser.get('/admin/models/providers')
     assert page.status_code == 200 and KEY.encode() not in page.data
@@ -209,12 +209,14 @@ def test_anthropic_native_system_effort_and_cache_usage(app, external_api):
     request = external_api.requests[-1]
     assert request['path'] == '/v1/messages'
     assert request['headers']['x-api-key'] == KEY and 'Authorization' not in request['headers']
-    assert request['body']['system'] == 'Be concise' and request['body']['thinking'] == {'type': 'adaptive'}
+    assert request['body']['system'] == 'Be concise'
+    assert request['body']['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
+    assert request['body']['output_config'] == {'effort': 'high'}
     assert chunks[-1].prompt_tokens == 15 and chunks[-1].completion_tokens == 4
 
 
 @pytest.mark.parametrize('events', [
-    openai_events()[:-1],
+    openai_events()[:1],  # cut off before the finish reason
     [{'choices': [], 'usage': {'prompt_tokens': -1, 'completion_tokens': 4}}, None],
     [{'choices': [{'delta': {'content': 'Hi'}, 'finish_reason': None}]}, None],
     [{'error': {'message': KEY}}],
@@ -251,6 +253,8 @@ def test_verified_missing_models_hide_and_reappear_without_resetting_limits(app,
         model = service.enroll(store.get(row['id']), 'gpt-test')
         policy = limits_db.get_model_policy(model)
         external_api.models = ['other-model']
+        service.sync(row['id'])
+        assert catalog.get(model['id'])['backend_available'], 'one listing without it is not enough'
         service.sync(row['id'])
         assert not catalog.get(model['id'])['backend_available']
         external_api.models.append('gpt-test')
@@ -426,7 +430,7 @@ def test_tool_streams_and_history_preserve_matching_ids(app, external_api, proto
         from bananachat.services.agents import settings as agent_settings
         assert agent_settings.supports_tools(model, {}, {})
         chunks = list(service.stream(model, history, tools=[tool]))
-    assert chunks[-1].tool_calls == [{'name': 'read_file', 'arguments': '{"path":"b"}'}]
+    assert chunks[-1].tool_calls == [{'name': 'read_file', 'arguments': {'path': 'b'}}]
     body = external_api.requests[-1]['body']
     if protocol == 'openai':
         assert body['messages'][1]['tool_calls'][0]['id'] == body['messages'][2]['tool_call_id']
@@ -441,8 +445,10 @@ def test_revision_change_during_stream_closes_it_without_terminal_success(app, e
         stream = service.stream(model, [{'role': 'user', 'content': 'Hi'}])
         assert next(stream).content == 'Hello'
         store.save(row['id'], enabled=0)
+        # The provider is reread now and then while it streams (not per chunk), and always before the last chunk.
         with pytest.raises(UpstreamError):
-            next(stream)
+            for chunk in stream:
+                assert not chunk.done
         stream.close()
 
 

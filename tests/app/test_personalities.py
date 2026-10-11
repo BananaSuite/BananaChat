@@ -195,7 +195,8 @@ def test_full_form_is_saved_and_shown(app, make_user):
     assert json.loads(row["starters"]) == ["Teach me fractions", "Quiz me"]
     assert (row["preferred_model"], row["response_length"], row["creativity"]) == ("llama3.2:3b", "concise", "precise")
     edit = browser.get(f"/personalities/{row['id']}/edit").get_data(as_text=True)
-    assert 'value="Teach me fractions"' in edit and 'value="green" checked' in edit
+    # Starters are one-line fields that grow with their text (textareas).
+    assert '>Teach me fractions</textarea>' in edit and 'value="green" checked' in edit
     assert re.search(r'<option value="llama3.2:3b" selected', edit)
 
 
@@ -658,8 +659,8 @@ def test_rate_limits_on_sharing_and_importing(app, make_user):
 
 
 @pytest.mark.parametrize(("lang", "words"), [
-    ("en", ["Personalities", "Start from a template", "Default for new chats", "Friendly tutor"]),
-    ("it", ["Personalità", "Parti da un modello", "Predefinita per le nuove chat", "Tutor paziente"]),
+    ("en", ["Personalities", "Start from an example", "Default for new chats", "Friendly tutor"]),
+    ("it", ["Personalità", "Parti da un esempio", "Predefinita per le nuove chat", "Tutor paziente"]),
 ])
 def test_pages_are_translated(app, make_user, lang, words):
     from bananachat.db import personalities

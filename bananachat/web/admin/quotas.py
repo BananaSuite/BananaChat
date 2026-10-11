@@ -200,6 +200,8 @@ def request_summary(row) -> str:
         pool = f"model {row['model_name'] or '(removed)'}"
     if kind == "effort":
         target = row["model_name"] or ("every model" if row["effort_all_models"] else "a removed model")
+        if limits.effort_is_binary(row["model_id"]):
+            return f"Reasoning on · {target}"
         return f"Reasoning effort up to {limits.effort_label(row['effort_level'] or 'medium')} · {target}"
     if kind == "weekly":
         return f"{tokens_en(_request_tokens(row, 'new_weekly_tokens', 'new_weekly_credits'))} per week · {pool}"

@@ -1,31 +1,32 @@
 {% extends "admin/_layout.html" %}
 {% from "partials/icons.html" import icon %}
+{% from "admin/_reauth.html" import reauth_field with context %}
 {% set section = "workers" %}
 {% block title %}Workers{% endblock %}
 
 {% macro status_badge(status) -%}
-<span class="badge {{ {'online': 'badge-success', 'busy': 'badge-warning', 'disabled': 'badge-danger'}.get(status, '') }}">{{ status }}</span>
+<span class="badge {{ {'online': 'badge-success', 'busy': 'badge-warning', 'disabled': 'badge-danger'}.get(status, '') }}">{{ status | capitalize }}</span>
 {%- endmacro %}
 
 {% macro activity_badge(activity) -%}
-{% if activity %}<span class="badge {{ {'idle': 'badge-success', 'light': 'badge-info', 'active': 'badge-warning', 'gaming': 'badge-danger'}.get(activity, '') }}">{{ activity }}</span>{% else %}<span class="faint">—</span>{% endif %}
+{% if activity %}<span class="badge {{ {'idle': 'badge-success', 'light': 'badge-info', 'active': 'badge-warning', 'gaming': 'badge-danger'}.get(activity, '') }}">{{ activity | capitalize }}</span>{% else %}<span class="faint">—</span>{% endif %}
 {%- endmacro %}
 
 {% macro worker_row(w) -%}
 <tr data-worker-id="{{ w.id }}">
-  <td><strong>{{ w.name }}</strong><br><span class="small faint mono">{{ w.id[:12] }}</span>{% if w.platform %}<br><span class="small muted">{{ w.platform }}</span>{% endif %}</td>
-  <td>{{ status_badge(w.status) }}{% if w.working %} <span class="badge badge-primary">running a job</span>{% endif %}</td>
-  <td>{{ activity_badge(w.activity) }}</td>
-  <td>{{ w.gpu_name or "—" }}{% if w.gpu_util is not none %}<br><span class="small muted">{{ w.gpu_util }}% busy</span>{% endif %}</td>
-  <td>
+  <td class="cell-full worker-name"><strong>{{ w.name }}</strong><br><span class="small faint mono">{{ w.id[:12] }}</span>{% if w.platform %}<br><span class="small muted">{{ w.platform }}</span>{% endif %}</td>
+  <td class="worker-status">{{ status_badge(w.status) }}{% if w.working %} <span class="badge badge-primary">Running a job</span>{% endif %}{% if w.paused %} <span class="badge badge-warning">Paused after failures</span>{% endif %}</td>
+  <td data-label="Activity:">{{ activity_badge(w.activity) }}</td>
+  <td class="worker-gpu" data-label="GPU:">{{ w.gpu_name or "—" }}{% if w.gpu_util is not none %}<br><span class="small muted">{{ w.gpu_util }}% busy</span>{% endif %}</td>
+  <td data-label="Models:">
     {% if w.models %}
-    <details><summary>{{ w.models | length }} model{{ "s" if w.models | length != 1 }}</summary>
+    <details class="inline-details"><summary class="nowrap">{{ w.models | length }} model{{ "s" if w.models | length != 1 }}{{ icon("chevron-down") }}</summary>
       <ul class="small">{% for model in w.models %}<li class="mono">{{ model }}</li>{% endfor %}</ul>
     </details>
     {% else %}<span class="faint">none reported</span>{% endif %}
-    {% if w.ollama_version %}<br><span class="small muted">Ollama {{ w.ollama_version }}</span>{% endif %}
+    {% if w.ollama_version %}<div class="small muted nowrap">Ollama {{ w.ollama_version }}</div>{% endif %}
   </td>
-  <td>{% if w.last_heartbeat %}<span title="{{ w.last_heartbeat | datetime }}">{{ w.last_heartbeat | timeago }}</span>{% else %}never{% endif %}</td>
+  <td class="nowrap" data-label="Last heartbeat:">{% if w.last_heartbeat %}<span title="{{ w.last_heartbeat | datetime }}">{{ w.last_heartbeat | timeago }}</span>{% else %}never{% endif %}</td>
   <td class="actions">
     <form method="post" action="{{ url_for('admin.workers_state', worker_id=w.id) }}"
           {% if w.status != 'disabled' %}data-confirm="Stop sending jobs to “{{ w.name }}”? A job it is running now is stopped." data-confirm-label="Disable"{% endif %}>
@@ -73,8 +74,9 @@
       your users’ conversations, and tell your users that some answers are produced on volunteer hardware.</p>
     <p class="small muted">Administrators’ own requests always use the local server. A worker gets a request only when it
       is online, not gaming and advertises the model; if none takes it within {{ claim_timeout }} seconds, or it fails
-      before answering, the local server answers instead. The server deletes a job’s prompt as soon as it ends and the
-      job record after an hour.</p>
+      before answering, the local server answers instead. A worker that fails or stalls a job is paused: it gets no job
+      for a minute, twice as long after each further failure (up to an hour), until it completes one again. The server
+      deletes a job’s prompt as soon as it ends and the job record after an hour.</p>
   </div>
 </div>
 
@@ -94,6 +96,7 @@
       <label for="worker-name">Name</label>
       <input type="text" id="worker-name" name="name" maxlength="80" required autocomplete="off" placeholder="e.g. Anna’s gaming PC">
     </div>
+    {{ reauth_field("worker-reauth") }}
     <button type="submit" class="btn btn-primary">{{ icon("key") }}<span>Register and create token</span></button>
   </form>
 </section>
@@ -104,7 +107,7 @@
     <span class="small muted" id="workers-updated">Refreshes every 15 seconds{% if job_counts %} · jobs: {% for status, count in job_counts.items() %}{{ count }} {{ status }}{{ ", " if not loop.last }}{% endfor %}{% endif %}</span>
   </div>
   <div class="table-wrap">
-    <table class="table" id="workers-table">
+    <table class="table table-stack table-stack-lg" id="workers-table">
       <thead><tr><th>Name</th><th>Status</th><th>Activity</th><th>GPU</th><th>Models</th><th>Last heartbeat</th><th class="actions">Actions</th></tr></thead>
       <tbody id="workers-body">
         {% for w in workers %}{{ worker_row(w) }}{% endfor %}

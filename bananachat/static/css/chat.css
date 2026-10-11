@@ -4,7 +4,9 @@
 
 /* ----- page frame ----------------------------------------------------------- */
 body.chat-page { height: 100vh; height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-body.chat-page > main { flex: 1 1 auto; min-height: 0; display: flex; }
+body.chat-page > main { flex: 1 1 0; min-height: 0; display: flex; }
+/* The top bar and service notices keep their size; only the conversation area gives way. */
+body.chat-page > .topbar, body.chat-page > .status-region { flex: none; }
 body.chat-page > main:focus { outline: none; }
 /* Conversation feedback stays above the message area, clear of the composer. */
 body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto; }
@@ -29,7 +31,7 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .sidebar-new .btn-icon { padding: 0; width: var(--control-height); background: transparent; border-color: transparent; }
 .sidebar-new .btn-icon svg { color: var(--text-muted); }
 .sidebar-search { position: relative; }
-.sidebar-search svg { position: absolute; left: .65rem; top: 50%; width: 16px; height: 16px; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+.sidebar-search svg { position: absolute; left: .65rem; top: 50%; width: 1rem; height: 1rem; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
 .sidebar-search input { padding-left: 2.1rem; min-height: var(--control-compact); font-size: .8125rem; background: var(--bg); border-color: var(--border); }
 .sidebar-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: .25rem .5rem .75rem; }
 .sidebar-label { margin: 0; padding: .25rem .6rem .5rem; font-size: .75rem; font-weight: 500; color: var(--text-faint); }
@@ -44,7 +46,7 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 }
 .session-link:hover { color: var(--text); }
 .session-item.is-no-history .session-link { flex-direction: row; align-items: center; gap: .45rem; }
-.session-link svg { width: 16px; height: 16px; flex: none; }
+.session-link svg { width: 1rem; height: 1rem; flex: none; }
 .session-snippet { font-size: .78rem; color: var(--text-muted); }
 .session-menu-button { width: 30px; height: 30px; flex: none; opacity: 0; }
 .session-item:hover .session-menu-button, .session-item:focus-within .session-menu-button,
@@ -61,8 +63,9 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
   border-bottom: 1px solid var(--border);
 }
 .chat-title { margin: 0; font-size: .875rem; font-weight: 550; min-width: 0; }
-.chat-header .badge svg { width: 13px; height: 13px; }
+.chat-header .badge svg { width: .8125rem; height: .8125rem; }
 .chat-header-actions { margin-left: auto; display: flex; align-items: center; gap: .25rem; flex: none; }
+.chat-header .chat-badge { flex: none; }
 .no-history-notice {
   display: flex; align-items: flex-start; gap: .6rem; padding: .6rem 1rem; font-size: .88rem;
   background: var(--info-bg); border-bottom: 1px solid color-mix(in srgb, var(--info) 35%, var(--bg));
@@ -89,6 +92,10 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .message-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .15rem .75rem; margin-top: .35rem; min-width: 0; }
 .message-meta { margin: 0; font-size: .75rem; color: var(--text-muted); overflow-wrap: anywhere; }
 .message-actions { display: flex; gap: 2px; margin-left: auto; opacity: 0; transition: opacity var(--speed); }
+/* Under a user bubble the time lines up with the bubble's edge; the actions sit to its left. */
+.message-user .message-footer { flex-direction: row-reverse; }
+.message-user .message-actions { margin-left: 0; margin-right: auto; }
+.message-user .message-meta.row { justify-content: flex-end; }
 .message:hover .message-actions, .message:focus-within .message-actions, .message:last-child .message-actions { opacity: 1; }
 @media (hover: none) { .message-actions { opacity: 1; } }
 .message-actions .icon-btn { width: 32px; height: 32px; }
@@ -98,6 +105,10 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .message-notice { margin: 0 0 .6rem; padding: .45rem .7rem; border-radius: var(--radius-sm); background: var(--info-bg); color: var(--text); }
 .message-state svg, .message-notice svg { width: 16px; height: 16px; flex: none; margin-top: .1rem; }
 .message-state.state-failed, .message-state.state-interrupted { color: var(--warning); }
+/* "Try again" sends the question again, so only the newest answer offers it. */
+.message-retry { margin: .5rem 0 0; }
+.message-retry .btn svg { width: 16px; height: 16px; }
+.message:not(:last-child) .message-retry { display: none; }
 .message-status { align-items: center; }
 .typing { display: inline-flex; gap: 3px; }
 .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); animation: typing 1.2s infinite ease-in-out; }
@@ -105,14 +116,15 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .typing span:nth-child(3) { animation-delay: .3s; }
 @keyframes typing { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
 
-.attachment-list { list-style: none; display: flex; flex-wrap: wrap; gap: .4rem; margin: .5rem 0 0; padding: 0; }
-.attachment-image img { display: block; max-width: min(240px, 100%); max-height: 240px; border-radius: var(--radius); border: 1px solid var(--border); }
+.attachment-list { list-style: none; display: flex; flex-wrap: wrap; align-items: flex-start; gap: .4rem; margin: .5rem 0 0; padding: 0; }
+.attachment-image { max-width: min(240px, 100%); }
+.attachment-image img { display: block; max-width: 100%; max-height: 240px; border-radius: var(--radius); border: 1px solid var(--border); }
 .file-chip {
   display: inline-flex; align-items: center; gap: .4rem; max-width: 100%; min-width: 0;
   padding: .2rem .35rem .2rem .6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: .8125rem;
 }
 .file-chip-kind { font-size: .68rem; font-weight: 700; letter-spacing: .03em; color: var(--primary); flex: none; }
-.file-chip-link { color: inherit; min-width: 0; }
+.file-chip-link { display: inline-flex; align-items: center; min-height: 1.5rem; color: inherit; min-width: 0; }
 .file-chip .icon-btn { width: 26px; height: 26px; flex: none; }
 .file-chip .icon-btn svg { width: 14px; height: 14px; }
 
@@ -132,11 +144,16 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .prose del { color: var(--text-muted); }
 .code-block .code-actions { display: flex; gap: .15rem; }
 .code-block .code-actions .btn { min-height: 26px; padding: .1rem .5rem; font-size: .78rem; font-family: var(--font); }
+/* TeX is shown as written (no math renderer): monospace, backslashes kept. */
+.prose code.math { white-space: pre-wrap; }
+/* Task items ("- [x] done"): the box takes the bullet's place. */
+.prose li.task-item { list-style: none; }
+.prose .task-mark { display: inline-block; width: 1.3em; margin-left: -1.3em; color: var(--text-muted); }
 
 /* ----- empty state ---------------------------------------------------------- */
 .chat-empty { text-align: center; padding: clamp(2rem, 10vh, 5rem) 0 1.5rem; }
 .chat-welcome { max-width: 32rem; margin: 0 auto; }
-.chat-empty h2 { font-size: 1.4rem; font-weight: 550; letter-spacing: -.025em; }
+.chat-empty h2 { font-size: 1.4rem; font-weight: 550; letter-spacing: calc(var(--letter-spacing) - .025em); }
 .chat-welcome p { margin: .5rem 0 0; font-size: .9375rem; }
 .suggestions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: .6rem; margin-top: 1.5rem; text-align: left; }
 .suggestion {
@@ -165,8 +182,18 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .composer-box:has(textarea:focus-visible) { border-color: var(--text-muted); }
 .file-chips { list-style: none; display: flex; flex-wrap: wrap; gap: .35rem; margin: 0; padding: .15rem .25rem 0; }
 .composer-toolbar { display: flex; align-items: flex-end; gap: .625rem; }
+.composer-toolbar > .voice-button { margin: 0 -.3rem 4px 0; }
 .composer-tools { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .2rem; flex: 1 1 auto; min-width: 0; }
 .composer-secondary { display: flex; align-items: center; gap: .2rem; margin-left: auto; }
+/* The pickers are flex boxes, so their buttons centre the same way under any line-spacing preference
+   (in a line box the tall strut would lift buttons without a text baseline). */
+.composer-tools > .model-picker { display: flex; align-items: center; }
+/* With the reasoning and personality pickers there is no room for the Attach and Options labels
+   beside them: icons only (the buttons keep their names), so the toolbar stays on one row. */
+.composer-tools:has(> #effort-picker:not([hidden])):has(> #persona-picker) .composer-action-label { display: none; }
+@media (min-width: 641px) {
+  .composer-tools:has(> #effort-picker:not([hidden])):has(> #persona-picker) .composer-action { padding-inline: .45rem; }
+}
 .send-button { min-height: var(--control-height); padding: .4rem .7rem; border-radius: var(--radius); flex: none; }
 .composer-action { gap: .35rem; }
 .picker-label { color: var(--text-muted); }
@@ -174,6 +201,8 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .composer-paused { display: flex; align-items: center; gap: .4rem; margin: .4rem 0 0; font-size: .85rem; color: var(--warning); text-align: center; justify-content: center; }
 .composer-paused:empty { display: none; }
 .composer-hint { margin: .45rem 0 0; font-size: .75rem; color: var(--text-faint); text-align: center; }
+/* While sending is paused the keyboard hint describes nothing that works. */
+.composer-paused:not(:empty) + .composer-hint { display: none; }
 .scroll-bottom { position: absolute; left: 50%; top: -2.9rem; transform: translateX(-50%); z-index: 5; border-radius: 999px; box-shadow: var(--shadow); }
 
 .params-panel { margin-bottom: .5rem; }
@@ -185,7 +214,7 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 /* Model picker: a searchable listbox that opens above the composer. */
 .model-picker { position: relative; min-width: 0; }
 .model-button { max-width: 240px; min-width: 0; gap: .3rem; }
-.model-button svg { width: 15px; height: 15px; }
+.model-button svg { width: .9375rem; height: .9375rem; }
 #model-picker > .model-button { border-color: var(--border); background: var(--raised); color: var(--text); }
 #model-picker > .model-button:hover, .model-button[aria-expanded="true"] { border-color: var(--border-strong); background: var(--hover); color: var(--text); }
 .model-popover {
@@ -247,10 +276,11 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
   .chat-shell { grid-template-columns: minmax(0, 1fr); }
   .chat-sidebar {
     position: fixed; top: 0; bottom: 0; left: 0; z-index: 60; width: min(320px, 86vw);
-    transform: translateX(-100%); visibility: hidden; transition: transform var(--speed), visibility var(--speed);
+    /* Visible at once when it opens (so focus can move into it), hidden only after it has slid away. */
+    transform: translateX(-100%); visibility: hidden; transition: transform var(--speed), visibility 0s linear var(--speed);
     box-shadow: var(--shadow-lg);
   }
-  .chat-shell.sidebar-open .chat-sidebar { transform: none; visibility: visible; }
+  .chat-shell.sidebar-open .chat-sidebar { transform: none; visibility: visible; transition: transform var(--speed), visibility 0s; }
   .chat-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgb(0 0 0 / .5); }
   .chat-backdrop[hidden] { display: none; }
 }
@@ -259,16 +289,28 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
   .composer-area { padding: 0 .5rem calc(.5rem + env(safe-area-inset-bottom)); }
   .composer-box { padding: .4rem; }
   .composer-tools { gap: .25rem .1rem; }
+  /* Only the model picker gives way: the icon buttons keep their size. */
+  .composer-tools > :not(#model-picker) { flex-shrink: 0; }
   .composer-secondary { display: contents; }
-  .composer-action { min-width: var(--control-compact); padding-inline: .4rem; }
+  .composer-action { min-width: var(--control-compact); padding-inline: .35rem; }
   .composer-action-label { display: none; }
   .send-button { width: var(--control-height); height: var(--control-height); padding: 0; }
   .composer-hint { display: none; }
-  .model-button { max-width: 124px; }
+  .composer-toolbar { gap: .35rem; }
+  /* The model name takes the room the row has (up to its full width) and is shortened only when the
+     icons need the space; it counts as 6rem when the row decides whether to wrap. */
+  #model-picker { flex: 1 1 6rem; min-width: 6rem; max-width: max-content; }
+  /* Large text leaves no room for a readable name beside the icons: the name gets the first row. */
+  .composer-tools { container-type: inline-size; }
+  #model-picker > .model-button { max-width: 100%; }
+  .chat-header-button { padding-inline: .5rem; }
+  .chat-action-label { display: none; }
+  .chat-badge-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .chat-header .chat-badge { padding: .2rem .35rem; }
   /* Like the personality and effort pickers: the list spans the composer instead of starting at its button. */
   .model-picker { position: static; }
   .model-popover { left: .5rem; right: .5rem; width: auto; }
-  .effort-button { max-width: 44px; padding-right: .35rem; }
+  .effort-button { max-width: none; padding-inline: .45rem; }
   .effort-button #effort-button-label, .effort-button .picker-label, .effort-button > svg:last-child { display: none; }
   .effort-popover { width: auto; }
   .chat-header { padding: .35rem .5rem; }
@@ -276,6 +318,19 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
   .chat-empty { padding-top: clamp(1.5rem, 7vh, 3rem); }
   .no-history-notice { padding: .5rem .75rem; font-size: .84rem; }
   .message-user { max-width: 94%; }
+  /* A wide Markdown table keeps readable columns and scrolls, instead of squeezing every column
+     to its narrowest (one word per line, very tall rows). */
+  .prose .table-scroll > table { width: max-content; }
+  .prose .table-scroll :is(th, td) { max-width: 16rem; }
+  /* Service notices stay short above a conversation: a blocking notice drops its generic line,
+     which the composer repeats ("Sending paused"); the title and the administrator's note remain. */
+  body.chat-page .status-banner { padding-block: .45rem; }
+  body.chat-page .status-banner.is-blocking .status-text { display: none; }
+  body.chat-page .status-banner :is(.status-text, .status-note) { font-size: .8125rem; }
+}
+
+@container (max-width: 13rem) {
+  #model-picker { flex-basis: 100%; max-width: none; }
 }
 
 @media (pointer: coarse) {

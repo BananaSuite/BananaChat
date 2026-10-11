@@ -14,6 +14,7 @@ from flask import abort, flash, redirect, render_template, request, url_for
 from bananachat.db import agents as agents_db
 from bananachat.db import catalog
 from bananachat.i18n import translate
+from bananachat.numbers import ascii_int
 from bananachat.security import admin_required
 from bananachat.services.access import is_text_model
 from bananachat.services.agents import gitfetch, service
@@ -27,7 +28,7 @@ from ._helpers import FormError, audit, back, flag, integer, me, page, text
 LIMIT_LABELS = {
     "max_steps": ("Steps per run", "Model calls per run, including parallel agents."),
     "max_minutes": ("Minutes per run", "Wall time per run; time paused for maintenance does not count."),
-    "max_tokens": ("Tokens per run", "Prompt and answer tokens per run (also counted against the agent token limits)."),
+    "max_tokens": ("Tokens per run", "Prompt and answer tokens per run (also counted against the owner's Cloud sessions token limits)."),
     "max_tasks_per_user": ("Running sessions per user", "Administrators are limited only by the site limit."),
     "max_tasks_total": ("Running sessions on the site", "Also capped by the runner's sandbox limit."),
     "command_timeout": ("Command timeout (seconds)", "Longest single command; the runner applies its own cap too."),
@@ -232,7 +233,7 @@ def _task_or_404(task_id: str):
 @admin_required
 def task_detail(task_id):
     task = _task_or_404(task_id)
-    after = max(0, request.args.get("after", 0, type=int) or 0)
+    after = ascii_int(request.args.get("after", ""), 18) or 0
     rows = agents_db.steps(task["id"], after=after, limit=500)
     steps = [step_view(row, "en") for row in rows]
     return render_template(

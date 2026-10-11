@@ -2,23 +2,27 @@
 {% block title %}{{ t("auth.create_account") }}{% endblock %}
 {% block card %}
 <h1>{{ t("auth.create_account") }}</h1>
-{% if signup_mode == "invite" %}<p class="muted">{{ t("auth.invite_only") }}</p>{% endif %}
+{%- set described = 'auth-messages ' if get_flashed_messages() else '' %}
+{%- set error_field = error_field | default(none) %}
+{#- The field a message is about takes the focus and reads the message; otherwise the first empty field. -#}
+{%- set focus = error_field or ("invite_code" if signup_mode == "invite" and not invite else "username") %}
+{% if signup_mode == "invite" and not invite %}<p class="muted">{{ t("auth.invite_only") }}</p>{% endif %}
 <form method="post" action="{{ url_for('auth.signup') }}" class="stack">
   {% include "auth/_bot_fields.html" %}
   {% if signup_mode == "invite" %}
   <div class="field">
     <label for="invite_code" class="required">{{ t("auth.invite_code") }}</label>
-    <input type="text" id="invite_code" name="invite_code" required maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false" value="{{ invite }}">
+    <input type="text" id="invite_code" name="invite_code" required maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false" value="{{ invite }}"{% if focus == "invite_code" %} autofocus{% if described %} aria-describedby="auth-messages"{% endif %}{% endif %}{% if error_field == "invite_code" %} aria-invalid="true"{% endif %}>
   </div>
   {% endif %}
   <div class="field">
     <label for="username" class="required">{{ t("auth.username") }}</label>
-    <input type="text" id="username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]+" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="username-hint" value="{{ request.form.get('username', '') }}">
+    <input type="text" id="username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]+" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="{% if focus == 'username' %}{{ described }}{% endif %}username-hint" value="{{ request.form.get('username', '') }}"{% if focus == "username" %} autofocus{% endif %}{% if error_field == "username" %} aria-invalid="true"{% endif %}>
     <span class="hint" id="username-hint">{{ t("auth.username_rules") }}</span>
   </div>
   <div class="field">
     <label for="password" class="required">{{ t("auth.password") }}</label>
-    <input type="password" id="password" name="password" required minlength="8" maxlength="1024" autocomplete="new-password" aria-describedby="password-hint">
+    <input type="password" id="password" name="password" required minlength="8" maxlength="1024" autocomplete="new-password" aria-describedby="{% if focus == 'password' %}{{ described }}{% endif %}password-hint"{% if focus == "password" %} autofocus{% endif %}{% if error_field == "password" %} aria-invalid="true"{% endif %}>
     <span class="hint" id="password-hint">{{ t("auth.password_length") }}</span>
   </div>
   <div class="field">

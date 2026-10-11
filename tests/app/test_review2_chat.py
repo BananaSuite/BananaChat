@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import os
-import shutil
-import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,9 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 from tests.app.test_chat import messages, new_chat, parse_sse, send, setup_models, user_browser
-
-MARKDOWN = Path(__file__).resolve().parents[2] / "bananachat" / "static" / "js" / "markdown.js"
-NODE = shutil.which("node")
+from tests.app.test_chat_markdown import require_node
+from tests.app.test_chat_markdown import render as render_markdown
 
 
 @pytest.fixture
@@ -24,19 +20,10 @@ def alice(app, make_user):
     return user_browser(app, make_user)
 
 
-def render_markdown(*texts: str) -> list[str]:
-    script = (f"import {{ renderMessage }} from {json.dumps(MARKDOWN.as_uri())};\n"
-              f"const inputs = JSON.parse({json.dumps(json.dumps(list(texts)))});\n"
-              "console.log(JSON.stringify(inputs.map((text) => renderMessage(text))));\n")
-    result = subprocess.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=30,
-                            check=True)
-    return json.loads(result.stdout)
-
-
 # ----- markdown -------------------------------------------------------------------------------
 
-@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_code_spans_inside_link_labels_are_rendered():
+    require_node()
     (html,) = render_markdown("See [the `config` file](https://example.com/config) and `run`.")
     assert '<a href="https://example.com/config" target="_blank" rel="noopener noreferrer nofollow">' \
            "the <code>config</code> file</a>" in html
@@ -207,6 +194,55 @@ def test_a_send_refused_for_maintenance_shows_the_translated_notice(app, chat_pa
     toast = chat_page.wait_for_selector(".toast", timeout=10000)
     assert toast.text_content().startswith(translate("it", "js.status_paused"))
     assert chat_page.input_value("#chat-input") == "Ciao?"
+
+
+def test_an_interrupted_answer_is_tried_again_through_the_normal_send(app, chat_page, fake_ollama):
+    """The "Try again" button sends the question again like typing it (same checks and charging); the draft stays."""
+    from bananachat import db
+    from bananachat.db import chats, settings, users
+    from bananachat.i18n import translate
+    from tests.app.test_chat import _stale_run
+
+    with app.app_context():
+        session_id = chats.create(users.get_by_username("alice")["id"], incognito=False)
+    _stale_run(app, session_id, partial="Half an answer")
+    chat_page.goto(chat_page.url.split("/chat")[0] + f"/chat/{session_id}")  # the reload saves the partial answer
+    chat_page.wait_for_selector(".message-assistant .state-interrupted")
+    retry = chat_page.locator(".message-retry button")
+    assert retry.count() == 1 and retry.is_visible()
+    assert retry.inner_text() == translate(chat_page.evaluate("document.documentElement.lang"), "js.chat_try_again")
+    chat_page.fill("#chat-input", "A draft")
+    chat_page.set_input_files("#file-input", files=[{"name": "staged.txt", "mimeType": "text/plain", "buffer": b"x"}])
+    with app.app_context():
+        charged = db.one("SELECT COUNT(*) AS n FROM credit_ledger")["n"]
+        settings.update(maintenance_mode=1)
+
+    retry.click()  # refused like any send: nothing is kept and the button comes back
+    chat_page.wait_for_selector(".toast", timeout=10000)
+    chat_page.wait_for_function("document.querySelectorAll('#chat-messages .message').length === 2")
+    assert retry.is_visible()
+    with app.app_context():
+        settings.update(maintenance_mode=0)
+    bodies = len(fake_ollama.chat_bodies())
+
+    retry.click()
+    chat_page.wait_for_function("""() => document.querySelectorAll('#chat-messages .message').length === 4
+        && !document.querySelector('.message.is-pending') && !document.getElementById('send-button').hidden""",
+                                timeout=20000)
+    shown = chat_page.locator("#chat-messages .message")
+    assert shown.nth(2).inner_text().startswith("Question")
+    assert "Answer text." in shown.nth(3).inner_text()
+    assert chat_page.locator(".message-retry button:visible").count() == 0  # only the newest answer offers it
+    assert chat_page.input_value("#chat-input") == "A draft"
+    assert chat_page.locator("#file-chips").inner_text().count("staged.txt") == 1
+    sent = fake_ollama.chat_bodies()[bodies:]
+    assert len(sent) == 1 and sent[0]["messages"][-1] == {"role": "user", "content": "Question"}
+    with app.app_context():
+        saved = chats.context_messages(session_id, max_messages=10, max_chars=10_000)
+        assert [(row["role"], row["content"]) for row in saved] == [
+            ("user", "Question"), ("assistant", "Half an answer"), ("user", "Question"), ("assistant", "Answer text.")]
+        assert db.query("SELECT COUNT(*) AS n FROM chat_attachments")[0]["n"] == 0
+        assert db.one("SELECT COUNT(*) AS n FROM credit_ledger")["n"] == charged + 1  # charged as a new message
 
 
 # ----- retention ------------------------------------------------------------------------------------

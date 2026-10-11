@@ -37,32 +37,37 @@ function actionForm(action, fields, button, confirm) {
   return form;
 }
 
+const capitalize = (text) => (text ? text.charAt(0).toUpperCase() + text.slice(1) : text);
+
 function row(worker) {
   const url = (template) => template.replace("WORKER_ID", encodeURIComponent(worker.id));
   const disabled = worker.status === "disabled";
-  const nameCell = el("td", {}, el("strong", { text: worker.name }), el("br"),
+  const nameCell = el("td", { class: "cell-full" }, el("strong", { text: worker.name }), el("br"),
     el("span", { class: "small faint mono", text: worker.id.slice(0, 12) }));
   if (worker.platform) nameCell.append(el("br"), el("span", { class: "small muted", text: worker.platform }));
 
-  const statusCell = el("td", {}, badge(worker.status, STATUS_CLASS[worker.status]));
+  const statusCell = el("td", {}, badge(capitalize(worker.status), STATUS_CLASS[worker.status]));
   if (worker.working) statusCell.append(" ", badge("running a job", "badge-primary"));
+  if (worker.paused) statusCell.append(" ", badge("paused after failures", "badge-warning"));
 
-  const activityCell = el("td", {}, worker.activity ? badge(worker.activity, ACTIVITY_CLASS[worker.activity]) : el("span", { class: "faint", text: "—" }));
+  const activityCell = el("td", { dataset: { label: "Activity:" } },
+    worker.activity ? badge(capitalize(worker.activity), ACTIVITY_CLASS[worker.activity]) : el("span", { class: "faint", text: "—" }));
 
-  const gpuCell = el("td", { text: worker.gpu_name || "—" });
+  const gpuCell = el("td", { dataset: { label: "GPU:" }, text: worker.gpu_name || "—" });
   if (worker.gpu_util !== null && worker.gpu_util !== undefined) gpuCell.append(el("br"), el("span", { class: "small muted", text: `${worker.gpu_util}% busy` }));
 
-  const modelsCell = el("td");
+  const modelsCell = el("td", { dataset: { label: "Models:" } });
   if (worker.models && worker.models.length) {
     const count = worker.models.length;
-    modelsCell.append(el("details", {}, el("summary", { text: `${count} model${count === 1 ? "" : "s"}` }),
+    modelsCell.append(el("details", {}, el("summary", { class: "nowrap", text: `${count} model${count === 1 ? "" : "s"}` }),
       el("ul", { class: "small" }, worker.models.map((model) => el("li", { class: "mono", text: model })))));
   } else {
     modelsCell.append(el("span", { class: "faint", text: "none reported" }));
   }
-  if (worker.ollama_version) modelsCell.append(el("br"), el("span", { class: "small muted", text: `Ollama ${worker.ollama_version}` }));
+  if (worker.ollama_version) modelsCell.append(el("br"), el("span", { class: "small muted nowrap", text: `Ollama ${worker.ollama_version}` }));
 
-  const seen = el("td", {}, el("span", { title: worker.last_heartbeat || "", text: ago(worker.seconds_since_heartbeat) }));
+  const seen = el("td", { class: "nowrap", dataset: { label: "Last heartbeat:" } },
+    el("span", { title: worker.last_heartbeat || "", text: ago(worker.seconds_since_heartbeat) }));
 
   const toggle = actionForm(url(urls.state), { enabled: disabled ? "1" : "0" },
     el("button", { type: "submit", class: "btn btn-sm", text: disabled ? "Enable" : "Disable" }),
@@ -98,14 +103,31 @@ async function refresh() {
 }
 
 const form = document.getElementById("register-form");
+
+// The confirmation field of admin/_reauth.html, for when the ten minutes run out while the page is open.
+function addConfirmationField() {
+  const id = "worker-reauth";
+  const field = el("div", { class: "field field-narrow" }, [
+    el("label", { for: id, class: "required", text: "Your password or authenticator code" }),
+    el("input", { type: "password", id, name: "reauth_secret", required: "", maxlength: "1024",
+                  autocomplete: "current-password", spellcheck: "false", "aria-describedby": `${id}-hint` }),
+    el("span", { class: "hint", id: `${id}-hint`, text: "Confirms it is you; not asked again for 10 minutes." }),
+  ]);
+  form.querySelector("button[type=submit]").before(field);
+  return field.querySelector("input");
+}
+
 form?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = form.querySelector("input[name=name]");
+  // Present while this session must confirm it is the administrator (recent sign-in or confirmation).
+  const confirmation = form.querySelector("input[name=reauth_secret]");
   const button = form.querySelector("button[type=submit]");
   setBusy(button, true);
   try {
-    const result = await api(urls.register, { json: { name: input.value } });
+    const result = await api(urls.register, { json: { name: input.value, reauth_secret: confirmation?.value ?? "" } });
     input.value = "";
+    confirmation?.closest(".field")?.remove(); // not asked again for ten minutes
     secretDialog({
       title: `Token for “${result.worker.name}”`,
       message: "Copy it now: it is shown only once and cannot be recovered.",
@@ -114,7 +136,9 @@ form?.addEventListener("submit", async (event) => {
     });
     await refresh();
   } catch (error) {
+    if (confirmation) confirmation.value = "";
     toast(error.message, "error");
+    if (error.code === "reauth_required") (confirmation || addConfirmationField()).focus();
   } finally {
     setBusy(button, false);
   }

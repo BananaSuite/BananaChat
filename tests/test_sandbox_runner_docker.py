@@ -1,11 +1,12 @@
-"""The sandbox runner against a real Docker engine (skipped when none is available).
+"""The sandbox runner against a real container engine (skipped when none is available).
 
 These tests start the runner exactly as production does (``create_server``
 with its start-up checks) and prove the isolation from inside real containers.
-They need ``docker`` and the image ``mirror.gcr.io/library/python:3.12-slim``
-(pulled beforehand: the runner never pulls). Set ``BC_SANDBOX_REQUIRE_DOCKER=1``
-to make a missing engine a failure instead of a skip (the CI job does).
-Every container is labelled with a per-run instance name and removed afterwards.
+They need ``docker`` (or ``podman`` with ``BC_SANDBOX_TEST_ENGINE=podman``) and
+the image ``mirror.gcr.io/library/python:3.12-slim`` (pulled beforehand: the
+runner never pulls). Set ``BC_SANDBOX_REQUIRE_DOCKER=1`` to make a missing
+engine a failure instead of a skip (the CI jobs do). Every container is
+labelled with a per-run instance name and removed afterwards.
 """
 
 import gzip
@@ -27,29 +28,31 @@ import pytest
 from compute import sandbox_runner as sr
 
 IMAGE = sr.DEFAULT_IMAGE
-DOCKER = shutil.which("docker")
+ENGINE = (os.environ.get("BC_SANDBOX_TEST_ENGINE") or "docker").strip().lower()
+DOCKER = shutil.which(ENGINE) if ENGINE in ("docker", "podman") else None  # the engine's command line
 REQUIRED = os.environ.get("BC_SANDBOX_REQUIRE_DOCKER") == "1"
 INSTANCE = "pytest-" + secrets.token_hex(4)
 
 
 def _docker_ready() -> str:
     if not DOCKER:
-        return "docker is not installed"
+        return f"{ENGINE} is not installed"
     try:
-        info = subprocess.run([DOCKER, "info", "--format", "{{.ServerVersion}}"], capture_output=True, timeout=30)
+        info_format = "json" if ENGINE == "podman" else "{{.ServerVersion}}"
+        info = subprocess.run([DOCKER, "info", "--format", info_format], capture_output=True, timeout=30)
         if info.returncode != 0:
-            return "the Docker daemon is not reachable"
+            return f"the {ENGINE} engine is not reachable"
         image = subprocess.run([DOCKER, "image", "inspect", IMAGE], capture_output=True, timeout=30)
         if image.returncode != 0:
             return f"{IMAGE} is not pulled"
     except (OSError, subprocess.TimeoutExpired) as error:
-        return f"docker failed: {error}"
+        return f"{ENGINE} failed: {error}"
     return ""
 
 
 REASON = _docker_ready()
 if REASON and not REQUIRED:
-    pytest.skip(f"Docker integration tests skipped: {REASON}", allow_module_level=True)
+    pytest.skip(f"Container engine integration tests skipped: {REASON}", allow_module_level=True)
 
 
 def _cleanup():
@@ -82,9 +85,9 @@ def runner(tmp_path_factory):
     environ = {
         "BC_SANDBOX_TOKEN_FILE": str(token_file),
         "BC_SANDBOX_PORT": str(_free_port()),
-        "BC_SANDBOX_ENGINE": "docker",
+        "BC_SANDBOX_ENGINE": ENGINE,
         "BC_SANDBOX_IMAGES": IMAGE,
-        # The daemon here is usually rootful; the test opts in explicitly, as an operator would have to.
+        # The engine here is usually rootful; the test opts in explicitly, as an operator would have to.
         "BC_SANDBOX_ALLOW_ROOTFUL": "1",
         "BC_SANDBOX_INSTANCE": INSTANCE,
         "BC_SANDBOX_MAX": "3",
@@ -142,9 +145,33 @@ def run(runner, sandbox, command, timeout=20, **extra):
     return payload
 
 
+_SIGNALS: dict[str, bool] = {}
+
+
+def _execs_can_signal_each_other(runner) -> bool:
+    """Whether a command can kill a process an earlier command left running.
+
+    On Ubuntu 24.04, Podman's AppArmor profile labels the processes of one ``exec`` differently from
+    those of another and forbids signals between them; Docker allows them. Where they are forbidden,
+    the runner cannot stop what a command left behind, so it removes the sandbox instead.
+    """
+    if "answer" not in _SIGNALS:
+        status, payload = call(runner, "POST", "/v1/sandboxes", {"session": "signals"})
+        assert status == 201, payload
+        box = payload["id"]
+        try:
+            run(runner, box, "sleep 61 >/dev/null 2>&1 &")
+            found = run(runner, box, "for d in /proc/[0-9]*; do case \"$(tr '\\0' ' ' < $d/cmdline 2>/dev/null)\" in "
+                                     "'sleep 61 '*) kill -9 \"${d#/proc/}\" 2>/dev/null && echo killed;; esac; done")
+            _SIGNALS["answer"] = "killed" in found["stdout"]
+        finally:
+            call(runner, "DELETE", f"/v1/sandboxes/{box}")
+    return _SIGNALS["answer"]
+
+
 def test_health_and_auth(runner):
     status, payload = call(runner, "GET", "/healthz", token="")
-    assert status == 200 and payload == {"ok": True, "engine": "docker"}
+    assert status == 200 and payload == {"ok": True, "engine": ENGINE}
     status, payload = call(runner, "GET", "/healthz")
     assert payload["network"] == "none" and payload["images"] == [IMAGE] and payload["max"] == 3
     assert call(runner, "GET", "/v1/sandboxes", token="")[0] == 401
@@ -226,7 +253,12 @@ def test_timeouts_kill_the_command_and_everything_it_started(runner, sandbox):
                                   "(sleep 1002 &) ; sleep 1003", timeout=2)
     elapsed = time.monotonic() - started
     assert result["timed_out"] and result["exit_code"] == 124 and 2 <= elapsed < 20
-    assert "timed out" in result["stderr"] and not result["sandbox_removed"]
+    assert "timed out" in result["stderr"]
+    if not _execs_can_signal_each_other(runner):
+        # Nothing the command started may outlive it: the runner could not stop it, so the sandbox is gone.
+        assert result["sandbox_removed"] and sr.NAME_PREFIX + sandbox not in _containers()
+        return
+    assert not result["sandbox_removed"]
     listing = run(runner, sandbox, "for d in /proc/[0-9]*; do cat $d/cmdline 2>/dev/null | tr '\\0' ' '; echo; "
                                    "done")["stdout"]
     assert "1000" not in listing and "1001" not in listing and "1002" not in listing and "1003" not in listing
@@ -250,6 +282,10 @@ def test_output_is_truncated_and_floods_are_stopped(runner, sandbox):
     result = run(runner, sandbox, "yes", timeout=30)
     assert result["truncated"] and "too much output" in result["stderr"] and not result["timed_out"]
     assert time.monotonic() - started < 25
+    if not _execs_can_signal_each_other(runner):
+        # The runner could not stop the flood, so the sandbox is gone.
+        assert result["sandbox_removed"] and sr.NAME_PREFIX + sandbox not in _containers()
+        return
     assert run(runner, sandbox, "echo ok")["stdout"] == "ok\n"
 
 
@@ -348,8 +384,10 @@ def test_archive_round_trip(runner, sandbox, monkeypatch):
 
 
 def test_interrupt_stops_a_running_command(runner, sandbox):
+    signals = _execs_can_signal_each_other(runner)
     results = []
-    worker = threading.Thread(target=lambda: results.append(run(runner, sandbox, "sleep 25", timeout=30)))
+    worker = threading.Thread(target=lambda: results.append(
+        call(runner, "POST", f"/v1/sandboxes/{sandbox}/exec", {"command": "sleep 25", "timeout": 30})))
     started = time.monotonic()
     worker.start()
     time.sleep(1.5)
@@ -357,11 +395,18 @@ def test_interrupt_stops_a_running_command(runner, sandbox):
     assert status == 409 and busy["error"]["code"] == "busy"
     assert call(runner, "POST", f"/v1/sandboxes/{sandbox}/interrupt", {})[1]["ok"]
     worker.join(20)
-    assert results and results[0]["interrupted"] and time.monotonic() - started < 15
+    assert results and time.monotonic() - started < 15
+    status, payload = results[0]
+    if not signals:
+        # The runner could not stop the command, so the interrupt removed the sandbox.
+        assert status == 410 and payload["error"]["code"] == "sandbox_gone", payload
+        return
+    assert status == 200 and payload["interrupted"], payload
     assert run(runner, sandbox, "echo after")["stdout"] == "after\n"
 
 
 def test_killing_everything_from_inside_ends_the_sandbox(runner):
+    signals = _execs_can_signal_each_other(runner)
     status, payload = call(runner, "POST", "/v1/sandboxes", {"session": "suicide"})
     sandbox = payload["id"]
     try:
@@ -372,6 +417,10 @@ def test_killing_everything_from_inside_ends_the_sandbox(runner):
         assert status in (200, 410)
         if status == 200:
             status, payload = call(runner, "POST", f"/v1/sandboxes/{sandbox}/exec", {"command": "true"})
+        if not signals:
+            # The command cannot signal the sandbox's other processes, so nothing ended and it still works.
+            assert status == 200 and payload["exit_code"] == 0, payload
+            return
         assert status == 410 and payload["error"]["code"] == "sandbox_gone"
         assert call(runner, "GET", f"/v1/sandboxes/{sandbox}")[0] == 410  # removed ids answer 410, not 404
         assert sr.NAME_PREFIX + sandbox not in _containers()

@@ -456,6 +456,19 @@ def test_the_size_cap_is_enforced_while_streaming(net, tmp_path):
     assert gitfetch.CHUNK <= cap
 
 
+def test_a_non_ascii_content_length_is_not_a_crash(net, tmp_path):
+    def odd_length(handler):
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/octet-stream")
+        handler.send_header("Content-Length", "\u00b2")
+        handler.end_headers()
+        handler.wfile.write(b"\x1f\x8b" + b"z" * 100)
+
+    net.server.routes["/octo/demo/tar.gz/main"] = odd_length
+    destination, size = fetch(tmp_path / "odd")
+    assert size == 102 and destination.stat().st_size == 102
+
+
 def test_timeouts_and_stop_end_the_download(net, tmp_path, monkeypatch):
     from bananachat.services.agents import gitfetch
     from bananachat.services.upstream import Cancelled, CancelToken

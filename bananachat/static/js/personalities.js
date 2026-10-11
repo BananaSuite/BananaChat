@@ -25,6 +25,31 @@ function initCounters(root = document) {
   }
 }
 
+/** Conversation starters are one-line textareas that grow with their text: Enter submits the form
+ *  (as in a text field), pasted line breaks become spaces, and the height follows the text where
+ *  CSS field-sizing is not supported. */
+function initStarterFields() {
+  const sizes = CSS.supports?.("field-sizing", "content");
+  for (const field of document.querySelectorAll("textarea.starter-input")) {
+    const fit = () => {
+      if (sizes) return;
+      field.style.height = "auto";
+      field.style.height = `${field.scrollHeight + 2}px`;
+    };
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        field.form?.requestSubmit();
+      }
+    });
+    field.addEventListener("input", () => {
+      if (/[\r\n]/.test(field.value)) field.value = field.value.replace(/\s*[\r\n]+\s*/g, " ");
+      fit();
+    });
+    fit();
+  }
+}
+
 /** Readonly share links select themselves when focused, ready to copy. */
 function initShareLinks() {
   for (const input of document.querySelectorAll("input[data-select-all]")) {
@@ -97,5 +122,6 @@ function initEditor() {
 }
 
 initCounters();
+initStarterFields();
 initShareLinks();
 initEditor();

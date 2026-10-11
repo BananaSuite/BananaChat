@@ -1,7 +1,5 @@
 /* Customize page. */
-.customize-toc { display: flex; flex-wrap: wrap; gap: .15rem; margin: 0 0 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
-.customize-toc a { display: flex; align-items: center; min-height: var(--control-compact); color: var(--text-muted); font-size: .875rem; line-height: 1.45; text-decoration: none; padding: .4rem .6rem; border-radius: var(--radius-sm); }
-.customize-toc a:hover { color: var(--text); background: var(--hover); }
+.customize-toc { margin: 0 0 1.5rem; padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
 .customize-layout { display: flex; flex-direction: column; gap: 1.5rem; }
 .customize-layout > * { width: 100%; min-width: 0; }
 .customize-preview { padding-block: 1.25rem; border-bottom: 1px solid var(--border); }
@@ -25,9 +23,19 @@
 .choice-group { border: 0; padding: 0; display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; min-width: 0; }
 .choice-group legend { padding: 0; margin-bottom: .35rem; font-weight: 500; font-size: .875rem; }
 .choice-group .hint { order: 2; margin: .15rem 0 0; font-size: .8125rem; }
+/* Options in an even grid: rows wrap without leaving one option alone at a different width. */
+.choice-group .segmented { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.5rem), 1fr)); align-self: stretch; }
+.choice-group .segmented label { display: flex; align-items: center; justify-content: center; text-align: center; }
+/* Up to five options: one row of equal options, or one option per row when they do not fit (large text,
+   narrow phones), never a lone option on a second row. */
+.choice-group .segmented:not(:has(> label:nth-child(6))) { display: flex; flex-wrap: wrap; }
+.choice-group .segmented:not(:has(> label:nth-child(6))) > label { flex: 1 1 calc((19rem - 100%) * 999); min-width: 0; }
+/* Six contrast levels: the whole row, one line of six (three plus three on phones). */
+.preference-grid > .choice-group:has(.segmented > label:nth-child(6)) { grid-column: 1 / -1; }
+.choice-group .segmented:has(> label:nth-child(6)) { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .semantic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem 1.5rem; }
 .motion-preference .hint { margin: .35rem 0 0; }
-.motion-preference .switch { min-height: var(--control-height); }
+.motion-preference .switch { min-height: var(--control-height); align-items: center; }
 .customize-page output { font-weight: 400; color: var(--text-muted); margin-left: .35rem; font-variant-numeric: tabular-nums; }
 
 .preset-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; width: 100%; }
@@ -68,14 +76,14 @@
   .semantic-grid, .colour-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
-  .customize-toc { gap: .15rem; margin-bottom: 1.25rem; }
-  .customize-toc a { padding: .35rem .45rem; }
+  .customize-toc { margin-bottom: 1.25rem; padding-bottom: .5rem; }
   .preference-grid, .semantic-grid, .colour-grid { grid-template-columns: minmax(0, 1fr); gap: .85rem; }
   .colour-grid { gap: 0; }
   .preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .segmented button, .segmented label { padding: .35rem .4rem; }
+  .choice-group .segmented { grid-template-columns: repeat(auto-fit, minmax(min(100%, 6.5rem), 1fr)); }
+  .choice-group .segmented:has(> label:nth-child(6)) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (pointer: coarse) {
-  .customize-toc a { min-height: var(--touch-target); }
   .preset { min-height: var(--touch-target); }
 }

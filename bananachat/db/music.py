@@ -88,22 +88,6 @@ def move_track(track_id: int, offset: int) -> bool:
     return True
 
 
-def reorder_tracks(ordered_ids) -> None:
-    """Apply a complete order; unknown ids are ignored, missing ones keep their relative order at the end."""
-    with db.transaction():
-        existing = [row["id"] for row in db.query("SELECT id FROM music_tracks ORDER BY sort_order, id")]
-        known = set(existing)
-        wanted = [identifier for identifier in dict.fromkeys(ordered_ids) if identifier in known]
-        chosen = set(wanted)
-        final = wanted + [identifier for identifier in existing if identifier not in chosen]
-        db.executemany("UPDATE music_tracks SET sort_order=? WHERE id=?",
-                       [(position, identifier) for position, identifier in enumerate(final)])
-
-
-def referenced_filenames() -> set[str]:
-    return {row["filename"] for row in db.query("SELECT filename FROM music_tracks")}
-
-
 # ----- participation --------------------------------------------------------
 
 def participation(user_id: str) -> tuple[bool, bool]:

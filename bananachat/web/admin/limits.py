@@ -11,15 +11,35 @@ from bananachat import db
 from bananachat.db import catalog, users
 from bananachat.db import limits as limits_db
 from bananachat.db import settings as site_settings
+from bananachat.numbers import ascii_int
 from bananachat.security import admin_required
 from bananachat.services import limits
 
 from . import bp
 from ._helpers import (
-    FormError, audit, back, choice, flag, integer, me, number, text, tokens, user_or_404, utc_datetime, utc_input_min,
+    FormError,
+    audit,
+    back,
+    choice,
+    flag,
+    integer,
+    me,
+    number,
+    text,
+    tokens,
+    user_or_404,
+    utc_datetime,
+    utc_input_min,
 )
 from ._quota_ui import (
-    POOL_LABELS, quota_tabs_context, rate_form_context, rules_en, rules_from_form, tokens_en, typed, typed_rules,
+    POOL_LABELS,
+    quota_tabs_context,
+    rate_form_context,
+    rules_en,
+    rules_from_form,
+    tokens_en,
+    typed,
+    typed_rules,
 )
 
 DURATIONS = {"1h": timedelta(hours=1), "24h": timedelta(hours=24), "7d": timedelta(days=7)}
@@ -32,13 +52,19 @@ PRESET_HELP = {
 SCOPE_LABELS = {"rate": "request rate", "window": "5-hour tokens", "weekly": "weekly tokens"}
 
 
+# The account page speaks to the account holder ("your account"); here an administrator reads about someone else.
+_ADMIN_REASONS = {"custom": "Custom limit for this account", "custom_floor": "Custom limit, never lowered by demand"}
+
+
 def _reason_texts(reasons) -> list[str]:
-    return [reason.text("en") for reason in reasons if reason.code not in ("not_limited",)]
+    return [_ADMIN_REASONS.get(reason.code) or reason.text("en") for reason in reasons
+            if reason.code not in ("not_limited",)]
 
 
 def _models():
-    """Catalog models that limits apply to (text and image models), in catalog order."""
-    return [model for model in catalog.list_models() if model["backend"] in ("ollama", "comfyui", "claude")]
+    """Catalog models that limits apply to (text and image models, local or through an external API), in catalog
+    order. External models have policies too (their presets fill them), and their pages link here."""
+    return [model for model in catalog.list_models() if model["backend"] in ("ollama", "comfyui", "external")]
 
 
 def _model_or_404(model_id: int):
@@ -137,6 +163,9 @@ def _grant_view(row) -> dict:
     else:
         what = f"+{tokens_en(row['amount'])}"
     scope = SCOPE_LABELS.get(row["scope"], "all limits")
+    if row["kind"] not in ("unlimited", "multiplier") and row["scope"] in ("window", "weekly"):
+        # "+50k tokens per 5 hours", not "+50k tokens · 5-hour tokens": the amount names its period.
+        what, scope = f"{what} {'per 5 hours' if row['scope'] == 'window' else 'per week'}", None
     if row["model_id"]:
         where = f"model {row['model_name'] or '(removed)'}"
     else:
@@ -301,7 +330,7 @@ def _models_page(refused: dict | None = None):
 
 
 def _model_policy_form(current: dict) -> dict:
-    counts = choice("counts_toward_pool", ("default", "yes", "no"), label="Counts toward service limits",
+    counts = choice("counts_toward_pool", ("default", "yes", "no"), label="Counts towards service limits",
                     default="default")
     effort = choice("effort_default", ("", *limits_db.EFFORT_LEVELS), label="Default reasoning effort", default="")
     controls = _model_controls(current)
@@ -484,8 +513,10 @@ def _effort_views(user, models, policies, prefs) -> list[dict]:
         if not limits.supported_efforts(model):
             continue
         ceiling = limits.effort_ceiling(user, model, policy=policies[model["id"]], own=own, prefs=prefs)
-        views.append({"model": model, "ceiling": ceiling, "own": own.get(model["id"]),
-                      "levels": limits.supported_efforts(model)})
+        allowed = limits.allowed_efforts(user, model, policy=policies[model["id"]], own=own, prefs=prefs)
+        # "Up to" in the model's own levels (an off/on model shows On or Off, not the account-wide Low).
+        views.append({"model": model, "ceiling": ceiling, "top": allowed[-1] if allowed else None,
+                      "own": own.get(model["id"]), "levels": limits.supported_efforts(model)})
     return views
 
 
@@ -552,7 +583,7 @@ def set_custom(user_id):
 @admin_required
 def set_model_custom(user_id):
     user = user_or_404(user_id)
-    model = _model_or_404(request.form.get("model_id", type=int) or 0)
+    model = _model_or_404(ascii_int(request.form.get("model_id", ""), 18) or 0)
     try:
         if request.form.get("action") == "clear":
             values = {"rate_rules": None, "window_tokens": None, "weekly_tokens": None, "locked": False,
@@ -596,7 +627,7 @@ def set_effort(user_id):
                   "success")
             return back("admin.user_limits", user_id=user_id, _anchor="effort")
         target = request.form.get("model_id") or ""
-        model = None if target in ("", "all") else _model_or_404(int(target) if target.isdigit() else 0)
+        model = None if target in ("", "all") else _model_or_404(ascii_int(target) or 0)
         level = choice("level", ("", *limits_db.EFFORT_LEVELS), label="Level", default="") or None
         pinned = flag("pinned")
         limits_db.set_effort_level(user_id, model["id"] if model else None, level, pinned=pinned, source="admin",

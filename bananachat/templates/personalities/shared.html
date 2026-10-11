@@ -9,7 +9,7 @@
   <header class="page-header">
     <div>
       <h1>{{ t("personality.shared_heading") }}</h1>
-      <p>{{ t("personality.shared_intro", owner=row.username) }}</p>
+      <p>{{ t("personality.shared_intro_own") if own else t("personality.shared_intro", owner=row.username) }}</p>
     </div>
   </header>
 
@@ -21,7 +21,7 @@
         {% if row.description %}<p class="persona-description">{{ row.description }}</p>{% endif %}
       </div>
     </div>
-    {{ traits(card) }}
+    {{ traits(card, count_starters=false) }}
     <section aria-labelledby="shared-instructions">
       <h3 class="label" id="shared-instructions">{{ t("personality.instructions") }}</h3>
       <pre class="instructions is-open">{{ row.instructions }}</pre>
@@ -30,13 +30,19 @@
     <section class="persona-intro-preview" aria-labelledby="shared-start">
       <h3 class="label" id="shared-start">{{ t("personality.section_start") }}</h3>
       {% if row.greeting %}<p class="persona-greeting">{{ row.greeting }}</p>{% endif %}
-      {% if card.starters %}<ul class="persona-starters">{% for starter in card.starters %}<li>{{ starter }}</li>{% endfor %}</ul>{% endif %}
+      {% if card.starters %}
+      <p class="hint mb-0" id="shared-starters-label">{{ t("personality.starters") }}</p>
+      <ul class="persona-starters persona-starter-chips" aria-labelledby="shared-starters-label">{% for starter in card.starters %}<li>{{ icon("chat") }}<span>{{ starter }}</span></li>{% endfor %}</ul>
+      {% endif %}
     </section>
     {% endif %}
     <div class="persona-footer">
       {% if own %}
       <p class="hint mb-0">{{ t("personality.shared_own") }}</p>
-      <div class="persona-actions"><a class="btn btn-sm" href="{{ url_for('personalities.index', _anchor='personality-' ~ row.id) }}">{{ t("personality.back") }}</a></div>
+      <div class="persona-actions">
+        <a class="btn btn-sm btn-primary" href="{{ url_for('personalities.edit', personality_id=row.id) }}">{{ icon("edit") }}{{ t("personality.edit") }}</a>
+        <a class="btn btn-sm btn-ghost" href="{{ url_for('personalities.index', _anchor='personality-' ~ row.id) }}">{{ t("personality.back") }}</a>
+      </div>
       {% elif not allowed %}
       <div class="alert alert-warning">{{ icon("shield") }}<p>{{ t("personality.no_access_text") }} <a href="{{ url_for('account.index', _anchor='access') }}">{{ t("personality.request_access") }}</a></p></div>
       {% elif full %}

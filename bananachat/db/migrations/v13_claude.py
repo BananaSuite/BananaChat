@@ -66,13 +66,9 @@ def _widen_backend(conn):
     conn.execute(f'INSERT INTO ai_models_v13 ({quoted}) SELECT {quoted} FROM ai_models')
     conn.execute("DROP TABLE ai_models")
     conn.execute("ALTER TABLE ai_models_v13 RENAME TO ai_models")
+    # The rebuilt table keeps every column, so its indexes and triggers apply unchanged.
     for statement in dependents:
-        if statement:
-            try:
-                conn.execute(statement)
-            except Exception:
-                # Indexes on dropped columns would fail; none exist for backend.
-                pass
+        conn.execute(statement)
 
 
 def upgrade(conn):

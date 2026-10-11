@@ -3,18 +3,21 @@
 from collections import deque
 from contextlib import nullcontext
 from datetime import datetime, timezone
+import errno
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import secrets
 import shutil
+import subprocess
+import sys
 import tarfile
 
 from .files import (absolute_path, atomic_write, extract_archive, maintenance_lock, read_environment,
                     read_json, read_package, regular_files, write_environment, write_json, write_package)
 from . import profile
-from .source import GitSource, valid_branch, valid_url
+from .source import GitSource, valid_branch, valid_track, valid_url
 from .system import System
 
 
@@ -25,6 +28,50 @@ AUTOMATIC_BACKUPS = ("auto", "before-update", "before-restore", "before-legacy-i
 HISTORY_LIMIT = 1000
 # Refuse to purge these even when they look like a managed installation.
 PROTECTED_ROOTS = ("/", "/usr", "/usr/local", "/opt", "/home", "/var", "/etc", "/srv", "/root")
+
+
+def declared_version(release, package):
+    """The ``<package>.__version__`` a release tree declares (read as data, never imported), or None."""
+    import ast
+    try:
+        tree = ast.parse((release / package / "__init__.py").read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
+        return None
+    for node in tree.body:
+        # ``__version__ = "X.Y.Z"`` or, annotated, ``__version__: str = "X.Y.Z"``.
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if (any(isinstance(target, ast.Name) and target.id == "__version__" for target in targets)
+                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
+            match = re.match(r"(\d+)\.(\d+)\.(\d+)", node.value.value)
+            return (int(match[1]), int(match[2]), int(match[3])) if match else None
+    return None
+
+
+def check_dependency_locks(release, package, *, allow_unpinned=False):
+    """Refuse a release that should ship hash-pinned dependency locks and does not; return whether it is unpinned.
+
+    1.7 and later releases install exactly the files ``requirements.lock``
+    and ``requirements-build.lock`` pin. Without them the installer
+    resolves the newest versions ``requirements.txt`` allows, from PyPI,
+    with no hash: right for a release from before 1.7 (a rollback), which
+    never had locks, never for a later one missing them by mistake. Only
+    the operator's explicit *allow_unpinned* deploys such a release. A tree
+    that declares no version is from before 1.7.
+    """
+    names = ("requirements.lock", "requirements-build.lock")
+    present = [(release / name).is_file() for name in names]
+    if all(present):
+        return False
+    version = declared_version(release, package)
+    # One lock without the other, or none in a release that says it is 1.7 or later: a release made by mistake.
+    if not any(present) and (version is None or version < (1, 7, 0)) or allow_unpinned:
+        return True
+    missing = " and ".join(name for name, found in zip(names, present, strict=True) if not found)
+    raise ValueError(f"This release lacks {missing}: since 1.7 a release installs exactly the dependency versions "
+                     "and files its locks pin, and without them every dependency would be resolved anew from PyPI "
+                     "with no hash check. Nothing was deployed. Ask its maintainers for a release with its locks; "
+                     "to install this one from its requirements.txt ranges anyway, run the update (with "
+                     "--retry-failed) or the restore again with --allow-unpinned.")
 
 
 class Manager:
@@ -58,13 +105,14 @@ class Manager:
         return data
 
     def source(self):
+        """``config/source.json``; one written before 1.7 has no ``track`` and keeps following its branch."""
         data = read_json(self.config_dir / "source.json")
         if not data:
             raise ValueError("No update source is configured.")
         valid_branch(data["branch"])
         if data.get("fallback_branch"):
             valid_branch(data["fallback_branch"])
-        return data
+        return {**data, "track": valid_track(data.get("track", "branch"))}
 
     def event(self, operation, outcome, **details):
         value = {"time": datetime.now(timezone.utc).isoformat(), "operation": operation, "outcome": outcome, **details}
@@ -98,9 +146,12 @@ class Manager:
 
     def configure_source(self, *, url=None, branch=None, fallback=None, clear_fallback=False, token_file=None,
                          username="git", ssh_key=None, known_hosts=None, clear_credentials=False, allow_local=False,
-                         signers_file=None, clear_signatures=False):
-        old = read_json(self.config_dir / "source.json", {"url": "https://github.com/BananaSuite/" + self.product + ".git", "branch": "main", "fallback_branch": None, "auth": "none", "signing": "none"})
+                         signers_file=None, clear_signatures=False, track=None):
+        # A new source follows release tags; one configured before 1.7 keeps its branch unless told otherwise.
+        old = read_json(self.config_dir / "source.json", {"url": "https://github.com/BananaSuite/" + self.product + ".git", "branch": "main", "fallback_branch": None, "auth": "none", "signing": "none", "track": "tags"})
         new = dict(old)
+        if track:
+            new["track"] = valid_track(track)
         if url:
             new["url"] = valid_url(url, allow_local=allow_local)
             from urllib.parse import urlsplit
@@ -162,7 +213,7 @@ class Manager:
             raise ValueError("Invalid credential file.")
         return value
 
-    def stage(self, settings, *, archive=None):
+    def stage(self, settings, *, archive=None, allow_unpinned=False):
         revision = settings["revision"]
         if not re.fullmatch(r"[a-f0-9]{40,64}", revision):
             raise ValueError("Invalid deployment revision.")
@@ -189,9 +240,14 @@ class Manager:
                 raise ValueError("The selected revision produced no readable source. Choose a compatible branch.") from exc
             if not (release / "banana").is_file() or not (release / "LICENSE").is_file():
                 raise ValueError("The selected revision does not support the managed lifecycle. Choose a compatible branch.")
+            unpinned = check_dependency_locks(release, self.product.lower(), allow_unpinned=allow_unpinned)
+            if unpinned:
+                print("Warning: this release has no dependency locks, so its dependencies are installed from the "
+                      "ranges in requirements.txt, without hash checks.", file=sys.stderr, flush=True)
             self.system.prepare_release(settings, release)
             shutil.copyfile(archive_file, release / ".source.tar.gz")
-            write_json(release / ".release.json", {"revision": revision, "product": self.product})
+            write_json(release / ".release.json", {"revision": revision, "product": self.product,
+                                                   **({"unpinned": True} if unpinned else {})})
             return release
         except BaseException:
             if release.exists():
@@ -213,8 +269,16 @@ class Manager:
         values = profile.environment(settings, current)
         write_environment(self.config_dir / "app.env", values)
         (self.root / "data/logs").mkdir(mode=0o700, parents=True, exist_ok=True)
-        if settings["mode"] == "compute" and not (self.root / "data/.compute-api-token").exists():
-            atomic_write(self.root / "data/.compute-api-token", secrets.token_hex(32) + "\n")
+        if settings["mode"] == "compute":
+            # The gateway's token, and its model management token where the configuration names the
+            # managed one (new installations; an operator-chosen file is the operator's to create).
+            tokens = [self.root / "data/.compute-api-token"]
+            management = self.root / "data/.compute-management-token"
+            if values.get("BC_COMPUTE_MANAGEMENT_TOKEN_FILE") == str(management):
+                tokens.append(management)
+            for path in tokens:
+                if not path.exists():
+                    atomic_write(path, secrets.token_hex(32) + "\n")
         if settings["mode"] == "hosting":
             (self.root / "data/instances").mkdir(mode=0o700, parents=True, exist_ok=True)
             profile.prepare_hosting_storage(self.root / "data")
@@ -226,7 +290,7 @@ class Manager:
 
     def install(self, checkout, *, mode, name=None, domain="", portal_domain="", port=None, backend_url="",
                 backend_token_file=None, ollama_binary="", source_options=None, reuse_data=False,
-                backend_token=None, ollama_url=""):
+                backend_token=None, ollama_url="", backend_management_token=None):
         self.layout()
         with maintenance_lock(self.root):
             existing = read_json(self.config_dir / "installation.json")
@@ -269,6 +333,9 @@ class Manager:
                 backend_token = check_token(backend_token)
             elif backend_token_file:
                 backend_token = self.read_secret(backend_token_file)
+            if backend_management_token:
+                from .backend import check_management_token
+                backend_management_token = check_management_token(backend_management_token, backend_token)
             source = self.configure_source(**(source_options or {}))
             settings = {"schema": 1, "product": self.product, "mode": mode, "root": str(self.root), "service": name,
                         "domain": domain, "portal_domain": portal_domain, "port": port, "backend_url": backend_url,
@@ -285,6 +352,8 @@ class Manager:
             environment = read_environment(self.config_dir / "app.env")
             if backend_token:
                 environment["BC_OLLAMA_API_KEY"] = backend_token
+            if backend_management_token:
+                environment["BC_OLLAMA_MANAGEMENT_API_KEY"] = backend_management_token
             self.write_runtime(settings, environment)
             write_json(self.config_dir / "updates.json", DEFAULT_POLICY.copy())
             self.system.install_units(settings)
@@ -321,19 +390,27 @@ class Manager:
         self.system.stop(list(profile.service_commands(journal["settings"])))
         self.system.stop_containers(journal["containers"])
 
-    def package(self, settings, destination, *, exclude_model_weights=False):
+    def package_inputs(self, settings, *, exclude_model_weights=False, rollback=False):
+        """What :meth:`package` writes: ``(inputs, excluded weight paths, model inventory or None)``."""
         data = self.root / "data"
         excluded, model_inventory = [], None
-        if self.product == "BananaChat" and exclude_model_weights:
+        if self.product == "BananaChat" and (exclude_model_weights or rollback):
             from .models import inventory
             environment = read_environment(self.config_dir / "app.env")
             database = Path(environment.get("BC_DATABASE_PATH", data / "bananachat.db")).absolute()
-            if not database.is_relative_to(data):
-                raise ValueError("Move the BananaChat database inside the managed data directory before making a weight-free package; external databases need a separate backup.")
             unmanaged = settings["mode"] in {"single", "compute"} and not profile.managed_ollama(settings)
-            model_inventory = inventory(data, environment,
-                                        upstream=profile.ollama_upstream(settings, environment) if unmanaged else None)
-            excluded = model_inventory["excluded_paths"]
+            if not database.is_relative_to(data):
+                if not rollback:
+                    raise ValueError("Move the BananaChat database inside the managed data directory before making a weight-free package; external databases need a separate backup.")
+            else:
+                try:
+                    # A rollback package never asks another Ollama: the weights stay where they are.
+                    model_inventory = inventory(data, environment, upstream=profile.ollama_upstream(settings, environment)
+                                                if unmanaged and not rollback else None)
+                except ValueError:
+                    if not rollback:
+                        raise
+                excluded = model_inventory["excluded_paths"] if model_inventory else []
         allowed_link = (lambda path: profile.hosting_storage_link(path, data)) if settings["mode"] == "hosting" else None
         inputs = [(path, "data/" + name) for path, name in regular_files(data, allowed_link=allowed_link, excluded=excluded)]
         inputs.extend((path, "site/" + name) for path, name in regular_files(self.root / "site"))
@@ -342,18 +419,51 @@ class Manager:
             path = self.config_dir / name
             if path.is_file() and not path.is_symlink():
                 inputs.append((path, "config/" + name))
-        source_archive = self.root / "releases" / settings["revision"] / ".source.tar.gz"
-        inputs.append((source_archive, "source.tar.gz"))
+        inputs.append((self.root / "releases" / settings["revision"] / ".source.tar.gz", "source.tar.gz"))
+        return inputs, excluded, model_inventory
+
+    def package(self, settings, destination, *, exclude_model_weights=False, rollback=False):
+        """Write a portable package of this installation.
+
+        *exclude_model_weights* leaves re-downloadable model weights out and
+        records what to download again. *rollback* does the same for the
+        package taken before an update, restore or import: those never change
+        the weights, so a rollback keeps them where they are (see
+        :meth:`apply_package`) and only a restore on another server downloads
+        them again. Gzipping a model library into every such package would
+        keep the service down for as long and need its size again in free space.
+        """
+        inputs, excluded, model_inventory = self.package_inputs(settings, exclude_model_weights=exclude_model_weights,
+                                                                rollback=rollback)
+        data = self.root / "data"
+        manifest = {"product": self.product, "mode": settings["mode"], "revision": settings["revision"],
+                    "created_at": datetime.now(timezone.utc).isoformat(), "old_root": str(self.root),
+                    "model_weights_excluded": model_inventory is not None, "excluded_paths": excluded}
+        if rollback and model_inventory is not None:
+            manifest["weights_in_place"] = [name for name in excluded if (data / name).exists()]
         inventory_file = self.root / "staging" / ("model-inventory-" + secrets.token_hex(6) + ".json")
         try:
             if model_inventory is not None:
                 write_json(inventory_file, model_inventory)
                 inputs.append((inventory_file, "model-inventory.json"))
-            return write_package(destination, {"product": self.product, "mode": settings["mode"], "revision": settings["revision"],
-                                 "created_at": datetime.now(timezone.utc).isoformat(), "old_root": str(self.root),
-                                 "model_weights_excluded": model_inventory is not None, "excluded_paths": excluded}, inputs)
+            return write_package(destination, manifest, inputs)
         finally:
             inventory_file.unlink(missing_ok=True)
+
+    def check_package_space(self, settings, *, copies, exclude_model_weights=False, rollback=False):
+        """Refuse, before anything stops, an operation whose package (and rollback) cannot fit.
+
+        *copies* is 2 when a rollback may follow: its package, and that package
+        extracted again to put the data back.
+        """
+        inputs = self.package_inputs(settings, exclude_model_weights=exclude_model_weights, rollback=rollback)[0]
+        total = sum(path.stat().st_size for path, _ in inputs)
+        needed = copies * total + 128 * 1024 * 1024
+        free = shutil.disk_usage(self.root / "backups").free
+        if free < needed:
+            raise ValueError(f"Not enough free space: this needs about {needed // 1024 ** 2:,} MiB in {self.root} "
+                             f"for its backup{' and a possible rollback' if copies > 1 else ''}, and "
+                             f"{free // 1024 ** 2:,} MiB are free. Nothing was stopped or changed.")
 
     def finish(self, journal, settings, *, old_containers=False):
         if old_containers:
@@ -378,6 +488,7 @@ class Manager:
             for directory in (self.root / "data", self.root / "site", self.root / "releases"):
                 if destination.is_relative_to(directory):
                     raise ValueError("Write backup packages outside the data, site, and release directories.")
+            self.check_package_space(settings, copies=1, exclude_model_weights=exclude_model_weights)
             journal = self.snapshot_state(settings)
             try:
                 self.quiesce(journal)
@@ -390,7 +501,7 @@ class Manager:
             self.event("backup", "complete", package=str(result), **({"pruning_warnings": warnings} if warnings else {}))
             return result
 
-    def update(self, *, automatic=False, allow_divergent=False, retry_failed=False):
+    def update(self, *, automatic=False, allow_divergent=False, retry_failed=False, allow_unpinned=False):
         with maintenance_lock(self.root):
             self.recover()
             settings = self.settings()
@@ -398,10 +509,21 @@ class Manager:
                 return {"outcome": "disabled"}
             if automatic and not self.system.active(settings["service"]):
                 return self.event("update", "skipped", reason="The application was intentionally stopped.")
-            source = GitSource(self.root, self.source())
+            configured = self.source()
+            source = GitSource(self.root, configured)
             sha, selected, forward = source.resolve(settings["revision"])
+            # What was deployed: the release, or the branch (and whether it was the fallback).
+            followed = ({"release": selected} if configured["track"] == "tags"
+                        else {"branch": selected, "used_fallback": selected != configured["branch"]})
+            if source.skipped_releases:
+                # Anyone who can push tags can push one that does not verify: reported, never deployed.
+                followed["skipped_releases"] = source.skipped_releases
+                print(f"Warning: the update source has release tags above {selected} that are not signed by a key "
+                      f"in the allowed signers file, so they were skipped: {', '.join(source.skipped_releases)}. "
+                      "Check who pushed them.", file=sys.stderr, flush=True)
             if sha == settings["revision"]:
-                return self.event("update", "current", revision=sha, branch=selected)
+                return self.event("update", "current", revision=sha,
+                                  **{key: value for key, value in followed.items() if key != "used_fallback"})
             if not forward and (automatic or not allow_divergent):
                 return self.event("update", "paused", revision=sha, reason="The selected source diverges from the installed revision. Review it and use update --allow-divergent for an intentional switch.")
             failed = read_json(self.config_dir / "failed-revision.json", {})
@@ -413,18 +535,25 @@ class Manager:
                 return self.event("update", "paused", revision=sha, reason=reason)
             candidate = {**settings, "revision": sha, "source_url": self.source()["url"]}
             try:
-                self.stage(candidate)
+                self.stage(candidate, allow_unpinned=allow_unpinned and not automatic)
             except BaseException:
                 write_json(self.config_dir / "failed-revision.json", {"revision": sha})
                 self.event("update", "failed", revision=sha, reason="Release preparation failed; the running version was left in place.")
                 raise
             if automatic and not self.policy()["enabled"]:
                 return self.event("update", "cancelled", reason="Automatic updates were disabled while preparing the release.")
+            try:
+                self.check_package_space(settings, copies=2, rollback=True)
+            except ValueError as error:
+                # Not this revision's failure: the next run tries it again.
+                self.event("update", "failed", revision=sha, reason=str(error))
+                raise
             journal = self.snapshot_state(settings)
             journal["candidate"] = sha
             try:
                 self.quiesce(journal)
-                archive = self.package(settings, self.backup_name("auto" if automatic else "before-update"))
+                archive = self.package(settings, self.backup_name("auto" if automatic else "before-update"),
+                                       rollback=True)
                 journal.update(backup=str(archive), phase="backed_up")
                 write_json(self.config_dir / "transaction.json", journal)
                 self.system.remove_containers(journal["containers"])
@@ -454,8 +583,9 @@ class Manager:
                 self.prune_releases({settings["revision"], sha})
             except (OSError, ValueError) as error:
                 warnings.append(f"Release pruning failed: {error}")
-            return self.event("update", "complete", revision=sha, previous_revision=settings["revision"], branch=selected,
-                              used_fallback=selected != self.source()["branch"], backup=str(archive),
+            unpinned = (read_json(self.root / "releases" / sha / ".release.json", {}) or {}).get("unpinned")
+            return self.event("update", "complete", revision=sha, previous_revision=settings["revision"], **followed,
+                              backup=str(archive), **({"dependencies_unpinned": True} if unpinned else {}),
                               **({"pruning_warnings": warnings} if warnings else {}))
 
     def restored_settings(self, extracted, manifest, *, name=None, domain=None, port=None, ollama_url=None,
@@ -497,15 +627,79 @@ class Manager:
             saved["port"] = int(port)
         return saved
 
-    def apply_package(self, extracted, manifest, settings, *, copy_source=True, preserve_policy=True, public_changed=False):
+    @staticmethod
+    def weight_names(manifest):
+        """The model weight paths a package left out, checked: they come from the package."""
+        names = manifest.get("excluded_paths") if manifest.get("model_weights_excluded") else None
+        if not isinstance(names, list) or len(names) > 100:
+            return []
+        valid = []
+        for name in names:
+            path = PurePosixPath(name) if isinstance(name, str) else None
+            if (path is None or path.is_absolute() or not path.parts or "\\" in name
+                    or any(part in {"", ".", ".."} for part in path.parts)):
+                raise ValueError("The package lists an invalid model weight path.")
+            valid.append(path.as_posix())
+        return sorted(set(valid))
+
+    def set_weights_aside(self, stash):
+        """Move this installation's model weights to *stash* while a restore replaces ``data/``."""
+        if self.product != "BananaChat":
+            return
+        from .models import weight_paths
+        data = self.root / "data"
+        for name in weight_paths(data, read_environment(self.config_dir / "app.env")):
+            origin = data / name
+            if origin.exists() and not origin.is_symlink() and not (stash / name).exists():
+                (stash / name).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.replace(origin, stash / name)
+
+    @staticmethod
+    def carry_weights(names, sources, target):
+        """Move the weights a package left out from *sources* (in order) into the new data *target*."""
+        carried = set()
+        for name in names:
+            destination = target / name
+            if destination.exists() or destination.is_symlink():
+                continue
+            for source in sources:
+                origin = source / name
+                if any(parent.is_symlink() for parent in (origin, *origin.parents) if parent.is_relative_to(source)):
+                    continue
+                if origin.exists():
+                    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    os.replace(origin, destination)
+                    carried.add(name)
+                    break
+        return carried
+
+    def apply_package(self, extracted, manifest, settings, *, copy_source=True, preserve_policy=True, public_changed=False,
+                      weights=None):
+        """Replace ``data/`` and ``site/`` from an extracted package, then fix the configuration.
+
+        The extracted trees are moved into place (staging is inside the root),
+        so a rollback needs no room for another copy. Model weights the package
+        left out are taken over from the data being replaced, or from
+        *weights*, where a restore set them aside, instead of downloading them again.
+        """
         old_root = manifest["old_root"]
+        names = self.weight_names(manifest)
+        carried = set()
         for name in ("data", "site"):
             source = extracted / name
             temporary = self.root / (".restore-" + name + "-" + secrets.token_hex(4))
-            if source.exists():
-                shutil.copytree(source, temporary)
+            if source.is_dir() and not source.is_symlink():
+                try:
+                    os.replace(source, temporary)
+                except OSError as error:
+                    if error.errno != errno.EXDEV:
+                        raise
+                    shutil.copytree(source, temporary)
             else:
                 temporary.mkdir(mode=0o700)
+            if name == "data" and names:
+                carried = self.carry_weights(names, ([Path(weights)] if weights else []) + [self.root / "data"],
+                                             temporary)
             previous = self.root / (".previous-" + name + "-" + secrets.token_hex(4))
             if (self.root / name).exists():
                 os.replace(self.root / name, previous)
@@ -544,10 +738,14 @@ class Manager:
             from .models import prepare_recovery, reset_restored_jobs
             restored_data = self.root / "data"
             database = Path(values.get("BC_DATABASE_PATH", restored_data / "bananachat.db"))
-            if manifest.get("model_weights_excluded"):
-                # Only a weight-free package needs an approved re-download.
+            kept = manifest.get("weights_in_place")
+            if manifest.get("model_weights_excluded") and not (isinstance(kept, list) and set(kept) <= carried):
+                # Only a weight-free package needs an approved re-download; a
+                # rollback that found its weights in place does not.
                 prepare_recovery(restored_data, read_json(extracted / "model-inventory.json"), database=database)
-            else:
+            elif database.absolute().is_relative_to(restored_data.absolute()):
+                # A database outside the data directory is not in the package,
+                # so it holds no restored work to stop.
                 reset_restored_jobs(restored_data, database)
         self.write_runtime(settings, values)
         if not preserve_policy:
@@ -566,7 +764,9 @@ class Manager:
         if journal.get("backup"):
             self.system.remove_containers(current)
             with read_package(journal["backup"], self.product, self.root / "staging") as (extracted, manifest):
-                self.apply_package(extracted, manifest, settings, copy_source=journal.get("restore_source", False))
+                self.apply_package(extracted, manifest, settings, copy_source=journal.get("restore_source", False),
+                                   weights=self.stash(journal))
+            self.drop_stash(journal)
             self.switch(settings["revision"])
             self.system.install_units(settings)
             self.finish(journal, settings)
@@ -575,7 +775,107 @@ class Manager:
         self.event("recover", "complete", restored_revision=settings["revision"])
         return True
 
-    def restore(self, package, *, new=False, name=None, domain=None, port=None, ollama_url=None):
+    def stash(self, journal):
+        """Where a restore set the model weights aside (``journal["weights"]``), checked, or None."""
+        value = journal.get("weights")
+        if not value:
+            return None
+        path = Path(value)
+        if path.parent != self.root or not re.fullmatch(r"\.rollback-weights-[0-9a-f]{8}", path.name) or path.is_symlink():
+            raise ValueError("The recovery journal names an unexpected model weight directory.")
+        return path
+
+    def drop_stash(self, journal):
+        stash = self.stash(journal)
+        if stash is not None and stash.is_dir():
+            shutil.rmtree(stash)
+
+    def restore_source(self, revision, extracted, manifest, *, trust_source=None):
+        """Where a restore takes the code it deploys from; never a package's bundled source unchecked.
+
+        That source runs as the service and, through the installed command,
+        as root. Returns the archive to stage, or None for the release this
+        server already prepared or the revision taken from this server's own
+        update source. When that source requires signatures, the revision
+        must carry one updates accept: its own, or a signed release tag
+        naming it (:meth:`GitSource.verify_restorable`). Only the operator's
+        explicit *trust_source* deploys the bundled source, and never on a
+        server whose update source requires signatures: that takes turning
+        them off first, which the refusal explains.
+        """
+        if (self.root / "releases" / revision / ".release.json").exists():
+            return None
+        source = read_json(self.config_dir / "source.json")
+        signed = bool(source) and source.get("signing", "none") == "ssh"
+        unsigned_steps = ("To deploy it anyway, turn signature checks off with 'source set --clear-signatures' "
+                          "(add --allow-unsigned while automatic updates are on), run the restore again with "
+                          f"--trust-source {revision}, then turn them back on with 'source set "
+                          "--require-signatures ALLOWED_SIGNERS': a restore keeps this server's update source "
+                          "settings. Nothing was changed.")
+        if source:
+            git = GitSource(self.root, source)
+            if self.source_has(git, source, revision):
+                try:
+                    git.verify_restorable(revision)
+                except (RuntimeError, ValueError) as error:
+                    raise ValueError(f"{error} This server's update source requires signed revisions, so it "
+                                     f"was not deployed. {unsigned_steps}") from None
+                return None
+            if signed:
+                raise ValueError(f"Revision {revision} is not available from this server's update source, which "
+                                 "requires signed revisions, so the source bundled in the package was not "
+                                 f"deployed. {unsigned_steps}")
+        if trust_source == revision:
+            return extracted / "source.tar.gz"
+        recorded = read_json(extracted / "config/source.json") or {}
+        raise ValueError(f"This package deploys source revision {revision} (recorded source: "
+                         f"{recorded.get('url') or 'unknown'}, branch {recorded.get('branch') or 'unknown'}; package "
+                         f"created {manifest.get('created_at') or 'at an unknown time'}). It could not be checked "
+                         "against this server's update source, and the restored code runs on this server with root "
+                         "privileges for maintenance. If you made this package or trust whoever did, run the restore "
+                         f"again with --trust-source {revision}. Nothing was changed.")
+
+    @staticmethod
+    def source_has(git, source, revision):
+        """Whether *revision* is a commit this server has fetched from (or can fetch from) its update source.
+
+        Its branches are searched, then its release tags: a release may be
+        reachable from a tag only (a maintenance branch deleted since).
+        """
+        def present():
+            return git.git("cat-file", "-e", revision + "^{commit}", check=False).returncode == 0
+        try:
+            git.initialize()
+            if present():
+                return True
+            url = valid_url(source["url"], allow_local=Path(source["url"]).is_absolute())
+            for branch in dict.fromkeys(filter(None, (source.get("branch"), source.get("fallback_branch")))):
+                git.git("fetch", "--no-tags", "--", url, "refs/heads/" + valid_branch(branch), check=False)
+                if present():
+                    return True
+            for name, commit in git.release_tags(url):
+                if commit == revision:
+                    git.git("fetch", "--no-tags", "--", url, "refs/tags/" + name, check=False)
+                    return present()
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            pass
+        return False
+
+    def kept_source(self, extracted):
+        """``source_warning`` when the package's update source settings differ from the ones this server keeps."""
+        keys = ("url", "track", "branch", "fallback_branch", "signing")
+        package = read_json(extracted / "config/source.json") or {}
+        current = read_json(self.config_dir / "source.json") or {}
+        if not package or all(package.get(key) == current.get(key) for key in keys):
+            return {}
+        return {"source_warning": (
+            f"The package's update source ({package.get('url') or 'unknown'}, signatures "
+            f"{package.get('signing') or 'none'}) differs from this server's ({current.get('url')}, signatures "
+            f"{current.get('signing') or 'none'}), which was kept with its credentials and allowed signers. "
+            "Use 'source set' to change it.")}
+
+    def restore(self, package, *, new=False, name=None, domain=None, port=None, ollama_url=None, trust_source=None,
+                allow_unpinned=False):
         self.layout()
         with maintenance_lock(self.root):
             if not new:
@@ -596,21 +896,34 @@ class Manager:
                 machine = read_environment(self.config_dir / "app.env") if existing and switched else None
                 if existing:
                     restored["service"] = existing["service"]
+                # Before anything changes: which code may run here at all, and room for a rollback.
+                archive = self.restore_source(restored["revision"], extracted, manifest, trust_source=trust_source)
+                # That was decided with this server's update source and signature trust: they stay. Only a
+                # server without any (a new one) takes the package's, credentials included.
+                keep_source = (self.config_dir / "source.json").is_file()
+                source_details = self.kept_source(extracted) if keep_source else {}
+                if existing:
+                    self.check_package_space(existing, copies=2, rollback=True)
                 self.system.preflight(restored)
                 self.system.account(restored)
-                self.stage(restored, archive=extracted / "source.tar.gz")
+                self.stage(restored, archive=archive, allow_unpinned=allow_unpinned)
                 journal = self.snapshot_state(existing) if existing else None
                 try:
                     if journal:
-                        # A failed restore must also undo its source and trust
-                        # configuration; updates never replace these files.
-                        journal["restore_source"] = True
+                        # A failed restore that replaces the source and trust
+                        # configuration must also undo it.
+                        journal["restore_source"] = not keep_source
                         self.quiesce(journal)
-                        before = self.package(existing, self.backup_name("before-restore"))
-                        journal.update(backup=str(before), phase="backed_up")
+                        before = self.package(existing, self.backup_name("before-restore"), rollback=True)
+                        stash = self.root / (".rollback-weights-" + secrets.token_hex(4))
+                        journal.update(backup=str(before), phase="backed_up", weights=str(stash))
                         write_json(self.config_dir / "transaction.json", journal)
                         self.system.remove_containers(journal["containers"])
-                    self.apply_package(extracted, manifest, restored, preserve_policy=False, public_changed=domain is not None)
+                        # The package left them out: keep them until the restore succeeded.
+                        self.set_weights_aside(stash)
+                    self.apply_package(extracted, manifest, restored, copy_source=not keep_source,
+                                       preserve_policy=False, public_changed=domain is not None,
+                                       weights=self.stash(journal) if journal else None)
                     if switched:
                         # The saved configuration pointed at another Ollama:
                         # keep this machine's Ollama settings (or the chosen URL).
@@ -643,13 +956,33 @@ class Manager:
                     if journal:
                         self.recover()
                     raise
+                if journal:
+                    self.drop_stash(journal)
             warnings = self.prune_backups_safely() if existing else []
             return self.event("restore", "complete", revision=restored["revision"], automatic_updates=False,
-                              **({"pruning_warnings": warnings} if warnings else {}))
+                              **source_details, **({"pruning_warnings": warnings} if warnings else {}))
 
-    def set_updates(self, enabled, *, interval=None, keep=None):
+    @staticmethod
+    def require_signed_updates(signing, *, allow_unsigned=False):
+        """Refuse automatic updates of revisions nobody signed, unless the operator explicitly accepts them.
+
+        Automatic updates run what they fetch as root, unattended: anyone who
+        can push to the source (a stolen maintainer account or token) would
+        otherwise own every server that enabled them.
+        """
+        if signing != "ssh" and not allow_unsigned:
+            raise ValueError("Automatic updates install new code as root without anyone reviewing it, so they "
+                             "require signed releases: add --require-signatures ALLOWED_SIGNERS (the maintainers' "
+                             "SSH keys, see docs/deployment.md). To accept unsigned revisions anyway, add "
+                             "--allow-unsigned.")
+
+    def set_updates(self, enabled, *, interval=None, keep=None, allow_unsigned=False):
         settings = self.settings()
         policy = self.policy()
+        if enabled:
+            signing = self.source().get("signing", "none")
+            self.require_signed_updates(signing, allow_unsigned=allow_unsigned)
+            policy["unsigned"] = signing != "ssh"
         policy["enabled"] = bool(enabled)
         if interval is not None:
             if not 5 <= interval <= 10080:
@@ -662,8 +995,10 @@ class Manager:
         # This file is separate so a running updater cannot overwrite a later opt-out.
         write_json(self.config_dir / "updates.json", policy)
         self.system.install_timer(settings, policy)
-        return self.event("updates", "enabled" if enabled else "disabled", source=self.source()["url"], branch=self.source()["branch"],
-                          fallback_branch=self.source().get("fallback_branch"), interval_minutes=policy["interval_minutes"])
+        source = self.source()
+        return self.event("updates", "enabled" if enabled else "disabled", source=source["url"], track=source["track"],
+                          branch=source["branch"], fallback_branch=source.get("fallback_branch"),
+                          signing=source.get("signing", "none"), interval_minutes=policy["interval_minutes"])
 
     def prune_backups(self):
         """Apply keep_backups to each kind of automatically created package."""
@@ -706,11 +1041,17 @@ class Manager:
     def status(self):
         from banana_backup.store import Store
         settings = self.settings()
-        return {"product": self.product, "mode": settings["mode"], "revision": settings["revision"], "root": str(self.root),
-                "service": settings["service"], "installed": settings.get("installed", False), "source": self.source(), "updates": self.policy(),
-                "maintenance": (self.root / "data/.banana-maintenance").exists(), "recovery_pending": bool(read_json(self.config_dir / "transaction.json")),
-                "last_operation": read_json(self.config_dir / "status.json"), "environment_file": str(self.config_dir / "app.env"),
-                "remote_backups": Store(self.config_dir / "remote-backup", self.product).status()}
+        source, policy = self.source(), self.policy()
+        output = {"product": self.product, "mode": settings["mode"], "revision": settings["revision"], "root": str(self.root),
+                  "service": settings["service"], "installed": settings.get("installed", False), "source": source, "updates": policy,
+                  "maintenance": (self.root / "data/.banana-maintenance").exists(), "recovery_pending": bool(read_json(self.config_dir / "transaction.json")),
+                  "last_operation": read_json(self.config_dir / "status.json"), "environment_file": str(self.config_dir / "app.env"),
+                  "remote_backups": Store(self.config_dir / "remote-backup", self.product).status()}
+        if policy["enabled"] and source.get("signing", "none") != "ssh":
+            output["warnings"] = ["Automatic updates install unsigned revisions as root: whoever can push to the update "
+                                  "source can run code on this server. Run 'updates enable --require-signatures "
+                                  "ALLOWED_SIGNERS'."]
+        return output
 
     def uninstall(self, *, purge=False, confirm=""):
         from banana_backup.files import lock as backup_lock

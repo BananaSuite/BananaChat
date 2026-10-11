@@ -1,6 +1,7 @@
 """Independent encrypted snapshots, verified uploads, and scoped retention."""
 
 from contextlib import contextmanager
+import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -15,6 +16,8 @@ from .files import atomic_write, digest, directory, lock, private_bytes, read_js
 from .git import Git, OVERHEAD, PART_BYTES, SNAPSHOT, check_private, location
 
 DEFAULT_SCHEDULE = {"enabled": False, "interval_minutes": 1440}
+# How far ahead of this server's clock a snapshot ID may be dated and still count (another server's clock).
+FUTURE_SKEW = timedelta(days=1)
 
 
 def _snapshot_order(identifier):
@@ -23,12 +26,33 @@ def _snapshot_order(identifier):
     return stamp if "." in stamp else stamp + ".000000"
 
 
+def _snapshot_time(identifier):
+    """When *identifier* says its snapshot was made, or None for an ID that is no date.
+
+    Snapshot IDs are branch names: whoever can push to the repository chooses them.
+    """
+    try:
+        return datetime.strptime(_snapshot_order(identifier), "%Y%m%dT%H%M%S.%f").replace(tzinfo=timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _plausible(identifier, now):
+    """Whether *identifier* is a date a snapshot could have been made at: not in the future (beyond clock skew)."""
+    when = _snapshot_time(identifier)
+    return when is not None and when <= now + FUTURE_SKEW
+
+
 def _next_snapshot(previous):
-    """Keep series order monotonic even within one second or after clock drift."""
+    """Keep series order monotonic even within one second or after clock drift.
+
+    IDs that are no dates, or dated in the future, are ignored: anyone who
+    can push could otherwise make every later ID overflow.
+    """
     now = datetime.now(timezone.utc)
-    if previous:
-        latest = datetime.strptime(max(map(_snapshot_order, previous)), "%Y%m%dT%H%M%S.%f").replace(tzinfo=timezone.utc)
-        now = max(now, latest + timedelta(microseconds=1))
+    times = [_snapshot_time(name) for name in previous if _plausible(name, now)]
+    if times:
+        now = max(now, max(times) + timedelta(microseconds=1))
     return now.strftime("%Y%m%dT%H%M%S.%fZ") + "-" + secrets.token_hex(4)
 
 
@@ -49,6 +73,8 @@ class Store:
         if (type(value.get("keep")) is not int or not 2 <= value["keep"] <= 30
                 or type(value.get("max_mib")) is not int or not 1 <= value["max_mib"] <= 1024):
             raise ValueError("Invalid backup retention or size limit.")
+        if type(value.get("append_only", False)) is not bool:
+            raise ValueError("Invalid append-only backup setting.")
         return value
 
     def schedule(self):
@@ -58,9 +84,11 @@ class Store:
             raise ValueError("Invalid backup schedule.")
         return value
 
-    def configure(self, *, repo, forge, name, token_file, key_file, username="git", keep=7, max_mib=512):
+    def configure(self, *, repo, forge, name, token_file, key_file, username="git", keep=7, max_mib=512,
+                  append_only=False):
+        """Select the series. *append_only* uploads never delete snapshots (see :meth:`prune`)."""
         config = {**location(repo, forge), "schema": 1, "product": self.product, "name": name,
-                  "username": username, "keep": keep, "max_mib": max_mib}
+                  "username": username, "keep": keep, "max_mib": max_mib, "append_only": bool(append_only)}
         if (not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", name) or not 2 <= keep <= 30
                 or not 1 <= max_mib <= 1024 or not re.fullmatch(r"[A-Za-z0-9_.@+-]{1,100}", username)):
             raise ValueError("Use a lowercase series name, 2–30 snapshots, and a size limit of 1–1024 MiB.")
@@ -135,7 +163,7 @@ class Store:
                 heads = git.heads(self.prefix(config))
             return [{"snapshot": name, "commit": heads[name]} for name in sorted(heads, key=_snapshot_order, reverse=True)]
 
-    def _download(self, git, config, identifier, sha, output):
+    def _download(self, git, config, identifier, sha, output, *, allow_unauthenticated=False, heads=None):
         maximum = config["max_mib"] * 1024 * 1024
         if shutil.disk_usage(git.work).free < maximum * 3 + 128 * 1024 * 1024:
             raise ValueError("Not enough staging space: reserve three times the configured backup limit plus 128 MiB.")
@@ -146,6 +174,12 @@ class Store:
                 or any(index.get(key) != value for key, value in expected.items())
                 or not isinstance(index.get("parts"), list) or not 1 <= len(index["parts"]) <= 34):
             raise ValueError("Invalid backup index.")
+        # Before anything is decrypted: age alone cannot tell our snapshots from ones
+        # encrypted to the (public) recipient by someone else who can push.
+        authenticated = crypto.check_authentication(index, self.identity,
+                                                    allow_unauthenticated=allow_unauthenticated)
+        if not authenticated:
+            self._refuse_downgrade(git, config, identifier, heads or {})
         parts = index["parts"]
         names = [f"part-{number:05d}.age" for number in range(len(parts))]
         if set(entries) != {*names, "index.json"}:
@@ -164,9 +198,70 @@ class Store:
                     actual = hashlib.sha256(check.read(entries[name][1])).hexdigest()
                 if actual != part.get("sha256"):
                     raise ValueError("An encrypted backup part failed its checksum.")
-        return crypto.decrypt(ciphertext, output, self.identity, expected, maximum)
+        metadata = crypto.decrypt(ciphertext, output, self.identity, expected, maximum)
+        return {**metadata, "authenticated": authenticated}
 
-    def download(self, identifier, output):
+    def _authenticated_index(self, git, config, identifier, sha):
+        """The index of the snapshot on branch *identifier* (head *sha*) if this recovery key authenticated it, else None.
+
+        Only its index is fetched where the repository allows partial fetches.
+        Anything wrong with it (no such snapshot, a forged or missing tag, an
+        index for another snapshot) is simply "not authenticated".
+        """
+        try:
+            index = json.loads(git.run("cat-file", "blob", git.index(self.prefix(config) + identifier, sha)))
+            if (not isinstance(index, dict) or index.get("schema") != 1
+                    or any(index.get(key) != value for key, value in self.context(config, identifier).items())):
+                return None
+            return index if crypto.check_authentication(index, self.identity, allow_unauthenticated=True) else None
+        except (ValueError, RuntimeError):
+            return None
+
+    def _authenticated(self, git, config, identifier, sha):
+        """Whether the snapshot on branch *identifier* (head *sha*) has an index this recovery key authenticated."""
+        return self._authenticated_index(git, config, identifier, sha) is not None
+
+    def _authenticated_since(self, git, config, heads):
+        """The ID of the series' first authenticated snapshot, as its authenticated snapshots in *heads* record it.
+
+        Every authenticated index carries it (``authenticated_since``), so it
+        outlives the snapshot itself, which retention deletes in time. An
+        index without it (development builds) counts as its own start. None
+        when no snapshot in *heads* is authenticated.
+        """
+        now = datetime.now(timezone.utc)
+        oldest = None
+        for name in sorted((name for name in heads if _plausible(name, now)), key=_snapshot_order, reverse=True):
+            index = self._authenticated_index(git, config, name, heads[name])
+            if index is None:
+                continue
+            since = index.get("authenticated_since")
+            if isinstance(since, str) and _plausible(since, now) and _snapshot_order(since) <= _snapshot_order(name):
+                return since
+            oldest = name
+        return oldest
+
+    def _refuse_downgrade(self, git, config, identifier, heads):
+        """Refuse an unauthenticated snapshot that cannot be one made before snapshots were authenticated.
+
+        ``--allow-unauthenticated`` exists for those. Once a series' uploads
+        are authenticated, they all are, and series IDs only grow: an
+        unauthenticated snapshot dated at or after the series' first
+        authenticated one, or dated in the future, was made by someone else
+        who could push to the repository.
+        """
+        if not _plausible(identifier, datetime.now(timezone.utc)):
+            raise ValueError("This snapshot is not authenticated and its ID is not a date it could have been made "
+                             "at (dated in the future, or no date at all), so it was not made by this series' "
+                             "backups. Do not restore it.")
+        since = self._authenticated_since(git, config, {name: sha for name, sha in heads.items() if name != identifier})
+        if since is not None and _snapshot_time(identifier) >= _snapshot_time(since):
+            raise ValueError(f"This snapshot is not authenticated, but this series' backups have been "
+                             f"authenticated since {since}, and this snapshot is not older than that: it was not "
+                             "made by them, but by someone else with write access to the backup repository. Do "
+                             "not restore it.")
+
+    def download(self, identifier, output, *, allow_unauthenticated=False):
         with lock(self.root):
             config = self.settings()
             self.context(config, identifier)
@@ -174,13 +269,15 @@ class Store:
                 heads = git.heads(self.prefix(config))
                 if identifier not in heads:
                     raise ValueError("The selected backup no longer exists. Use backups list.")
-                metadata = self._download(git, config, identifier, heads[identifier], output)
+                metadata = self._download(git, config, identifier, heads[identifier], output,
+                                          allow_unauthenticated=allow_unauthenticated, heads=heads)
         return {**metadata, "package": str(Path(output).absolute()), "verified": True}
 
-    def verify(self, identifier):
+    def verify(self, identifier, *, allow_unauthenticated=False):
         directory(self.root)
         with tempfile.TemporaryDirectory(prefix="verify-", dir=self.root) as name:
-            result = self.download(identifier, Path(name) / "package.tar.gz")
+            result = self.download(identifier, Path(name) / "package.tar.gz",
+                                   allow_unauthenticated=allow_unauthenticated)
         result.pop("package")
         return result
 
@@ -200,6 +297,7 @@ class Store:
                 old = git.heads(self.prefix(config))
                 identifier = _next_snapshot(old)
                 context = self.context(config, identifier)
+                since = self._authenticated_since(git, config, old) or identifier
                 sealed = git.work / "sealed.age"
                 metadata = crypto.encrypt(package, sealed, self.identity, context)
                 if sealed.stat().st_size > maximum + OVERHEAD:
@@ -212,7 +310,8 @@ class Store:
                         paths.append(path)
                         parts.append({"name": path.name, "bytes": len(chunk), "sha256": digest(path)})
                 index = git.work / "index.json"
-                write_json(index, {**context, "schema": 1, "parts": parts})
+                write_json(index, crypto.authenticate({**context, "schema": 1, "parts": parts,
+                                                       "authenticated_since": since}, self.identity))
                 sha = git.commit([*paths, index])
                 if automatic and not self.schedule()["enabled"]:
                     return {"outcome": "disabled", "package": str(package)}
@@ -224,17 +323,70 @@ class Store:
                     downloaded = self._download(reader, config, identifier, sha, verified)
                     if downloaded["sha256"] != metadata["sha256"]:
                         raise ValueError("The uploaded backup did not match the local package.")
-                warnings = []
-                # Only this product and explicitly configured series are owned.
-                # Each retained snapshot is an independent root commit, so old
-                # payloads are not kept reachable through its Git ancestry.
-                for previous in sorted(old, key=_snapshot_order, reverse=True)[config["keep"] - 1:]:
-                    try:
-                        git.remove(self.prefix(config) + previous, old[previous])
-                    except RuntimeError as error:
-                        warnings.append(str(error))
+                # An append-only series is pruned only by an explicit prune, so its
+                # token needs no right to delete branches.
+                warnings = [] if config.get("append_only") else self._prune(git, config, old, config["keep"] - 1)[1]
                 result = {**context, "outcome": "complete", "commit": sha, "bytes": metadata["bytes"],
                           "sha256": metadata["sha256"], "verified": True,
                           "completed_at": datetime.now(timezone.utc).isoformat(), "retention_warnings": warnings}
                 write_json(self.root / "last-backup.json", result)
         return result
+
+    def _prune(self, git, config, heads, keep):
+        """Delete all but the *keep* newest authenticated snapshots of *heads*; return ``(removed, warnings)``.
+
+        Snapshot IDs are branch names anyone who can push chooses, so only
+        snapshots this series' recovery key authenticated count, newest
+        first, and nothing is deleted while fewer than *keep* of them would
+        remain: everything older than the *keep*-th is deleted. Snapshots
+        that are not authenticated but newer (made before snapshots were
+        authenticated, or by someone else) are kept, uncounted, until enough
+        authenticated ones replace them. IDs dated in the future or that are
+        no dates are neither counted nor deleted. Both are reported.
+        """
+        removed, warnings, unverified = [], [], []
+        now = datetime.now(timezone.utc)
+        implausible = sorted(name for name in heads if not _plausible(name, now))
+        if implausible:
+            warnings.append("Not counted and not deleted, as no backup of this series can have made them (dated in "
+                            "the future, or no date): " + ", ".join(implausible) + ". Check who pushed them to the "
+                            "backup repository, and delete them there.")
+        counted = 0
+        # Only this product and explicitly configured series are owned.
+        # Each retained snapshot is an independent root commit, so old
+        # payloads are not kept reachable through its Git ancestry.
+        for name in sorted((name for name in heads if _plausible(name, now)), key=_snapshot_order, reverse=True):
+            if counted < keep:
+                if self._authenticated(git, config, name, heads[name]):
+                    counted += 1
+                else:
+                    unverified.append(name)
+                continue
+            try:
+                git.remove(self.prefix(config) + name, heads[name])
+                removed.append(name)
+            except RuntimeError as error:
+                warnings.append(str(error))
+        if unverified:
+            warnings.append("Not authenticated with this series' recovery key, so not counted and kept: "
+                            + ", ".join(unverified) + ". They were made before backups were authenticated, or by "
+                            "someone else with write access to the backup repository; once enough authenticated "
+                            "snapshots are newer, retention deletes them.")
+        return removed, warnings
+
+    def prune(self, token_file=None):
+        """Apply the retention setting now, optionally with a token used for this command only.
+
+        Append-only series are pruned this way: the stored upload token can
+        then lack the right to delete branches (or the snapshot branches can
+        be protected), and the operator supplies a deleting token only here.
+        """
+        with lock(self.root):
+            config = self.settings()
+            pruner = copy.copy(self)
+            if token_file is not None:
+                private_bytes(token_file)
+                pruner.token = Path(token_file).absolute()
+            with pruner.transport(config) as git:
+                removed, warnings = self._prune(git, config, git.heads(self.prefix(config)), config["keep"])
+        return {"removed": sorted(removed, key=_snapshot_order), "kept": config["keep"], "warnings": warnings}

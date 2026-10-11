@@ -1280,7 +1280,7 @@ def crosses_allowed(model, other, directions: tuple[bool, bool]) -> bool:
 
 def quota_fallback(user, selection, requested: str | None, *, pool: str, candidates, settings: dict | None = None):
     """For a model chosen by name: when its quota is used up for the account (locked, its own limits or its
-    provider's pooled quota spent, or it counts toward the pool's spent tokens), switch to a usable model -
+    provider's capacity spent, or it counts toward the pool's spent tokens), switch to a usable model -
     the same kind first (local or cloud), then the other kind when the administrator allows that direction.
     The switch is recorded as ``selection.reason = "quota"`` with the original in ``selection.requested``.
 
@@ -1543,6 +1543,15 @@ def promote(now: datetime | None = None) -> list[tuple[str, str, str]]:
         if target <= current:
             continue
         with db.transaction():
+            # The candidates were read outside this transaction: an administrator
+            # may have locked, moved or suspended the account since.
+            prefs, account = store.user_settings(row["id"]), users.get(row["id"])
+            if account is None or prefs.tier_locked or prefs.tier_id != row["tier_id"]:
+                continue
+            fresh = {**dict(row), **{key: account[key] for key in
+                                     ("suspended", "suspended_until", "last_suspension_at")}}
+            if eligible_index(all_tiers, fresh, now) < target:
+                continue
             store.update_user_settings(row["id"], None, tier_id=all_tiers[target]["id"],
                                        tier_changed_at=db.timestamp(now))
             users.audit(None, "limits.tier_promote", row["username"],
@@ -1612,6 +1621,27 @@ def supported_efforts(model) -> tuple[str, ...]:
     if _get(model, "is_reasoning"):
         return ("off", "on")
     return ()
+
+
+def binary_effort(model) -> bool:
+    """Whether the model's reasoning is only off or on (asked for as "On", stored as the medium level)."""
+    return model is not None and set(supported_efforts(model)) == {"off", "on"}
+
+
+def effort_is_binary(model_id) -> bool:
+    """:func:`binary_effort` for a request's model id. The catalog is read once per request, so a list of
+    effort requests costs the same queries for one row or many."""
+    if model_id is None:
+        return False
+    from flask import g, has_app_context
+
+    if not has_app_context():
+        return binary_effort(db.one("SELECT * FROM ai_models WHERE id=?", (model_id,)))
+    ids = g.get("_binary_effort_ids")
+    if ids is None:
+        ids = g._binary_effort_ids = frozenset(row["id"] for row in db.query("SELECT * FROM ai_models")
+                                               if binary_effort(row))
+    return model_id in ids
 
 
 def named_levels(model) -> bool:
@@ -1876,19 +1906,6 @@ def apply_model_preset(model_id: int, preset: str, *, updated_by: str | None = N
         from bananachat.services import external_providers
 
         policy.update(external_providers.preset_limits(preset))
-    elif model["backend"] == "claude":
-        from bananachat.services import claude_pool
-
-        family = model["family"] or claude_pool.family_of(model["ollama_name"])
-        strict = claude_pool.strict_policy(model["ollama_name"], family=family)
-        if preset != strict["preset"]:
-            family = {"light": "haiku", "standard": "sonnet", "heavy": "opus"}[preset]
-            strict = claude_pool.strict_policy(model["ollama_name"], family=family)
-        # Presets replace budget fields, keeping administrator switches.
-        strict.pop("auto_tiers")
-        strict["counts_toward_pool"] = current["counts_toward_pool"] \
-            if current["counts_toward_pool"] is not None else False
-        policy.update(strict)
     return store.set_model_policy(model_id, policy, updated_by)
 
 

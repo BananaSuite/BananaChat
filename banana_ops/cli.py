@@ -16,6 +16,8 @@ from . import profile
 
 def source_options(parser):
     parser.add_argument("--repo", help="HTTPS or SSH source URL, including a private repository or fork")
+    parser.add_argument("--track", choices=("tags", "branch"),
+                        help="Deploy the latest release tag vX.Y.Z (tags, the default for new installations) or the latest commit of --branch (branch)")
     parser.add_argument("--branch")
     parser.add_argument("--fallback-branch", help="Use this branch only if the selected branch disappears; divergence still pauses automatic updates")
     parser.add_argument("--clear-fallback", action="store_true")
@@ -30,13 +32,26 @@ def source_options(parser):
                             help="Deploy only revisions signed by a key in this SSH allowed-signers file")
     signatures.add_argument("--clear-signatures", action="store_true",
                             help="Stop requiring signed revisions")
+    parser.add_argument("--allow-unsigned", action="store_true",
+                        help="Accept automatic updates of revisions without a trusted signature (not recommended)")
+
+
+TRUST_SOURCE = ("Deploy the source code bundled in the package, revision REVISION, when it cannot be checked against "
+                "this server's update source (the restore shows the revision). Not accepted while that source "
+                "requires signatures")
+ALLOW_UNPINNED = ("Deploy a release from 1.7 on that lacks its hash-pinned dependency locks, installing its "
+                  "dependencies from the ranges in requirements.txt (never done for automatic updates)")
 
 
 def source_values(args):
     return {"url": args.repo, "branch": args.branch, "fallback": args.fallback_branch, "clear_fallback": args.clear_fallback,
             "token_file": args.token_file, "ssh_key": args.ssh_key, "known_hosts": args.known_hosts,
             "username": args.username, "clear_credentials": args.clear_credentials,
-            "signers_file": args.require_signatures, "clear_signatures": args.clear_signatures}
+            "signers_file": args.require_signatures, "clear_signatures": args.clear_signatures, "track": args.track}
+
+
+UNSIGNED_WARNING = ("Warning: automatic updates install revisions nobody signed (--allow-unsigned): whoever can push to the "
+                    "update source can run code as root on this server. Prefer --require-signatures.")
 
 
 CHAT = profile.PRODUCT == "BananaChat"
@@ -61,8 +76,13 @@ def parser():
     install.add_argument("--backend-url", default="", help="BananaChat web mode: HTTPS compute URL or loopback SSH tunnel"
                          + (" (overrides the address in --pair)" if CHAT else ""))
     install.add_argument("--backend-token-file", type=Path, help="BananaChat web mode: private file with the compute token")
+    if CHAT:
+        install.add_argument("--backend-management-token-file", type=Path, metavar="FILE",
+                             help="web, with --backend-token-file: private file with the compute server's model "
+                                  "management token")
     install.add_argument("--ollama-binary", default="", help="BananaChat single/compute: the Ollama program for the managed Ollama service")
     install.add_argument("--restore", type=Path, metavar="PACKAGE")
+    install.add_argument("--trust-source", metavar="REVISION", help="With --restore: " + TRUST_SOURCE)
     install.add_argument("--reuse-data", action="store_true", help="Reuse saved configuration/data after uninstall or an interrupted installation")
     if CHAT:
         install.add_argument("--pair", nargs="?", const="-", metavar="CODE",
@@ -82,6 +102,7 @@ def parser():
     update.add_argument("--automatic", action="store_true", help=argparse.SUPPRESS)
     update.add_argument("--allow-divergent", action="store_true", help="Explicitly permit a reviewed switch to unrelated or rewritten source history")
     update.add_argument("--retry-failed", action="store_true")
+    update.add_argument("--allow-unpinned", action="store_true", help=ALLOW_UNPINNED)
     backup = commands.add_parser("backup", aliases=["migrate"], help="Create a private portable package with code, data, configuration, and repository credentials")
     backup.add_argument("--output", type=Path)
     backup.add_argument("--exclude-model-weights", action="store_true", help="BananaChat: keep download recipes instead of model caches")
@@ -89,10 +110,14 @@ def parser():
     restore.add_argument("package", type=Path)
     restore.add_argument("--domain")
     restore.add_argument("--port", type=int)
+    restore.add_argument("--trust-source", metavar="REVISION", help=TRUST_SOURCE)
+    restore.add_argument("--allow-unpinned", action="store_true", help=ALLOW_UNPINNED)
     if profile.PRODUCT == "BananaChat":
         restore.add_argument("--legacy-database", action="store_true", help="Import an old database or v1 export after stopping all services and saving a rollback package")
     rollback = commands.add_parser("rollback", help="Restore the package saved before the last successful update")
     rollback.add_argument("--package", type=Path)
+    rollback.add_argument("--trust-source", metavar="REVISION", help=TRUST_SOURCE)
+    rollback.add_argument("--allow-unpinned", action="store_true", help=ALLOW_UNPINNED)
     for name in ("status", "start", "stop", "restart", "recover"):
         commands.add_parser(name)
     updates = commands.add_parser("updates", help="Opt into or out of automatic source updates")
@@ -127,24 +152,33 @@ def parser():
         backend.add_argument("--pair-file", type=Path, metavar="FILE", help="connect: read the pairing code from a private file")
         backend.add_argument("--url", help="connect: compute address, overriding the one in the pairing code")
         backend.add_argument("--token-file", type=Path, help="connect: private file with the compute token (instead of a pairing code)")
+        backend.add_argument("--management-token-file", type=Path, metavar="FILE",
+                             help="connect, with --token-file: private file with the compute server's model "
+                                  "management token (BC_COMPUTE_MANAGEMENT_TOKEN_FILE there)")
         backend.add_argument("--skip-check", action="store_true", help="connect: store the connection without testing it")
         backend.add_argument("--yes", action="store_true", help="connect: use the gateway address in the pairing code "
                                                                  "without asking (needed without a terminal)")
+        reset = commands.add_parser("reset-two-step", help="Single/web server: turn off two-step verification for an "
+                                                           "account that lost its authenticator app and recovery codes "
+                                                           "(audited; signs the account out everywhere and "
+                                                           "revokes its API keys)")
+        reset.add_argument("username")
     return result
 
 
 def install_connection(args, read_secret):
     """BananaChat: the checked compute connection of a web install and the existing Ollama of single/compute.
 
-    Returns ``(mode, backend_url, backend_token)`` and fails before anything is installed.
+    Returns ``(mode, backend_url, backend_token, management_token)`` and fails before anything is installed.
     """
     from . import backend
     pairing = args.pair is not None or args.pair_file is not None
     mode = args.mode or ("web" if pairing or args.backend_url else None)
+    management = None
     if not mode:
-        return None, args.backend_url, None
+        return None, args.backend_url, None, None
     if mode != "web":
-        if pairing or args.backend_url or args.backend_token_file:
+        if pairing or args.backend_url or args.backend_token_file or args.backend_management_token_file:
             raise ValueError("--pair, --backend-url and --backend-token-file are for the web server; "
                              f"a {mode} server uses its own Ollama.")
         if args.ollama_url:
@@ -154,14 +188,15 @@ def install_connection(args, read_secret):
             if not args.skip_connection_check:
                 version = backend.check_ollama(url)
                 print(f"Using the existing Ollama {version} at {url}; {profile.PRODUCT} will not manage it.", file=sys.stderr)
-        return mode, "", None
+        return mode, "", None, None
     if args.ollama_binary or args.ollama_url:
         raise ValueError("A web server never runs Ollama: --ollama-binary and --ollama-url are for single and compute "
                          "servers. Connect the web server to its compute server with --pair.")
     if pairing:
-        if args.backend_token_file:
-            raise ValueError("The pairing code already contains the token; leave out --backend-token-file.")
-        url, token = backend.read_pairing(None if args.pair_file else args.pair, args.pair_file)
+        if args.backend_token_file or args.backend_management_token_file:
+            raise ValueError("The pairing code already contains the tokens; leave out --backend-token-file and "
+                             "--backend-management-token-file.")
+        url, token, management = backend.read_pairing(None if args.pair_file else args.pair, args.pair_file)
         if args.backend_url:
             url = backend.backend_url(args.backend_url)
         else:
@@ -169,13 +204,17 @@ def install_connection(args, read_secret):
     elif args.backend_url:
         url = backend.backend_url(args.backend_url)
         token = backend.check_token(read_secret(args.backend_token_file)) if args.backend_token_file else None
+        if args.backend_management_token_file:
+            management = backend.check_management_token(read_secret(args.backend_management_token_file), token)
     else:
         raise ValueError("A web server needs its compute server. On the compute server run 'bananachat compute "
                          "pairing-code', then install this one with --pair (the code is asked for).")
     if not args.skip_connection_check:
         version = backend.check_backend(url, token)
+        if management:
+            backend.check_management(url, management)
         print(f"Connected to the compute server at {url} (Ollama {version}).", file=sys.stderr)
-    return mode, url, token
+    return mode, url, token, management
 
 
 def next_steps(manager):
@@ -213,6 +252,27 @@ def recovery_message(manager):
                 "restore --yes' here).")
     return ("Model weights were not in this backup: BananaChat checks which saved models are missing on its model "
             "server and, only if some are, Admin → Overview offers to download them.")
+
+
+def reset_two_step(manager, username):
+    """BananaChat: the application's audited two-step verification reset, run as the service account.
+
+    For an account that lost both its authenticator app and its recovery codes when no administrator
+    can reset it in Admin → Users (see bananachat/manage.py).
+    """
+    settings = manager.settings()
+    if settings["mode"] not in {"single", "web"}:
+        raise ValueError("Accounts are kept on the web server: run reset-two-step there.")
+    with maintenance_lock(manager.root):
+        manager.recover()
+        try:
+            output = manager.system.application_command(
+                settings, ["-m", "bananachat.manage", "reset-two-step", "--", username])
+        except ValueError as error:
+            raise ValueError(str(error).removeprefix(profile.PRODUCT + ": ")) from None
+        result = json.loads(output)
+        manager.event("reset-two-step", result.get("outcome", "complete"), username=result.get("username", username))
+    return result
 
 
 def configure_proxy(manager, args):
@@ -275,21 +335,26 @@ def main(argv=None):
                                      "server with 'bananachat backend connect'.")
                 ollama_url = getattr(args, "ollama_url", "")
                 result = manager.restore(args.restore, new=True, name=args.name, domain=args.domain, port=args.port,
+                                         trust_source=args.trust_source,
                                          **({"ollama_url": ollama_url} if ollama_url else {}))
             else:
-                mode, backend_url, backend_token = (install_connection(args, manager.read_secret) if CHAT
-                                                    else (args.mode, args.backend_url, None))
+                if args.trust_source:
+                    raise ValueError("--trust-source confirms the source bundled in a package: use it with --restore.")
+                mode, backend_url, backend_token, management_token = (
+                    install_connection(args, manager.read_secret) if CHAT else (args.mode, args.backend_url, None, None))
                 if not mode:
                     raise ValueError("Choose --mode, or use --restore PACKAGE to recover the saved deployment mode."
                                      + (CHAT_LAYOUT if CHAT else ""))
-                extra = {"backend_token": backend_token, "ollama_url": args.ollama_url} if CHAT else {}
+                extra = {"backend_token": backend_token, "ollama_url": args.ollama_url,
+                         "backend_management_token": management_token} if CHAT else {}
                 result = manager.install(Path(__file__).resolve().parents[1], mode=mode, name=args.name, domain=args.domain or "",
                                          portal_domain=args.portal_domain, port=args.port, backend_url=backend_url,
                                          backend_token_file=None if backend_token else args.backend_token_file,
                                          ollama_binary=args.ollama_binary, source_options=source_values(args),
                                          reuse_data=args.reuse_data, **extra)
         elif args.command == "update":
-            result = manager.update(automatic=args.automatic, allow_divergent=args.allow_divergent, retry_failed=args.retry_failed)
+            result = manager.update(automatic=args.automatic, allow_divergent=args.allow_divergent, retry_failed=args.retry_failed,
+                                    allow_unpinned=args.allow_unpinned)
         elif args.command in {"backup", "migrate"}:
             result = {"package": str(manager.backup(args.output, exclude_model_weights=args.exclude_model_weights)), "contains_secrets": True}
         elif args.command == "backups":
@@ -302,8 +367,9 @@ def main(argv=None):
                     raise ValueError("Install or restore the application before enabling its backup schedule.")
             result = handle(args, Store(manager.config_dir / "remote-backup", manager.product),
                             create_package=lambda: manager.backup(manager.backup_name("remote"), exclude_model_weights=True),
-                            restore_package=lambda package, options: manager.restore(package, name=options.name,
-                                                                                     domain=options.domain, port=options.port),
+                            restore_package=lambda package, options: manager.restore(
+                                package, name=options.name, domain=options.domain, port=options.port,
+                                trust_source=options.trust_source, allow_unpinned=options.allow_unpinned),
                             schedule=schedule)
         elif args.command == "models":
             from .models import compute_recovery
@@ -317,7 +383,7 @@ def main(argv=None):
             from . import backend
             if args.action == "rotate-token":
                 result = backend.rotate_token(manager, args.url)
-                print("The old token no longer works. Connect the web server again: on it run "
+                print("The old tokens no longer work. Connect the web server again: on it run "
                       "'bananachat backend connect' and paste the new pairing code.", file=sys.stderr)
             else:
                 result = backend.pairing_code(manager, args.url)
@@ -330,12 +396,16 @@ def main(argv=None):
                     if args.code is not None or args.pair_file is not None or not args.url:
                         raise ValueError("Use either a pairing code, or --url with --token-file.")
                     url, token = args.url, manager.read_secret(args.token_file)
+                    management = manager.read_secret(args.management_token_file) if args.management_token_file else None
                 else:
-                    url, token = backend.read_pairing(args.code, args.pair_file)
+                    if args.management_token_file:
+                        raise ValueError("The pairing code already contains the management token; leave out "
+                                         "--management-token-file.")
+                    url, token, management = backend.read_pairing(args.code, args.pair_file)
                     if not args.url:
                         backend.confirm_address(url, args.yes)
                     url = args.url or url
-                result = backend.connect(manager, url, token, check=not args.skip_check)
+                result = backend.connect(manager, url, token, management_token=management, check=not args.skip_check)
             elif args.action == "test":
                 result = backend.test(manager)
             else:
@@ -344,6 +414,8 @@ def main(argv=None):
                     raise ValueError("Only a web server has a compute backend; on a compute server use 'compute pairing-code'.")
                 result = {"mode": "web", **backend.summary(manager, settings),
                           "test": f"Run '{settings['service']} backend test' to check the connection now."}
+        elif args.command == "reset-two-step":
+            result = reset_two_step(manager, args.username)
         elif args.command == "restore":
             if getattr(args, "legacy_database", False):
                 if args.domain is not None or args.port is not None:
@@ -351,13 +423,14 @@ def main(argv=None):
                 from .legacy_import import restore_database
                 result = restore_database(manager, args.package)
             else:
-                result = manager.restore(args.package, domain=args.domain, port=args.port)
+                result = manager.restore(args.package, domain=args.domain, port=args.port, trust_source=args.trust_source,
+                                         allow_unpinned=args.allow_unpinned)
         elif args.command == "rollback":
             recent = read_json(manager.config_dir / "last-update.json", {})
             archive = args.package or recent.get("backup")
             if not archive:
                 raise ValueError("No previous update package is recorded. Use rollback --package PATH.")
-            result = manager.restore(archive)
+            result = manager.restore(archive, trust_source=args.trust_source, allow_unpinned=args.allow_unpinned)
         elif args.command == "status":
             result = manager.status()
             if CHAT:
@@ -367,24 +440,42 @@ def main(argv=None):
             if args.action == "status":
                 result = {"source": manager.source(), "updates": manager.policy()}
             else:
+                enable = args.action == "enable"
+                if enable:
+                    # Before anything is written: unsigned automatic updates need the operator's explicit waiver.
+                    signing = ("ssh" if args.require_signatures else "none" if args.clear_signatures
+                               else manager.source().get("signing", "none"))
+                    manager.require_signed_updates(signing, allow_unsigned=args.allow_unsigned)
                 changes = source_values(args)
                 if any(value for key, value in changes.items() if key != "username"):
                     with maintenance_lock(manager.root):
                         manager.configure_source(**changes)
-                result = manager.set_updates(args.action == "enable", interval=args.interval, keep=args.keep_backups)
-                if args.action == "enable":
-                    print("Automatic updates are now enabled. Changes on the configured branch can alter or remove features. Use updates disable to opt out.")
+                result = manager.set_updates(enable, interval=args.interval, keep=args.keep_backups,
+                                             allow_unsigned=args.allow_unsigned)
+                if enable:
+                    print("Automatic updates are now enabled. Each new " + ("release" if manager.source()["track"] == "tags"
+                          else "commit on the configured branch") + " is installed and can alter or remove features. Use updates disable to opt out.")
+                    if signing != "ssh":
+                        print(UNSIGNED_WARNING, file=sys.stderr)
                 else:
                     print("Automatic updates are disabled. An update already applying its changes will finish safely.")
         elif args.command == "source":
             if args.action == "set":
                 with maintenance_lock(manager.root):
+                    policy = manager.policy()
+                    if args.clear_signatures and policy["enabled"]:
+                        manager.require_signed_updates("none", allow_unsigned=args.allow_unsigned)
                     result = manager.configure_source(**source_values(args))
+                    if args.clear_signatures and policy["enabled"]:
+                        write_json(manager.config_dir / "updates.json", {**policy, "unsigned": True})
+                        print(UNSIGNED_WARNING, file=sys.stderr)
             elif args.action == "check":
                 from .source import GitSource
                 with maintenance_lock(manager.root):
-                    revision, branch, forward = GitSource(manager.root, manager.source()).resolve(manager.settings()["revision"])
-                result = {"revision": revision, "selected_branch": branch, "fast_forward": forward, "deployed": False}
+                    source = manager.source()
+                    revision, selected, forward = GitSource(manager.root, source).resolve(manager.settings()["revision"])
+                result = {"revision": revision, ("release" if source["track"] == "tags" else "selected_branch"): selected,
+                          "fast_forward": forward, "deployed": False}
             else:
                 result = manager.source()
         elif args.command in {"start", "stop", "restart", "recover"}:

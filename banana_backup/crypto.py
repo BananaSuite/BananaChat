@@ -1,5 +1,15 @@
-"""Use age's authenticated streaming format; keep recovery identities off Git."""
+"""Use age's authenticated streaming format; keep recovery identities off Git.
 
+age authenticates a ciphertext against its *recipient*, which is public (it
+is in the series' identity branch), so anyone who can push to the backup
+repository could encrypt a package of their own. Snapshot indexes therefore
+carry an HMAC-SHA256 keyed from the recovery identity, which never leaves
+the server and the operator's offline copy: whoever holds the recovery key
+(and so can restore) can also authenticate, and nobody else can forge.
+"""
+
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -11,6 +21,8 @@ import tempfile
 from .files import digest, private_bytes, publish
 
 MAGIC = b"BananaSuite backup v1\n"
+AUTHENTICATION = "hmac-sha256-v1"
+_KEY_LABEL = b"BananaSuite backup index authentication v1"
 
 
 def binary(name):
@@ -20,11 +32,16 @@ def binary(name):
     return result
 
 
-def recipient(identity):
+def _secret(identity):
     lines = private_bytes(identity, 4096).decode("ascii").splitlines()
     secrets = [line.strip() for line in lines if line.strip() and not line.startswith("#")]
     if len(secrets) != 1 or not re.fullmatch(r"AGE-SECRET-KEY-1[0-9A-Z]{58}", secrets[0]):
         raise ValueError("Use a native age recovery identity created by backups keygen.")
+    return secrets[0]
+
+
+def recipient(identity):
+    _secret(identity)
     result = subprocess.run([binary("age-keygen"), "-y", str(identity)], capture_output=True, text=True, timeout=15)
     value = result.stdout.strip()
     if result.returncode or not re.fullmatch(r"age1[0-9a-z]{58}", value):
@@ -45,6 +62,42 @@ def keygen(destination):
     destination.chmod(0o600)
     return {"key_file": str(destination), "recipient": recipient(destination),
             "next": "Keep an offline copy of this key. Repository access alone cannot restore a backup."}
+
+
+def _mac(identity, index):
+    key = hmac.new(_secret(identity).encode("ascii"), _KEY_LABEL, hashlib.sha256).digest()
+    body = {name: value for name, value in index.items() if name != "authentication"}
+    message = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def authenticate(index, identity):
+    """*index* with an ``authentication`` tag over everything else in it (context and part checksums)."""
+    return {**index, "authentication": {"scheme": AUTHENTICATION, "mac": _mac(identity, index)}}
+
+
+def check_authentication(index, identity, *, allow_unauthenticated=False):
+    """Verify a snapshot index before any of its ciphertext is decrypted; return whether it was authenticated.
+
+    The index binds the product, series, snapshot ID and every encrypted
+    part's SHA-256, so the tag covers the whole ciphertext. Snapshots made
+    before authentication existed are refused unless *allow_unauthenticated*;
+    a forgery looks the same, so the store also refuses one that cannot be
+    that old.
+    """
+    tag = index.get("authentication")
+    if tag is None:
+        if allow_unauthenticated:
+            return False
+        raise ValueError("This snapshot is not authenticated: either a release from before backups were "
+                         "authenticated made it, or someone else with write access to the backup repository did, "
+                         "and nothing tells which. Restore it with --allow-unauthenticated only if you know it is "
+                         "one of your own older backups and trust everyone who could push to that repository.")
+    if (not isinstance(tag, dict) or tag.get("scheme") != AUTHENTICATION or not isinstance(tag.get("mac"), str)
+            or not hmac.compare_digest(tag["mac"].encode(), _mac(identity, index).encode())):
+        raise ValueError("Backup authentication failed: this snapshot was not made with this recovery key, or was "
+                         "changed in the repository. Do not restore it.")
+    return True
 
 
 def encrypt(package, destination, identity, context):
@@ -73,7 +126,11 @@ def encrypt(package, destination, identity, context):
 
 
 def decrypt(ciphertext, destination, identity, context, maximum):
-    """Verify age authentication and the whole payload before publishing it."""
+    """Decrypt and check the whole payload before publishing it.
+
+    age only proves the ciphertext was encrypted to our public recipient:
+    callers check the snapshot index with :func:`check_authentication` first.
+    """
     recipient(identity)
     destination = Path(destination).absolute()
     if destination.exists() or destination.is_symlink():

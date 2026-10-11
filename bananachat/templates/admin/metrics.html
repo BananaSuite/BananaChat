@@ -5,23 +5,28 @@
 {% block admin_content %}
 {% macro ms(value) -%}{% if value is none %}—{% elif value >= 10000 %}{{ (value / 1000) | number(0) }} s{% elif value >= 1000 %}{{ (value / 1000) | number(1) }} s{% else %}{{ value | number }} ms{% endif %}{%- endmacro %}
 {% macro mb(value) -%}{% if value is none %}—{% elif value >= 1024 %}{{ (value / 1024) | number(1) }} GB{% else %}{{ value | number }} MB{% endif %}{%- endmacro %}
-{% macro breakdown(title, rows, id) -%}
+{% macro breakdown(title, rows, id, named=true) -%}
+{#- Request types and statuses in words; model names are shown as they are. -#}
+{%- set metric_labels = {"chat": "Chat", "chat_incognito": "No-history chat", "api": "API", "playground": "Playground",
+                        "image": "Images", "images": "Images", "agent": "Cloud sessions", "agents": "Cloud sessions",
+                        "ok": "OK", "error": "Error", "failed": "Failed", "rate_limited": "Rate limited", "stopped": "Stopped",
+                        "cancelled": "Cancelled", "timeout": "Timed out", "interrupted": "Interrupted"} %}
 <section class="settings-section" aria-labelledby="{{ id }}">
   <div class="section-header"><h2 id="{{ id }}">{{ title }}</h2></div>
   {% if rows %}
   {% set top = rows[0].requests %}
   <div class="table-wrap table-plain">
-    <table class="table">
+    <table class="table table-stack">
       <thead><tr><th scope="col">{{ title | replace("By ", "") | capitalize }}</th><th scope="col" class="text-right">Requests</th><th scope="col" class="meter-col"><span class="visually-hidden">Share</span></th><th scope="col" class="text-right">Tokens</th><th scope="col" class="text-right">Avg. time</th><th scope="col" class="text-right">Failed</th></tr></thead>
       <tbody>
       {% for row in rows %}
         <tr>
-          <td class="truncate cell-wide">{{ row.label }}</td>
-          <td class="text-right">{{ row.requests | number }}</td>
+          <td class="truncate cell-wide cell-full">{% if named %}{{ metric_labels.get(row.label) or (row.label | replace("_", " ") | capitalize) }}{% else %}{{ row.label }}{% endif %}</td>
+          <td class="text-right" data-label="Requests:">{{ row.requests | number }}</td>
           <td class="meter-col"><progress class="meter" max="{{ top }}" value="{{ row.requests }}" aria-hidden="true"></progress></td>
-          <td class="text-right">{{ (row.tokens_in + row.tokens_out) | number }}</td>
-          <td class="text-right nowrap">{{ ms(row.avg_duration_ms) }}</td>
-          <td class="text-right">{% if row.errors %}<span class="danger-text">{{ row.errors | number }}</span>{% else %}0{% endif %}</td>
+          <td class="text-right" data-label="Tokens:">{{ (row.tokens_in + row.tokens_out) | number }}</td>
+          <td class="text-right nowrap" data-label="Avg. time:">{{ ms(row.avg_duration_ms) }}</td>
+          <td class="text-right" data-label="Failed:">{% if row.errors %}<span class="danger-text">{{ row.errors | number }}</span>{% else %}0{% endif %}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -54,11 +59,11 @@
 <section class="settings-section mb-3" aria-labelledby="chart-title">
   <div class="section-header">
     <h2 id="chart-title">Requests per {{ "hour" if range_key == "24h" else "day" }}</h2>
-    <span class="small muted">Peak {{ chart.peak | number }} · UTC</span>
+    <span class="small muted">Peak: {{ chart.peak | number }} request{{ "" if chart.peak == 1 else "s" }} · times in UTC</span>
   </div>
   {% if chart.total %}
   <figure class="chart">
-    <svg viewBox="0 0 {{ chart.width }} {{ chart.height + 22 }}" class="bar-chart" role="img" aria-labelledby="chart-title chart-desc" preserveAspectRatio="none">
+    <svg viewBox="0 0 {{ chart.width }} {{ chart.height }}" class="bar-chart" role="img" aria-labelledby="chart-title chart-desc" preserveAspectRatio="none">
       <desc id="chart-desc">{{ chart.total | number }} requests in total; the busiest {{ "hour" if range_key == "24h" else "day" }} had {{ chart.peak | number }}. The table below lists every value.</desc>
       <line x1="0" y1="{{ chart.height }}" x2="{{ chart.width }}" y2="{{ chart.height }}" class="chart-axis"/>
       <line x1="0" y1="{{ chart.height / 2 }}" x2="{{ chart.width }}" y2="{{ chart.height / 2 }}" class="chart-grid"/>
@@ -68,11 +73,10 @@
         {% if bar.height %}<rect class="chart-bar" x="{{ bar.x }}" y="{{ bar.y }}" width="{{ bar.width }}" height="{{ bar.height }}" rx="{{ 2 if bar.width > 6 else 0 }}"/>{% endif %}
       </g>
       {% endfor %}
-      {% for tick in chart.ticks %}
-      <text x="{{ tick.x + tick.width / 2 }}" y="{{ chart.height + 16 }}" class="chart-label" text-anchor="{{ 'start' if loop.first else ('end' if loop.last else 'middle') }}">{{ tick.label }}</text>
-      {% endfor %}
     </svg>
-    <figcaption><details class="inline-details"><summary>Show as a table</summary>
+    {#- The first, middle and last periods, as text outside the stretched drawing so they are never distorted. -#}
+    <div class="chart-ticks" aria-hidden="true">{% for tick in chart.ticks %}<span>{{ tick.label }}</span>{% endfor %}</div>
+    <figcaption><details class="inline-details"><summary>Show as a table{{ icon("chevron-down") }}</summary>
       <div class="table-wrap mt-1"><table class="table"><thead><tr><th scope="col">Period (UTC)</th><th scope="col" class="text-right">Requests</th><th scope="col" class="text-right">Failed</th></tr></thead>
       <tbody>{% for bar in chart.bars %}<tr><td>{{ bar.label }}</td><td class="text-right">{{ bar.count }}</td><td class="text-right">{{ bar.errors }}</td></tr>{% endfor %}</tbody></table></div>
     </details></figcaption>
@@ -82,16 +86,16 @@
   {% endif %}
 </section>
 
-<div class="grid grid-2 mb-3">
+<div class="grid metrics-pair mb-3">
   {{ breakdown("By type", by_type, "by-type-title") }}
   {{ breakdown("By status", by_status, "by-status-title") }}
 </div>
-<div class="mb-3">{{ breakdown("By model", by_model, "by-model-title") }}</div>
+<div class="mb-3">{{ breakdown("By model", by_model, "by-model-title", false) }}</div>
 
 <section class="settings-section" aria-labelledby="compute-title">
   <div class="section-header">
     <h2 id="compute-title">Inference server load</h2>
-    <span class="small muted">A sample every {{ interval }} s{% if latest %} · latest {{ when(latest.recorded_at) }}{% endif %}</span>
+    <span class="small muted">A sample every {{ interval }} s{% if latest %} · {{ source_labels.get(latest.metrics_source, latest.metrics_source or "Unknown") }} · latest {{ when(latest.recorded_at) }}{% endif %}</span>
   </div>
   {% if stale %}
   <div class="alert alert-warning section-body">{{ icon("alert") }}<p>{% if latest %}No recent samples: the background services may not be running.{% else %}No samples recorded yet. They are collected by the background services every {{ interval }} seconds.{% endif %}</p></div>
@@ -99,29 +103,30 @@
   {% if peaks.samples %}
   <dl class="details section-body">
     <dt>Peak GPU memory</dt><dd>{{ mb(peaks.gpu_used) }}{% if peaks.gpu_total %} of {{ mb(peaks.gpu_total) }}{% endif %}</dd>
-    <dt>Peak GPU utilisation</dt><dd>{{ (peaks.gpu_util | number) ~ " %" if peaks.gpu_util is not none else "—" }}</dd>
+    <dt>Peak GPU utilisation</dt><dd>{{ (peaks.gpu_util | number) ~ "%" if peaks.gpu_util is not none else "—" }}</dd>
     <dt>Peak host memory</dt><dd>{{ mb(peaks.ram_used) }}{% if peaks.ram_total %} of {{ mb(peaks.ram_total) }}{% endif %}</dd>
     <dt>Peak queue depth</dt><dd>{{ peaks.queue or 0 }}</dd>
   </dl>
   {% endif %}
   {% if snapshots %}
   <div class="table-wrap table-plain">
-    <table class="table">
+    <table class="table table-stack table-stack-lg">
       <thead><tr><th scope="col">Time (UTC)</th><th scope="col">GPU memory</th><th scope="col">GPU use</th><th scope="col">Host memory</th><th scope="col">CPU</th><th scope="col">Queue</th><th scope="col">Loaded models</th></tr></thead>
       <tbody>
       {% for snap in snapshots %}
         <tr>
-          <td class="nowrap">{{ snap.recorded_at | datetime }}</td>
-          <td class="nowrap">
-            {{ mb(snap.gpu_memory_used_mb) }}{% if snap.gpu_memory_total_mb %} / {{ mb(snap.gpu_memory_total_mb) }}
+          <td class="nowrap cell-full"><strong>{{ snap.recorded_at | datetime }}</strong></td>
+          <td class="nowrap cell-full" data-label="GPU memory:">
+            {{ mb(snap.gpu_memory_used_mb) }}{% if snap.gpu_memory_total_mb %} of {{ mb(snap.gpu_memory_total_mb) }}
             <progress class="meter{% if (snap.gpu_memory_used_mb or 0) / snap.gpu_memory_total_mb > 0.9 %} full{% elif (snap.gpu_memory_used_mb or 0) / snap.gpu_memory_total_mb > 0.75 %} warn{% endif %}" max="{{ snap.gpu_memory_total_mb }}" value="{{ snap.gpu_memory_used_mb or 0 }}" aria-label="GPU memory in use"></progress>{% endif %}
-            <div class="small faint">{{ source_labels.get(snap.metrics_source, snap.metrics_source or "Unknown") }}</div>
+            {#- The source is named in the caption; a row names it only when it changes. -#}
+            {% if not loop.first and snap.metrics_source != loop.previtem.metrics_source %}<div class="small faint">{{ source_labels.get(snap.metrics_source, snap.metrics_source or "Unknown") }}</div>{% endif %}
           </td>
-          <td>{{ (snap.gpu_utilization_percent | number) ~ " %" if snap.gpu_utilization_percent is not none else "—" }}</td>
-          <td class="nowrap">{{ mb(snap.system_memory_used_mb) }}{% if snap.system_memory_total_mb %} / {{ mb(snap.system_memory_total_mb) }}{% endif %}</td>
-          <td>{{ (snap.cpu_percent | number) ~ " %" if snap.cpu_percent is not none else "—" }}</td>
-          <td>{{ snap.queue_depth }}</td>
-          <td class="small">{{ snap.active_models | join(", ") or "—" }}</td>
+          <td data-label="GPU use:">{{ (snap.gpu_utilization_percent | number) ~ "%" if snap.gpu_utilization_percent is not none else "—" }}</td>
+          <td class="nowrap" data-label="Host memory:">{{ mb(snap.system_memory_used_mb) }}{% if snap.system_memory_total_mb %} of {{ mb(snap.system_memory_total_mb) }}{% endif %}</td>
+          <td data-label="CPU:">{{ (snap.cpu_percent | number) ~ "%" if snap.cpu_percent is not none else "—" }}</td>
+          <td data-label="Queue:">{{ snap.queue_depth }}</td>
+          <td class="small cell-full" data-label="Loaded models:">{{ snap.active_models | join(", ") or "—" }}</td>
         </tr>
       {% endfor %}
       </tbody>

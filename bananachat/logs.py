@@ -1,12 +1,14 @@
 """Logging to stderr (journald under systemd) and an optional private file.
 
 ``BC_LOGGING_LEVEL``: ``off`` < ``minimal`` (errors) < ``medium`` (warnings)
-< ``verbose`` (informational, default) < ``debug``. Prompts, passwords and
+< ``verbose`` (informational, default) < ``debug``. ``BC_LOG_FORMAT=json``
+writes one JSON object per line for log collectors. Prompts, passwords and
 tokens are never logged.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import logging.handlers
 import os
@@ -30,6 +32,15 @@ class _PrivateRotatingHandler(logging.handlers.RotatingFileHandler):
             os.umask(previous)
 
 
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {"time": datetime.fromtimestamp(record.created, timezone.utc).isoformat(timespec="milliseconds"),
+                 "level": record.levelname, "logger": record.name, "message": record.getMessage()}
+        if record.exc_info:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry, ensure_ascii=False)
+
+
 def configure_logging(config) -> None:
     global _configured
     logger = logging.getLogger("bananachat")
@@ -38,7 +49,8 @@ def configure_logging(config) -> None:
         return
     _configured = True
     logger.propagate = False
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    formatter = (JsonFormatter() if config.log_format == "json"
+                 else logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     stream = logging.StreamHandler()
     stream.setFormatter(formatter)
     logger.addHandler(stream)

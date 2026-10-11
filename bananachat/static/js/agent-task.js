@@ -46,7 +46,8 @@ function parseTime(value) {
 
 function clock(value) {
   const date = parseTime(value);
-  return date ? date.toLocaleTimeString(boot.lang === "it" ? "it-IT" : "en-US", { hour: "2-digit", minute: "2-digit" }) : "";
+  // Like the server's times: 24-hour UTC ("15:44 UTC"), so it matches the dates on the page.
+  return date ? `${date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" })} UTC` : "";
 }
 
 function duration(ms) {
@@ -66,7 +67,7 @@ function preview(step) {
     case "bash": return String(args.command || "");
     case "search": return `${args.pattern || ""}  ${args.path || ""}`.trim();
     case "delegate": return (Array.isArray(args.tasks) ? args.tasks : []).map((item) => item && item.title).filter(Boolean).join(", ");
-    case "finish": return String(args.summary || "").split("\n")[0];
+    case "finish": return String(args.summary || "").split("\n")[0].replace(/\*\*|__|`/g, "");  // plain text, not Markdown
     default: return String(args.path || "");
   }
 }

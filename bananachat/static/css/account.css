@@ -1,20 +1,17 @@
 /* Account navigation and usage. Section and form layout comes from app.css. */
 .account-layout { display: flex; flex-direction: column; gap: 1.5rem; }
 .account-toc { width: 100%; padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
-.account-nav-sections { display: flex; flex-wrap: wrap; align-items: center; gap: .15rem; }
-.account-toc a { display: flex; align-items: center; gap: .5rem; min-height: var(--control-compact); padding: .4rem .6rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .875rem; line-height: 1.45; }
-.account-toc a:hover { background: var(--hover); color: var(--text); }
-.account-toc a[aria-current="location"] { color: var(--text); background: var(--hover); text-decoration: underline; text-decoration-color: var(--primary); text-underline-offset: .35em; }
 .account-toc a[href="#delete"]:hover { color: var(--danger); }
-.account-toc svg { width: 16px; height: 16px; flex: none; }
 .account-sections { width: 100%; }
 .account-sections > section { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
-.account-sections > section > p.muted { max-width: 68ch; font-size: .875rem; }
+.account-sections > section > p.muted { max-width: 68ch; font-size: .875rem; text-wrap: pretty; }
 .account-profile-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 1rem 1.5rem; margin: 0; }
 .account-profile-details > div { min-width: 0; }
 .account-profile-details dt { color: var(--text-muted); font-size: .8125rem; margin-bottom: .2rem; }
 .account-profile-details dd { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
 .account-profile-details dd .faint { font-size: .8125rem; }
+/* The exact time sits on its own line and breaks only between the date and the time (large text, phones). */
+.account-profile-details .last-sign-in-time { display: block; }
 .account-sections .form-actions { justify-content: flex-start; }
 .quota-form > fieldset { border: 0; border-radius: 0; padding: 0; }
 .usage-pools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
@@ -25,6 +22,15 @@
 .usage-pool h3 { margin-bottom: .25rem; font-size: .9rem; }
 .usage-meter { display: flex; flex-direction: column; gap: .3rem; }
 .usage-meter .row-between { gap: .25rem .75rem; font-size: .875rem; }
+/* A value that wraps under its label stays at the right, like the values that fit beside it. */
+.usage-meter .row-between > :last-child { margin-inline-start: auto; text-align: end; }
+/* In a narrow column every meter puts its value under its label, so meters stacked in one card match
+   (whether a value fits beside its label depends on the label's length). */
+.usage-meter { container-type: inline-size; }
+@container (max-width: 30rem) {
+  .usage-meter .row-between { flex-direction: column; align-items: flex-start; gap: .05rem; }
+  .usage-meter .row-between > :last-child { margin-inline-start: 0; text-align: start; }
+}
 .limit-reasons { display: flex; flex-wrap: wrap; gap: .25rem .75rem; color: var(--text-muted); }
 .limit-reasons li::before { content: "• "; color: var(--text-faint); }
 .tier-requirements { display: flex; flex-direction: column; gap: .25rem; margin-bottom: .5rem; }
@@ -33,7 +39,8 @@
 .tier-requirements .is-met { color: var(--success); }
 .tier-requirements .is-open { color: var(--text-muted); }
 .session-item form { flex: none; }
-.session-actions { min-width: 0; max-width: 100%; }
+.session-actions { min-width: 0; max-width: 100%; display: flex; flex-wrap: wrap; align-items: center;
+                   justify-content: flex-end; gap: .5rem .75rem; }
 .session-actions .btn { max-width: 100%; white-space: normal; }
 .session-item .grow { overflow-wrap: anywhere; }
 .session-item .grow > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; }
@@ -48,14 +55,31 @@
   .account-layout { gap: 1.25rem; }
 }
 @media (max-width: 640px) {
+  .account-toc { padding-bottom: .5rem; }
+  .account-profile-details { align-items: start; }
   .usage-pools { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
   .usage-pool + .usage-pool { padding: 1rem 0 0; border-inline-start: 0; border-top: 1px solid var(--border); }
   .account-profile-details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem 1rem; }
   #access .list-item { flex-direction: column; align-items: flex-start; gap: .5rem; }
   #access .list-item .grow { width: 100%; }
 }
-@media (pointer: coarse) {
-  .account-toc a { min-height: var(--touch-target); }
-}
 .model-limits > li { display: flex; flex-direction: column; gap: .45rem; padding: .8rem 0; }
-.model-limits .badge svg, .model-limits p > svg { width: 14px; height: 14px; vertical-align: -2px; }
+.model-limits .badge svg, .model-limits p > svg { width: .875rem; height: .875rem; vertical-align: -.125rem; }
+
+/* Two-step verification (account/two_step.html, account/two_step_codes.html). */
+.account-back { margin: 0 0 .75rem; font-size: .9rem; }
+.account-back a { display: inline-flex; align-items: center; gap: .25rem; min-height: 1.5rem; color: var(--text-muted); text-decoration: none; }
+.account-back a:hover { color: var(--text); text-decoration: underline; }
+.account-back svg { width: 16px; height: 16px; }
+/* Numbered steps: list items keep their markers ("1.", "2."); children are spaced with margins. */
+.two-step-steps { display: flex; flex-direction: column; gap: 1.25rem; margin: 0; padding-inline-start: 1.5rem; }
+.two-step-steps > li { display: list-item; padding-inline-start: .25rem; }
+.two-step-steps > li > * + * { margin-top: .6rem; }
+.two-step-steps > li::marker { color: var(--text-muted); font-weight: 600; }
+.two-step-key + .btn { flex: none; }
+.two-step-steps p { margin: 0; }
+/* Dark modules on white whatever the theme, with a quiet zone, as scanners expect. */
+.two-step-qr { width: 200px; height: 200px; padding: 8px; border-radius: var(--radius-sm); background: #fff; image-rendering: pixelated; }
+.two-step-key { font-size: .95rem; letter-spacing: .04em; overflow-wrap: anywhere; user-select: all; }
+.two-step-codes { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: .5rem 1.5rem; margin: 0; padding: 0; list-style: none; font-size: 1rem; }
+.two-step-codes li { user-select: all; }

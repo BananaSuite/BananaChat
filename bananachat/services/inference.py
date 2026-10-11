@@ -18,6 +18,26 @@ next candidate model when one fails before producing any output, the
 response size limit and token accounting (estimated when the backend reports
 none). Callers persist results and charge credits.
 
+An answer that does not complete (stopped, the client left, cut at the size
+limit or the deadline, failed) is charged by :func:`interrupted_usage`: the
+provider's own counts where it sent them before the end, else estimates of
+the prompt (images included) and of what was produced. A completed answer
+whose backend reported no usage is estimated the same way. External API models
+that reason without streaming their reasoning (OpenAI's reasoning models; a
+summary for Claude) are also charged for the time they worked before their
+first output, at the conservative :data:`HIDDEN_REASONING_TOKENS_PER_SECOND`
+and within the output limit, unless the provider counted the output itself,
+and an interrupted external request is charged
+for its prompt even when nothing was produced (``Finished.billable``): the
+provider bills both.
+
+A failed attempt counts toward marking its model failing
+(``services.model_lifecycle``) only when the failure is the model's: not when
+the server refused the request (4xx) or could not read what the user sent
+(an image, the input), and not for the fallback attempts of a request that
+already failed, which would fail anywhere. Otherwise one user could withdraw
+models from everyone.
+
 Queue problems are raised before any event: ``queue.QueueFull``,
 ``queue.QueueTimeout`` and ``upstream.Cancelled`` (cancelled while waiting).
 """
@@ -25,6 +45,7 @@ Queue problems are raised before any event: ``queue.QueueFull``,
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -32,7 +53,7 @@ from dataclasses import dataclass, field, replace
 from flask import current_app
 
 from bananachat.db import catalog
-from bananachat.db.credits import estimate_tokens
+from bananachat.db.credits import IMAGE_TOKEN_ESTIMATE, estimate_tokens
 from bananachat.services import health, model_lifecycle, ollama, queue, remote, supervisor
 from bananachat.services.access import AccessContext, is_text_model, usable_models
 from bananachat.services.upstream import Cancelled, CancelToken, UpstreamError
@@ -98,9 +119,21 @@ class Finished:
     error_status: int | None = None
     error_code: str = ""
     retry_after: int | None = None
+    # The provider reported token usage for this attempt (also for an interrupted answer).
+    usage_reported: bool = False
+    # The attempt has a cost even if nothing was produced: the provider reported usage, or an external API
+    # request was interrupted after it was sent (see interrupted_usage).
+    billable: bool = False
+    # Requests with tools: the provider's own record of a completed turn, to be sent back unchanged with the
+    # tool results (Claude's signed thinking blocks, see external_api._replay); None for other backends.
+    replay: dict | None = None
 
 
 MAX_TOOL_CALLS = 32
+# Reasoning an external provider does not stream is charged at this rate for the time before the first output
+# when it did not count the output itself. Providers generate 50-150 tokens per second, so this stays below their
+# bill.
+HIDDEN_REASONING_TOKENS_PER_SECOND = 20
 
 
 @dataclass
@@ -115,7 +148,7 @@ class TextRequest:
     fallbacks: list = field(default_factory=list)
     think: bool | str | None = None  # Ollama's think: see think_for()
     # The resolved reasoning effort level (services.limits.resolve_effort), for backends that take levels
-    # directly (the Claude pool) rather than Ollama's think.
+    # directly (external API providers) rather than Ollama's think.
     effort: str | None = None
     max_response_bytes: int | None = None
     # Called with the fresh model before each attempt: return an error message
@@ -126,6 +159,12 @@ class TextRequest:
     # ``prepare(model) -> (messages, options)`` rebuilds the request for a
     # fallback model, so it gets its own system prompt and generation defaults.
     prepare: object = None
+    # Token counts the provider reported before the end of the current attempt
+    # (``prompt``/``completion``), so an interrupted answer is charged with them.
+    reported: dict = field(default_factory=dict)
+    # The current attempt (see interrupted_usage): ``external``, ``reasoning`` (the provider was asked to reason),
+    # monotonic times ``opened`` (sent), ``output`` (first output) and ``ended``, and ``interrupted``.
+    attempt: dict = field(default_factory=dict)
 
 
 # ----- model selection ---------------------------------------------------------
@@ -255,7 +294,7 @@ def think_for(model, level: str | None):
     (thinking on for reasoning models), ``off`` is false, ``on`` true, and a
     named level is passed as a name to models that take named levels (``extra``
     and ``max`` as ``high``) and as true to models that only switch thinking on.
-    Claude receives the resolved level separately without this Ollama mapping.
+    External API providers receive the resolved level separately without this Ollama mapping.
     """
     from bananachat.services import limits
 
@@ -331,6 +370,7 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
     last_error_status = last_retry_after = None
     last_error_code = ""
     tried = request.model
+    failed_before = False  # an attempt of this request already failed: later ones say nothing about their model
     for index, model in enumerate(attempts):
         # Register a fallback before checking its fresh deletion marker. A
         # concurrent delete then either sees this request or prevents it from
@@ -370,6 +410,9 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
         notice = "" if index == 0 else f"{tried['display_name']} failed, so " \
                                        f"{model['display_name']} is answering instead."
         tried = model
+        request.reported.clear()
+        request.attempt.clear()
+        request.attempt["external"] = model["backend"] == "external"
         yield Started(model, via_worker, wait_ms, notice)
         produced = 0
         text_parts: list[str] = []
@@ -378,8 +421,13 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
         stream = None
         try:
             cancel.check()
+            request.attempt["opened"] = time.monotonic()
             stream = _open_stream(request, model, via_worker, cancel, config)
             for chunk in stream:
+                if not chunk.done:
+                    for key, value in (("prompt", chunk.prompt_tokens), ("completion", chunk.completion_tokens)):
+                        if value is not None:
+                            request.reported[key] = value
                 if request.tools and chunk.tool_calls:
                     tool_calls.extend(chunk.tool_calls[: max(0, MAX_TOOL_CALLS - len(tool_calls))])
                     produced += 1
@@ -393,6 +441,7 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
                     produced += len(text.encode("utf-8"))
                     if text:
                         text_parts.append(text)
+                        request.attempt.setdefault("output", time.monotonic())
                         yield Delta(text, thinking)
                     if truncated:
                         break
@@ -400,36 +449,51 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
                     cancel.cancel("limit")
                     break
                 if chunk.done:
+                    request.attempt.setdefault("ended", time.monotonic())
                     prompt, completion = chunk.prompt_tokens, chunk.completion_tokens
                     estimated = prompt is None or completion is None
-                    if prompt is None:
-                        prompt = sum(estimate_tokens(str(m.get("content", ""))) for m in request.messages)
-                    if completion is None:
-                        completion = estimate_tokens("".join(text_parts))
+                    if estimated:
+                        # No usage from the backend: the estimates of an interrupted answer (the counts reported
+                        # before the end, else the prompt, the output and the reasoning it did not stream).
+                        guessed_prompt, guessed_completion = interrupted_usage(request, "".join(text_parts))
+                        prompt = guessed_prompt if prompt is None else prompt
+                        completion = guessed_completion if completion is None else completion
                     if not via_worker:
                         model_lifecycle.record_success(model)
                     yield Finished("completed", model, chunk.finish_reason or "stop", prompt, completion, estimated,
                                    wait_ms=wait_ms, duration_ms=_elapsed(started), via_worker=via_worker,
-                                   tool_calls=tool_calls)
+                                   tool_calls=tool_calls, usage_reported=not estimated, billable=True,
+                                   replay=chunk.extra.get("replay") if request.tools else None)
                     return
-        except Cancelled:
-            pass
+        except (Cancelled, GeneratorExit) as interruption:
+            request.attempt.update(interrupted=True, ended=time.monotonic())
+            if isinstance(interruption, GeneratorExit):
+                raise  # the caller stopped reading (an API client went away): it charges interrupted_usage()
         except (UpstreamError, OSError) as error:
+            if cancel.cancelled:
+                request.attempt.update(interrupted=True, ended=time.monotonic())
             last_error = str(error) or "The model failed."
             capacity_unavailable = isinstance(error, UpstreamError) and error.kind == "capacity"
+            # External API failures carry a provider_* code that the chat and the API explain.
+            provider_code = error.code if isinstance(error, UpstreamError) and model["backend"] == "external" \
+                and (error.code or "").startswith("provider_") else ""
             last_error_status = 503 if capacity_unavailable else None
-            last_error_code = (error.code or "provider_capacity_unavailable") if capacity_unavailable else ""
-            last_retry_after = 30 if capacity_unavailable else None
+            last_error_code = provider_code or ("provider_capacity_unavailable" if capacity_unavailable else "")
+            last_retry_after = (error.retry_after or 30) if capacity_unavailable else None
             if capacity_unavailable:
                 log.info("Generation with %s is waiting for provider capacity", model["ollama_name"])
             else:
-                log.warning("Generation with %s failed: %s", model["ollama_name"], last_error)
-            if not via_worker and not cancel.cancelled and not capacity_unavailable:
+                detail = getattr(error, "detail", "")
+                log.warning("Generation with %s failed: %s%s", model["ollama_name"], last_error,
+                            f" Provider message: {detail}" if detail else "")
+            if not via_worker and not cancel.cancelled and not capacity_unavailable and not failed_before \
+                    and not _request_fault(error, request):
                 model_lifecycle.record_failure(model, error, config)
+            failed_before = True
             if produced == 0 and not cancel.cancelled and index + 1 < len(attempts):
                 continue
             finished = _partial(request, model, text_parts, "failed", last_error, wait_ms, started, via_worker)
-            if capacity_unavailable and produced == 0:
+            if produced == 0:
                 finished.error_status = last_error_status
                 finished.error_code = last_error_code
                 finished.retry_after = last_retry_after
@@ -442,6 +506,9 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
                 except Exception:  # noqa: BLE001 - cleanup cannot replace a committed outcome or backend error
                     log.exception("Closing generation with %s failed", model["ollama_name"])
 
+        if cancel.cancelled:
+            request.attempt.setdefault("ended", time.monotonic())
+            request.attempt["interrupted"] = True
         if truncated:
             finished = _partial(request, model, text_parts, "stopped", "", wait_ms, started, via_worker)
             finished.finish_reason, finished.truncated = "length", True
@@ -465,6 +532,30 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
                    retry_after=last_retry_after)
 
 
+# The model server's words for input it cannot read (Ollama: "failed to process inputs: image: unknown format").
+_INPUT_FAULTS = ("process input", "invalid input", "input length", "input too long", "prompt is too long",
+                 "prompt too long", "context length", "exceeds the context")
+_IMAGE_FAULTS = ("image", "unsupported format", "unknown format")
+
+
+def _request_fault(error, request) -> bool:
+    """Whether a failure follows from the request rather than the model (see the module docstring)."""
+    status = getattr(error, "status", None)
+    if isinstance(status, int) and 400 <= status < 500:
+        return True
+    if getattr(error, "kind", None) is not None:
+        return False  # a timeout, an unreachable server or missing capacity says nothing about the request
+    return input_fault(str(error), images=any(item.get("images") for item in request.messages))
+
+
+def input_fault(message: str, *, images: bool) -> bool:
+    """Whether a model server's error message says it could not read the request (its input, or an image the
+    request carried)."""
+    message = message.lower()
+    return any(marker in message for marker in _INPUT_FAULTS) or (
+        images and any(marker in message for marker in _IMAGE_FAULTS))
+
+
 def _provider_effort(request, model):
     from bananachat.db import users
     from bananachat.services import limits
@@ -483,20 +574,19 @@ def _open_stream(request, model, via_worker, cancel, config):
     if model["backend"] == "external":
         from bananachat.services import external_providers
 
-        return external_providers.stream(model, request.messages, options=request.options,
-                                         effort=_provider_effort(request, model),
+        effort = _provider_effort(request, model)
+        request.attempt["reasoning"] = bool(model["is_reasoning"]) and effort != "off"
+        return external_providers.stream(model, request.messages, options=request.options, effort=effort,
                                          tools=request.tools, cancel=cancel)
-    if model["backend"] == "claude":
-        # Claude models are served by the pooled subscription accounts, never by Ollama or a worker PC.
-        from bananachat.services import claude_pool
-
-        return claude_pool.stream_chunks(name, request.messages, options=request.options, think=request.think,
-                                         effort=_provider_effort(request, model), cancel=cancel)
+    if model["backend"] != "ollama":
+        # Only Ollama models reach a model server or a worker PC; a catalog row of a removed backend never does.
+        raise UpstreamError(f"The model '{model['ollama_name']}' is not available right now.")
     if via_worker:
         return remote.stream(name, request.messages, request.options, cancel=cancel, priority=request.priority,
                              think=request.think,
                              first_token_timeout=config.first_token_timeout,
-                             total_timeout=config.generation_timeout)
+                             total_timeout=config.generation_timeout,
+                             user_id=request.user.get("id") if request.user is not None else None)
     if request.tools:
         return ollama.chat_stream(name, request.messages, options=request.options, think=request.think,
                                   cancel=cancel, config=config, tools=request.tools)
@@ -505,9 +595,51 @@ def _open_stream(request, model, via_worker, cancel, config):
 
 
 def _partial(request, model, text_parts, state, error, wait_ms, started, via_worker) -> Finished:
-    completion = estimate_tokens("".join(text_parts))
-    prompt = sum(estimate_tokens(str(message.get("content", ""))) for message in request.messages)
-    return Finished(state, model, "stop", prompt, completion, True, error, wait_ms, _elapsed(started), via_worker)
+    """An answer that did not complete: provider-reported counts where known, estimates otherwise."""
+    prompt, completion = interrupted_usage(request, "".join(text_parts))
+    return Finished(state, model, "stop", prompt, completion, True, error, wait_ms, _elapsed(started), via_worker,
+                    usage_reported=bool(request.reported), billable=billable(request))
+
+
+def estimate_prompt(messages) -> int:
+    """Estimated input tokens of *messages*: their text and :data:`IMAGE_TOKEN_ESTIMATE` per image."""
+    return sum(estimate_tokens(str(message.get("content", ""))) + IMAGE_TOKEN_ESTIMATE * len(message.get("images") or ())
+               for message in messages)
+
+
+def billable(request, *, interrupted: bool | None = None) -> bool:
+    """Whether the current attempt costs something even with no output (see the module docstring); with
+    *interrupted*, as if it were (or were not) interrupted now."""
+    attempt = request.attempt
+    if interrupted is None:
+        interrupted = bool(attempt.get("interrupted"))
+    return bool(request.reported) or bool(interrupted and attempt.get("external") and attempt.get("opened") is not None)
+
+
+def _hidden_reasoning(request, visible: int) -> int:
+    """Reasoning tokens an external attempt that was asked to reason probably spent without streaming them (the
+    time before its first output; until now while it has none)."""
+    attempt = request.attempt
+    if not (attempt.get("reasoning") and attempt.get("opened") is not None):
+        return 0
+    silent = (attempt.get("output") or attempt.get("ended") or time.monotonic()) - attempt["opened"]
+    hidden = math.ceil(max(0.0, silent) * HIDDEN_REASONING_TOKENS_PER_SECOND)
+    limit = (request.options or {}).get("num_predict")
+    return min(hidden, max(0, int(limit) - visible)) if limit else hidden
+
+
+def interrupted_usage(request, produced: str) -> tuple[int, int]:
+    """Tokens to charge for an interrupted answer (or one whose backend reported no usage): the provider's counts
+    when it sent them, else estimates of the prompt and of what was produced plus the reasoning it did not stream
+    (see the module docstring)."""
+    reported = request.reported
+    prompt = reported.get("prompt")
+    if prompt is None:
+        prompt = estimate_prompt(request.messages)
+    visible = estimate_tokens(produced)
+    if reported.get("completion") is not None:
+        return prompt, max(visible, reported["completion"])
+    return prompt, visible + _hidden_reasoning(request, visible)
 
 
 def _elapsed(started: float) -> int:

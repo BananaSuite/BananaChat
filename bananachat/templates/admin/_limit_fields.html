@@ -41,9 +41,12 @@
     <select id="{{ id }}-per-{{ index }}" name="rule_per_{{ index }}">
       {% for unit in units %}<option value="{{ unit }}"{% if (rule and rule.per == unit) or (not rule and ((shown and shown.per == unit) or (not shown and unit == "minute"))) %} selected{% endif %}>{{ unit }}</option>{% endfor %}
     </select>
-    <span class="rule-word" aria-hidden="true">· bursts of</span>
-    <label class="visually-hidden" for="{{ id }}-burst-{{ index }}">Rule {{ index + 1 }}: burst (optional)</label>
-    <input type="number" id="{{ id }}-burst-{{ index }}" name="rule_burst_{{ index }}" min="1" step="1" inputmode="numeric" value="{{ rule.burst if rule else '' }}" placeholder="{{ shown.burst if shown else 'same' }}">
+    {#- The burst part wraps as one unit, so a narrow row never starts with a lone "· bursts of". -#}
+    <span class="rule-burst">
+      <span class="rule-word" aria-hidden="true"><span class="rule-separator">· </span>bursts of</span>
+      <label class="visually-hidden" for="{{ id }}-burst-{{ index }}">Rule {{ index + 1 }}: burst (optional)</label>
+      <input type="number" id="{{ id }}-burst-{{ index }}" name="rule_burst_{{ index }}" min="1" step="1" inputmode="numeric" value="{{ rule.burst if rule else '' }}" placeholder="{{ shown.burst if shown else 'same' }}">
+    </span>
   </div>
   {% endfor %}
   <span class="hint" id="{{ id }}-hint">{{ hint or "All rules apply. Burst allows consecutive requests; leave it empty to use the request count. Fill the last row to add a rule, then save for another row. Clear a row to remove it." }}</span>

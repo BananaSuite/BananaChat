@@ -12,7 +12,7 @@
 <div class="usage-line">
   <span>{{ window.used | tokens }} of {{ window.tokens | tokens }} <span class="muted">({{ window.left | tokens }} left)</span></span>
   <progress class="meter{% if window.left <= 0 %} full{% endif %}" value="{{ [window.used, window.tokens] | min }}" max="{{ window.tokens if window.tokens > 0 else 1 }}" aria-label="{{ label }} used">{{ window.used }}</progress>
-  <span class="hint">{% if window.open %}Resets {{ window.resets_at | time_text }} (in {{ window.resets_at | time_left }}){% else %}No window open: the next request starts one.{% endif %}</span>
+  <span class="hint">{% if window.open %}Resets {{ window.resets_at | time_text }} (in {{ window.resets_at | time_left_html }}){% else %}No window open: the next request starts one.{% endif %}</span>
 </div>
 {% else %}Not limited <span class="muted">({{ window.used | tokens }} used)</span>{% endif %}
 {%- endmacro %}
@@ -25,7 +25,7 @@
 <div class="alert alert-info mb-3">{{ icon("info") }}<p>Administrators are never limited. The settings below take effect only if this account becomes a regular user.</p></div>
 {% endif %}
 
-<nav class="tabs tabs-compact mb-2" aria-label="Sections">
+<nav class="admin-section-nav" aria-label="Sections">
   <a href="#exemptions">Exemptions</a><a href="#pool-api">Services</a><a href="#models">Models</a><a href="#effort">Reasoning effort</a><a href="#speed-title">Speed and tier</a><a href="#grants-title">Grants</a>
 </nav>
 
@@ -37,7 +37,7 @@
       {{ csrf() }}
       {{ checkbox("token_exempt", "Exempt from token limits", settings.token_exempt, "Skip service and model 5-hour and weekly limits.") }}
       {{ checkbox("rate_exempt", "Exempt from request-rate limits", settings.rate_exempt, "Skip service and model rate rules. The image-generation safety cap still applies.") }}
-      <div class="form-actions"><button type="submit" class="btn">Save exemptions</button></div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save exemptions</button></div>
     </form>
   </section>
   {% for item in pools %}
@@ -56,7 +56,7 @@
     {#- A refused form shows again, open and as typed. -#}
     {% set shown = refused.override if refused.pool == item.pool else override %}
     <details class="inline-details"{% if not override.empty or refused.pool == item.pool %} open{% endif %}>
-      <summary>Edit service limits</summary>
+      <summary>Edit service limits{{ icon("chevron-down") }}</summary>
       <form method="post" action="{{ url_for('admin.user_limits_custom', user_id=user.id) }}" class="stack">
         {{ csrf() }}<input type="hidden" name="pool" value="{{ item.pool }}">
         <p class="hint mb-0">Empty fields use the policy shown as a placeholder. Custom token amounts replace the tier and are never reduced by demand adjustments.</p>
@@ -64,8 +64,8 @@
         {% if automatic_fields %}<p class="hint mb-0">Approved automatically, so never below the tier's amount: {{ automatic_fields | map("replace", "window_tokens", "tokens per 5 hours") | map("replace", "weekly_tokens", "tokens per week") | sort | join(", ") }}. Typing another amount makes it exact.</p>{% endif %}
         {{ rules_editor(shown.rate_rules, item.pool ~ "-rules", units, rule_rows, "Request rate", placeholders=item.policy.rate.rules) }}
         <div class="form-grid">
-          {{ token_field("window_tokens", "Tokens per 5 hours", shown.window_tokens, item.pool ~ "-window", "Empty: the policy.", false, item.policy.window.tokens | token_input) }}
-          {{ token_field("weekly_tokens", "Tokens per week", shown.weekly_tokens, item.pool ~ "-weekly", "Empty: the policy.", false, item.policy.weekly.tokens | token_input) }}
+          {{ token_field("window_tokens", "Tokens per 5 hours", shown.window_tokens, item.pool ~ "-window", "Leave empty to use the site policy (shown in the field).", false, item.policy.window.tokens | token_input) }}
+          {{ token_field("weekly_tokens", "Tokens per week", shown.weekly_tokens, item.pool ~ "-weekly", "Leave empty to use the site policy (shown in the field).", false, item.policy.weekly.tokens | token_input) }}
         </div>
         <div class="form-actions"><button type="submit" class="btn btn-primary">Save custom limits</button></div>
       </form>
@@ -90,7 +90,7 @@
       {% set key = "model-" ~ view.model.id %}
       {% set shown = refused.override if refused.model_id == view.model.id else view.override %}
       <details class="inline-details"{% if refused.model_id == view.model.id %} open{% endif %}>
-        <summary>Edit model limits</summary>
+        <summary>Edit model limits{{ icon("chevron-down") }}</summary>
         <form method="post" action="{{ url_for('admin.user_limits_model', user_id=user.id) }}" class="stack" id="model-form-{{ view.model.id }}">
           {{ csrf() }}<input type="hidden" name="model_id" value="{{ view.model.id }}">
           <input type="hidden" name="limit_controls" value="1">
@@ -107,12 +107,12 @@
     {% else %}
     <p class="muted mb-0">No model-specific limits apply to this account.</p>
     {% endfor %}
-    {% set customised = model_views | selectattr("override.empty", "false") | map(attribute="model.id") | list %}
-    {% set others = models | rejectattr("id", "in", customised) | list %}
+    {% set customized = model_views | selectattr("override.empty", "false") | map(attribute="model.id") | list %}
+    {% set others = models | rejectattr("id", "in", customized) | list %}
     {% if others %}
     {% set typed_model = refused.override if refused.model_id in (others | map(attribute="id") | list) else none %}
     <details class="inline-details"{% if typed_model %} open{% endif %}>
-      <summary>Add a model override</summary>
+      <summary>Add a model override{{ icon("chevron-down") }}</summary>
       <form method="post" action="{{ url_for('admin.user_limits_model', user_id=user.id) }}" class="stack">
         {{ csrf() }}
         <input type="hidden" name="limit_controls" value="1">
@@ -142,14 +142,14 @@
     <div class="table-wrap">
       <table class="table">
         <caption class="visually-hidden">Reasoning effort per model</caption>
-        <thead><tr><th scope="col">Model</th><th scope="col">Levels</th><th scope="col">Up to</th><th scope="col">Set</th></tr></thead>
+        <thead><tr><th scope="col">Model</th><th scope="col">Levels</th><th scope="col">Up to</th><th scope="col">Set by</th></tr></thead>
         <tbody>
         {% for view in effort_views %}
           <tr>
             <td>{{ view.model.display_name }}</td>
             <td class="small">{{ view.levels | join(", ") }}</td>
-            <td>{{ (view.ceiling or "—") | capitalize }}</td>
-            <td class="small">{% if view.own %}{{ {"admin": "by an administrator", "request": "by a request", "automatic": "automatically"}.get(view.own.source, view.own.source) }}{% if view.own.pinned %} <span class="badge">kept</span>{% endif %}{% else %}<span class="muted">default</span>{% endif %}</td>
+            <td>{{ (view.top or "—") | capitalize }}</td>
+            <td class="small">{% if view.own %}{{ {"admin": "by an administrator", "request": "by a request", "automatic": "automatically"}.get(view.own.source, view.own.source) }}{% if view.own.pinned %} <span class="badge">kept</span>{% endif %}{% else %}<span class="muted">site default</span>{% endif %}</td>
           </tr>
         {% endfor %}
         </tbody>
@@ -183,7 +183,7 @@
       <input type="hidden" name="limit_controls" value="1">
       {{ checkbox("effort_gating_off", "Allow all reasoning levels", settings.effort_gating_off, "Every level each model supports, regardless of the limits above.") }}
       {{ checkbox("effort_auto_unlock_off", "Disable automatic unlocks", settings.effort_auto_unlock_off, "Requests and administrator unlocks remain available.") }}
-      <div class="form-actions"><button type="submit" class="btn">Save</button></div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save reasoning exceptions</button></div>
     </form>
   </section>
 
@@ -232,7 +232,7 @@
       <form method="post" action="{{ url_for('admin.user_limits_dynamic', user_id=user.id) }}" class="stack">
         {{ csrf() }}
         {{ checkbox("dynamic_exempt", "Exempt from demand adjustments", settings.dynamic_exempt, "Apply neither increases nor reductions.") }}
-        <div class="form-actions"><button type="submit" class="btn">Save</button></div>
+        <div class="form-actions"><button type="submit" class="btn btn-primary">Save demand adjustment</button></div>
       </form>
     </section>
 
@@ -262,7 +262,7 @@
     <ul class="plain-list">
       {% for item in grants %}
       <li class="row-between">
-        <span><strong>{{ item.what }}</strong> · {{ item.scope }} · {{ item.pool }}{% if not item.row.user_id %} <span class="badge badge-primary">everyone</span>{% endif %}
+        <span><strong>{{ item.what }}</strong>{% if item.scope %} · {{ item.scope }}{% endif %} · {{ item.pool }}{% if not item.row.user_id %} <span class="badge badge-primary">everyone</span>{% endif %}
           <span class="hint">{{ item.row.starts_at | datetime }} → {{ (item.row.ends_at | datetime) if item.row.ends_at else "forever" }}{% if item.row.reason %} · {{ item.row.reason }}{% endif %}</span></span>
         {% if item.row.user_id %}
         <form method="post" action="{{ url_for('admin.limit_grant_revoke', grant_id=item.row.id) }}" data-confirm="Revoke this grant?">

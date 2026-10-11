@@ -62,10 +62,12 @@ export function initChatPickers({ models, lastModel, storage, input, announce })
         return;
       }
       this.list.replaceChildren(...this.visible.map((model, index) => {
+        const named = new Set(model.categories.map((name) => name.trim().toLowerCase()));
+        const listed = (english, key) => named.has(english) || named.has(t(key).toLowerCase());
         const metadata = el("span", { class: "model-metadata" },
           ...model.categories.map((name) => el("span", { text: name })),
-          model.reasoning ? el("span", { text: t("chat_badge_reasoning") }) : null,
-          model.vision ? el("span", { text: t("chat_badge_vision") }) : null,
+          model.reasoning && !listed("reasoning", "chat_badge_reasoning") ? el("span", { text: t("chat_badge_reasoning") }) : null,
+          model.vision && !listed("vision", "chat_badge_vision") ? el("span", { text: t("chat_badge_vision") }) : null,
           model.weight && model.weight !== 1
             ? el("span", { class: model.weight > 1 ? "model-cost" : null, text: t("chat_badge_weight", { factor: model.weight.toLocaleString(document.documentElement.lang || undefined) }) })
             : null);

@@ -12,10 +12,10 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import hmac
+import ipaddress
 import logging
 import math
 import os
-import re
 import secrets
 import stat
 import tempfile
@@ -28,6 +28,18 @@ DEFAULT_SOURCE_URL = "https://github.com/BananaSuite/BananaChat"
 SUPPORTED_LANGUAGES = ("it", "en")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+# What the deprecated BC_*_ALLOW_INSECURE_TAILSCALE flags add to the insecure networks.
+TAILSCALE_NETWORKS = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
+# The only ranges BC_*_INSECURE_NETWORKS may name, so a bearer token sent over
+# plain HTTP never crosses the public internet: loopback, RFC 1918, the RFC 6598
+# shared address space (carrier-grade NAT and overlay VPNs such as Tailscale)
+# and IPv6 unique local addresses. Link-local ranges are left out: an IPv6 one
+# needs a zone index that URLs here cannot carry, and 169.254.0.0/16 is rarely
+# a network chosen for a service (cloud metadata services answer there). Some
+# allowed ranges hold such services too (100.100.100.200 in 100.64.0.0/10), so
+# only an address the operator writes in the URL can match.
+PRIVATE_NETWORKS = tuple(ipaddress.ip_network(text) for text in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7"))
 
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off", ""}
@@ -126,6 +138,7 @@ class Config:
     database_path: Path = REPO_ROOT / "instance" / "bananachat.db"
     log_file: Path | None = None
     logging_level: str = "verbose"
+    log_format: str = "text"
     maintenance_file: Path | None = None
 
     # Security
@@ -134,7 +147,14 @@ class Config:
     session_cookie_name: str = "bc_session"
     secure_cookies: bool = False
     session_days: int = 7
-    password_hash_method: str = "auto"
+    # Sign-in and sign-up throttling per client address (an IPv4 address or an
+    # IPv6 /64). A browser that signed in to an account before has its own limits.
+    login_attempts_per_minute: int = 60
+    login_failures_per_address: int = 20
+    login_failures_per_account: int = 10
+    signups_per_hour: int = 30
+    signup_failures_per_hour: int = 20
+    password_hash_method: str = "auto"  # noqa: S105 - the name of a hashing scheme, not a password
     min_form_seconds: float = 0.4
 
     # Interface
@@ -154,7 +174,9 @@ class Config:
     chat_max_text_bytes: int = 1024 * 1024
     chat_max_extracted_chars: int = 200_000
     chat_max_image_pixels: int = 20_000_000
+    chat_max_image_dimension: int = 2048
     chat_max_session_attachment_bytes: int = 40 * 1024 * 1024
+    chat_max_account_attachment_bytes: int = 1024 * 1024 * 1024
     chat_max_context_chars: int = 300_000
     chat_max_context_images: int = 8
     chat_max_message_bytes: int = 100 * 1024
@@ -164,6 +186,9 @@ class Config:
     # Inference
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_api_key: str = ""
+    # Sent instead of ollama_api_key for model downloads and deletions, when the
+    # compute gateway requires a separate management token.
+    ollama_management_api_key: str = ""
     inference_local: bool | None = None
     ollama_sync_interval: int = 60
     keep_alive: int = 0
@@ -187,9 +212,6 @@ class Config:
     inference_fallback_api_key: str = ""
     workers_enabled: bool = False
     worker_claim_timeout: int = 20
-    # Operator-installed provider adapter; unset keeps Claude disconnected.
-    claude_extension: str = ""
-    claude_code_config: str = ""
 
     # Retention
     no_history_ttl_hours: int = 24
@@ -214,12 +236,16 @@ class Config:
     image_credit_reservation_heartbeat: float = 30.0
     checkpoint_agent_url: str = ""
     checkpoint_agent_token_file: str = ""
+    # Private networks (CIDR) where plain HTTP to the agent is accepted.
+    checkpoint_agent_insecure_networks: tuple[str, ...] = ()
+    # Deprecated alias: TAILSCALE_NETWORKS plus MagicDNS (*.ts.net) names.
     checkpoint_agent_allow_insecure_tailscale: bool = False
 
     # Agents (sandbox runner on the compute host; see docs/agents.md)
     agents_runner_url: str = ""
     agents_runner_token_file: str = ""
     agents_runner_token: str = ""
+    agents_runner_insecure_networks: tuple[str, ...] = ()
     agents_runner_allow_insecure_tailscale: bool = False
     agents_max_upload_bytes: int = 20 * 1024 * 1024
 
@@ -342,6 +368,56 @@ def _bearer_token(r: _Reader, name: str, url: str) -> str:
     return value
 
 
+def insecure_network(text: str):
+    """*text* (an address or a CIDR network) as a network inside :data:`PRIVATE_NETWORKS`.
+
+    Raises ValueError naming the problem: not an address or network (host bits
+    set, a zone index), every address, or not entirely inside a private range.
+    """
+    try:
+        network = None if "%" in text else ipaddress.ip_network(text)
+    except ValueError:
+        network = None
+    if network is None:
+        raise ValueError("is not an IP address or network in CIDR notation such as 10.0.0.0/8")
+    if network.prefixlen == 0:
+        raise ValueError("would accept plain HTTP to every address")
+    if not any(network.version == allowed.version and network.subnet_of(allowed) for allowed in PRIVATE_NETWORKS):
+        raise ValueError("is not a private network (loopback, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, "
+                         "100.64.0.0/10 or fc00::/7)")
+    return network
+
+
+def _insecure_networks(r: _Reader, name: str, tailscale: bool) -> tuple[str, ...]:
+    """The comma-separated private networks in *name*, plus Tailscale's when the deprecated flag is on.
+
+    Each invalid or public entry is reported and left out; the others still apply.
+    """
+    networks = []
+    for item in r.text(name).split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            networks.append(str(insecure_network(item)))
+        except ValueError as error:
+            r.warnings.append(f"{name} entry {item!r} {error}; ignoring it.")
+    if tailscale:
+        networks.extend(TAILSCALE_NETWORKS)
+    return tuple(dict.fromkeys(networks))
+
+
+def _cookie_name(r: _Reader) -> str:
+    """The session cookie's base name. Over HTTPS it is sent as ``__Host-<name>`` (see security.py)."""
+    name = r.text("BC_SESSION_COOKIE_NAME", "bc_session") or "bc_session"
+    for prefix in ("__Host-", "__Secure-"):
+        if name.startswith(prefix):
+            r.warnings.append(f"BC_SESSION_COOKIE_NAME must not start with {prefix}: it is added "
+                              "automatically when cookies are secure.")
+            name = name[len(prefix):] or "bc_session"
+    return name
+
+
 def _path(value, base):
     path = Path(value).expanduser()
     return path if path.is_absolute() else (base / path)
@@ -381,12 +457,16 @@ def load_config(environ=None, *, load_secret=True) -> Config:
     fallback_url = _fallback_url(r, ollama_url, outage_mode)
     if outage_mode == "fallback" and not fallback_url:
         outage_mode = "shutdown"
+    checkpoint_agent_tailscale = r.flag("BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE", False)
+    agents_runner_tailscale = r.flag("BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE", False)
 
-    claude_extension = r.text("BC_CLAUDE_EXTENSION")
-    if claude_extension and not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", claude_extension,
-                                             flags=re.ASCII):
-        r.warnings.append("BC_CLAUDE_EXTENSION must be an installed Python module name; Claude is disabled.")
-        claude_extension = ""
+    # The Claude subscription connector was removed; old settings are ignored.
+    removed = sorted(name for name in env if name.startswith("BC_CLAUDE_") and r.text(name))
+    if removed:
+        r.warnings.append(f"The Claude subscription connector was removed; {', '.join(removed)} "
+                          f"{'is' if len(removed) == 1 else 'are'} ignored. Remove "
+                          f"{'it' if len(removed) == 1 else 'them'} from the configuration and use an external "
+                          "API provider for Anthropic models.")
 
     config = Config(
         host=r.text("BC_HOST", "127.0.0.1") or "127.0.0.1",
@@ -399,10 +479,16 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         database_path=database_path,
         log_file=log_file,
         logging_level=r.choice("BC_LOGGING_LEVEL", "verbose", ("off", "minimal", "medium", "verbose", "debug")),
+        log_format=r.choice("BC_LOG_FORMAT", "text", ("text", "json")),
         maintenance_file=Path(maintenance) if maintenance else None,
-        session_cookie_name=r.text("BC_SESSION_COOKIE_NAME", "bc_session") or "bc_session",
+        session_cookie_name=_cookie_name(r),
         secure_cookies=r.flag("BC_SECURE_COOKIES", proxy_mode),
         session_days=r.integer("BC_SESSION_DAYS", 7, 1, 365),
+        login_attempts_per_minute=r.integer("BC_LOGIN_ATTEMPTS_PER_MINUTE", 60, 1, 100000),
+        login_failures_per_address=r.integer("BC_LOGIN_FAILURES_PER_ADDRESS", 20, 1, 100000),
+        login_failures_per_account=r.integer("BC_LOGIN_FAILURES_PER_ACCOUNT", 10, 1, 1000),
+        signups_per_hour=r.integer("BC_SIGNUPS_PER_HOUR", 30, 1, 100000),
+        signup_failures_per_hour=r.integer("BC_SIGNUP_FAILURES_PER_HOUR", 20, 1, 100000),
         password_hash_method=r.text("BC_PASSWORD_HASH_METHOD", "auto") or "auto",
         min_form_seconds=r.number("BC_MIN_FORM_SECONDS", 0.4, 0, 30),
         default_language=default_language,
@@ -417,14 +503,18 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         chat_max_text_bytes=r.integer("BC_CHAT_MAX_TEXT_KB", 1024, 1, 65536) * 1024,
         chat_max_extracted_chars=r.integer("BC_CHAT_MAX_EXTRACTED_CHARS", 200_000, 1000, 5_000_000),
         chat_max_image_pixels=r.integer("BC_CHAT_MAX_IMAGE_PIXELS", 20_000_000, 1_000_000, 200_000_000),
+        chat_max_image_dimension=r.integer("BC_CHAT_MAX_IMAGE_DIMENSION", 2048, 256, 16384),
         chat_max_session_attachment_bytes=max(
             chat_max_request_bytes, r.integer("BC_CHAT_MAX_SESSION_ATTACHMENT_MB", 40, 1, 4096) * 1024 * 1024),
+        chat_max_account_attachment_bytes=r.integer("BC_CHAT_MAX_ACCOUNT_ATTACHMENT_MB", 1024, 1, 1_048_576)
+        * 1024 * 1024,
         chat_max_context_chars=r.integer("BC_CHAT_MAX_CONTEXT_CHARS", 300_000, 1000, 5_000_000),
         chat_max_context_images=r.integer("BC_CHAT_MAX_CONTEXT_IMAGES", 8, 1, 64),
         chat_max_response_bytes=r.integer("BC_CHAT_MAX_RESPONSE_KB", 1024, 16, 8192) * 1024,
         chat_max_history_messages=r.integer("BC_CHAT_MAX_HISTORY_MESSAGES", 100, 2, 500),
         ollama_url=ollama_url,
         ollama_api_key=_bearer_token(r, "BC_OLLAMA_API_KEY", ollama_url),
+        ollama_management_api_key=_bearer_token(r, "BC_OLLAMA_MANAGEMENT_API_KEY", ollama_url),
         inference_local=r.optional_flag("BC_INFERENCE_LOCAL"),
         ollama_sync_interval=r.integer("BC_OLLAMA_SYNC_INTERVAL", 60, 10, 86400),
         keep_alive=r.integer("BC_KEEP_ALIVE", 0, -1, 86400 * 7),
@@ -451,8 +541,6 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         inference_fallback_api_key=_bearer_token(r, "BC_INFERENCE_FALLBACK_API_KEY", fallback_url) if fallback_url else "",
         workers_enabled=r.flag("BC_WORKERS_ENABLED", False),
         worker_claim_timeout=r.integer("BC_WORKER_CLAIM_TIMEOUT", 20, 2, 600),
-        claude_extension=claude_extension,
-        claude_code_config=r.text("BC_CLAUDE_CODE_CONFIG"),
         no_history_ttl_hours=r.integer("BC_NO_HISTORY_TTL_HOURS", 24, 1, 24 * 365),
         deleted_chat_retention_days=r.integer("BC_DELETED_CHAT_RETENTION_DAYS", 30, 0, 36500),
         metrics_retention_days=r.integer("BC_METRICS_RETENTION_DAYS", 30, 1, 36500),
@@ -476,11 +564,15 @@ def load_config(environ=None, *, load_secret=True) -> Config:
             5.0, min(reservation_ttl / 3.0, r.number("BC_IMAGE_CREDIT_RESERVATION_HEARTBEAT", 30, 1, 3600))),
         checkpoint_agent_url=r.text("BC_CHECKPOINT_AGENT_URL"),
         checkpoint_agent_token_file=r.text("BC_CHECKPOINT_AGENT_TOKEN_FILE"),
-        checkpoint_agent_allow_insecure_tailscale=r.flag("BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE", False),
+        checkpoint_agent_insecure_networks=_insecure_networks(r, "BC_CHECKPOINT_AGENT_INSECURE_NETWORKS",
+                                                              checkpoint_agent_tailscale),
+        checkpoint_agent_allow_insecure_tailscale=checkpoint_agent_tailscale,
         agents_runner_url=r.text("BC_AGENTS_RUNNER_URL"),
         agents_runner_token_file=r.text("BC_AGENTS_RUNNER_TOKEN_FILE"),
         agents_runner_token=r.text("BC_AGENTS_RUNNER_TOKEN"),
-        agents_runner_allow_insecure_tailscale=r.flag("BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE", False),
+        agents_runner_insecure_networks=_insecure_networks(r, "BC_AGENTS_RUNNER_INSECURE_NETWORKS",
+                                                           agents_runner_tailscale),
+        agents_runner_allow_insecure_tailscale=agents_runner_tailscale,
         agents_max_upload_bytes=r.integer("BC_AGENTS_MAX_UPLOAD_MB", 20, 1, 200) * 1024 * 1024,
     )
     if load_secret:

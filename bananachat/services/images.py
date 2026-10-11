@@ -30,6 +30,7 @@ from flask import current_app
 from bananachat import db
 from bananachat.db import catalog, credits, tokens, users
 from bananachat.i18n import translate
+from bananachat.numbers import ascii_int
 from bananachat.services import api_usage, background, comfyui, limits, queue
 from bananachat.services.access import AccessContext, is_image_model, usable_models
 from bananachat.services.completions import sanitize_backend_message
@@ -94,9 +95,10 @@ def parse_size(value, lang: str = "en") -> tuple[int, int]:
     if not isinstance(text, str):
         raise ImageError(translate(lang, "images.error_size_type"), param="size")
     parts = text.strip().lower().split("x")
-    if len(parts) != 2 or not all(part.isdigit() and len(part) <= 5 for part in parts):
+    sizes = [ascii_int(part, 5) for part in parts]
+    if len(parts) != 2 or None in sizes:
         raise ImageError(translate(lang, "images.error_size_format"), param="size")
-    width, height = int(parts[0]), int(parts[1])
+    width, height = sizes
     try:
         comfyui.check_dimensions(width, height)
     except ValueError:
@@ -104,12 +106,22 @@ def parse_size(value, lang: str = "en") -> tuple[int, int]:
     return width, height
 
 
+def _current_first(models: list) -> list:
+    """Deprecated checkpoints after the others (the order is otherwise kept), so ``auto`` avoids them."""
+    return sorted(models, key=lambda model: bool(model["deprecated_at"]))
+
+
 def image_models(user, config=None) -> list:
-    """Image models *user* may use (the ``api`` surface governs images everywhere)."""
+    """Image models *user* may pick (the ``api`` surface governs images everywhere).
+
+    Deprecated checkpoints are left out while another one is available, like deprecated models in the chat
+    picker; requests that name one are still served until it is retired (``resolve_model``).
+    """
     config = config or current_app.config["BC"]
     if not config.images_enabled:
         return []
-    return usable_models(AccessContext.load(user), "api", kind="image", images_enabled=True)
+    models = usable_models(AccessContext.load(user), "api", kind="image", images_enabled=True)
+    return [model for model in models if not model["deprecated_at"]] or models
 
 
 def resolve_model(user, requested, config=None, lang: str = "en"):
@@ -121,7 +133,7 @@ def resolve_model(user, requested, config=None, lang: str = "en"):
     requested = requested.strip()
     context = AccessContext.load(user)
     if requested == "auto":
-        options = usable_models(context, "api", kind="image", images_enabled=config.images_enabled)
+        options = _current_first(usable_models(context, "api", kind="image", images_enabled=config.images_enabled))
         if not options:
             raise ImageError(translate(lang, "images.error_no_model"), 503, "model_unavailable", retry_after=60,
                              param="model")

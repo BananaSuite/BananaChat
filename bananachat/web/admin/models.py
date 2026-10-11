@@ -5,14 +5,16 @@ from __future__ import annotations
 
 import logging
 
-from flask import abort, current_app, flash, jsonify, render_template, request, url_for
 from filelock import Timeout
+from flask import abort, current_app, flash, jsonify, render_template, request, url_for
+from werkzeug.routing import BuildError
 
 from bananachat import db, security
 from bananachat.db import access as access_db
 from bananachat.db import catalog
 from bananachat.db import model_lifecycle as lifecycle_db
 from bananachat.db import pulls as pulls_db
+from bananachat.numbers import ascii_int
 from bananachat.security import admin_required
 from bananachat.services import checkpoint_agent, model_lifecycle, model_recovery, ollama, pulls
 from bananachat.services.upstream import UpstreamError
@@ -69,7 +71,7 @@ def _model_limits_url(model_id: int) -> str | None:
         try:
             return url_for(endpoint, model_id=model_id) if per_model else \
                 url_for(endpoint, _anchor=f"model-{model_id}")
-        except Exception:  # noqa: BLE001 - the limits area names its parameters differently
+        except BuildError:  # the limits area names its parameters differently
             continue
     return None
 
@@ -242,7 +244,7 @@ def _limits() -> dict:
 
 
 def _form_categories() -> list[int]:
-    return [int(value) for value in request.form.getlist("categories") if value.isdigit()]
+    return [number for number in map(ascii_int, request.form.getlist("categories")) if number is not None]
 
 
 def _edit_form(model, known_categories: set[int]):
@@ -293,7 +295,7 @@ def remove(model_id):
         flash(f"{model['display_name']} was not removed: {reason} Hide it or try again when they finish.", "error")
         return back("admin.models", _anchor=f"model-{model_id}")
     audit("model_remove", model["ollama_name"])
-    flash(f"{model['display_name']} was removed from the catalog. If the model is still installed, the next sync adds "
+    flash(f"{model['display_name']} was removed from the catalogue. If the model is still installed, the next sync adds "
           "it back as a new entry waiting for review.", "success")
     return back("admin.models")
 
@@ -399,7 +401,7 @@ def restore(model_id):
         return back("admin.model_settings", _anchor="ignored")
     model_lifecycle.restore_model(model, me())
     audit("model_restore", model["ollama_name"])
-    flash(f"{model['ollama_name']} is back in the catalog, waiting for review.", "success")
+    flash(f"{model['ollama_name']} is back in the catalogue, waiting for review.", "success")
     return back("admin.model_settings", _anchor="ignored")
 
 
@@ -437,11 +439,11 @@ def lifecycle(model_id):
             message = f"{model['display_name']} is offered again."
         elif action == "deprecate":
             replacement = request.form.get("replacement_id") or ""
-            if replacement and not replacement.isdigit():
+            if replacement and ascii_int(replacement) is None:
                 raise FormError("Choose a valid replacement.")
             moment = utc_datetime("retire_at", label="Retirement date")
             note = text("note", max_length=500, label="Note")
-            model_lifecycle.deprecate(model, actor, replacement_id=int(replacement) if replacement else None,
+            model_lifecycle.deprecate(model, actor, replacement_id=ascii_int(replacement),
                                       retire_at=db.timestamp(moment) if moment else None, note=note)
             message = f"{model['display_name']} is deprecated."
         elif action == "undeprecate":
@@ -837,7 +839,7 @@ def _category_form():
 @bp.get("/models/categories", endpoint="categories")
 @admin_required
 def categories():
-    return render_template("admin/categories.html", section="models", rows=catalog.list_categories())
+    return _render("admin/categories.html", tab="categories", rows=catalog.list_categories())
 
 
 @bp.post("/models/categories/create", endpoint="category_create")

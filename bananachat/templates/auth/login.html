@@ -2,16 +2,18 @@
 {% block title %}{{ t("auth.sign_in") }}{% endblock %}
 {% block card %}
 <h1>{{ t("auth.sign_in") }}</h1>
+{%- set kept_username = request.form.get('username', '') %}
+{%- set described = ' aria-describedby="auth-messages"' if get_flashed_messages() else '' %}
 <form method="post" action="{{ url_for('auth.login') }}" class="stack">
   {% include "auth/_bot_fields.html" %}
   {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
   <div class="field">
     <label for="username">{{ t("auth.username") }}</label>
-    <input type="text" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus maxlength="64" value="{{ request.form.get('username', '') }}">
+    <input type="text" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required{% if not kept_username %} autofocus{{ described | safe }}{% endif %} maxlength="64" value="{{ kept_username }}">
   </div>
   <div class="field">
     <label for="password">{{ t("auth.password") }}</label>
-    <input type="password" id="password" name="password" autocomplete="current-password" required maxlength="1024">
+    <input type="password" id="password" name="password" autocomplete="current-password" required maxlength="1024"{% if kept_username %} autofocus{{ described | safe }}{% endif %}>
   </div>
   <button type="submit" class="btn btn-primary btn-lg btn-block">{{ t("auth.sign_in") }}</button>
 </form>

@@ -947,7 +947,7 @@ def test_pages_render_every_state_and_need_an_administrator(app, admin, fake_oll
     admin.post("/admin/models/downloads", {"name": "tiny:1b"})
     admin.post("/admin/models/ignore-rules", {"pattern": "old-*"})
     pages = {"/admin/models": ["1 new model", "Needs attention", "Failing", "Missing", "Deprecated", "gpt-oss:20b"],
-             "/admin/models/downloads": ["tiny:1b", "Overall progress", "Catalog models no longer on the server"],
+             "/admin/models/downloads": ["tiny:1b", "Overall progress", "Catalogue models no longer on the server"],
              "/admin/models/settings": ["Manual review", "old-*", "Recent changes"]}
     for model_name in ("llama3.2:3b", "qwen3:4b", "gpt-oss:20b", "gone:1b"):
         row = model(app, model_name)

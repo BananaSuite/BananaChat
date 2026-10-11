@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from tests.app.test_foundation import legacy_instance
 
 
@@ -204,6 +206,39 @@ def test_tiers_and_the_personal_factor_count_only_services_with_token_limits(app
         assert limits.effective(user, "api").dynamic.personal > 1.0
 
 
+@pytest.mark.parametrize("change", ["lock", "suspend"])
+def test_promotion_respects_an_administrator_change_made_after_the_candidates_were_read(
+        app, make_user, monkeypatch, change):
+    from datetime import datetime, timedelta, timezone
+
+    from bananachat import db
+    from bananachat.db import limits as store
+    from bananachat.services import limits
+    from tests.app.test_limits import _age, _charge, _policy
+
+    user = make_user("eager")
+    with app.app_context():
+        _policy("chat", window={"enabled": True, "auto_tiers": True})
+        _age(user["id"], 40)
+        now = datetime.now(timezone.utc)
+        for day in range(1, 8):
+            _charge(user["id"], 10_000, request_type="chat", at=now - timedelta(days=day, hours=1))
+        candidates = store.promotion_candidates
+
+        def read_then_changed(*args):
+            rows = candidates(*args)
+            if change == "lock":
+                store.update_user_settings(user["id"], None, tier_locked=1)
+            else:
+                db.execute("UPDATE users SET suspended=1, last_suspension_at=? WHERE id=?",
+                           (db.timestamp(now), user["id"]))
+            return rows
+
+        monkeypatch.setattr(store, "promotion_candidates", read_then_changed)
+        assert limits.promote() == []
+        assert limits.tier_progress(user)["index"] == 0
+
+
 # ----- temporary increases ---------------------------------------------------------------------
 
 def test_temporary_extra_tokens_need_a_5_hour_limit(app, admin, make_user):
@@ -256,7 +291,7 @@ def test_the_request_queue_costs_the_same_queries_for_one_or_many_requests(app, 
     from bananachat import db
     from bananachat.db import credits
 
-    def queries() -> int:
+    def page_queries() -> int:
         statements = []
         db.conn().set_trace_callback(statements.append)
         try:
@@ -264,6 +299,12 @@ def test_the_request_queue_costs_the_same_queries_for_one_or_many_requests(app, 
         finally:
             db.conn().set_trace_callback(None)
         return len(statements)
+
+    def queries() -> int:
+        # Short per-process caches (agent settings, service health: a few seconds) refresh with extra queries
+        # when a page load happens to cross their expiry, which a slow machine makes likely: count the fewest
+        # of three loads. A query per request would show in every load.
+        return min(page_queries() for _ in range(3))
 
     with app.app_context():
         first = make_user("queue0")

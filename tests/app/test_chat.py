@@ -131,6 +131,26 @@ def test_send_streams_and_saves_the_answer(app, alice, fake_ollama):
     assert body["messages"][-1] == {"role": "user", "content": "Tell me about **bananas** please"}
 
 
+def test_an_answer_cut_short_by_a_storage_error_is_still_charged(app, alice, fake_ollama, monkeypatch):
+    import sqlite3
+
+    from bananachat import db
+    from bananachat.db import runs
+    from bananachat.services import chat
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(chat, "CHECKPOINT_SECONDS", 0)
+    monkeypatch.setattr(runs, "checkpoint", locked)
+    session_id = new_chat(alice)
+    events = parse_sse(send(alice, session_id).get_data(as_text=True))
+    assert events[-1]["state"] == "failed" and events[-1]["tokens_out"] > 0
+    with app.app_context():
+        ledger = db.one("SELECT * FROM credit_ledger")
+        assert ledger["tokens_in"] > 0 and ledger["tokens_out"] > 0
+
+
 def test_history_is_sent_without_reasoning_and_reasoning_is_saved_collapsed(app, make_user, fake_ollama):
     setup_models(app, reasoning=True)
     browser = user_browser(app, make_user)
@@ -176,6 +196,32 @@ def test_stop_ends_the_answer_and_keeps_the_partial_text(app, alice, fake_ollama
     saved = messages(app, session_id)[-1]
     assert saved["generation_state"] == "stopped" and 0 < len(saved["content"]) < len(fake_ollama.reply)
     assert saved["id"] == events[-1]["message_id"]
+
+
+def test_stop_while_the_answer_is_still_queued_ends_it_as_stopped(app, alice, fake_ollama):
+    """inference.generate raises Cancelled for a request stopped in the queue; the chat reports "stopped"."""
+    from dataclasses import replace
+
+    from bananachat.services import queue
+
+    app.config["BC"] = replace(app.config["BC"], max_concurrent=1)
+    session_id = new_chat(alice)
+    with app.app_context():
+        blocker = queue.Slot(queue.PRIORITY_ADMIN, owner_key="blocker").__enter__()
+        blocker.wait(timeout=5)
+    try:
+        response = send(alice, session_id, buffered=False)
+        events = read_events(response, until=lambda event: event["type"] == "queued")
+        assert events[-1]["type"] == "queued"
+        assert alice.fetch(f"/chat/{session_id}/stop", method="POST").json["stopping"]
+        events += read_events(response)
+    finally:
+        with app.app_context():
+            blocker.release()
+    assert events[-1]["type"] == "done" and events[-1]["state"] == "stopped"
+    assert fake_ollama.chat_bodies() == []  # it never reached the model
+    wait_idle(app, session_id)
+    assert send(alice, session_id, "Again").status_code == 200  # the chat is free for the next message
 
 
 def test_status_reports_the_checkpointed_partial_answer(app, alice, fake_ollama):
@@ -295,6 +341,49 @@ def test_rate_limit_and_5_hour_tokens(app, alice):
     assert len(messages(app, session_id)) == count
 
 
+def test_refused_sends_do_not_use_a_rate_token(app, alice, fake_ollama):
+    with app.app_context():
+        _chat_policy(rate={"rules": [{"requests": 2, "per": "minute"}]})
+    fake_ollama.reply = " ".join(["slow"] * 200)
+    fake_ollama.chunk_delay = 0.02
+    session_id = new_chat(alice)
+    response = send(alice, session_id, buffered=False)
+    read_events(response, until=lambda event: event["type"] == "delta")
+    for _ in range(3):
+        assert send(alice, session_id, "Again").json["error"]["code"] == "busy"
+    alice.fetch(f"/chat/{session_id}/stop", method="POST")
+    read_events(response)
+    wait_idle(app, session_id)
+    fake_ollama.reply = "done"
+    assert send(alice, session_id, "Once more").status_code == 200
+
+
+def test_uploads_are_parsed_one_at_a_time_per_chat_and_account():
+    from bananachat.services.chat import _parsing
+
+    with _parsing("chat-1", "user-1") as first:
+        assert first
+        with _parsing("chat-2", "user-1") as same_account:
+            assert not same_account
+        with _parsing("chat-1", "admin-user") as same_chat:
+            assert not same_chat
+        with _parsing("chat-3", "user-2") as unrelated:
+            assert unrelated
+    with _parsing("chat-1", "user-1") as released:
+        assert released
+
+
+def test_administrators_are_only_limited_per_chat_while_parsing():
+    from bananachat.services.chat import _parsing
+
+    with _parsing("chat-1", None) as first:
+        assert first
+        with _parsing("chat-2", None) as other_chat:
+            assert other_chat
+        with _parsing("chat-1", None) as same_chat:
+            assert not same_chat
+
+
 def test_administrators_are_not_rate_limited(app, admin):
     setup_models(app)
     with app.app_context():
@@ -357,6 +446,8 @@ def test_the_personality_is_added_to_the_system_prompt(app, alice, fake_ollama):
     system = fake_ollama.chat_bodies()[-1]["messages"][0]
     assert system["role"] == "system" and "Talk like a pirate." in system["content"]
     assert alice.post_json(f"/chat/{session_id}/personality", {"personality_id": 99999}).status_code == 403
+    for invalid in ("9" * 30, 10 ** 30, "²", True, [1]):
+        assert alice.post_json(f"/chat/{session_id}/personality", {"personality_id": invalid}).status_code == 400
 
 
 # ----- attachments ----------------------------------------------------------------------------

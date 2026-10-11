@@ -3,9 +3,19 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Permissions · {{ resource.name }}{% endblock %}
 {% block admin_content %}
-{% set scope_labels = {"uncensored": "Uncensored models", "image_generation": "Image generation", "custom_personality": "Custom personalities", "agents": "Agents", "category": "Category", "model": "Model"} %}
+{% set scope_labels = {"uncensored": "Uncensored models", "image_generation": "Image generation", "custom_personality": "Custom personalities", "agents": "Cloud sessions", "category": "Category", "model": "Model"} %}
 <p class="breadcrumb"><a href="{{ url_for('admin.access') }}">{{ icon("chevron-left") }}Permissions</a></p>
+{% if resource.scope == "model" %}
+{#- A model's description is its technical id: monospace, like on the Permissions overview. -#}
+<header class="page-header admin-header">
+  <div>
+    <h1>{{ resource.kind ~ ": " ~ resource.name }}</h1>
+    {% if resource.description %}<p class="mono">{{ resource.description }}</p>{% endif %}
+  </div>
+</header>
+{% else %}
 {{ header(resource.kind ~ ": " ~ resource.name, resource.description) }}
+{% endif %}
 
 <div class="grid grid-2 mb-3">
   <section class="settings-section" aria-labelledby="rule-title">
@@ -63,19 +73,19 @@
   </div>
   {% if lists[list_type] %}
   <div class="table-wrap mt-1">
-    <table class="table">
+    <table class="table table-stack">
       <thead><tr><th scope="col">User</th><th scope="col">Reason</th><th scope="col">Expires</th><th scope="col">Added</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
       <tbody>
       {% for entry in lists[list_type] %}
         <tr{% if entry.expired %} class="row-muted"{% endif %}>
-          <td><a href="{{ url_for('admin.user_detail', user_id=entry.row.user_id) }}">{{ entry.row.username }}</a></td>
-          <td>{{ entry.row.reason or "—" }}</td>
-          <td class="nowrap">{% if entry.expired %}<span class="badge">Expired {{ entry.row.expires_at | datetime }}</span>{% elif entry.row.expires_at %}{{ entry.row.expires_at | datetime }}{% else %}Never{% endif %}</td>
-          <td class="nowrap small">{{ entry.row.created_at | datetime(true) }}{% if entry.row.added_by_name %} · {{ entry.row.added_by_name }}{% endif %}</td>
+          <td class="cell-full"><a href="{{ url_for('admin.user_detail', user_id=entry.row.user_id) }}"><strong>{{ entry.row.username }}</strong></a></td>
+          <td class="cell-full" data-label="Reason:">{% if entry.row.reason %}{{ entry.row.reason }}{% else %}<span class="table-only">—</span>{% endif %}</td>
+          <td class="nowrap" data-label="Expires:">{% if entry.expired %}<span class="badge">Expired {{ entry.row.expires_at | datetime }}</span>{% elif entry.row.expires_at %}{{ entry.row.expires_at | datetime }}{% else %}Never{% endif %}</td>
+          <td class="small" data-label="Added:"><span class="nowrap">{{ entry.row.created_at | datetime(true) }}</span>{% if entry.row.added_by_name %} <span class="nowrap muted">by {{ entry.row.added_by_name }}</span>{% endif %}</td>
           <td class="actions">
             <form method="post" action="{{ url_for('admin.access_member_remove', scope=resource.scope, resource_id=resource.id) }}" data-confirm="Remove {{ entry.row.username }} from the {{ list_type }}?">
               {{ csrf() }}<input type="hidden" name="user_id" value="{{ entry.row.user_id }}"><input type="hidden" name="list_type" value="{{ list_type }}">
-              <button type="submit" class="btn btn-sm btn-ghost">Remove</button>
+              <button type="submit" class="btn btn-sm">Remove</button>
             </form>
           </td>
         </tr>

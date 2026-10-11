@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ t("two_step.codes_page_title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/account.css') }}">{% endblock %}
+{% block toasts %}<div class="toasts" id="toasts" role="status" aria-live="polite"></div>{% endblock %}
+{% block content %}
+<div class="page page-narrow account-page">
+  <header class="page-header">
+    <div>
+      <h1>{{ t("two_step.codes_page_title") }}</h1>
+      <p id="two-step-codes-help">{{ t("two_step.codes_body") }}</p>
+    </div>
+  </header>
+  {%- for category, text in get_flashed_messages(with_categories=true) %}
+  <div class="alert alert-{{ category if category in ('success', 'error', 'warning') else 'info' }} mb-2" role="{{ 'alert' if category == 'error' else 'status' }}">{{ icon("check" if category == "success" else "info") }}<p>{{ text }}</p></div>
+  {%- endfor %}
+  <div class="section-stack account-sections">
+    <section class="settings-section stack" aria-labelledby="two-step-codes-title">
+      <h2 id="two-step-codes-title" class="visually-hidden">{{ t("two_step.codes_label") }}</h2>
+      <ul class="two-step-codes mono" aria-describedby="two-step-codes-help">
+        {% for code in codes %}<li>{{ code }}</li>{% endfor %}
+      </ul>
+      <div class="form-actions">
+        <button type="button" class="btn" data-copy="{{ codes | join('\n') }}">{{ icon("copy") }}{{ t("two_step.copy_codes") }}</button>
+        <a class="btn btn-primary" href="{{ url_for('account.index') }}#two-step">{{ icon("check") }}{{ t("two_step.saved_codes") }}</a>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

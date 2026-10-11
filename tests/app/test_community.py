@@ -91,7 +91,7 @@ def test_consent_with_renounced_tokens_approves_and_moves_quota(app, people):
     assert window.tokens == before - 10_000
     assert any(reason.code == "renounced" for reason in window.reasons)
     with app.test_request_context():
-        assert "Renounced" in next(r for r in window.reasons if r.code == "renounced").text("en")
+        assert "Pledged" in next(r for r in window.reasons if r.code == "renounced").text("en")
 
 
 def test_objections_and_uncovered_tokens_keep_a_request_pending(app, people):
@@ -193,31 +193,28 @@ def test_disabled_or_excluded_kinds_only_wait_for_administrators(app, people):
     assert _row(app, request_id)["community"] == 0
 
 
-def _available_claude(monkeypatch, model_name):
-    """Community tests use a discovered fake provider, never curated availability."""
-    from bananachat.db import claude_pool as pool_db
-    from bananachat.services import claude_pool
+def _hosted_model(upstream_name):
+    """A hosted external API model with the strict limits its enrollment installs."""
+    from bananachat.db import catalog, external_providers as provider_store
+    from bananachat.services import external_providers
 
-    monkeypatch.setattr(claude_pool, "_site_discovery", lambda: [
-        {"name": model_name, "reasoning": ["low", "medium", "high", "extra", "max"]}])
-    monkeypatch.setattr(claude_pool, "_site_chat", lambda *args, **kwargs: iter(()))
-    pool_db.add_account("community-fixture", window_limit=100_000)
+    provider_id = provider_store.save(name="Community fixture", protocol="openai",
+                                      base_url="https://provider.invalid/v1")
+    row = external_providers.enroll(provider_store.get(provider_id), upstream_name, manual=True)
+    return catalog.get(row["id"])
 
 
-def test_unlimited_for_a_day_on_one_model_by_votes(app, people, monkeypatch):
+def test_unlimited_for_a_day_on_one_model_by_votes(app, people):
     """A temporary unlimited boost for one model's own limits (e.g. a strict cloud model)."""
     from bananachat import db
     from bananachat.db import catalog
     from bananachat.db import limits as limits_db
-    from bananachat.services import claude_pool, limits
+    from bananachat.services import limits
 
     asker, ann, bob, cid, _ = people
     with app.test_request_context():
-        _available_claude(monkeypatch, "claude-opus-4-1")
-        claude_pool.sync_catalog(selected=["claude-opus-4-1"], source="test")
-        model = catalog.get_by_name("claude-opus-4-1")
+        model = _hosted_model("hosted-opus-model")
         db.execute("UPDATE ai_models SET is_rolled_out=1 WHERE id=?", (model["id"],))
-        limits_db.set_model_policy(model["id"], claude_pool.strict_policy(model["ollama_name"]), None)
         assert limits.model_limits(asker, model).window.limited
     request_id = _submit(app, asker, kind="temporary", pool="chat", hours=24, unlimited=True,
                          model_id=model["id"])["id"]
@@ -234,19 +231,16 @@ def test_unlimited_for_a_day_on_one_model_by_votes(app, people, monkeypatch):
         assert limits.model_limits(ann, catalog.get(model["id"])).window.limited
 
 
-def test_model_window_request_approved_by_an_administrator(app, people, monkeypatch):
-    from bananachat.db import catalog, credits, users
+def test_model_window_request_approved_by_an_administrator(app, people):
+    from bananachat.db import credits, users
     from bananachat.db import limits as limits_db
-    from bananachat.services import claude_pool, limits
+    from bananachat.services import limits
 
     asker, *_ = people
     with app.test_request_context():
-        _available_claude(monkeypatch, "claude-sonnet-4-5")
-        claude_pool.sync_catalog(selected=["claude-sonnet-4-5"], source="test")
-        model = catalog.get_by_name("claude-sonnet-4-5")
-        limits_db.set_model_policy(model["id"], claude_pool.strict_policy(model["ollama_name"]), None)
+        model = _hosted_model("hosted-standard-model")
         base = limits.model_base(asker["id"], model)
-        assert base["window_enabled"] and base["window_tokens"] == 150_000
+        assert base["window_enabled"] and base["window_tokens"] == 100_000
     request_id = _submit(app, asker, kind="window", pool="chat", tokens=300_000, model_id=model["id"],
                          community=False)["id"]
     with app.test_request_context():
@@ -320,7 +314,11 @@ def test_migration_14_keeps_requests_and_the_one_pending_rule(app, people):
         sql = db.scalar("SELECT sql FROM sqlite_master WHERE name='quota_requests'")
         assert "'cancelled'" in sql and "'community'" in sql
         assert db.scalar("SELECT 1 FROM sqlite_master WHERE name='idx_quota_requests_one_pending'")
-        v14.upgrade(db.conn())  # safe to run again
+        # Safe to run again. Version 21 dropped the removed connector's table
+        # that version 14 extends, so supply it as a version-14 database had it.
+        db.execute("CREATE TABLE claude_accounts (id INTEGER PRIMARY KEY)")
+        v14.upgrade(db.conn())
+        db.execute("DROP TABLE claude_accounts")
         assert _row(app, request_id)["status"] == "pending"
         with pytest.raises(sqlite3.IntegrityError):
             db.execute("INSERT INTO quota_requests (user_id, new_credits, new_slow_credits, status) "

@@ -1,6 +1,7 @@
 """Common backup commands; applications supply snapshot and restore hooks."""
 
 from pathlib import Path
+import sys
 import tempfile
 
 from . import crypto
@@ -22,6 +23,9 @@ def add_commands(commands, *, agent=False):
     setup.add_argument("--username", default="git")
     setup.add_argument("--keep", type=int, default=7, help="Retain 2–30 snapshots in this series; default 7")
     setup.add_argument("--max-mib", type=int, default=512, help="Maximum compressed package size, 1–1024 MiB; default 512")
+    setup.add_argument("--append-only", action="store_true",
+                       help="Never delete snapshots while uploading, so the token needs no right to delete branches; "
+                            "apply --keep with backups prune")
     actions.add_parser("status")
     actions.add_parser("list", help="List snapshot IDs in this series")
     run = actions.add_parser("run", help="Create, encrypt, upload, download-verify, then prune a snapshot")
@@ -29,9 +33,18 @@ def add_commands(commands, *, agent=False):
     enable = actions.add_parser("enable", help="Opt into scheduled backups")
     enable.add_argument("--interval", type=int, default=None, help="Minutes between backups (60–10080; default 1440)")
     actions.add_parser("disable", help="Stop scheduling new backups; allow an upload already in progress to finish")
+    prune = actions.add_parser("prune", help="Delete all but the --keep newest snapshots of this series that "
+                                             "its recovery key authenticated, now")
+    prune.add_argument("--token-file", type=Path,
+                       help="Private file with a token allowed to delete branches, used for this command only")
     for action in ("download", "verify", "restore"):
         target = actions.add_parser(action)
         target.add_argument("snapshot", help="Exact snapshot ID from backups list")
+        target.add_argument("--allow-unauthenticated", action="store_true",
+                            help="Accept a snapshot made before snapshots were authenticated (never one newer "
+                                 "than an authenticated snapshot of the series). Anyone with write access to the "
+                                 "backup repository can create such a snapshot, and a restore deploys its data and "
+                                 "configuration")
         if action == "download" or (action == "restore" and agent):
             target.add_argument("--output", type=Path, required=True,
                                 help="New package filename" if action == "download" else "Empty recovery directory")
@@ -39,6 +52,14 @@ def add_commands(commands, *, agent=False):
             target.add_argument("--domain")
             target.add_argument("--port", type=int)
             target.add_argument("--name", help="Service name when restoring to an empty installation")
+            target.add_argument("--trust-source", metavar="REVISION",
+                                help="Deploy the source code bundled in the snapshot, which is shown when it cannot be "
+                                     "checked against this server's update source. Not accepted while that source "
+                                     "requires signatures")
+            target.add_argument("--allow-unpinned", action="store_true",
+                                help="Deploy the snapshot's release even if it is from 1.7 on and lacks its "
+                                     "hash-pinned dependency locks, installing its dependencies from the ranges in "
+                                     "requirements.txt")
     return parser
 
 
@@ -48,7 +69,8 @@ def handle(args, store, *, create_package, restore_package, schedule=None):
         return crypto.keygen(args.output)
     if action == "configure":
         result = store.configure(repo=args.repo, forge=args.forge, name=args.name, token_file=args.token_file,
-                                 key_file=args.key_file, username=args.username, keep=args.keep, max_mib=args.max_mib)
+                                 key_file=args.key_file, username=args.username, keep=args.keep, max_mib=args.max_mib,
+                                 append_only=args.append_only)
         if schedule:
             schedule(store.schedule())
         return result
@@ -67,10 +89,13 @@ def handle(args, store, *, create_package, restore_package, schedule=None):
         return {"schedule": policy}
     if action == "list":
         return store.list()
+    if action == "prune":
+        return store.prune(args.token_file)
+    unauthenticated = getattr(args, "allow_unauthenticated", False)
     if action == "verify":
-        return store.verify(args.snapshot)
+        return warn_unauthenticated(store.verify(args.snapshot, allow_unauthenticated=unauthenticated))
     if action == "download":
-        return store.download(args.snapshot, args.output)
+        return warn_unauthenticated(store.download(args.snapshot, args.output, allow_unauthenticated=unauthenticated))
     if action == "run":
         if args.automatic and not store.schedule()["enabled"]:
             return {"outcome": "disabled"}
@@ -91,7 +116,7 @@ def handle(args, store, *, create_package, restore_package, schedule=None):
         directory(store.root)
         with tempfile.TemporaryDirectory(prefix="restore-", dir=store.root) as name:
             package = Path(name) / "package.tar.gz"
-            store.download(args.snapshot, package)
+            warn_unauthenticated(store.download(args.snapshot, package, allow_unauthenticated=unauthenticated))
             result = restore_package(package, args)
         # Both the updater and the backup schedule remain opt-in on a restore.
         policy = store.set_schedule(False)
@@ -99,3 +124,11 @@ def handle(args, store, *, create_package, restore_package, schedule=None):
             schedule(policy)
         return result
     raise ValueError("Unknown backup command.")
+
+
+def warn_unauthenticated(result):
+    """Say loudly when --allow-unauthenticated actually let an unauthenticated snapshot through."""
+    if result.get("authenticated") is False:
+        print("WARNING: this snapshot is not authenticated. Anyone who could write to the backup repository could "
+              "have created or changed it; use it only if you trust all of them.", file=sys.stderr)
+    return result

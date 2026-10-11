@@ -1,15 +1,20 @@
 /* Administrator layout. */
 .admin-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: calc(100vh - var(--topbar-height)); }
+/* Narrow side padding and gaps: the longest label ("Backup & migration") fits in bold with room to spare, so the
+   current page does not wrap. */
 .admin-nav { position: sticky; top: var(--topbar-height); align-self: start; height: calc(100vh - var(--topbar-height)); overflow-y: auto;
-  display: flex; flex-direction: column; gap: 2px; padding: .85rem .75rem 1.25rem; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 40%, var(--surface)); }
-.admin-nav a { display: flex; align-items: center; gap: .6rem; min-height: 36px; padding: .4rem .65rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .86rem; }
+  display: flex; flex-direction: column; gap: 2px; padding: .85rem .5rem 1.25rem; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 40%, var(--surface)); }
+.admin-nav a { display: flex; align-items: center; gap: .5rem; min-height: 36px; padding: .4rem .55rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .86rem; }
 .admin-nav a:hover { background: var(--hover); color: var(--text); }
 .admin-nav a[aria-current="page"] { background: var(--active); color: var(--text); font-weight: 600; box-shadow: inset 2px 0 0 var(--primary); }
 .admin-nav a[aria-current="page"] svg { color: var(--primary); }
 .admin-nav svg { width: 16px; height: 16px; flex: none; }
 .admin-nav a > span { min-width: 0; overflow-wrap: anywhere; }
+/* The current page is bold: reserve the bold width so the label does not wrap only when current. */
+.admin-nav-desktop a > span { display: inline-grid; }
+.admin-nav-desktop a > span::after { content: attr(data-label); height: 0; overflow: hidden; visibility: hidden; font-weight: 600; user-select: none; }
 .admin-nav-group { display: flex; flex-direction: column; gap: 2px; margin-top: .8rem; }
-.admin-nav-label { padding: 0 .65rem .3rem; color: var(--text-muted); font-size: .7rem; font-weight: 600; letter-spacing: .02em; }
+.admin-nav-label { padding: 0 .55rem .3rem; color: var(--text-muted); font-size: .7rem; font-weight: 600; letter-spacing: .02em; }
 .admin-nav-mobile { display: none; }
 .admin-main { padding: 1.75rem clamp(1rem, 3vw, 2.5rem) 4rem; min-width: 0; width: 100%; max-width: var(--content-width); margin-inline: auto; }
 .admin-main [id] { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
@@ -18,8 +23,20 @@
 .admin-section-nav a:hover { color: var(--text); text-decoration: underline; text-underline-offset: .25em; }
 .admin-options { border-top: 1px solid var(--border); padding-top: 1rem; }
 .admin-page .site-footer { display: none; }
-@media (max-width: 900px) {
-  .admin-shell { grid-template-columns: 1fr; }
+/* The page's last section does not end with a rule above nothing. */
+.admin-main > .settings-section:last-child { border-bottom: 0; padding-bottom: 0; }
+.admin-main > .stack:nth-last-child(1 of :not(script)) > .settings-section:last-child { border-bottom: 0; padding-bottom: 0; }
+/* A grid of sections or request cards that ends the page: each item's rule sits in the gap under it and the
+   grid clips the last row's, however many columns there are. */
+.admin-main > .grid:last-child { overflow-y: clip; }
+.admin-main > :last-child .grid:has(> .request-card) { overflow-y: clip; }
+.admin-main > .grid:last-child > .settings-section, .admin-main > :last-child .grid > .request-card { margin-bottom: -1px; }
+.admin-main > :last-child .request-card:last-child { border-bottom: 0; }
+/* The menu is a disclosure row below 1024px: beside the 220px sidebar the page column would be narrower
+   than a phone held sideways. */
+@media (max-width: 1023px) {
+  /* The navigation row keeps its height on short pages; only the content row grows. */
+  .admin-shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; align-content: start; }
   .admin-nav-desktop { display: none; }
   .admin-nav-mobile { display: block; min-width: 0; border-bottom: 1px solid var(--border); }
   .admin-nav-mobile > summary { display: flex; align-items: center; gap: .6rem; min-height: 48px; padding: .65rem 1rem; list-style: none; cursor: pointer; font-size: .88rem; }
@@ -40,12 +57,13 @@
 .admin-main h2 { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .admin-main h2 svg { width: 20px; height: 20px; }
 .breadcrumb { margin: 0 0 .75rem; font-size: .9rem; }
-.breadcrumb a { display: inline-flex; align-items: center; gap: .25rem; color: var(--text-muted); text-decoration: none; }
+.breadcrumb a { display: inline-flex; align-items: center; gap: .25rem; min-height: 1.5rem; color: var(--text-muted); text-decoration: none; }
 .breadcrumb a:hover { color: var(--text); }
 .breadcrumb svg { width: 16px; height: 16px; }
 .toolbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-start; justify-content: space-between; }
 .search-form { display: flex; gap: .5rem; align-items: center; flex: 1 1 320px; max-width: 520px; }
-.search-form input { flex: 1 1 auto; }
+/* The field keeps its width when a Clear button appears beside it. */
+.search-form input { flex: 0 1 20rem; }
 .field-inline { flex-direction: row; align-items: center; gap: .6rem; }
 .field-inline select { width: auto; min-width: 220px; }
 .field-narrow { max-width: 360px; }
@@ -63,7 +81,9 @@
 .sub-card { min-width: 0; border-top: 1px solid var(--border); padding: 1rem 0 0; }
 .sub-card h3 { margin-bottom: .25rem; }
 .admin-fieldset { min-width: 0; border: 0; padding: 0; border-radius: 0; }
-.admin-fieldset > legend { padding: 0; margin-bottom: .6rem; }
+/* Floated, the legend leaves the fieldset's top border, so a divider above a group never strikes through its title. */
+.admin-fieldset > legend:not(.visually-hidden) { float: left; width: 100%; padding: 0; margin-bottom: .6rem; }
+.admin-fieldset > legend:not(.visually-hidden) + * { clear: both; }
 .admin-setting-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
 .admin-setting-row > h2 { font-size: 1rem; line-height: 1.45; margin: 0; }
 .admin-setting-row .admin-fieldset + .admin-fieldset { border-top: 1px solid var(--border); padding-top: 1rem; }
@@ -77,11 +97,15 @@
 .admin-help > summary svg { width: 16px; height: 16px; flex: none; color: var(--text-muted); }
 .admin-help[open] > summary { margin-bottom: 1rem; }
 .admin-help[open] > summary svg { transform: rotate(180deg); }
+.effort-model > summary { font-weight: 400; }
+.effort-model > summary .limit-summary { flex: 1 1 10rem; }
+/* The check button lines up with the Save button above it, also when it wraps under its text. */
+.effort-check > .btn { margin-inline-start: auto; }
+.effort-model[open] > summary { margin-bottom: .75rem; }
 
 @media (pointer: coarse) {
   .admin-section-nav a { min-height: var(--touch-target); }
   :is(.admin-disclosure, .admin-help, .inline-details) > summary { min-height: var(--touch-target); }
-  .inline-details > summary { align-content: center; }
 }
 
 /* disclosure: <details> whose summary is a button */
@@ -89,15 +113,46 @@
 .disclosure > summary::-webkit-details-marker { display: none; }
 .disclosure[open] { flex-basis: 100%; }
 .disclosure[open] > summary { margin-left: auto; }
-.inline-details > summary { cursor: pointer; color: var(--text-muted); font-size: .85rem; }
+/* inline-details: a small disclosure with the chevron of the API and personality pages, not the native triangle. */
+.inline-details > summary { display: flex; align-items: center; gap: .35rem; width: fit-content; list-style: none; cursor: pointer; color: var(--text-muted); font-size: .85rem; }
+.inline-details > summary::-webkit-details-marker { display: none; }
+.inline-details > summary svg { width: 14px; height: 14px; flex: none; transition: transform var(--speed); }
 .inline-details > summary:hover { color: var(--text); }
 .inline-details[open] > summary { margin-bottom: .35rem; }
+.inline-details[open] > summary svg { transform: rotate(180deg); }
+/* In a table cell the summary is the cell's value: the same size and colour as the values beside it. */
+.table td .inline-details > summary { font-size: inherit; color: inherit; }
+
+/* No-history audit entries: "Delete entry" lines up with the message's edge, close to the time above it. */
+.audit-entry-meta { row-gap: .15rem; }
+.audit-entry-meta .btn-ghost.btn-sm { white-space: nowrap; max-width: none; }
+/* "Delete entry" lines its label up with the message's edge: the right one under a question; on phones
+   it has a line of its own under an answer, its icon at the left edge. */
+.message-user .audit-entry-meta .btn-ghost.btn-sm { margin-inline-end: -.65rem; }
+@media (max-width: 640px) {
+  .message-assistant .audit-entry-meta > form { flex-basis: 100%; }
+  .message-assistant .audit-entry-meta .btn-ghost.btn-sm { margin-inline-start: -.65rem; }
+}
 
 /* ----- tables -------------------------------------------------------------- */
 .table-plain { border: 0; border-radius: 0; border-top: 1px solid var(--border); }
 .cell-wide { max-width: 28rem; }
-.break-anywhere { overflow-wrap: anywhere; max-width: 24rem; }
+/* break-word (not anywhere): long values wrap, but the column keeps a usable width and the table scrolls instead. */
+.break-anywhere { overflow-wrap: break-word; word-break: normal; min-width: 10rem; max-width: 24rem; }
 .row-muted td { color: var(--text-muted); }
+/* Action codes ("account.two_step_enable") stay whole in a table and break only after their dots and
+   underscores (<wbr> from the template) when a column is too narrow; a card lets them wrap anywhere. */
+.break-code { overflow-wrap: break-word; }
+@media (max-width: 640px) {
+  .table-stack .break-anywhere { min-width: 0; max-width: none; }
+  .table-stack .break-code { overflow-wrap: anywhere; }
+  .table-stack .order-cell:not(:has(form)) { display: none; }
+  .table-stack .stack-break { display: none; }
+  .table-stack .progress-cell { min-width: 0; }
+  .table-stack .name-cell { min-width: 0; }
+  /* The value follows its label on the same line. */
+  .table-stack td[data-label] > .inline-details { display: inline-block; vertical-align: baseline; }
+}
 .table .actions { display: table-cell; }
 .table .actions > * + * { margin-left: .35rem; }
 .table .actions .menu { display: inline-block; vertical-align: middle; }
@@ -118,15 +173,79 @@
 .plain-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .3rem; }
 .check-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: .5rem 1rem; }
 fieldset .check + .check { margin-top: .5rem; }
+/* Two switches in a row read as two controls: the same spacing as the field groups around them. */
+.admin-fieldset .switch + .switch { margin-top: .5rem; }
 .check-list .check + .check { margin-top: 0; }
 .pre-wrap { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16rem; overflow: auto; padding: .5rem; background: var(--hover); border-radius: var(--radius-sm); }
-.invite-code { font-size: .95rem; letter-spacing: .04em; }
+/* The three permission tables share their first column's width, so the columns line up down the page. */
+.access-table td:first-child, .access-table th:first-child { width: 40%; }
+/* The lists and the action take only the room they need; the rule's badge keeps one line. */
+.access-table :is(td, th):nth-child(3), .access-table :is(td, th):nth-child(4) { width: 1%; white-space: nowrap; }
+/* Long model ids wrap instead of widening the first column; tablets give it a smaller share. */
+.access-table td .mono { overflow-wrap: anywhere; }
+@media (max-width: 1279px) {
+  .access-table td:first-child, .access-table th:first-child { width: 30%; }
+}
+/* The permission tables are cards up to 900px (.table-stack-md). */
+@media (max-width: 900px) {
+  .access-table .badge { white-space: normal; }
+  /* Every card: the rule, then its lists on a line of their own. */
+  .access-table td[data-label] { flex-basis: 100%; }
+}
+/* The account list on phones: short cards (name, role, status, two-step); the name opens the account. */
+@media (max-width: 640px) {
+  .users-table.table-stack .col-optional { display: none; }
+}
+/* Provider model lists as cards (up to 900px): the check box beside the model's name, its facts under them. */
+@media (max-width: 900px) {
+  .provider-model-table td.model-cell { flex: 1 1 calc(100% - 4rem); min-width: 0; overflow-wrap: anywhere; }
+}
+.invite-weak-hint { min-width: 14rem; max-width: 28rem; }
+.invite-code { font-size: .95rem; letter-spacing: .04em; white-space: nowrap; }
+/* Tablets and small laptops (below 1280px the sidebar leaves the page column less than about 980px):
+   row actions stack and long codes break at their hyphens, so no column is pushed out of the table's box. */
+@media (max-width: 1279px) {
+  .table .actions { white-space: normal; }
+  .invite-code { white-space: normal; }
+  .invite-weak-hint { min-width: 9rem; }
+  .break-anywhere { min-width: 7rem; }
+}
+/* Secondary columns that give way on tablets and small laptops (and plain tables on phones); tables that
+   are cards at that width show them again. */
+@media (min-width: 641px) and (max-width: 1279px) {
+  .table:not(.table-stack-md, .table-stack-lg) .col-lg { display: none; }
+}
+@media (min-width: 901px) and (max-width: 1279px) {
+  .table-stack-md .col-lg { display: none; }
+}
+@media (max-width: 640px) {
+  .table:not(.table-stack) .col-lg { display: none; }
+}
+/* A shortened value (a device, a label) takes a share of the row instead of setting the table's width. */
+@media (min-width: 641px) {
+  .table:not(.table-stack-md, .table-stack-lg) td.truncate.cell-wide { max-width: 0; width: 40%; }
+}
+
+/* The entry tier's requirements are never checked: read-only and visibly inactive. */
+.tier-entry-field label { color: var(--text-muted); }
+.tier-entry-field input { border-style: dashed; background: transparent; color: var(--text-muted); }
+
+/* Workers: short names and GPU models stay on one line beside the badges. */
+@media (min-width: 641px) {
+  .worker-name strong, .worker-gpu { white-space: nowrap; }
+}
+/* The worker table is cards up to 1279px; above, several status badges stack and the actions may wrap,
+   so the table fits the page column. */
+#workers-table .actions { white-space: normal; }
 
 /* ----- requests (access, quotas) ------------------------------------------- */
 .request-card { border-bottom: 1px solid var(--border); padding: 1rem 0; min-width: 0; display: flex; flex-direction: column; gap: .35rem; }
 .request-card h3 { font-size: 1rem; }
+/* In a grid of cards the decision buttons line up at the bottom of each card. */
+.request-card > form { margin-top: auto; }
+.grant-what { min-width: 11rem; }
 .quote { margin: 0 0 .5rem; padding: .5rem .75rem; border-left: 3px solid var(--border-strong); background: var(--hover); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; }
-.tabs-compact { margin-bottom: 0; border-bottom: 0; }
+.tabs-compact { margin-bottom: .75rem; border-bottom: 0; }
 .tabs-compact a { padding: .4rem .7rem; }
 
 /* ----- settings: palettes --------------------------------------------------- */
@@ -150,6 +269,17 @@ fieldset .check + .check { margin-top: .5rem; }
 .chart-bar-group:hover .chart-bar { fill: var(--accent); }
 .chart-label { fill: var(--text-muted); font-size: 11px; font-family: var(--font); }
 .chart figcaption { margin-top: .5rem; }
+.bar-chart { height: 200px; }
+.chart-ticks { display: flex; justify-content: space-between; gap: 1rem; margin-top: .35rem; color: var(--text-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+/* Two breakdowns side by side only when each has room; the share bar is left to the wide model table. */
+.metrics-pair { grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); }
+.metrics-pair .meter-col { display: none; }
+.table th.text-right { white-space: nowrap; }
+.table td progress.meter { display: block; min-width: 6rem; margin-top: .3rem; }
+@media (max-width: 640px) {
+  .meter-col, .table.table-stack .meter-col { display: none; }
+  .chart-ticks span:nth-child(2) { display: none; }
+}
 
 /* ----- logs and commands ---------------------------------------------------- */
 .log-view { max-height: 70vh; overflow: auto; padding: 1rem; margin: 0; border: 1px solid var(--border); border-radius: var(--radius);
@@ -158,8 +288,14 @@ fieldset .check + .check { margin-top: .5rem; }
 .command-list { margin: 0; display: flex; flex-direction: column; gap: .35rem; }
 .command-list dt { font-weight: 550; font-size: .92rem; }
 .command-list dd { margin: 0 0 .5rem; }
-.command-list pre, .settings-section pre { margin: 0; padding: .6rem .8rem; border-radius: var(--radius-sm); background: var(--hover); overflow-x: auto; }
+/* Facts about a model: quiet labels above their values. */
+.model-facts dt { color: var(--text-muted); font-size: .85rem; font-weight: 500; }
+/* Commands wrap instead of hiding their end behind a scrollbar nobody sees. */
+.command-list pre, .settings-section pre { margin: 0; padding: .6rem .8rem; border-radius: var(--radius-sm); background: var(--hover); white-space: pre-wrap; overflow-wrap: anywhere; }
+.settings-section p > code { white-space: nowrap; }
 .settings-section pre code { background: none; padding: 0; }
+.command-copy { display: flex; align-items: flex-start; gap: .5rem; }
+.command-copy > pre { flex: 1 1 auto; min-width: 0; }
 
 @media (max-width: 760px) {
   .admin-main .btn { max-width: 100%; white-space: normal; }
@@ -176,6 +312,29 @@ fieldset .check + .check { margin-top: .5rem; }
   .field-inline select { min-width: 0; width: 100%; }
   .table .actions { white-space: normal; }
   .cell-wide { max-width: 14rem; }
+  /* Secondary columns give way on phones; the row's first cell links to the full record. */
+  .col-optional { display: none; }
+  .categories-table .action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .categories-table td:nth-child(2) { min-width: 9rem; }
+  .catalog-name { min-width: 10rem; }
+}
+
+/* The model id is shortened to the column's width instead of setting it (long external ids). */
+.catalog-table .catalog-name .cell-wide { max-width: 0; min-width: 100%; }
+/* Below 1280px the Server column gives way; its badges follow the model's name instead. */
+.catalog-server-inline { display: none; }
+@media (max-width: 1279px) {
+  .catalog-table .catalog-server { display: none; }
+  .catalog-server-inline { display: flex; }
+}
+/* Phones: each catalog (or category) row is a card: the order buttons in a column of their own, the name,
+   publishing and actions (or the category's details) under one another beside them, all starting at one edge. */
+@media (max-width: 640px) {
+  .catalog-table.table-stack tr { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .45rem 1rem; align-items: start; }
+  .catalog-table.table-stack .col-optional { display: none; }
+  .catalog-table.table-stack .order-cell { grid-column: 1; grid-row: 1 / span 4; width: auto; }
+  .catalog-table.table-stack td:not(.order-cell) { grid-column: 2; }
+  .catalog-table.table-stack td.actions { padding-top: 0; }
 }
 
 @media (pointer: coarse) {
@@ -204,6 +363,36 @@ fieldset .check + .check { margin-top: .5rem; }
 .queue-stats > div { display: flex; flex-direction: column; gap: .2rem; }
 .queue-meter progress { width: 100%; }
 .download-forms { align-items: start; }
+/* The queue section above already ends with a rule; the two forms do not start with another. */
+.download-forms > .sub-card { border-top: 0; padding-top: 0; }
+/* The short single-model form stays in view beside the long list of suggestions. */
+@media (min-width: 761px) {
+  .download-forms > .sub-card:first-child { position: sticky; top: calc(var(--topbar-height) + 1rem); }
+}
+/* Download cards (phones and tablets): the order buttons side by side at the top right, beside the name;
+   the requester follows the time after a dot instead of a line break. */
+.stack-sep { display: none; }
+@media (max-width: 640px) {
+  .table-stack .stack-sep { display: inline; }
+}
+@media (max-width: 900px) {
+  .table-stack-md .order-cell:not(:has(form)) { display: none; }
+  .table-stack-md .stack-break { display: none; }
+  .table-stack-md .stack-sep { display: inline; }
+  .table-stack-md :is(.progress-cell, .name-cell) { min-width: 0; }
+  .table-stack-md .break-anywhere { min-width: 0; max-width: none; }
+  .table-stack-md .break-code { overflow-wrap: anywhere; }
+  .table-stack-md td[data-label] > .inline-details { display: inline-block; vertical-align: baseline; }
+  #download-table tr { position: relative; }
+  #download-table .order-cell:has(form) { position: absolute; top: .45rem; right: .6rem; width: auto; }
+  #download-table .order-buttons { flex-direction: row; }
+  #download-table tr:has(.order-cell form) .name-cell { padding-inline-end: calc(2 * var(--control-compact) + 1rem); }
+}
+@media (max-width: 1279px) {
+  .progress-cell { min-width: 8rem; }
+}
+/* Small text links keep a 24px target (WCAG 2.5.8). */
+.inline-target, .review-links > a { display: inline-flex; align-items: center; min-height: 1.5rem; }
 .event-list li { padding: .45rem 0; }
 .event-list .event-name { font-weight: 600; }
 
@@ -214,12 +403,15 @@ fieldset .check + .check { margin-top: .5rem; }
 .rule-row input { width: 6rem; }
 .rule-row select { width: auto; min-width: 6.5rem; }
 .rule-word { color: var(--text-muted); font-size: .88rem; }
+.rule-burst { display: inline-flex; align-items: center; gap: .4rem .5rem; white-space: nowrap; }
+.rule-list .rule-row + .rule-row { padding-top: .45rem; border-top: 1px dashed var(--border); }
 .limit-summary { margin: 0; color: var(--text-muted); font-size: .9rem; overflow-wrap: anywhere; }
-.model-card > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .75rem; }
+/* The chevron stays at the top right, outside the wrapping name, badges and summary. */
+.model-card > summary { position: relative; cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .75rem; padding-right: 2rem; }
 .model-card > summary::-webkit-details-marker { display: none; }
 .model-card > summary h2 { margin: 0; font-size: 1.05rem; }
 .model-card > summary .limit-summary { flex: 1 1 16rem; }
-.model-card > summary .chevron { display: inline-flex; flex: none; margin-left: auto; }
+.model-card > summary .chevron { display: inline-flex; flex: none; position: absolute; right: 0; top: .2rem; }
 .model-card > summary .chevron svg { width: 18px; height: 18px; transition: transform var(--speed); }
 .model-card[open] > summary .chevron svg { transform: rotate(180deg); }
 .model-card[open] > summary { margin-bottom: 1rem; }
@@ -227,8 +419,34 @@ fieldset .check + .check { margin-top: .5rem; }
 .preset-option { display: flex; flex-direction: column; gap: .4rem; align-items: flex-start; }
 .preset-option p { margin: 0; }
 .usage-line { display: flex; flex-direction: column; gap: .2rem; }
+/* Music tracks: aligned with the section, controls in one row under the name on phones. */
+.track-list { list-style: none; padding: 0; margin: 0; }
+@media (max-width: 640px) {
+  .track-item { flex-wrap: wrap; }
+  /* The number and the name share a line, so the buttons below line up with the name. */
+  .track-item > .grow { flex: 1 1 0; min-width: 0; }
+  .track-item > .row-end { flex: 1 1 100%; flex-wrap: nowrap; justify-content: flex-start; padding-inline-start: 2.1rem; }
+  /* Stacked search row: the filter is as wide as the field above it. */
+  .music-search > select { flex: 1 1 100%; width: 100%; }
+}
 .usage-line progress { width: 100%; max-width: 22rem; }
 @media (max-width: 640px) {
-  .rule-row input { width: 4.5rem; }
+  /* Every new model's actions sit under its details, whether it has one action or two. */
+  .lifecycle-item > .lifecycle-actions { flex-basis: 100%; justify-content: flex-start; }
+  .rule-row input { width: 5.25rem; padding-inline: .5rem; }
   .rule-row select { min-width: 0; }
+  .rule-separator { display: none; }
 }
+/* A field and its button on one line (provider test). */
+.input-row { display: flex; align-items: center; gap: .5rem; }
+.input-row > input { flex: 1 1 auto; min-width: 0; }
+/* The button keeps its label on one line; the field gives way. */
+.input-row > .btn { flex: none; white-space: nowrap; }
+.provider-test { max-width: 46rem; }
+/* Wide fields (long option labels) take two columns whenever the grid has two or more. */
+.form-grid:has(> .field-wide) { container-type: inline-size; }
+@container (min-width: 29rem) { .form-grid > .field-wide { grid-column: span 2; } }
+.provider-models input[type="checkbox"] { width: 1.5rem; height: 1.5rem; margin: 0; accent-color: var(--primary); }
+/* External API providers: a long model list scrolls inside its card. */
+.provider-models { max-height: 28rem; overflow: auto; }
+.provider-models td:first-child, .provider-models th:first-child { width: 2.5rem; }

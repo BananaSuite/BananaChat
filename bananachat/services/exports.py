@@ -2,13 +2,15 @@
 
 * :func:`gdpr_export` - everything stored about one account: profile (never
   the password hash), preferences, quota and limits (custom limits, tier,
-  speed, the account's own grants), API token metadata (never the token
-  hash), the credit ledger, access-list memberships and requests, quota
-  requests, personalities, sign-in sessions (never the session hash), the
-  account's own audit-log entries, every chat that has not been deleted
-  with its messages and attachments, and the account's agent tasks with
-  their steps, sub-agents and follow-up messages (never the task's lease or
-  sandbox identifiers).
+  speed, the account's own grants), API token metadata with scope and expiry
+  (never the token hash), whether two-step verification is on (since when,
+  how many recovery codes are left; never the authenticator secret or the
+  recovery-code digests), the credit ledger, access-list memberships and
+  requests, quota requests, personalities, sign-in sessions (never the
+  session hash), the account's own audit-log entries, every chat that has
+  not been deleted with its messages and attachments, and the account's
+  agent tasks with their steps, sub-agents and follow-up messages (never the
+  task's lease or sandbox identifiers).
 * :func:`chats_export` - chats and messages only.
 
 Attachments are exported as metadata plus their extracted text. Image bytes
@@ -22,6 +24,7 @@ JSON-serialisable dicts.
 from __future__ import annotations
 
 import base64
+import json
 from datetime import datetime, timezone
 
 from bananachat import __version__, db
@@ -110,6 +113,20 @@ def _agent_tasks(user_id: str) -> list[dict]:
     return tasks
 
 
+def _two_step(user_id: str) -> dict:
+    """Whether two-step verification is on, without its secret or recovery-code digests."""
+    row = db.one("SELECT enabled_at, recovery_hashes FROM user_two_step WHERE user_id=?", (user_id,)) \
+        if _columns("user_two_step") else None
+    if row is None:
+        return {"enabled": False, "enabled_at": None, "recovery_codes_left": 0}
+    try:
+        digests = json.loads(row["recovery_hashes"] or "[]")
+    except ValueError:
+        digests = []
+    return {"enabled": True, "enabled_at": row["enabled_at"],
+            "recovery_codes_left": len(digests) if isinstance(digests, list) else 0}
+
+
 def chats_export(user_id: str) -> dict:
     """The account's chats (not deleted) with their messages and attachment metadata."""
     user = users.get(user_id)
@@ -135,10 +152,13 @@ def gdpr_export(user_id: str) -> dict:
     payload["preferences"] = users.get_preferences(user_id)
     quota = db.one("SELECT daily_credits, daily_slow_credits, updated_at FROM user_quota WHERE user_id=?", (user_id,))
     payload["quota"] = quota.to_dict() if quota else {}
+    now = db.now()
     payload["api_tokens"] = [
-        {**row, "revoked": bool(row["revoked"])} for row in _rows(
-            "SELECT id, name, token_prefix, created_at, last_used_at, revoked FROM api_tokens WHERE user_id=? "
-            "ORDER BY id", (user_id,))]
+        {**row, "revoked": bool(row["revoked"]), "expired": bool(row["expires_at"]) and row["expires_at"] <= now}
+        for row in _rows(
+            "SELECT id, name, token_prefix, scope, created_at, expires_at, last_used_at, revoked FROM api_tokens "
+            "WHERE user_id=? ORDER BY id", (user_id,))]
+    payload["two_step"] = _two_step(user_id)
     payload["credit_ledger"] = _rows(
         "SELECT l.created_at, l.request_type, l.credits_used * 1000 AS counted_tokens, l.is_slow, l.tokens_in, "
         "l.tokens_out, "
@@ -212,6 +232,7 @@ def gdpr_export(user_id: str) -> dict:
         "images": f"Images up to {INLINE_IMAGE_MAX_BYTES // 1024} KB are included as base64 "
                   f"(at most {INLINE_IMAGES_TOTAL_BYTES // (1024 * 1024)} MB in total); larger ones are listed "
                   "with their SHA-256 only.",
-        "secrets": "Password, API token and session hashes are never exported.",
+        "secrets": "Password, API token and session hashes, the two-step verification secret and its recovery "
+                   "codes are never exported.",
     }
     return payload

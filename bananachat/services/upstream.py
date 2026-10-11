@@ -9,13 +9,18 @@
 
 from __future__ import annotations
 
+import email.utils
 import http.client
 import json
+import logging
+import math
 import socket
 import ssl
 import threading
 import time
 from urllib.parse import urlsplit
+
+log = logging.getLogger("bananachat.upstream")
 
 # Everything sent to a model server must fit the compute proxy's 32 MB body
 # limit (1.0 compute servers enforce the same), so the images of one request
@@ -26,15 +31,23 @@ MAX_CONTEXT_IMAGE_BYTES = 20 * 1024 * 1024
 class UpstreamError(RuntimeError):
     """The backend failed, timed out or returned an error status (``code``: its error code, if it sent one).
 
-    ``kind`` is ``connect`` when the backend could not be reached at all and
-    ``timeout`` when it did not answer in time (None otherwise).
+    ``kind`` is ``connect`` when the backend could not be reached at all,
+    ``timeout`` when it did not answer in time and ``capacity`` when it is
+    rate limited or overloaded (None otherwise). ``retry_after`` is the wait in
+    seconds the backend asked for, ``error_type`` the type it named (such as
+    Anthropic's ``overloaded_error``) and ``detail`` a credential-free account
+    of the backend's own message, for administrators only.
     """
 
-    def __init__(self, message: str, status: int | None = None, code: str | None = None, kind: str | None = None):
+    def __init__(self, message: str, status: int | None = None, code: str | None = None, kind: str | None = None,
+                 *, retry_after: int | None = None, error_type: str | None = None, detail: str = ""):
         super().__init__(message)
         self.status = status
         self.code = code
         self.kind = kind
+        self.retry_after = retry_after
+        self.error_type = error_type
+        self.detail = detail
 
 
 class Cancelled(RuntimeError):
@@ -60,8 +73,8 @@ class CancelToken:
         for callback in callbacks:
             try:
                 callback()
-            except Exception:  # noqa: BLE001 - best effort
-                pass
+            except Exception:  # noqa: BLE001 - best effort: the other callbacks must still run
+                log.warning("A cancellation callback failed", exc_info=True)
 
     @property
     def cancelled(self) -> bool:
@@ -315,32 +328,59 @@ def open_request(method: str, base_url: str, path: str, *, body=None, headers=No
                         cancel=cancel, response_socket=response_socket,
                         deadline_cancel=deadline_cancel, deadline_handle=deadline_handle)
     if not 200 <= raw.status < 300:
+        retry_after = _retry_after(raw.headers)
         try:
-            message, code = _error_details(response)
+            message, code, error_type = _error_details(response)
         finally:
             response.close()
-        raise UpstreamError(message or f"The backend returned HTTP {raw.status}.", raw.status, code)
+        raise UpstreamError(message or f"The backend returned HTTP {raw.status}.", raw.status, code,
+                            retry_after=retry_after, error_type=error_type)
     return response
 
 
-def _error_details(response: Response) -> tuple[str, str | None]:
+def _retry_after(headers) -> int | None:
+    """``Retry-After`` (seconds or an HTTP date) or ``retry-after-ms``, as whole seconds up to an hour."""
+    try:
+        value = (headers.get("Retry-After") or "").strip()
+        milliseconds = (headers.get("retry-after-ms") or "").strip()
+        if milliseconds:
+            seconds = float(milliseconds) / 1000
+        elif value.replace(".", "", 1).isdigit():
+            seconds = float(value)
+        elif value:
+            moment = email.utils.parsedate_to_datetime(value)
+            seconds = moment.timestamp() - time.time()
+        else:
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if seconds != seconds:  # NaN
+        return None
+    return int(min(3600, max(1, math.ceil(seconds))))
+
+
+def _error_details(response: Response) -> tuple[str, str | None, str | None]:
+    """The backend's error message, code and type (OpenAI and Anthropic error shapes, or plain text)."""
     try:
         data = response.read(16384)
     except (UpstreamError, OSError, http.client.HTTPException):
-        return "", None
+        return "", None, None
     try:
         parsed = json.loads(data)
         if isinstance(parsed, dict):
             error = parsed.get("error")
-            code = None
+            code = error_type = None
             if isinstance(error, dict):
-                code = error.get("code") if isinstance(error.get("code"), str) else None
+                raw_code = error.get("code")
+                code = raw_code if isinstance(raw_code, str) else str(raw_code) if isinstance(raw_code, int) \
+                    and not isinstance(raw_code, bool) else None
+                error_type = error.get("type") if isinstance(error.get("type"), str) else None
                 error = error.get("message")
             if isinstance(error, str):
-                return error[:500], (code[:64] if code else None)
+                return error[:500], (code[:64] if code else None), (error_type[:64] if error_type else None)
     except (ValueError, RecursionError):
         pass
-    return data.decode("utf-8", errors="replace").strip()[:300], None
+    return data.decode("utf-8", errors="replace").strip()[:300], None, None
 
 
 def request_json(method: str, base_url: str, path: str, *, body=None, headers=None, timeout: float = 15,

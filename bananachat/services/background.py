@@ -55,10 +55,6 @@ def jobs() -> dict[str, Job]:
     return dict(_jobs)
 
 
-def is_leader() -> bool:
-    return _state["leader"]
-
-
 def start(app) -> None:
     """Begin competing for leadership (idempotent)."""
     if _threads:

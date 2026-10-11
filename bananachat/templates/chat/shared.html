@@ -6,7 +6,7 @@
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">{% endblock %}
 {% block content %}
 {%- set state_labels = {"stopped": t("chat.state_stopped"), "failed": t("chat.state_failed"), "interrupted": t("chat.state_interrupted")} -%}
-<div class="page">
+<div class="page page-narrow">
   <header class="page-header">
     <div>
       <h1>{{ title }}</h1>
@@ -18,7 +18,7 @@
   <p class="text-center"><a class="btn btn-ghost btn-sm" href="{{ older_url }}">{{ t("chat.show_earlier") }}</a></p>
   {% endif %}
   <div class="chat-messages read-only">
-    {% for m in messages %}{{ message(m, t("chat.you"), t("chat.assistant"), state_labels) }}{% else %}
+    {% for m in messages %}{{ message(m, t("chat.shared_user"), t("chat.assistant"), state_labels) }}{% else %}
     <p class="empty">{{ t("chat.shared_empty") }}</p>
     {% endfor %}
   </div>

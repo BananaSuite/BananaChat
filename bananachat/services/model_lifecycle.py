@@ -151,7 +151,7 @@ def save_policy(changes: dict, actor=None) -> dict:
     for key, value in changes.items():
         if key == "enrollment":
             if value not in ENROLLMENT_POLICIES:
-                raise ValueError("Choose manual or automatic enrollment.")
+                raise ValueError("Choose manual or automatic enrolment.")
         elif key in NUMBERS:
             _default, low, high = NUMBERS[key]
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
@@ -219,7 +219,7 @@ def remove_ignore_rule(rule_id: int) -> str | None:
 def ignore_model(model, actor=None) -> None:
     """Never offer this model: hide it and remember its exact name."""
     with db.transaction():
-        lifecycle_db.add_rule(model["ollama_name"], "Ignored from the catalog.", actor["id"] if actor else None)
+        lifecycle_db.add_rule(model["ollama_name"], "Ignored from the catalogue.", actor["id"] if actor else None)
         reason = "Ignored by an administrator."
         catalog.set_lifecycle(model["id"], enrollment="ignored", is_rolled_out=0, state_reason=reason)
         _record(model, "ignored", reason, actor)
@@ -251,8 +251,7 @@ def parameters_billions(size: str | None, count=None) -> float | None:
 def preset_for(model) -> str:
     """Heavy from 30B parameters, standard from 7B, light below; standard when unknown.
 
-    Claude subscription models use per-family strictness instead: opus is
-    heavy/strict, sonnet standard, haiku light.
+    External API models follow their provider's model name instead.
     """
     try:
         backend = model["backend"]
@@ -262,10 +261,6 @@ def preset_for(model) -> str:
         from bananachat.services import external_providers
 
         return external_providers.preset_for_name(model["backend_model_name"] or model["ollama_name"])
-    if backend == "claude":
-        from bananachat.services import claude_pool
-
-        return claude_pool.strict_policy(model["ollama_name"], family=model["family"] or None)["preset"]
     billions = parameters_billions(model["parameter_size"])
     if billions is None:
         return "standard"
@@ -435,24 +430,6 @@ def sync(config=None, *, source: str = "background") -> dict:
     state.update(ok=True, count=len(tags), new=[name for _id, name in summary["inserted"]][:50],
                  missing=[name for _id, name, _reason in summary["missing"]][:50],
                  returned=[name for _id, name in summary["returned"]][:50])
-    try:
-        from bananachat.services import claude_pool
-
-        # Claude models enroll only once the pool is in use (accounts exist)
-        # or already enrolled; otherwise every Ollama sync would add curated
-        # Claude rows to sites that never asked for them.
-        from bananachat.db import claude_pool as _pool_db
-
-        has_claude = bool(db.scalar("SELECT 1 FROM ai_models WHERE backend='claude' LIMIT 1", default=None))
-        has_accounts = bool(_pool_db.list_accounts())
-        if has_claude or has_accounts:
-            claude_state = claude_pool.sync_catalog(source=source)
-            state["new"] = (state["new"] + claude_state.get("new", []))[:50]
-            state["enabled"] = (state["enabled"] + claude_state.get("enabled", []))[:50]
-            state["missing"] = (state["missing"] + claude_state.get("missing", []))[:50]
-    except Exception:  # noqa: BLE001 - Claude enrollment must never break the Ollama sync
-        log.warning("Claude catalog sync failed", exc_info=True)
-        db.close_thread_connection()
     _save_sync_state(state)
     if state["errors"]:
         log.warning("Model sync: %d model(s) could not be inspected", len(state["errors"]))
@@ -560,7 +537,10 @@ def enable(model, actor=None, *, preset: str | None = None) -> None:
     with db.transaction():
         fresh = catalog.get(model["id"])
         if fresh is None:
-            raise ValueError("The model no longer exists; refresh the catalog.")
+            raise ValueError("The model no longer exists; refresh the catalogue.")
+        if fresh["backend"] not in ("ollama", "comfyui", "external"):
+            # Only the removed Claude subscription connector served other backends.
+            raise ValueError("The connector that served this model was removed; remove it from the catalogue.")
         if fresh["enrollment"] == "ignored":
             raise ValueError(f"{fresh['ollama_name']} is on the ignore list; restore it first.")
         if fresh["retired_at"] or fresh["delete_requested_at"]:
@@ -569,7 +549,7 @@ def enable(model, actor=None, *, preset: str | None = None) -> None:
         preset = preset or current_preset
         from bananachat.db import limits as limits_db
 
-        preserve_policy = fresh["backend"] in ("claude", "external") and \
+        preserve_policy = fresh["backend"] == "external" and \
             limits_db.has_model_policy(fresh["id"]) and preset == current_preset
         if preserve_policy:
             # Enrollment installs hosted-model limits before publication. A
@@ -890,9 +870,6 @@ def delete_from_server(model, actor=None, *, when_idle: bool = False, config=Non
     for them (the ``model-lifecycle`` job finishes it).
     """
     config = _config(config)
-    if model["backend"] == "claude":
-        raise ValueError("Claude subscription models are removed from the catalog, not from a model server: "
-                         "retire or delete the catalog entry instead.")
     if model["backend"] != "ollama":
         raise ValueError("Only Ollama models can be deleted from here; remove checkpoints on the ComfyUI server.")
     name = _name(model)
@@ -900,7 +877,7 @@ def delete_from_server(model, actor=None, *, when_idle: bool = False, config=Non
     with db.transaction():
         model = catalog.get(model["id"])
         if model is None:
-            raise ValueError("The model no longer exists; refresh the catalog.")
+            raise ValueError("The model no longer exists; refresh the catalogue.")
         if pulls_db.active_for(name, "ollama"):
             raise ValueError(f"A download of {name} is queued or running; cancel it first.")
         already = model["delete_requested_at"]
@@ -917,7 +894,7 @@ def delete_from_server(model, actor=None, *, when_idle: bool = False, config=Non
         with operation_lock(name, config):
             fresh = catalog.get(model["id"])
             if fresh is None or not fresh["delete_requested_at"]:
-                raise ValueError("The deletion was cancelled; refresh the catalog.")
+                raise ValueError("The deletion was cancelled; refresh the catalogue.")
             return _delete_now(fresh, actor, config)
     except Timeout:
         if when_idle:
@@ -950,7 +927,11 @@ def _delete_now(model, actor, config) -> str:
     existed = ollama.delete(name, config)
     # The pending-deletion marker excludes recovery checks while the backend
     # call runs. A failed call must not suppress future recovery of the model.
-    model_recovery.ignore([name], config)
+    try:
+        model_recovery.ignore([name], config)
+    except Timeout:
+        # The model is gone already; reporting the deletion as unfinished would be wrong.
+        log.warning("Model recovery may still offer %s after its deletion: its record is busy", name)
     replacement = catalog.get(model["replacement_id"]) if model["replacement_id"] else None
     reason = (f"Deleted from the model server by {actor['username']}." if actor else
               "Deleted from the model server after its requests finished.")

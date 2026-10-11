@@ -7,7 +7,8 @@ import pytest
 from tests.app.test_chat import alice, new_chat, send, setup_models, user_browser, wait_idle  # noqa: F401
 from tests.app.test_agents import agents_app, fast_loop, runner, token_file  # noqa: F401
 from tests.app.test_images import comfy, image_app  # noqa: F401
-from tests.app.test_review2_chat import NODE, chat_page, render_markdown  # noqa: F401
+from tests.app.test_chat_markdown import require_node
+from tests.app.test_review2_chat import chat_page, render_markdown  # noqa: F401
 
 
 def _italian(app, username="alice"):
@@ -177,9 +178,9 @@ def test_attachment_kinds_are_translated(app, chat_page):
 
 # ----- markdown --------------------------------------------------------------------------------------
 
-@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_loose_lists_stay_one_list():
     """Models separate list items with blank lines: that is one (loose) list, not one list per item."""
+    require_node()
     ordered, bullets, split = render_markdown("1. **First**\n\n   Details.\n\n2. Second\n\n3. Third",
                                               "- a\n\n- b", "1. a\n\nA paragraph.\n\n2. b")
     assert ordered.count("<ol") == 1 and ordered.count("<li>") == 3
@@ -187,15 +188,15 @@ def test_loose_lists_stay_one_list():
     assert split.count("<ol") == 2  # a paragraph in between still ends the list
 
 
-@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_link_destinations_may_contain_parentheses():
+    require_node()
     (html,) = render_markdown("See [Python](https://en.wikipedia.org/wiki/Python_(programming_language)).")
     assert html == ('<p>See <a href="https://en.wikipedia.org/wiki/Python_(programming_language)" target="_blank" '
                     'rel="noopener noreferrer nofollow">Python</a>.</p>')
 
 
-@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_backslash_escapes_and_triple_emphasis():
+    require_node()
     escaped, triple = render_markdown(r"5 \* 3 \* 2, snake\_case, \# not a heading and `a\*b`", "***both*** and *one*")
     assert escaped == r"<p>5 * 3 * 2, snake_case, # not a heading and <code>a\*b</code></p>"
     assert triple == "<p><strong><em>both</em></strong> and <em>one</em></p>"
@@ -288,9 +289,9 @@ def test_on_phones_enter_starts_a_new_line_and_the_button_sends(chat_page):
     chat_page.wait_for_selector(".message-user", timeout=10000)
 
 
-@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_setext_headings_and_images_as_links():
     """"Title" underlined with === or --- is a heading; an image is shown as a link (remote images are never loaded)."""
+    require_node()
     headings, rule, image, bare = render_markdown("Big title\n=========\n\nSmall **title**\n---\ntext",
                                                   "Paragraph\n\n---\n\nNext",
                                                   "See ![a *cat*](https://example.com/cat.png) here",
@@ -368,14 +369,31 @@ def test_an_agent_start_refused_by_the_models_rate_is_in_the_readers_language(ag
     assert limits.rule_text("it", rule) in message and limits.rule_text("en", rule) not in message, message
 
 
-def test_every_agent_step_takes_a_request_from_the_models_rate_and_waits_for_it(agents_app, fake_ollama):
+def test_every_agent_step_takes_a_request_from_the_models_rate_and_waits_for_it(agents_app, fake_ollama,
+                                                                                 monkeypatch):
     """The model's request rate holds for agents too: each step takes a request; when none is left the task waits
     (it does not fail) and goes on."""
     import itertools
+    import threading
     import time
+    from types import SimpleNamespace
 
+    from bananachat.services import limits
+    from bananachat.services.agents import loop
     from tests.app.test_agents import call, start_ok, steps, wait_status
 
+    # The limiter's clock moves only while the task waits for the rate, so the steps are refused however fast or
+    # slow the machine is, and the gaps below are exact.
+    clock, lock = [time.time()], threading.Lock()
+    monkeypatch.setattr(limits, "time", SimpleNamespace(time=lambda: clock[0], monotonic=time.monotonic))
+    real_sleep = loop.TaskRun._sleep
+
+    def sleep(run, seconds):
+        with lock:
+            clock[0] += seconds
+        real_sleep(run, 0.01)
+
+    monkeypatch.setattr(loop.TaskRun, "_sleep", sleep)
     env = _agents_env(agents_app)
     _model_rate(env.app, env.user, {"requests": 1, "per": "second", "burst": 1})
     moments = []
@@ -383,7 +401,7 @@ def test_every_agent_step_takes_a_request_from_the_models_rate_and_waits_for_it(
               call("finish", summary="Done.")]
 
     def responder(body):
-        moments.append(time.monotonic())
+        moments.append(clock[0])
         return script[min(len(moments), len(script)) - 1]
 
     fake_ollama.tool_responder = responder
@@ -392,7 +410,7 @@ def test_every_agent_step_takes_a_request_from_the_models_rate_and_waits_for_it(
     assert row["status"] == "finished", row["error"]
     assert len(moments) == 3
     # The start took the first request; each later step waited for the next one (one per second).
-    assert all(later - earlier >= 0.8 for earlier, later in itertools.pairwise(moments)), moments
+    assert all(later - earlier >= 1 for earlier, later in itertools.pairwise(moments)), moments
     assert any("notice_model_rate" in step["content"] for step in steps(env.app, task_id) if step["kind"] == "notice")
 
 

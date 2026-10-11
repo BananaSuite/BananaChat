@@ -28,10 +28,12 @@
   <noscript><div class="alert alert-warning mb-2">{{ t("customize.needs_javascript") }}</div></noscript>
 
   <nav class="customize-toc" aria-label="{{ t('customize.title') }}">
-    <a href="#appearance">{{ t("customize.appearance") }}</a>
-    <a href="#reading">{{ t("customize.reading") }}</a>
-    <a href="#preview-title">{{ t("customize.preview") }}</a>
-    <a href="#more-appearance">{{ t("customize.more_options") }}</a>
+    <div class="section-nav" data-section-nav>
+      <a href="#appearance">{{ t("customize.appearance") }}</a>
+      <a href="#reading">{{ t("customize.reading") }}</a>
+      <a href="#preview-title">{{ t("customize.preview") }}</a>
+      <a href="#more-appearance">{{ t("customize.more_options") }}</a>
+    </div>
   </nav>
 
   <div class="customize-layout">

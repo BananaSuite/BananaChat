@@ -158,9 +158,12 @@ def test_pdf_extraction_is_bounded_in_time(monkeypatch):
 def test_administrator_invitations_stop_working_when_their_creator_is_no_longer_an_administrator(app, make_user):
     from bananachat.db import invites, users
 
+    from datetime import datetime, timedelta, timezone
+
     rogue = make_user("rogue", role="admin")
     with app.app_context():
-        admin_code = invites.create(rogue["id"], max_uses=0, assigned_role="admin")
+        admin_code = invites.create(rogue["id"], assigned_role="admin",
+                                    expires_at=datetime.now(timezone.utc) + timedelta(days=7))
         user_code = invites.create(rogue["id"], max_uses=0, assigned_role="user")
         assert invites.find_usable(admin_code) and invites.find_usable(user_code)
         users.set_role(rogue["id"], "user")

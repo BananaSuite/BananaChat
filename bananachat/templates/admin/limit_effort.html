@@ -31,7 +31,7 @@
       <select id="effort-default" name="effort_default_level" aria-describedby="effort-default-hint">
         {% for level in levels %}<option value="{{ level }}"{% if shown.default == level %} selected{% endif %}>{{ level | capitalize }}</option>{% endfor %}
       </select>
-      <span class="hint" id="effort-default-hint">Allows all supported levels up to this level. Model-specific defaults can override it.</span>
+      <span class="hint" id="effort-default-hint">Allows every supported level up to this one. The model defaults below can override it.</span>
     </div>
     <fieldset class="admin-fieldset stack">
       <legend>Automatic unlocks</legend>
@@ -63,6 +63,12 @@
     </fieldset>
     <div class="form-actions"><button type="submit" class="btn btn-primary">Save reasoning settings</button></div>
   </form>
+  {#- Next to the automatic-unlock settings it belongs to (a form cannot sit inside the settings form). -#}
+  <form method="post" action="{{ url_for('admin.limit_effort_auto') }}" class="settings-section row-between effort-check">
+    {{ csrf() }}
+    <p class="muted small mb-0">Run the check now to apply new requirements at once.</p>
+    <button type="submit" class="btn">{{ icon("refresh") }}Check automatic unlocks now</button>
+  </form>
 
   <section class="settings-section stack" id="models" aria-labelledby="effort-models-title">
     <h2 id="effort-models-title">Model defaults</h2>
@@ -71,8 +77,9 @@
     <ul class="plain-list divider-list">
       {% for item in models %}
       <li class="list-item">
-        <details class="inline-details grow">
-          <summary><strong>{{ item.model.display_name }}</strong> · {% if not settings.gating or item.policy.effort_gating_off %}All supported levels{% else %}Up to {{ (item.default or settings.default) | capitalize }}{% endif %}</summary>
+        {#- Like the model cards on Limits > Models: the name first, the chevron at the right. -#}
+        <details class="model-card effort-model grow">
+          <summary><strong>{{ item.model.display_name }}</strong><span class="limit-summary">{% if not settings.gating or item.policy.effort_gating_off %}All supported levels{% else %}Up to {{ (item.default or settings.default) | capitalize }}{% endif %}</span><span class="chevron" aria-hidden="true">{{ icon("chevron-down") }}</span></summary>
           <form method="post" action="{{ url_for('admin.limit_effort_model', model_id=item.model.id) }}" class="stack">
             {{ csrf() }}
             <input type="hidden" name="limit_controls" value="1">
@@ -95,10 +102,6 @@
     {% else %}
     <p class="muted mb-0">No models support reasoning levels yet.</p>
     {% endif %}
-    <form method="post" action="{{ url_for('admin.limit_effort_auto') }}" class="row">
-      {{ csrf() }}
-      <button type="submit" class="btn">{{ icon("refresh") }}Check automatic unlocks now</button>
-    </form>
   </section>
 </div>
 
@@ -106,23 +109,23 @@
   <h2 id="unlocks-title">Account levels</h2>
   {% if unlocks %}
   <div class="table-wrap">
-    <table class="table">
+    <table class="table table-stack stack-lines">
       <caption class="visually-hidden">Reasoning effort levels of accounts</caption>
       <thead><tr><th scope="col">Account</th><th scope="col">Model</th><th scope="col">Maximum</th><th scope="col">Source</th><th scope="col">Updated</th></tr></thead>
       <tbody>
       {% for row in unlocks %}
         <tr>
-          <td><a href="{{ url_for('admin.user_limits', user_id=row.user_id) }}#effort">{{ row.username }}</a></td>
-          <td>{{ row.model_name or "Every model" }}</td>
-          <td>{{ row.level | capitalize }}{% if row.pinned %} <span class="badge">pinned</span>{% endif %}</td>
-          <td>{{ {"admin": "Set by " ~ (row.updated_by_name or "an administrator"), "request": "Approved request", "automatic": "Automatic"}.get(row.source, row.source) }}</td>
-          <td class="nowrap">{{ when(row.updated_at) }}</td>
+          <td class="cell-full"><a href="{{ url_for('admin.user_limits', user_id=row.user_id) }}#effort"><strong>{{ row.username }}</strong></a></td>
+          <td data-label="Model:">{{ row.model_name or "Every model" }}</td>
+          <td data-label="Maximum:">{{ row.level | capitalize }}{% if row.pinned %} <span class="badge">Pinned</span>{% endif %}</td>
+          <td data-label="Source:">{{ {"admin": "Set by " ~ (row.updated_by_name or "an administrator"), "request": "Approved request", "automatic": "Automatic"}.get(row.source, row.source) }}</td>
+          <td class="nowrap" data-label="Updated:">{{ when(row.updated_at) }}</td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
   </div>
-  <p class="hint">Showing the latest 100 account settings.</p>
+  {% if unlocks | length >= 100 %}<p class="hint mt-1">Showing the latest 100 account settings.</p>{% endif %}
   {% else %}
   <p class="muted">No account-specific levels. All accounts follow the defaults.</p>
   {% endif %}

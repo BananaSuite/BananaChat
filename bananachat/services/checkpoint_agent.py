@@ -4,8 +4,8 @@ The agent (``compute/checkpoint_agent.py``) downloads Hugging Face
 safetensors checkpoints into ComfyUI's model directory and verifies their
 SHA-256. It is optional: configure ``BC_CHECKPOINT_AGENT_URL`` and
 ``BC_CHECKPOINT_AGENT_TOKEN_FILE`` (a mode-0600 file holding the bearer
-token). HTTPS is required unless the agent is on this host; plain HTTP over
-Tailscale needs ``BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE=1``.
+token). HTTPS is required unless the agent is on this host or its address is
+inside a private network listed in ``BC_CHECKPOINT_AGENT_INSECURE_NETWORKS``.
 
 Agent API: ``POST /v1/downloads``, ``GET``/``DELETE /v1/downloads/<id>``,
 ``GET /v1/status``, ``GET /v1/checkpoints``. Messages coming back from the
@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 from flask import current_app
 
+from bananachat.config import TAILSCALE_NETWORKS, insecure_network
 from bananachat.services.upstream import UpstreamError, open_request
 
 log = logging.getLogger("bananachat.checkpoint_agent")
@@ -35,14 +36,15 @@ _CONTROL_RE = re.compile(r"[\r\n\x00-\x1f\x7f]")
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _BEARER_RE = re.compile(r"\bBearer\s+\S+", re.IGNORECASE)
 _HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
-_TAILSCALE_V4 = ipaddress.ip_network("100.64.0.0/10")
-_TAILSCALE_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
+_TAILSCALE = tuple(ipaddress.ip_network(text) for text in TAILSCALE_NETWORKS)
 
 
 class CheckpointAgentError(RuntimeError):
-    def __init__(self, message: str, status: int | None = None):
+    def __init__(self, message: str, status: int | None = None, *, transient: bool = False):
         super().__init__(message)
         self.status = status
+        # Unreachable, restarting or busy: asking again later may succeed.
+        self.transient = transient or status in (429, 502, 503, 504)
 
 
 def _config(config=None):
@@ -58,6 +60,19 @@ def _is_loopback(hostname: str) -> bool:
         return False
 
 
+# (service, URL) pairs already reported by warn_plain_http in this process.
+_PLAIN_HTTP_WARNED: set[tuple[str, str]] = set()
+
+
+def warn_plain_http(service: str, url: str) -> None:
+    """Log once per process that *service*'s token travels without TLS (plain HTTP to another machine)."""
+    parts = urlsplit(url)
+    if parts.scheme != "http" or _is_loopback(parts.hostname or "") or (service, url) in _PLAIN_HTTP_WARNED:
+        return
+    _PLAIN_HTTP_WARNED.add((service, url))
+    log.warning("%s is reached over plain HTTP on a private network; its token is not protected by TLS", service)
+
+
 def _is_tailscale(hostname: str) -> bool:
     if hostname.lower().endswith(".ts.net"):
         return True
@@ -65,10 +80,38 @@ def _is_tailscale(hostname: str) -> bool:
         address = ipaddress.ip_address(hostname)
     except ValueError:
         return False
-    return address in _TAILSCALE_V4 or address in _TAILSCALE_V6
+    return any(address.version == network.version and address in network for network in _TAILSCALE)
 
 
-def validate_base_url(value: str, *, allow_insecure_tailscale: bool = False) -> str:
+def _on_insecure_network(hostname: str, networks, tailscale: bool) -> bool:
+    """Whether plain HTTP may go to *hostname*: an IP literal inside one of *networks*.
+
+    Host names never match: they are not resolved for this check, so a DNS
+    change cannot move the token onto another network. The deprecated Tailscale
+    flag keeps admitting MagicDNS names as before. Entries that are not private
+    networks (load_config already refuses them) are ignored here too.
+    """
+    if tailscale and _is_tailscale(hostname):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    for text in networks:
+        try:
+            network = insecure_network(str(text))
+        except ValueError:
+            continue
+        if address.version == network.version and address in network:
+            return True
+    return False
+
+
+def validate_base_url(value: str, *, insecure_networks=(), allow_insecure_tailscale: bool = False) -> str:
+    """*value* checked and without a trailing slash; ValueError when it must not be used.
+
+    Plain HTTP is accepted for this host and for IP addresses inside *insecure_networks*.
+    """
     problem = ValueError("The checkpoint agent URL is not configured correctly.")
     if not isinstance(value, str) or not value or value != value.strip() or _CONTROL_RE.search(value) \
             or any(char.isspace() for char in value):
@@ -90,9 +133,10 @@ def validate_base_url(value: str, *, allow_insecure_tailscale: bool = False) -> 
             raise problem from None
     elif len(hostname) > 253 or not all(_HOST_LABEL_RE.fullmatch(label) for label in hostname.split(".")):
         raise problem
-    if parts.scheme == "http" and not _is_loopback(hostname):
-        if not (allow_insecure_tailscale and _is_tailscale(hostname)):
-            raise ValueError("The checkpoint agent URL must use HTTPS unless the agent runs on this host.")
+    if parts.scheme == "http" and not _is_loopback(hostname) \
+            and not _on_insecure_network(hostname, insecure_networks, allow_insecure_tailscale):
+        raise ValueError("The checkpoint agent URL must use HTTPS unless the agent runs on this host or on a "
+                         "private network listed in BC_CHECKPOINT_AGENT_INSECURE_NETWORKS.")
     return value.rstrip("/")
 
 
@@ -133,11 +177,16 @@ def configuration_error(config=None) -> str | None:
     if not url or not token_file:
         return "Set both BC_CHECKPOINT_AGENT_URL and BC_CHECKPOINT_AGENT_TOKEN_FILE."
     try:
-        validate_base_url(url, allow_insecure_tailscale=config.checkpoint_agent_allow_insecure_tailscale)
+        _validate_url(config)
         read_token(token_file)
     except ValueError as error:
         return str(error)
     return None
+
+
+def _validate_url(config) -> str:
+    return validate_base_url(config.checkpoint_agent_url, insecure_networks=config.checkpoint_agent_insecure_networks,
+                             allow_insecure_tailscale=config.checkpoint_agent_allow_insecure_tailscale)
 
 
 def is_configured(config=None) -> bool:
@@ -183,7 +232,7 @@ class Client:
             if error.status is not None:
                 message = sanitize(str(error)) or f"The checkpoint agent returned HTTP {error.status}."
                 raise CheckpointAgentError(message, error.status) from None
-            raise CheckpointAgentError("The checkpoint agent is unavailable.") from None
+            raise CheckpointAgentError("The checkpoint agent is unavailable.", transient=True) from None
         if not isinstance(payload, dict):
             raise CheckpointAgentError("The checkpoint agent returned an invalid response.")
         return payload
@@ -230,8 +279,6 @@ def client(config=None) -> Client:
     error = configuration_error(config)
     if error:
         raise CheckpointAgentError(error)
-    url = validate_base_url(config.checkpoint_agent_url,
-                            allow_insecure_tailscale=config.checkpoint_agent_allow_insecure_tailscale)
-    if url.startswith("http://") and not _is_loopback(urlsplit(url).hostname or ""):
-        log.warning("The checkpoint agent is reached over plain HTTP (Tailscale); its token is not protected by TLS")
+    url = _validate_url(config)
+    warn_plain_http("The checkpoint agent", url)
     return Client(url, read_token(config.checkpoint_agent_token_file))

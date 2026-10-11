@@ -70,6 +70,13 @@ LOG = logging.getLogger("compute.sandbox_runner")
 DEFAULT_IMAGE = "mirror.gcr.io/library/python:3.12-slim"
 WORKSPACE = "/workspace"
 SANDBOX_USER = "1000:1000"
+# What ``inspect`` may report for --security-opt no-new-privileges (Docker keeps the spelling given).
+NO_NEW_PRIVILEGES = frozenset({"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"})
+# Podman's default capability set (containers.conf), all of which --cap-drop ALL must drop.
+PODMAN_DEFAULT_CAPABILITIES = frozenset({
+    "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_FSETID", "CAP_KILL", "CAP_NET_BIND_SERVICE",
+    "CAP_SETFCAP", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID", "CAP_SYS_CHROOT",
+})
 LABEL = "io.bananachat.sandbox"
 LABEL_RUNNER = "io.bananachat.runner"
 LABEL_SESSION = "io.bananachat.session"
@@ -317,13 +324,17 @@ FIND_KEEPER = ('for d in /proc/[0-9]*; do p=${d#/proc/}; [ "$p" = 1 ] && continu
 
 # Kills every process except init, the idle main process ($1) and itself. The killing uses only
 # shell builtins so it still works when a fork bomb exhausted the pids limit; the short pause
-# between rounds (which may fail to fork, harmlessly) lets killed processes finish exiting. If the
-# exec itself cannot start, or processes survive every round, the runner removes the sandbox.
-KILL_SCRIPT = ('keep=$1; me=$$; i=0; while [ $i -lt 40 ]; do found=0; '
+# between rounds (which may fail to fork, harmlessly) lets killed processes finish exiting. It
+# succeeds (0) only once no other process is left. A kill the kernel refuses for a process that is
+# still there ends it at once with 2 (on Ubuntu 24.04, Podman's AppArmor profile stops processes of
+# one `exec` from signalling those of another). If the exec itself cannot start, or processes
+# survive every round (1) or cannot be signalled (2), the runner removes the sandbox.
+KILL_SCRIPT = ('keep=$1; me=$$; i=0; while [ $i -lt 40 ]; do left=0; refused=0; '
                'for d in /proc/[0-9]*; do p=${d#/proc/}; case $p in 1|"$keep"|"$me") continue;; esac; '
                '{ read -r s < "$d/stat"; } 2>/dev/null || continue; s=${s##*) }; s=${s%% *}; '
-               'case $s in Z|X|x) continue;; esac; kill -9 "$p" 2>/dev/null && found=1; done; '
-               '[ $found = 0 ] && exit 0; i=$((i+1)); sleep 0.1 2>/dev/null; done; exit 1')
+               'case $s in Z|X|x) continue;; esac; left=1; '
+               'kill -9 "$p" 2>/dev/null || { [ -d "$d" ] && refused=1; }; done; '
+               '[ $left = 0 ] && exit 0; [ $refused = 1 ] && exit 2; i=$((i+1)); sleep 0.1 2>/dev/null; done; exit 1')
 
 
 class ApiError(Exception):
@@ -1015,6 +1026,7 @@ class SandboxManager:
         self._sandboxes: dict[str, Sandbox] = {}
         self._pending: set[str] = set()
         self._doomed: set[str] = set()  # retiring containers keep their capacity until removal succeeds
+        self._kill_warned = False  # the AppArmor explanation is logged once
         self._removed: OrderedDict[str, None] = OrderedDict()  # recently removed ids (answered with 410)
         self._slots = threading.BoundedSemaphore(config.max_execs)
         self._stop = threading.Event()
@@ -1136,7 +1148,9 @@ class SandboxManager:
         with self._cleanup_lock:
             with self._lock:
                 self._doomed.add(name)
-            result = self.engine.run(["rm", "-f", "-v", name], timeout=30)
+            # Podman otherwise first waits ten seconds for the stop signal; Docker's rm -f kills at once.
+            wait = ["--time", "0"] if self.engine.kind == "podman" else []
+            result = self.engine.run(["rm", "-f", *wait, "-v", name], timeout=30)
             text = result.stderr.decode("utf-8", "replace").lower()
             if result.returncode == 0 or "no such container" in text or "no container with name" in text:
                 with self._lock:
@@ -1245,6 +1259,9 @@ class SandboxManager:
     def create_args(self, sandbox_id: str, name: str, session: str, image: str, limits: dict) -> list:
         """The complete ``run`` argument list; every sandbox gets every one of these flags."""
         memory = f"{limits['memory_mb']}m"
+        # The workspace belongs to the sandbox user. Docker takes uid=/gid= on a tmpfs; Podman refuses them
+        # ("unknown mount option") and mounts it as the container's user with U instead.
+        owner = "U" if self.engine.kind == "podman" else "uid=1000,gid=1000"
         args = [
             "run", "--detach", "--name", name, "--hostname", "sandbox",
             "--label", f"{LABEL}=1", "--label", f"{LABEL_RUNNER}={self.config.instance}",
@@ -1252,8 +1269,9 @@ class SandboxManager:
             "--pull", "never", "--restart", "no", "--log-driver", "none", "--no-healthcheck",
             "--network", self.config.network,
             "--read-only",
-            "--tmpfs", f"{WORKSPACE}:rw,exec,nosuid,nodev,size={limits['workspace_mb']}m,uid=1000,gid=1000,mode=0700",
-            "--tmpfs", f"/tmp:rw,noexec,nosuid,nodev,size={TMP_MB}m,mode=1777",
+            "--tmpfs", f"{WORKSPACE}:rw,exec,nosuid,nodev,size={limits['workspace_mb']}m,{owner},mode=0700",
+            # The sandbox container's own private /tmp, not one on this host.
+            "--tmpfs", f"/tmp:rw,noexec,nosuid,nodev,size={TMP_MB}m,mode=1777",  # noqa: S108
             "--user", SANDBOX_USER, "--workdir", WORKSPACE, "--env", f"HOME={WORKSPACE}",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--ipc", "private",
@@ -1293,16 +1311,27 @@ class SandboxManager:
             problems.append("network mode")
         if host.get("Binds") or host.get("Devices"):
             problems.append("host mounts or devices")
-        if self.engine.kind == "docker":
-            if [str(item).upper() for item in host.get("CapDrop") or []] != ["ALL"] or host.get("CapAdd"):
-                problems.append("capabilities")
-            if not any("no-new-privileges" in str(item) for item in host.get("SecurityOpt") or []):
-                problems.append("no-new-privileges")
-            if (data.get("Config") or {}).get("User") != SANDBOX_USER:
-                problems.append("user")
+        if not self._capabilities_dropped(data, host):
+            problems.append("capabilities")
+        if not any(str(item).strip().lower() in NO_NEW_PRIVILEGES for item in host.get("SecurityOpt") or []):
+            problems.append("no-new-privileges")
+        if (data.get("Config") or {}).get("User") != SANDBOX_USER:
+            problems.append("user")
         if problems:
             LOG.error("Sandbox %s failed verification: %s", box.id, ", ".join(problems))
             raise ApiError(502, "engine_error", "The container engine did not apply the sandbox restrictions.")
+
+    def _capabilities_dropped(self, data: dict, host: dict) -> bool:
+        if host.get("CapAdd"):
+            return False
+        dropped = {str(item).upper() for item in host.get("CapDrop") or []}
+        if self.engine.kind == "docker":
+            return dropped == {"ALL"}
+        # Podman lists the default capabilities it dropped rather than "ALL", and
+        # reports the bounding and effective sets the process really has.
+        if "BoundingCaps" in data or "EffectiveCaps" in data:
+            return not data.get("BoundingCaps") and not data.get("EffectiveCaps")
+        return "ALL" in dropped or PODMAN_DEFAULT_CAPABILITIES <= dropped
 
     def create(self, request: dict) -> Sandbox:
         if not isinstance(request, dict):
@@ -1447,6 +1476,14 @@ class SandboxManager:
                                      timeout=KILL_TIMEOUT)
             if result.returncode == 0 and not result.timed_out:
                 return True
+            if result.returncode == 2:  # the kernel refuses the signals: trying again cannot help
+                break
+        if self.engine.kind == "podman" and not self._kill_warned:
+            self._kill_warned = True
+            LOG.warning("Processes in sandbox %s could not be stopped from inside it, so it is removed instead. On "
+                        "Ubuntu 24.04, Podman's AppArmor profile stops the processes of one exec from signalling "
+                        "those of another: commands that time out or are interrupted then end their sandbox.",
+                        box.id)
         return False
 
     def interrupt(self, sandbox_id: str) -> dict:
@@ -1928,7 +1965,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command in ("PUT", "POST"):
                 raise ApiError(411, "length_required", "Send the request body with a Content-Length.")
             return b""
-        if not raw.strip().isdigit():
+        if not (raw.isascii() and raw.strip().isdigit()):
             raise ApiError(400, "bad_request", "Invalid Content-Length.")
         length = int(raw)
         if length > limit:
@@ -2100,8 +2137,10 @@ def create_server(environ=None, *, engine: Engine | None = None) -> RunnerServer
     manager = SandboxManager(config, engine)
     manager.preflight()
     if not _is_loopback(config.host):
-        LOG.warning("SECURITY: the sandbox runner listens on %s without TLS; put it behind HTTPS (Caddy) or an "
-                    "SSH tunnel and keep it on loopback.", config.host)
+        LOG.warning("SECURITY: the sandbox runner listens on %s without TLS. Keep it on loopback behind HTTPS "
+                    "(Caddy) or an SSH tunnel; or, on a private network, firewall the port to the web server, list "
+                    "that server in BC_SANDBOX_TRUSTED_PEERS and this network in its "
+                    "BC_AGENTS_RUNNER_INSECURE_NETWORKS (docs/agents.md).", config.host)
     server = RunnerServer((config.host, config.port), token=token, manager=manager,
                           max_connections=config.max_connections, max_per_peer=config.max_per_peer,
                           trusted_peers=config.trusted_peers)

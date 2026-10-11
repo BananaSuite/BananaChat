@@ -55,6 +55,19 @@ def translate(language: str, key: str, /, **params) -> str:
     return str(text)
 
 
+def translate_html(language: str, key: str, /, **params):
+    """:func:`translate` for page text with markup parameters (dates that must not break inside):
+    the translated text is escaped, parameters that are already ``Markup`` are kept as they are."""
+    from markupsafe import Markup, escape
+
+    holders = {name: f"\x00{index}\x00" for index, (name, value) in enumerate(params.items())
+               if isinstance(value, Markup)}
+    result = escape(translate(language, key, **{**params, **holders}))
+    for name, holder in holders.items():
+        result = result.replace(holder, params[name])
+    return result
+
+
 @lru_cache(maxsize=len(SUPPORTED_LANGUAGES))
 def browser_catalog(language: str) -> dict[str, object]:
     """The ``js.*`` subset for the browser, with English fallbacks."""

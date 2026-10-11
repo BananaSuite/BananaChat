@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit
 
+from bananachat.numbers import ascii_int
 from bananachat.services.upstream import Cancelled
 
 PROVIDERS = ("github", "gitlab", "gitea")
@@ -531,8 +532,10 @@ def _save(hop: _Hop, destination: Path, max_bytes: int, deadline: float, cancel)
         raise FetchError("agents.import_not_archive")
     size_mb = max(1, max_bytes // (1024 * 1024))
     declared = (response.getheader("Content-Length") or "").strip()
-    if declared.isdigit() and int(declared) > max_bytes:
-        raise FetchError("agents.import_too_large", size=size_mb)
+    if declared.isascii() and declared.isdecimal():
+        length = ascii_int(declared)
+        if length is None or length > max_bytes:
+            raise FetchError("agents.import_too_large", size=size_mb)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(destination, flags, 0o600)
     total = 0

@@ -35,13 +35,16 @@ def _bearer(key: str) -> dict:
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
-def endpoint(config=None, *, primary: bool = False) -> tuple[str, dict]:
+def endpoint(config=None, *, primary: bool = False, management: bool = False) -> tuple[str, dict]:
     """The server to use now and the headers that belong to that server.
 
     ``primary`` ignores the outage fallback (model management targets the
-    configured compute server only).
+    configured compute server only). ``management`` (downloads, deletions)
+    sends the compute management token when one is configured.
     """
     config = _config(config)
+    if management:
+        return config.ollama_url, _bearer(config.ollama_management_api_key or config.ollama_api_key)
     if not primary and health.using_fallback(config):
         return config.inference_fallback_url, _bearer(config.inference_fallback_api_key)
     return config.ollama_url, _bearer(config.ollama_api_key)
@@ -365,7 +368,7 @@ def pull(name: str, *, cancel: CancelToken | None = None, config=None):
         from bananachat.services.upstream import UpstreamError as _UpstreamError
 
         raise _UpstreamError(f"Invalid model name: {name[:120]}")
-    url, headers = endpoint(config, primary=True)
+    url, headers = endpoint(config, management=True)
     with open_request("POST", url, "/api/pull", body={"model": name, "name": name, "stream": True},
                       headers=headers, first_byte_timeout=120, read_timeout=300,
                       total_timeout=24 * 3600, max_bytes=512 * 1024 * 1024, cancel=cancel) as response:
@@ -379,7 +382,7 @@ def pull(name: str, *, cancel: CancelToken | None = None, config=None):
 
 def delete(name: str, config=None) -> bool:
     """Remove a model from the Ollama server. Returns False when it did not exist."""
-    url, headers = endpoint(config, primary=True)
+    url, headers = endpoint(config, management=True)
     try:
         with open_request("DELETE", url, "/api/delete", body={"model": name, "name": name},
                           headers=headers, total_timeout=60):

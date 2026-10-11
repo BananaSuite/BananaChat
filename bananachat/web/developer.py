@@ -23,7 +23,7 @@ from flask import Blueprint, Response, current_app, flash, g, jsonify, redirect,
 from bananachat import db, security
 from bananachat.db import credits, tokens, users
 from bananachat.formatting import tokens_text
-from bananachat.i18n import translate
+from bananachat.i18n import translate, translate_html
 from bananachat.services import inference, limits, status
 from bananachat.services.access import AccessContext, usable_models
 from bananachat.services.completions import CompletionError, CompletionRun, parse_chat_request
@@ -60,7 +60,7 @@ def credit_summary(user) -> dict:
 
     Bonus, tier, dynamic adjustment and grants are included (see ``services.limits.effective``).
     """
-    from bananachat.formatting import time_left, time_text
+    from bananachat.formatting import time_html, time_left
 
     current = limits.effective(user, "api")
     budget = current.budget()
@@ -89,8 +89,8 @@ def credit_summary(user) -> dict:
                 notes.append(reason.text(g.lang))
     window_note = ""
     if window.limited and not budget.unlimited:
-        window_note = _t("developer.window_resets", time=time_text(window.resets_at),
-                         left=time_left(window.resets_at)) if window.open else _t("developer.window_not_started")
+        window_note = translate_html(g.lang, "developer.window_resets", time=time_html(window.resets_at),
+                                     left=time_left(window.resets_at)) if window.open else _t("developer.window_not_started")
     rate = current.rate
     return {"unlimited": budget.unlimited, "admin": current.admin, "meters": meters, "available": budget.available,
             "bonus": bonus, "regular_left": budget.regular_left,
@@ -144,6 +144,7 @@ def index():
     user = g.user
     rows = tokens.list_for(user["id"])
     return render_template("developer/index.html", tokens=rows, max_tokens=tokens.MAX_PER_USER,
+                           expiry_days=tokens.EXPIRY_DAYS,
                            summary=credit_summary(user), models=_models(user, "any"), api_base=_api_base(),
                            snippets=quickstart_snippets(_api_base()))
 
@@ -193,17 +194,20 @@ def legacy_playground():
 
 # ----- tokens ------------------------------------------------------------------------
 
-def _token_json(token_id: int, raw: str, name: str) -> dict:
-    return {"id": token_id, "name": name, "prefix": raw[:12], "token": raw}
+def _token_json(token_id: int, raw: str, row) -> dict:
+    return {"id": token_id, "name": row["name"], "prefix": raw[:12], "token": raw, "scope": row["scope"],
+            "expires_at": row["expires_at"]}
 
 
-def _show_new_token(token_id: int, raw: str, name: str, rotated: bool):
+def _show_new_token(token_id: int, raw: str, rotated: bool):
+    row = db.one("SELECT name, scope, expires_at FROM api_tokens WHERE id=?", (token_id,))
     if security.wants_json():
-        response = jsonify(_token_json(token_id, raw, name))
+        response = jsonify(_token_json(token_id, raw, row))
         response.status_code = 201
     else:
         response = current_app.make_response(render_template(
-            "developer/token_created.html", token=raw, name=name, rotated=rotated, api_base=_api_base()))
+            "developer/token_created.html", token=raw, name=row["name"], scope=row["scope"],
+            expires_at=row["expires_at"], rotated=rotated, api_base=_api_base()))
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -220,13 +224,23 @@ def _problem(message: str, status: int = 400, code: str = "bad_request"):
 @security.rate_limit("api-tokens", 30, 3600, per_user=True)
 def create_token():
     user = g.user
-    name = " ".join(str(_body().get("name") or "").split())[:64]
+    body = _body()
+    name = " ".join(str(body.get("name") or "").split())[:64]
+    scope = str(body.get("scope") or "full")
     try:
-        token_id, raw = tokens.create(user["id"], name)
+        expires_days = int(str(body.get("expires_days") or 0))
     except ValueError:
+        expires_days = -1
+    if scope not in tokens.SCOPES or expires_days not in tokens.EXPIRY_DAYS:
+        return _problem(_t("developer.token_options_invalid"), 400, "invalid_options")
+    try:
+        token_id, raw = tokens.create(user["id"], name, scope=scope, expires_days=expires_days)
+    except OverflowError:
         return _problem(_t("developer.token_limit", count=tokens.MAX_PER_USER), 400, "token_limit")
-    users.audit(user, "api_token.create", str(token_id), {"name": name, "prefix": raw[:12]}, security.client_ip())
-    return _show_new_token(token_id, raw, name, rotated=False)
+    users.audit(user, "api_token.create", str(token_id),
+                {"name": name, "prefix": raw[:12], "scope": scope, "expires_days": expires_days},
+                security.client_ip())
+    return _show_new_token(token_id, raw, rotated=False)
 
 
 @bp.post("/developer/tokens/<int:token_id>/rotate", endpoint="rotate_token")
@@ -234,14 +248,13 @@ def create_token():
 @security.rate_limit("api-tokens", 30, 3600, per_user=True)
 def rotate_token(token_id):
     user = g.user
-    current = next((row for row in tokens.list_for(user["id"]) if row["id"] == token_id), None)
     try:
         new_id, raw = tokens.rotate(token_id, user["id"])
     except LookupError:
         return _problem(_t("developer.token_missing"), 404, "not_found")
     users.audit(user, "api_token.rotate", str(token_id), {"new_token": new_id, "prefix": raw[:12]},
                 security.client_ip())
-    return _show_new_token(new_id, raw, current["name"] if current else "", rotated=True)
+    return _show_new_token(new_id, raw, rotated=True)
 
 
 @bp.post("/developer/tokens/<int:token_id>/rename", endpoint="rename_token")

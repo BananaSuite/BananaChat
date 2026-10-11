@@ -19,7 +19,7 @@
   <noscript><p class="alert alert-warning mb-2">{{ t("developer.pg_needs_js") }}</p></noscript>
   <div class="dev-playground">
     <aside class="dev-settings" aria-labelledby="pg-settings-title">
-      <h2 id="pg-settings-title">{{ t("developer.pg_settings") }}</h2>
+      <div class="section-header"><h2 id="pg-settings-title">{{ t("developer.pg_settings") }}</h2></div>
       <form id="pg-settings" class="stack" novalidate>
         <div class="field">
           <label for="pg-model">{{ t("developer.pg_model") }}</label>
@@ -39,26 +39,26 @@
           <legend class="visually-hidden">{{ t("developer.pg_parameters") }}</legend>
           <div class="form-grid dev-params">
             <div class="field">
-              <label for="pg-temperature">temperature</label>
+              <label for="pg-temperature"><code translate="no">temperature</code></label>
               <input type="number" id="pg-temperature" name="temperature" min="0" max="2" step="0.1" inputmode="decimal" placeholder="{{ t('developer.pg_default') }}" aria-describedby="pg-temperature-hint">
               <span class="hint" id="pg-temperature-hint">0–2</span>
             </div>
             <div class="field">
-              <label for="pg-top-p">top_p</label>
+              <label for="pg-top-p"><code translate="no">top_p</code></label>
               <input type="number" id="pg-top-p" name="top_p" min="0" max="1" step="0.05" inputmode="decimal" placeholder="{{ t('developer.pg_default') }}" aria-describedby="pg-top-p-hint">
               <span class="hint" id="pg-top-p-hint">0–1</span>
             </div>
             <div class="field">
-              <label for="pg-max-tokens">max_tokens</label>
+              <label for="pg-max-tokens"><code translate="no">max_tokens</code></label>
               <input type="number" id="pg-max-tokens" name="max_tokens" min="1" step="1" inputmode="numeric" placeholder="{{ t('developer.pg_default') }}">
             </div>
             <div class="field">
-              <label for="pg-seed">seed</label>
+              <label for="pg-seed"><code translate="no">seed</code></label>
               <input type="number" id="pg-seed" name="seed" min="0" step="1" inputmode="numeric" placeholder="{{ t('developer.pg_random') }}">
             </div>
           </div>
           <div class="field">
-            <label for="pg-stop">stop</label>
+            <label for="pg-stop"><code translate="no">stop</code></label>
             <textarea id="pg-stop" name="stop" rows="2" class="dev-small-textarea" aria-describedby="pg-stop-hint"></textarea>
             <span class="hint" id="pg-stop-hint">{{ t("developer.pg_stop_hint") }}</span>
           </div>
@@ -106,7 +106,7 @@
         </div>
       </form>
       <details class="dev-request mt-2">
-        <summary>{{ t("developer.pg_as_request") }}</summary>
+        <summary>{{ t("developer.pg_as_request") }}{{ icon("chevron-down") }}</summary>
         <figure class="code-block mt-1">
           <header><figcaption>curl</figcaption>
             <button type="button" class="btn btn-sm btn-ghost" id="pg-copy-request">{{ icon("copy") }}{{ t("common.copy") }}</button></header>
@@ -115,7 +115,7 @@
       </details>
     </section>
   </div>
-  <div class="mt-3">{% include "developer/_credits.html" %}</div>
+  <div class="dev-playground-credits">{% include "developer/_credits.html" %}</div>
   {% endif %}
 </div>
 <script type="application/json" id="page-data">{{ data | tojson }}</script>

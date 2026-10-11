@@ -12,11 +12,14 @@ def list_providers(*, enabled_only=False):
 
 
 def save(provider_id=None, **fields):
-    allowed = {'name', 'base_url', 'protocol', 'secret_ref', 'enabled', 'allow_private', 'auto_enroll', 'token_parameter', 'stream_usage'}
+    allowed = {'name', 'base_url', 'protocol', 'secret_ref', 'enabled', 'allow_private', 'auto_enroll', 'token_parameter',
+               'stream_usage', 'preset', 'auth_style', 'extra_headers'}
     if not fields or not fields.keys() <= allowed:
         raise ValueError('Invalid provider fields.')
     with db.transaction():
         if provider_id is None:
+            if 'auth_style' not in fields:
+                fields['auth_style'] = 'x-api-key' if fields.get('protocol') == 'anthropic' else 'bearer'
             keys = ', '.join(fields)
             marks = ', '.join('?' for _ in fields)
             return db.execute(f'INSERT INTO external_providers ({keys}) VALUES ({marks})', tuple(fields.values())).lastrowid
@@ -27,4 +30,47 @@ def save(provider_id=None, **fields):
                    (*fields.values(), db.now(), provider_id))
         # A changed connection needs a fresh observation; keep models hidden until checked.
         db.execute('UPDATE ai_models SET backend_available=0 WHERE external_provider_id=?', (provider_id,))
+        if fields.get('preset') == 'gemini':
+            use_bare_gemini_ids(provider_id)
     return provider_id
+
+
+GEMINI_RESOURCE = 'models/'
+
+
+def _bare(name):
+    return name[len(GEMINI_RESOURCE):] if isinstance(name, str) and name.startswith(GEMINI_RESOURCE) \
+        and len(name) > len(GEMINI_RESOURCE) else name
+
+
+def use_bare_gemini_ids(provider_id):
+    """Call a Gemini-preset provider's models by the bare ID its listing gives (``gemini-…``, not ``models/gemini-…``).
+
+    Migration v23 does this for providers it recognises as Gemini by their address; this covers one that gets the
+    Gemini preset later (for example one reached through another host). A model keeps its row, public ID,
+    publication, limits and access; one whose bare ID is already enrolled is left alone. Call inside a transaction.
+    """
+    taken = {row['backend_model_name'] for row in db.query(
+        "SELECT backend_model_name FROM ai_models WHERE backend='external' AND external_provider_id=?",
+        (provider_id,))}
+    rows = db.query("SELECT id, backend_model_name, display_name FROM ai_models WHERE backend='external' "
+                    "AND external_provider_id=? AND substr(backend_model_name, 1, 7)=? ORDER BY id",
+                    (provider_id, GEMINI_RESOURCE))
+    for row in rows:
+        name, bare = row['backend_model_name'], _bare(row['backend_model_name'])
+        if bare == name or bare in taken:
+            continue
+        db.execute('UPDATE ai_models SET backend_model_name=?, display_name=? WHERE id=?',
+                   (bare, bare if row['display_name'] == name else row['display_name'], row['id']))
+        taken.add(bare)
+
+
+def model(provider_id, model_id):
+    """The catalog row of a provider's model, found by the ID the provider is called with.
+
+    That ID usually ends the public one (``external:<provider>:<model ID>``), but Gemini models enrolled
+    before 1.7 keep their public ``…:models/<ID>`` name while the provider is called with the bare ID
+    (migration v23).
+    """
+    return db.one("SELECT * FROM ai_models WHERE backend='external' AND external_provider_id=? "
+                  "AND backend_model_name=? ORDER BY id LIMIT 1", (provider_id, model_id))

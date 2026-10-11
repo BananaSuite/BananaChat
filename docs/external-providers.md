@@ -3,86 +3,251 @@
 Administrators can offer hosted models through BananaChat's ordinary chat,
 playground, agents and `/v1` API alongside Ollama models. Users keep their
 BananaChat account and API keys; provider credentials stay on the server.
-Provider usage is billed to your provider account. Claude Code subscription
-profiles remain a separate, opt-in integration; see [Claude Code](claude-code.md).
+Provider usage is billed to your provider account. Anthropic models are
+available through the native Anthropic Messages API with an Anthropic API key;
+consumer subscriptions are not supported.
 
-## Add and activate a provider
+BananaChat speaks two API formats:
+
+- **Anthropic Messages**, natively, including adaptive thinking, effort,
+  thinking budgets for older Claude models, tool use and image input.
+- **OpenAI Chat Completions**, used by OpenAI and by every OpenAI-compatible
+  service: OpenRouter, Google Gemini, Mistral, Groq, DeepSeek, xAI, Together,
+  Fireworks, Azure OpenAI and local servers such as LM Studio, vLLM, llama.cpp
+  and LiteLLM.
+
+Endpoints must stream their answers (server-sent events). OpenAI's separate
+Responses API and vendor-specific native APIs (for example Gemini's own API)
+are not used.
+
+## Add a provider
 
 1. Open **Administration → Models → External APIs**.
-2. Enter a provider name, API format, base URL and provider API key.
-3. Click **Check connection & refresh models**. Select a listed model, optionally
-   give it a display name, and enable only its verified vision, function-tool
-   and reasoning capabilities. Unselected reasoning stays disabled.
-4. Click **Enroll model**, then review and publish it in **Catalog**. Configure
-   its access rules and token/rate limits there. Model limits are installed
-   before publication and remain active when the model is published.
-5. Send a short real conversation through the chat and through a BananaChat API
-   key. Verify the provider's model permissions, response, tokens and billing.
+2. Under **Add a provider**, choose the **Service**. The preset fills in the
+   API base URL, the API format, the header that carries the key and any
+   suggested extra headers. Every value stays editable. Choose **Other
+   OpenAI-compatible service** for anything not listed and enter its base URL.
+   If you leave the base URL empty, the service's own address is used.
+3. Give the provider a name and paste its API key, then click **Add provider**.
+   The key is stored encrypted on the server and is never shown again. Adding,
+   changing or removing a provider asks for your password (or an authenticator
+   code) unless you signed in or confirmed in the last ten minutes, with or
+   without a key: the connection decides where users' prompts are sent.
+4. Click **Test connection**. It checks the key and the model list. Enter a
+   model ID (the field suggests listed ones) to also stream a short test answer:
+   this costs a few tokens and shows whether the provider reports token usage.
+   Errors explain what failed (rejected key, missing permission, no credit,
+   wrong URL, rate limit, timeout) and quote the provider's own message with
+   anything that looks like a key removed.
+5. Click **Refresh model list**. **Available models** lists every model the
+   provider returns, with its context window, maximum output, price per million
+   tokens and features where the provider states them. Filter the list, select
+   the models you want to offer and click **Add selected models**. Tick
+   **Publish the selected models now** to make them available at once with
+   standard limits; otherwise they wait for review in **Catalogue**, where you set
+   the display name, categories, access rules and limits before publishing.
+6. Send a short real conversation through the chat and through a BananaChat API
+   key, and compare the tokens with the provider's own usage page.
 
-| Provider | API format | Base URL |
-| --- | --- | --- |
-| OpenAI | OpenAI-compatible | `https://api.openai.com/v1` |
-| xAI / Grok | OpenAI-compatible | `https://api.x.ai/v1` |
-| Anthropic API | Anthropic Messages | `https://api.anthropic.com/v1` |
-| Other compatible services or your gateway | OpenAI-compatible | Its documented API root |
+Models are never hard-coded: the list always comes from the provider. For an
+endpoint without a model list (or Azure deployment names), use **Add a model
+ID manually**.
 
-Use the API root, without `/chat/completions`, `/messages` or `/models` at the
-end. This connector implements OpenAI Chat Completions and native Anthropic
-Messages, not every vendor's proprietary API or OpenAI's separate Responses
-API. Endpoints must support streamed responses in their selected format.
+## Service setup
 
-**Connection settings** let you rotate a key, disable a provider, enable
-per-provider automatic enrollment, allow an explicitly trusted private gateway,
-and choose compatibility options. A blank key preserves the current key; the
-separate remove-key checkbox clears it. Connection changes hide the provider's
-models until a fresh check (or explicit manual enrollment). Disabling a
-provider refuses new generations and stops its active stream at the next
-record. Removing a provider removes its stored credential and retires its
-models; conversation and token-usage history stay intact.
+| Service | Base URL (preset) | Key header | Notes |
+| --- | --- | --- | --- |
+| Anthropic | `https://api.anthropic.com/v1` | `x-api-key` (plus `anthropic-version`) | Native Messages API. |
+| OpenAI | `https://api.openai.com/v1` | `Authorization: Bearer` | Sends `max_completion_tokens`. |
+| OpenRouter | `https://openrouter.ai/api/v1` | `Authorization: Bearer` | Suggests `HTTP-Referer` and `X-Title` headers. |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `Authorization: Bearer` | Gemini's OpenAI-compatible endpoint. |
+| Mistral AI | `https://api.mistral.ai/v1` | `Authorization: Bearer` | |
+| Groq | `https://api.groq.com/openai/v1` | `Authorization: Bearer` | |
+| DeepSeek | `https://api.deepseek.com/v1` | `Authorization: Bearer` | |
+| xAI (Grok) | `https://api.x.ai/v1` | `Authorization: Bearer` | |
+| Together AI | `https://api.together.xyz/v1` | `Authorization: Bearer` | |
+| Fireworks AI | `https://api.fireworks.ai/inference/v1` | `Authorization: Bearer` | |
+| Azure OpenAI | `https://YOUR-RESOURCE.openai.azure.com/openai/v1` | `api-key` | The v1 API; no `api-version` needed. |
+| LM Studio | `http://localhost:1234/v1` | none, or bearer | Local server. |
+| vLLM | `http://localhost:8000/v1` | none, or bearer (`--api-key`) | Local server. |
+| llama.cpp server | `http://localhost:8080/v1` | none, or bearer (`--api-key`) | Local server. |
+| LiteLLM proxy | `http://localhost:4000/v1` | bearer (virtual key) | Local or private gateway. |
 
-For OpenAI-compatible endpoints, **Output limit field** defaults to
-`max_completion_tokens` for `api.openai.com`, and `max_tokens` elsewhere. A
-proxy may need an explicit override. **Streamed token usage** can omit the
-`stream_options` field for gateways that reject it. Usage is still read when
-reported; missing counts are recorded as estimates. Native Anthropic uses
-`max_tokens` and its own streamed usage.
+**Anthropic.** Create a key in the Anthropic Console. The model list includes
+each model's context window, maximum output and capabilities (images, adaptive
+thinking or thinking budgets, effort levels), which BananaChat uses to suggest
+each model's settings.
 
-## Model selection and lifecycle
+**OpenAI.** Create a project key at platform.openai.com. Reasoning models
+receive `reasoning_effort`; sampling parameters are sent only to models without
+a reasoning level.
+
+**OpenRouter.** One key reaches many vendors. Its model list is public, so the
+connection test also calls `/key` to prove the key works and shows the credit
+left on it. The list includes context length, input modalities (images),
+supported parameters (tools, reasoning) and prices. `HTTP-Referer` and
+`X-Title` attribute requests to your site; they are optional. Reasoning is sent
+as OpenRouter's `reasoning` object and its streamed reasoning is shown.
+
+**Google Gemini.** Use a Google AI Studio key with the OpenAI-compatible
+endpoint. Google lists models as `models/<id>`; BananaChat stores the bare ID,
+which is what the chat endpoint takes. Models added before 1.7 keep their
+public ID (`external:<provider>:models/<id>`), publication, limits and access;
+the update only changes the ID they are called with. A provider reached
+through another address keeps the Custom preset at the update; choosing the
+Gemini preset for it later changes its models' IDs in the same way.
+
+**Mistral, Groq, DeepSeek, xAI, Together, Fireworks.** Create a key in the
+service's console and choose its preset. Where the model list states context
+windows, vision, tools or prices (Mistral, Groq, Together), they are shown and
+used as suggestions. Reasoning text in `reasoning_content`, `reasoning` or
+Mistral's typed thinking chunks is shown as reasoning. Groq's usage in
+`x_groq` is used when the standard usage record is missing.
+
+**Azure OpenAI.** Replace `YOUR-RESOURCE` with your resource name and use a key
+of that resource; it is sent in the `api-key` header. Azure lists base models,
+not your deployments: add each deployment name with **Add a model ID
+manually**.
+
+**Local servers (LM Studio, vLLM, llama.cpp, LiteLLM).** The local presets tick
+**Allow a local or private-network endpoint**, which permits loopback and
+private (RFC 1918 / ULA) addresses and plain HTTP to them. `localhost` means the
+machine running BananaChat (inside a container, the container itself); use the
+server's LAN address otherwise. Leave the key empty unless the server requires
+one. If a server rejects `stream_options`, set **Streamed token usage** to
+*Endpoint has no stream_options support*; usage is then still read when the
+server sends it, and estimated otherwise.
+
+**Other OpenAI-compatible services.** Choose **Other OpenAI-compatible
+service**, enter the API root (without `/chat/completions` or `/models`) and
+pick the key header. **Output limit field** lets a gateway receive
+`max_completion_tokens` or `max_tokens`. **Extra headers** (one `Name: value`
+per line) are sent with every request; they are visible settings, not secret
+storage, and cannot replace the key or protocol headers.
+
+## Models and their lifecycle
 
 Model IDs are scoped to the provider: `external:<provider-id>:<upstream-model-id>`.
 Use the ID returned by BananaChat's `/v1/models`, not the raw provider ID, when
-calling BananaChat. The chat shows your model display name. This prevents
-providers with the same upstream model name from colliding, and keeps
-self-hosted and subscription models distinct.
+calling BananaChat. This keeps providers with the same upstream model name and
+self-hosted models apart.
 
-Manual enrollment is the default. Optional automatic enrollment publishes known
-chat model families with conservative model limits; unknown/non-chat families
-wait for review. Model-list APIs usually do not advertise reasoning, vision or
-tool capabilities, so automatic enrollment does not invent them. Explicitly
-configure supported capabilities and effort levels after reviewing the model.
+Each model's settings (on the provider page, under the model) are:
 
-Enabled providers refresh their model lists every 15 minutes independently of
-Ollama. A verified missing model becomes unavailable immediately; a failed,
-malformed, oversized or incomplete listing preserves the previous catalog.
-Models return when rediscovered, without discarding their custom policies.
-Existing lifecycle retirement/removal settings still apply. Explicit upstream
-`model_not_found`/`model_not_supported` errors also withdraw the affected model;
-generic HTTP errors do not withdraw the entire catalog.
+- **Images in conversations**, **Function tools for agents** and the
+  **Supported reasoning levels**. Enable only what the model supports; the
+  provider's list pre-selects them where it says.
+- **Sampling parameters**: send `temperature` and `top_p` when no reasoning
+  level is used. On by default for OpenAI-compatible models and off for
+  Anthropic models (current Claude models refuse them).
+- **Thinking control** (Anthropic): adaptive thinking with effort for Claude
+  4.6 and newer, or a thinking budget for older models.
 
-For providers without a model-list endpoint, **Add a verified model ID manually**
-is available. Such models are operator-verified and are not withdrawn simply
-because they are absent from a list. Model access and actual generation still
-need a real test. Ignore lists, access policies, retirement and publication
-controls remain binding.
+Enabled providers refresh their model lists every 15 minutes, independently of
+Ollama, and update the stated context windows, output limits and prices. A
+model missing from two consecutive successful listings becomes unavailable;
+one listing without it changes nothing, and a model that reappears is
+available again with its settings and limits intact. A failed, malformed,
+oversized or incomplete listing changes nothing. A generation answered with a
+model-specific "not found" error also withdraws that model until it is listed
+again. Manually added models are not withdrawn for being absent from a list.
 
-## Token and request limits
+Optional automatic enrolment (per provider) publishes chat models of known
+families with conservative limits; other models wait for review.
+
+## Reasoning, output limits and streaming
+
+| BananaChat level | OpenAI-compatible | OpenRouter | Anthropic (adaptive) | Anthropic (budget) |
+| --- | --- | --- | --- | --- |
+| Off | `reasoning_effort: none` | `reasoning: {effort: none}` | no thinking | no thinking |
+| Low / Medium / High | `low` / `medium` / `high` | same, in `reasoning` | `output_config.effort` | 2,048 / 6,144 / 12,288 budget |
+| Extra | `xhigh` | `xhigh` | `xhigh` | 20,480 budget |
+| Max | `xhigh` | `xhigh` | `max` | 32,000 budget |
+
+Anthropic adaptive thinking requests `display: "summarized"`, so users see the
+reasoning summary instead of a silent pause. A thinking budget is added to
+`max_tokens`.
+
+When an agent continues a tool round, the earlier turns of that round go back
+exactly as Claude streamed them (signed `thinking` and `redacted_thinking`
+blocks first, then the text and the tool calls with Claude's own ids), and
+thinking is requested again. Claude binds each thinking block to the system
+prompt, the tools and every message before it, so a block is sent back only
+while all of that is unchanged. When it is not (older steps were shortened to
+fit the context, the tools, the system prompt, the provider settings or the
+model changed), when a turn contained a block BananaChat does not send back
+(server tools, citations), or when the round's thinking passes 300,000
+characters, the round continues without a thinking request, as Claude refuses
+one whose last tool turn lost its blocks; the effort level still applies.
+Thinking from before the last user message is never sent again. Signatures
+are kept only in the memory of the running task, never in the database.
+
+The output limit is the administrator's maximum (or a lower client value),
+capped at the model's stated maximum output. Between streamed tokens,
+BananaChat waits up to `BC_FIRST_TOKEN_TIMEOUT`, because reasoning models can
+think silently for minutes; `BC_GENERATION_TIMEOUT` bounds the whole answer.
+
+## Token usage, limits and credits
+
+Limits and credits use the provider's own token counts:
+
+- OpenAI-compatible services receive `stream_options: {"include_usage": true}`
+  and report `prompt_tokens` and `completion_tokens` at the end. Reasoning
+  tokens that a service reports only in `total_tokens` (xAI) are counted as
+  output.
+- Anthropic reports input tokens (including cache writes and reads) when the
+  answer starts and the output tokens when it ends.
+- An interrupted answer (stopped by the user, a client disconnect or a failure)
+  is charged with the input count the provider already reported (else an
+  estimate that counts each image as 765 tokens and Chinese, Japanese and
+  Korean text as a token per character) and at least an estimate of what was
+  produced. A reasoning model that does not stream its reasoning (OpenAI's
+  reasoning models; Claude streams a summary) is also charged 20 tokens per
+  second for the time it worked before its first output, within the output
+  limit; providers generate faster, so this stays below their bill. A request
+  stopped or abandoned after it was sent is charged at least its input, even
+  with no output. An answer that failed before any output is charged only for
+  an input count the provider reported.
+- When a provider sends no usage, BananaChat records an estimate and marks it
+  as estimated.
+
+**Why stopped reasoning is estimated, not reserved.** OpenAI-compatible APIs
+report usage only at the end of a stream, so when an answer is stopped while
+the model reasons silently, nothing tells BananaChat how many tokens the
+provider generated. Reserving the output limit against the 5-hour window at
+admission, and releasing the unused part afterwards, was evaluated and not
+adopted:
+
+- It would not make the charge more accurate. At a stop the unused part is
+  just as unknown, so the reservation would be settled either at the whole
+  output limit (often tens of thousands of tokens for a stop after a few
+  seconds, far more than the provider bills) or with the same estimate.
+- It would change who is admitted. Today a request is admitted while any
+  allowance remains and the finished answer is charged in full, so one answer
+  can end past the allowance, within the output limit and the deadline. With
+  reservations every request in flight would hold its whole output limit:
+  accounts near the end of their window would be refused even for short
+  answers, and an account's parallel API requests and sub-agents would refuse
+  each other.
+- It would add shared state to every check. Reservation rows would have to be
+  counted by every pool and model limit (with the model's weight and its own
+  windows) in every Gunicorn worker, created and settled for each attempt,
+  fallbacks included, and expired after a crashed process, which would hold
+  the account's tokens until then.
+
+The charge for a stop therefore stays a conservative estimate: the input
+count, what was produced, and 20 tokens per second of silent reasoning within
+the output limit, which is below what current providers generate. Exact
+numbers need a provider that reports usage for a cancelled answer. Where a
+strict monetary cap matters, set a spending limit at the provider too.
 
 Every user's BananaChat API keys share that account's API token budget and
-request-rate buckets. Hosted API models count toward standard service budgets
-by default, including the configured cloud-chat consumption policy. Unlike the
-subscription connector, they do not default to an independent service exemption.
+request-rate buckets. Hosted API models count towards standard service budgets
+by default, including the configured cloud-chat consumption policy.
 Administrators can change counting, limits, exemptions and reasoning access
-through the existing account/model controls.
+through the existing account and model controls. Token budgets are internal
+controls, not provider dollar balances; the prices shown on the provider page
+help you choose each model's usage weight.
 
 Initial model presets use one five-hour token window and no weekly token window:
 
@@ -93,57 +258,74 @@ Initial model presets use one five-hour token window and no weekly token window:
 | Heavy | 50,000 | 6 | 3 | 3 |
 
 Opus/Fable/Mythos and pro reasoning families start with Heavy; Haiku starts
-with Light; other models start with Standard. Demand adjustment is enabled for
-these presets and follows the existing site settings. Administrators can
-replace them, disable a quota, add an optional weekly budget, and set request
-rules per second/minute/hour/day globally or per account/model. Input and output
-usage is recorded as actual tokens; the existing model weight applies when
-computing allowance consumption. Token budgets are internal controls, not
-provider dollar balances or claims about subscription percentages.
+with Light; other models start with Standard. Demand adjustment follows the
+existing site settings.
 
-Reasoning uses only the levels explicitly configured for that model. OpenAI
-compatible endpoints receive `reasoning_effort` (`off` → `none`, Extra → `xhigh`).
-Anthropic receives adaptive thinking and `output_config.effort` for supported
-levels. Enable those only for models whose API supports them. Fresh account
-permissions and effort ceilings are checked at routing, including fallback
-models. The existing unlock-request and lower-tier cascade rules apply.
+## Errors
 
-## Transport and private credentials
+| Provider answer | Administrators see | Chat users see | `/v1` API returns |
+| --- | --- | --- | --- |
+| 401 | the key was rejected | a settings problem; choose another model | 502 `provider_misconfigured` |
+| 403, 402, no credit or quota | missing permission or credit | a settings problem | 502 `provider_misconfigured` |
+| 404 for the model | the model is not offered | the model is no longer offered | 404 `model_not_found` |
+| 404 for the endpoint | check the base URL | a settings problem | 502 `provider_misconfigured` |
+| 429 | rate limited, with the wait it asked for | busy, try again | 503 `provider_rate_limited` with its `Retry-After` |
+| 529 or overloaded | overloaded | busy, try again | 503 `provider_overloaded` |
+| 5xx, unreachable | server error or unreachable | not responding | 503 `provider_unavailable` |
+| timeout | did not answer in time | not responding | 504 `timeout` |
+| 400, 413, 422 | the provider rejected the request | the request was refused (too long or unsupported content) | 400 `provider_rejected_request` |
 
-Public endpoints require HTTPS and normal certificate/hostname verification.
-Credentials in URLs, query strings and fragments are refused. No redirects or
-environment proxies are followed. DNS results are checked and pinned for the
-connection, preventing a second DNS resolution from changing the destination.
-Private addresses need explicit administrator permission; link-local,
-multicast, unspecified and reserved/metadata addresses remain blocked.
+Chat messages are shown in the reader's language. When a model fails before
+answering, BananaChat tries the request's fallback models first. Rate limits
+and overload never mark a model as failing. The provider's own error message
+appears only to administrators (connection test, provider page and server
+log), with the key and anything that looks like a key removed.
 
-API keys live in private `0600` files under
-`BC_INSTANCE_DIR/.provider-keys` (directory `0700`), owned by the service user.
-Database rows contain opaque references, not plaintext keys. Keys are never
-rendered back into forms, returned by the public API or placed in audit details.
-Upstream errors are replaced with credential-free messages. Provider-key files
-are protected by filesystem permissions; this is not a claim of at-rest
-application encryption. Back up the entire private instance directory securely,
-including these files, and preserve it when applying a source update.
+## Security
 
-HTTP/SSE input, output, event and token values are bounded. DNS, headers and
-body have deadlines; cancellation closes sockets. A valid terminal protocol
-marker is required before success. Partial/disconnected responses use existing
-interrupted-answer accounting. Function calls retain matching IDs and are
-validated by the agent engine before execution. Images are sent as already
-validated inline content, not fetched from user-supplied URLs by this connector.
+**Keys.** API keys are encrypted at rest (Fernet: AES-128-CBC with
+HMAC-SHA256) with a key derived from the instance secret (`BC_SECRET_KEY`, or
+`BC_INSTANCE_DIR/.secret_key`), and stored in private `0600` files under
+`BC_INSTANCE_DIR/.provider-keys` (directory `0700`) owned by the service user.
+Key files from older versions are encrypted the first time they are used, and
+the background model refresh encrypts the rest within 15 minutes of the update.
+The database holds opaque references only. Keys are never rendered into forms,
+returned by the API, written to the audit log or logged. If the instance secret
+changes, stored keys can no longer be decrypted: the connection test says so,
+and you enter each key again. Back up the instance directory and the instance
+secret together, securely.
+
+**Transport.** Public endpoints require HTTPS with normal certificate and
+hostname verification. Credentials in URLs, query strings and fragments are
+refused. No redirects or environment proxies are followed. DNS results are
+checked and pinned for the connection, so a second resolution cannot change
+the destination. Loopback and private addresses need **Allow a local or
+private-network endpoint**; link-local, multicast, unspecified, reserved,
+cloud-metadata (including Alibaba's `100.100.100.200` and AWS's
+`fd00:ec2::254`) and translated IPv6 (NAT64, 6to4, Teredo) addresses stay
+blocked even then. Plain HTTP is only allowed to non-public addresses.
+
+**Responses.** HTTP/SSE input, output, event and token values are bounded. DNS,
+headers and body have deadlines; cancellation closes sockets. A valid finish
+marker is required before an answer counts as complete. Tool calls keep
+matching IDs and are validated by the agent engine before execution. Images are
+sent as already validated inline content; this connector never fetches
+user-supplied URLs.
 
 Hosted models stay available when the local compute server is down. The banner
 reports a local outage; automatic selection can choose a hosted model. Access
-rules and maintenance still apply. Hosted HTTP requests do not require memory
-for a local inference model and still use the site's concurrency/queue limits.
+rules and maintenance still apply. Hosted requests do not need memory for a
+local inference model and still use the site's concurrency and queue limits.
 
 ## Verification limits
 
-Regression checks exercise real local HTTP servers, native/open-compatible
-streams, private credential files, model discovery/retirement, schema upgrades,
-admin forms, public API routing, quota sharing and cancellation. Browser checks
-cover desktop and phone flows. They use synthetic keys and model responses.
-Actual provider authentication, model-specific parameters, billing and live
-traffic must be verified after your credentials are configured. No production
-provider key or live subscription authentication is shipped in the ZIP.
+The tests run every dialect against local fake HTTP servers: Anthropic
+(pagination, capabilities, thinking, cache usage, stop reasons, stream errors),
+OpenAI, OpenRouter (key check, reasoning, prices), Together (list-shaped model
+lists), Mistral (typed chunks), Groq (`x_groq` usage), xAI (reasoning tokens)
+and llama.cpp-style streams; error mapping, timeouts, encrypted keys, schema
+upgrades, administrator forms, chat messages in both languages, public API
+routing and accounting of interrupted answers. They use synthetic keys and
+responses and never touch the network. Actual provider authentication,
+model-specific parameters, billing and live traffic must be verified with your
+own credentials.

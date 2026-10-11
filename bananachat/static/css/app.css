@@ -26,10 +26,14 @@
   --overlay: color-mix(in srgb, var(--raised) 94%, var(--text));
   --on-primary: var(--palette-on-primary, #000000);
   --focus: color-mix(in srgb, var(--primary) 75%, var(--text));
+  /* Primary-coloured text on tinted backgrounds (badges, links inside alerts). */
+  --primary-text: var(--primary);
+  /* The off state of a switch: 3:1 against the page (WCAG 1.4.11). */
+  --control-off: color-mix(in srgb, var(--text) 50%, var(--bg));
 
   --success: #3fb97a;
   --warning: #e0a526;
-  --danger: #e5534b;
+  --danger: #f06b64;
   --info: #4a9ff5;
   --success-bg: color-mix(in srgb, var(--success) 14%, var(--bg));
   --warning-bg: color-mix(in srgb, var(--warning) 14%, var(--bg));
@@ -48,7 +52,7 @@
   --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
   --font-scale: 1;
   --line-height: 1.55;
-  --letter-spacing: normal;
+  --letter-spacing: 0em;
   --sidebar-width: 250px;
   --topbar-height: 52px;
   --content-width: 1120px;
@@ -64,6 +68,7 @@
   /* Light backgrounds need darker text shades to keep a 4.5:1 contrast (WCAG AA). */
   --text-muted: color-mix(in srgb, var(--text) 78%, var(--bg));
   --text-faint: color-mix(in srgb, var(--text) 66%, var(--bg));
+  --primary-text: color-mix(in srgb, var(--primary) 80%, var(--text));
   --success: #176b3d;
   --warning: #7a5500;
   --danger: #ac2d27;
@@ -96,8 +101,9 @@ body.has-background {
   background-image: linear-gradient(color-mix(in srgb, var(--bg) 82%, transparent), color-mix(in srgb, var(--bg) 82%, transparent)), var(--background-image);
   background-size: cover; background-attachment: fixed; background-position: center;
 }
-h1, h2, h3, h4 { line-height: 1.3; margin: 0 0 .5em; font-weight: 600; letter-spacing: -.01em; }
-h1 { font-size: 1.5rem; letter-spacing: -.025em; }
+/* Headings are slightly tighter than body text, on top of the reader's letter-spacing preference. */
+h1, h2, h3, h4 { line-height: 1.3; margin: 0 0 .5em; font-weight: 600; letter-spacing: calc(var(--letter-spacing) - .01em); }
+h1 { font-size: 1.5rem; letter-spacing: calc(var(--letter-spacing) - .025em); }
 h2 { font-size: 1.125rem; }
 h3 { font-size: 1rem; }
 p { margin: 0 0 .9em; }
@@ -112,6 +118,8 @@ img, svg, video { max-width: 100%; }
 /* Icons from partials/icons.html default to the text size; components below set their own sizes. */
 svg[viewBox="0 0 24 24"] { width: 1.25em; height: 1.25em; flex: none; vertical-align: -.25em; }
 [hidden] { display: none !important; }
+/* Disclosure toggles and small text links keep a 24px target (WCAG 2.5.8). */
+summary { min-height: 1.5rem; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
 ::selection { background: color-mix(in srgb, var(--primary) 35%, transparent); }
 
@@ -132,15 +140,13 @@ label:has(+ input.visually-hidden:focus-visible) { outline: 2px solid var(--focu
 .text-right { text-align: right; }
 .text-center { text-align: center; }
 .danger-text { color: var(--danger); }
-.success-text { color: var(--success); }
 
 /* ----- layout ------------------------------------------------------------ */
 .page { width: 100%; max-width: var(--content-width); margin: 0 auto; padding: 1.75rem clamp(1rem, 3vw, 2rem) 3rem; }
 .page-narrow { max-width: var(--reading-width); }
-.page-tiny { max-width: 440px; }
 .page-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
 .page-header h1 { margin: 0; }
-.page-header p { margin: .4rem 0 0; color: var(--text-muted); max-width: 64ch; font-size: .9rem; }
+.page-header p { margin: .4rem 0 0; color: var(--text-muted); max-width: 64ch; font-size: .9rem; text-wrap: balance; }
 .stack { display: flex; flex-direction: column; gap: 1rem; }
 .stack-sm { display: flex; flex-direction: column; gap: .5rem; }
 .stack-lg { display: flex; flex-direction: column; gap: 1.75rem; }
@@ -152,15 +158,23 @@ label:has(+ input.visually-hidden:focus-visible) { outline: 2px solid var(--focu
 .settings-section-danger > :is(h2, h3), .settings-section-danger > .section-header :is(h2, h3) { color: var(--danger); }
 .section-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: 1rem; flex-wrap: wrap; }
 .section-header h2, .section-header h3 { margin: 0; }
+/* A small button beside a heading does not make the header taller than headings without one. */
+.section-header > .btn-sm { margin-block: -.3rem; }
+.settings-section:has(+ .settings-section-danger) { border-bottom: 0; }
+.settings-section-danger:last-child { border-bottom: 0; }
 .form-width { width: 100%; max-width: 38rem; }
 .row { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
 .row-end { display: flex; align-items: center; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; }
 .grow { flex: 1 1 auto; min-width: 0; }
+/* Fields placed straight in a row keep their own width (the global 100% would push their buttons to the next line). */
+.row > :is(input, select):not([type="checkbox"]):not([type="radio"]):not(.visually-hidden) { width: auto; }
+.row > input.grow { flex: 1 1 12rem; }
 .grid { display: grid; gap: 1rem; }
 .grid-2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
 .grid-3 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
 .grid-4 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+.grid-full { grid-column: 1 / -1; }
 .mt-0 { margin-top: 0; } .mt-1 { margin-top: .5rem; } .mt-2 { margin-top: 1rem; } .mt-3 { margin-top: 1.5rem; }
 .mb-0 { margin-bottom: 0; } .mb-1 { margin-bottom: .5rem; } .mb-2 { margin-bottom: 1rem; } .mb-3 { margin-bottom: 1.5rem; }
 
@@ -171,9 +185,12 @@ label:has(+ input.visually-hidden:focus-visible) { outline: 2px solid var(--focu
   background: color-mix(in srgb, var(--bg) 40%, var(--surface));
   border-bottom: 1px solid var(--border);
 }
-.brand { display: inline-flex; align-items: center; gap: .55rem; min-width: 0; color: var(--text); text-decoration: none; font-weight: 700; letter-spacing: -.01em; }
-.topbar .brand span { max-width: min(18rem, 30vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.brand img { width: 28px; height: 28px; }
+.brand { display: inline-flex; align-items: center; gap: .55rem; min-width: 0; color: var(--text); text-decoration: none; font-weight: 700; letter-spacing: calc(var(--letter-spacing) - .01em); }
+.topbar .brand { flex: 0 1 auto; }
+.topbar .brand span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar:has(.nav) .brand span { max-width: min(18rem, 30vw); }
+/* The banana logo: twice the 16x16 sprite, scaled without smoothing so its pixels stay squares. */
+.brand img { width: 32px; height: 32px; image-rendering: pixelated; }
 .brand:hover { color: var(--text); }
 .nav { display: flex; align-items: center; gap: .25rem; margin-left: .5rem; min-width: 0; height: 100%; flex-shrink: 0; }
 .nav > a {
@@ -206,7 +223,11 @@ label:has(+ input.visually-hidden:focus-visible) { outline: 2px solid var(--focu
 .topbar.nav-collapsed .nav > a { padding: .7rem .9rem; border: 0; border-radius: var(--radius-sm); }
 .topbar.nav-collapsed .nav > a[aria-current="page"] { background: var(--hover); }
 .topbar.nav-collapsed .brand { flex: 1; }
-.topbar.nav-collapsed .brand span { max-width: min(18rem, 45vw); }
+/* The links are in the menu: the name takes the free space and only shortens when it really does not fit. */
+.topbar.nav-collapsed .brand span { max-width: none; }
+/* core.js: when even that space is too small, the name drops the text-size preference, then only the logo shows. */
+.topbar.brand-small .brand span { font-size: calc(.9375rem / var(--font-scale)); letter-spacing: normal; }
+.topbar.brand-icon .brand span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .topbar.nav-collapsed .topbar-end { gap: .25rem; }
 .topbar.nav-collapsed .topbar-account { padding-inline-start: .25rem; }
 
@@ -228,6 +249,8 @@ label:has(+ input.visually-hidden:focus-visible) { outline: 2px solid var(--focu
 .menu-panel [aria-current="page"], .menu-panel button[aria-current="true"] { background: var(--active); color: var(--text); }
 .menu-panel svg { width: 18px; height: 18px; flex: none; }
 .menu-panel .danger { color: var(--danger); }
+/* The current choice: a check at the end of the row, like the model picker (aria-current carries the state). */
+.menu-check { display: inline-flex; margin-inline-start: auto; color: var(--primary); }
 .menu-panel hr { margin: .35rem 0; }
 .menu-panel .menu-label { padding: .45rem .7rem .2rem; font-size: .78rem; color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
 .menu-panel .menu-identity { padding-bottom: .45rem; color: var(--text); font-weight: 600; font-size: .875rem; text-transform: none; letter-spacing: normal; overflow-wrap: anywhere; }
@@ -263,7 +286,7 @@ label:has(+ input.visually-hidden:focus-visible) { outline: 2px solid var(--focu
 }
 .icon-btn:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--hover); color: var(--text); }
 .icon-btn:disabled, .icon-btn[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
-.icon-btn svg, .btn svg { width: 18px; height: 18px; flex: none; }
+.icon-btn svg, .btn svg { width: 1.125rem; height: 1.125rem; flex: none; }
 .btn.is-loading { position: relative; color: transparent !important; }
 .btn.is-loading::after {
   content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
@@ -280,13 +303,18 @@ form { margin: 0; }
 .field-error { color: var(--danger); font-size: .85rem; }
 .required::after { content: " *"; color: var(--danger); }
 input, select, textarea { font: inherit; color: inherit; }
-.input, input[type="text"], input[type="password"], input[type="email"], input[type="number"], input[type="search"],
+/* Form controls and buttons follow the letter-spacing preference (browsers reset it on them). */
+input, select, textarea, button { letter-spacing: inherit; }
+.input, input:not([type]), input[type="text"], input[type="password"], input[type="email"], input[type="number"], input[type="search"],
 input[type="url"], input[type="datetime-local"], input[type="date"], select, textarea {
   width: 100%; min-height: var(--control-height); padding: .5rem .75rem; border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong); background: var(--bg); color: var(--text);
   transition: border-color var(--speed);
 }
 textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
+/* One-line fields keep their height under the line-spacing preference, like selects and buttons beside them. */
+.input, input:not([type]), input[type="text"], input[type="password"], input[type="email"], input[type="number"], input[type="search"],
+input[type="url"], input[type="datetime-local"], input[type="date"] { line-height: 1.25; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--focus); box-shadow: none; }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 input::placeholder, textarea::placeholder { color: var(--text-faint); }
@@ -295,11 +323,15 @@ input[type="range"] { accent-color: var(--primary); width: 100%; }
 input[type="file"] { max-width: 100%; font-size: .875rem; }
 input[type="file"]::file-selector-button { min-height: var(--control-height); margin-right: .75rem; padding: .4rem .75rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
 input[type="file"]::file-selector-button:hover { background: var(--hover); }
-.check { display: flex; align-items: flex-start; gap: .6rem; cursor: pointer; }
+.check { display: flex; align-items: flex-start; gap: .6rem; min-height: 1.5rem; cursor: pointer; }
 .check input { margin-top: .25rem; width: 18px; height: 18px; accent-color: var(--primary); flex: none; }
 .check span small { display: block; color: var(--text-muted); }
 .form-actions { display: flex; justify-content: flex-end; gap: .5rem; flex-wrap: wrap; margin-top: .5rem; }
+/* A long label (large text, Italian) wraps inside its button instead of pushing the page sideways. */
+.form-actions > .btn, .form-actions > form > .btn { max-width: 100%; white-space: normal; text-align: center; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 1rem; align-items: start; }
+/* A button cell beside fields lines up with the inputs, not with their labels. */
+.form-grid > .form-actions { align-self: end; margin-top: 0; }
 fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin: 0; }
 legend { padding: 0 .35rem; font-weight: 600; }
 fieldset.settings-section { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding-inline: 0; }
@@ -312,11 +344,24 @@ fieldset.settings-section > legend { width: 100%; padding: 0; }
 .segmented label { position: relative; }
 .segmented input { position: absolute; opacity: 0; pointer-events: none; }
 .segmented label:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
-.segmented button[aria-pressed="true"], .segmented input:checked + span, .segmented label:has(input:checked) { background: var(--raised); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / .2); }
-.switch { position: relative; display: inline-flex; align-items: center; gap: .6rem; max-width: 100%; cursor: pointer; }
+/* The selected option is one raised chip with a ring, so it stands out from the track in both themes (WCAG 1.4.11). */
+.segmented button[aria-pressed="true"], .segmented label:has(input:checked) {
+  background: var(--raised); color: var(--text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .2), inset 0 0 0 1px color-mix(in srgb, var(--primary) 70%, transparent);
+}
+:root:not([data-theme="light"]) .segmented :is(button[aria-pressed="true"], label:has(input:checked)) { background: color-mix(in srgb, var(--raised) 82%, var(--text)); }
+/* .segmented-fill: on phones the options share the full width evenly instead of wrapping one under the other. */
+@media (max-width: 640px) {
+  .segmented.segmented-fill { display: flex; flex-wrap: nowrap; width: 100%; }
+  .segmented.segmented-fill > label { flex: 1 1 0; min-width: 0; justify-content: center; text-align: center; }
+}
+@supports not selector(:has(*)) {
+  .segmented input:checked + span { background: var(--raised); color: var(--text); box-shadow: inset 0 0 0 1px var(--primary); }
+}
+.switch { position: relative; display: inline-flex; align-items: flex-start; gap: .6rem; max-width: 100%; cursor: pointer; }
 .switch > span:not(.track) { min-width: 0; overflow-wrap: break-word; }
 .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.switch .track { width: 40px; height: 22px; border-radius: 999px; background: var(--border-strong); position: relative; transition: background var(--speed); flex: none; }
+.switch .track { width: 40px; height: 22px; margin-top: .05rem; border-radius: 999px; background: var(--control-off); position: relative; transition: background var(--speed); flex: none; }
 .switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform var(--speed); }
 .switch input:checked + .track { background: var(--primary); }
 .switch input:checked + .track::after { transform: translateX(18px); }
@@ -324,16 +369,11 @@ fieldset.settings-section > legend { width: 100%; padding: 0; }
 
 /* ----- cards, panels ----------------------------------------------------- */
 .card { min-width: 0; background: color-mix(in srgb, var(--bg) 45%, var(--surface)); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 1.125rem; }
-.card-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: 1rem; flex-wrap: wrap; }
-.card-header h2, .card-header h3 { margin: 0; }
-.card-footer { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .card.flush { padding: 0; overflow: hidden; }
-.card.flush > .card-header { padding: 1rem 1.25rem 0; }
 .card.flush .table :is(th, td):first-child { padding-left: 1.25rem; }
 .card.flush .table :is(th, td):last-child { padding-right: 1.25rem; }
-.card-danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--bg)); }
 .stat { display: flex; flex-direction: column; gap: .15rem; }
-.stat-value { font-size: 1.6rem; font-weight: 700; letter-spacing: -.02em; }
+.stat-value { font-size: 1.6rem; font-weight: 700; letter-spacing: calc(var(--letter-spacing) - .02em); }
 .stat-label { color: var(--text-muted); font-size: .85rem; }
 /* Usage bars: native <progress> (no inline styles needed). */
 progress.meter { appearance: none; -webkit-appearance: none; width: 100%; height: 5px; border: 0; border-radius: 999px; background: var(--hover); overflow: hidden; }
@@ -350,11 +390,14 @@ progress.meter.full::-moz-progress-bar { background: var(--danger); }
 .empty > p:last-child { margin-bottom: 0; }
 .divider-list > * + * { border-top: 1px solid var(--border); }
 .list-item { display: flex; align-items: center; gap: .75rem; padding: .8rem 0; }
+/* A list that ends its section does not add its own bottom padding to the section's. */
+.settings-section > .divider-list:last-child > .list-item:last-child { padding-bottom: 0; }
 
 /* ----- alerts, badges ----------------------------------------------------- */
 .alert { display: flex; gap: .7rem; align-items: flex-start; padding: .8rem 1rem; border-radius: var(--radius); border: 1px solid var(--border); background: var(--hover); }
 .alert > :not(svg) { min-width: 0; }
 .alert code { overflow-wrap: anywhere; }
+.alert a { color: var(--primary-text); }
 .alert p:last-child { margin-bottom: 0; }
 .alert > svg { width: 20px; height: 20px; flex: none; margin-top: .1rem; }
 .alert-info { background: var(--info-bg); border-color: color-mix(in srgb, var(--info) 40%, var(--bg)); }
@@ -365,52 +408,129 @@ progress.meter.full::-moz-progress-bar { background: var(--danger); }
   display: inline-flex; align-items: center; gap: .3rem; padding: .12rem .5rem; border-radius: 4px;
   font-size: .76rem; font-weight: 600; line-height: 1.4; background: var(--hover); color: var(--text-muted); white-space: nowrap;
 }
-.badge-primary { background: var(--active); color: var(--primary); }
+.badge-primary { background: var(--active); color: var(--primary-text); }
 .badge-success { background: var(--success-bg); color: var(--success); }
 .badge-warning { background: var(--warning-bg); color: var(--warning); }
 .badge-danger { background: var(--danger-bg); color: var(--danger); }
 .badge-info { background: var(--info-bg); color: var(--info); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); display: inline-block; }
-.dot-success { background: var(--success); } .dot-warning { background: var(--warning); } .dot-danger { background: var(--danger); }
 
 /* Service notices (maintenance, AI-server outage, announcements). */
 .status-region { display: flex; flex-direction: column; }
 .status-region:empty { display: none; }
 .status-banner {
   --tone: var(--info);
-  display: flex; align-items: center; gap: .6rem; padding: .6rem max(1rem, calc((100vw - var(--content-width)) / 2));
+  display: flex; align-items: flex-start; gap: .6rem; padding: .6rem max(1rem, calc((100vw - var(--content-width)) / 2));
   background: var(--surface); border-bottom: 1px solid var(--border);
 }
 .status-banner.status-warning { --tone: var(--warning); }
 .status-banner.status-danger { --tone: var(--danger); }
-.status-icon { display: grid; place-items: center; flex: none; width: 18px; height: 18px; color: var(--tone); }
-.status-icon svg { width: 18px; height: 18px; }
+.status-icon { display: grid; place-items: center; flex: none; width: 1.125rem; height: 1.125rem; margin-top: .1rem; color: var(--tone); }
+.status-icon svg { width: 1.125rem; height: 1.125rem; }
 .status-body { display: flex; align-items: baseline; flex-wrap: wrap; gap: .25rem .75rem; flex: 1 1 0; min-width: 0; }
 .status-body p { margin: 0; }
 .status-title { font-weight: 600; font-size: .875rem; }
 .status-since { font-weight: 400; color: var(--text-muted); font-size: .85rem; }
 .status-text { color: var(--text-muted); font-size: .875rem; }
 .status-note { flex-basis: 100%; font-size: .875rem; white-space: pre-line; }
-.status-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; flex: none; }
-.auth-status { margin-bottom: 1rem; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+.status-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; flex: none; align-self: center; }
+.auth-status { margin-bottom: 1.5rem; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
 .auth-status .status-banner { padding: .8rem 1rem; border-bottom: 0; align-items: flex-start; }
 .auth-status .status-banner + .status-banner { border-top: 1px solid var(--border); }
-@media (max-width: 640px) { .status-banner { padding: .6rem .9rem; align-items: flex-start; flex-wrap: wrap; } .status-actions { margin-inline-start: 1.5rem; } }
+/* A lone dismiss button is centred on the first line of text, so it neither sits below a one-line
+   notice nor makes it taller; the notice card on the sign-in pages keeps it centred. */
+.status-actions:not(:has(> .btn)) { align-self: flex-start; margin-block: max(-.55rem, calc((.875rem * var(--line-height) - var(--control-compact)) / 2)); }
+.auth-status .status-actions:not(:has(> .btn)) { align-self: center; margin-block: 0; }
+/* Labelled buttons (Details, Hide) are taller than a line of text: on wider screens the first line
+   and the icon are centred on them, so a one-line notice reads level with its buttons. */
+@media (min-width: 641px) {
+  .status-banner:has(> .status-actions > .btn) {
+    --status-line: calc(.875rem * var(--line-height));
+    --status-row: max(var(--status-line), var(--control-compact), calc(.8125rem * 1.2 + .5rem + 2px));
+  }
+  .status-banner:has(> .status-actions > .btn) > .status-body { padding-block: calc((var(--status-row) - var(--status-line)) / 2); }
+  .status-banner:has(> .status-actions > .btn) > .status-icon { margin-top: calc((var(--status-row) - 1.125rem) / 2); }
+}
+@media (max-width: 640px) {
+  .status-banner { padding: .6rem .9rem; flex-wrap: wrap; }
+  .status-actions { align-self: flex-start; }
+  /* A lone dismiss button stays beside the text; buttons with labels move under it, aligned with the text. */
+  .status-actions:has(> .btn) { flex: 1 1 100%; min-width: 0; margin-inline-start: calc(1.125rem + .6rem); }
+  .status-actions:not(:has(> .btn)) { margin: -.3rem -.4rem 0 0; }
+}
 
 /* ----- tables ------------------------------------------------------------ */
 /* Positioned, so visually hidden labels inside a scrolled table do not widen the page. */
 .table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
 table.table { width: 100%; border-collapse: collapse; font-size: .92rem; font-variant-numeric: tabular-nums; }
 .table th, .table td { padding: .65rem .85rem; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; }
-.table thead th { font-size: .8rem; letter-spacing: 0; color: var(--text-muted); font-weight: 600; background: var(--surface); position: sticky; top: 0; }
-.table tbody tr:last-child td { border-bottom: 0; }
+.table thead th { font-size: .8rem; color: var(--text-muted); font-weight: 600; background: var(--surface); position: sticky; top: 0; }
+.table tbody tr:last-child > :is(th, td) { border-bottom: 0; }
 .table tbody tr:hover { background: var(--hover); }
 .table .actions { text-align: right; white-space: nowrap; }
-.table .actions form { display: inline; }
+.table .actions form { display: inline-flex; vertical-align: middle; }
+.table .actions .btn, .table .actions .icon-btn { vertical-align: middle; }
+/* After the cell rules above, so a right-aligned numeric column wins over text-align: left. */
+.table :is(th, td).text-right { text-align: right; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: .5rem; margin-top: 1rem; }
-dl.details { display: grid; grid-template-columns: max-content 1fr; gap: .45rem 1.25rem; margin: 0; }
+/* Long labels wrap instead of squeezing the values into a narrow column. */
+dl.details { display: grid; grid-template-columns: fit-content(12rem) minmax(0, 1fr); gap: .45rem 1.25rem; margin: 0; }
+/* .table-stack: on phones each row becomes a small card; cells with data-label name their value. */
+@media (max-width: 640px) {
+  .table.table-stack, .table.table-stack tbody { display: block; }
+  .table.table-stack thead { display: none; }
+  .table.table-stack tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem 1rem; padding: .7rem .8rem; border-bottom: 1px solid var(--border); }
+  .table.table-stack tbody tr:last-child { border-bottom: 0; }
+  .table.table-stack :is(th, td) { display: block; padding: 0; border: 0; text-align: left; min-width: 0; }
+  .table.table-stack :is(th[scope="row"], .cell-full, td.actions) { flex-basis: 100%; }
+  .table.table-stack td:empty { display: none; }
+  /* An empty value shows a dash in the table; a card leaves the line out. */
+  .table.table-stack td:has(> .table-only:only-child) { display: none; }
+  .table.table-stack [data-label]::before { content: attr(data-label); margin-right: .35rem; color: var(--text-muted); font-family: var(--font); font-size: .8rem; }
+  .table.table-stack td.actions { padding-top: .35rem; white-space: normal; }
+  .table.table-stack td.actions .row-end { justify-content: flex-start; }
+  /* A card has room for the whole value: no column cap, and long values wrap instead of being cut. */
+  .table.table-stack td.cell-wide { max-width: none; }
+  .table.table-stack td.truncate { white-space: normal; overflow-wrap: anywhere; }
+  /* .stack-lines: every labelled value on a line of its own, so all cards have the same shape. */
+  .table.table-stack.stack-lines td[data-label] { flex-basis: 100%; }
+}
+/* .table-stack-md: wide tables (many columns or several labelled buttons) are cards up to 900px. */
+@media (max-width: 900px) {
+  .table.table-stack-md, .table.table-stack-md tbody { display: block; }
+  .table.table-stack-md thead { display: none; }
+  .table.table-stack-md tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem 1rem; padding: .7rem .8rem; border-bottom: 1px solid var(--border); }
+  .table.table-stack-md tbody tr:last-child { border-bottom: 0; }
+  .table.table-stack-md :is(th, td) { display: block; padding: 0; border: 0; text-align: left; min-width: 0; }
+  .table.table-stack-md :is(th[scope="row"], .cell-full, td.actions) { flex-basis: 100%; }
+  .table.table-stack-md td:empty { display: none; }
+  .table.table-stack-md td:has(> .table-only:only-child) { display: none; }
+  .table.table-stack-md td.cell-wide { max-width: none; }
+  .table.table-stack-md [data-label]::before { content: attr(data-label); margin-right: .35rem; color: var(--text-muted); font-family: var(--font); font-size: .8rem; }
+  .table.table-stack-md td.actions { padding-top: .35rem; white-space: normal; }
+  .table.table-stack-md td.actions .row-end { justify-content: flex-start; }
+}
+/* .table-stack-lg: administration tables with many columns are cards up to 1279px (beside the 220px
+   menu the page column is no wider there than on a tablet). */
+@media (max-width: 1279px) {
+  .table.table-stack-lg, .table.table-stack-lg tbody { display: block; }
+  .table.table-stack-lg thead { display: none; }
+  .table.table-stack-lg tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem 1rem; padding: .7rem .8rem; border-bottom: 1px solid var(--border); }
+  .table.table-stack-lg tbody tr:last-child { border-bottom: 0; }
+  .table.table-stack-lg :is(th, td) { display: block; padding: 0; border: 0; text-align: left; min-width: 0; }
+  .table.table-stack-lg :is(th[scope="row"], .cell-full, td.actions) { flex-basis: 100%; }
+  .table.table-stack-lg td:empty { display: none; }
+  .table.table-stack-lg [data-label]::before { content: attr(data-label); margin-right: .35rem; color: var(--text-muted); font-family: var(--font); font-size: .8rem; }
+  .table.table-stack-lg td.actions { padding-top: .35rem; white-space: normal; }
+  .table.table-stack-lg td.actions .row-end { justify-content: flex-start; }
+  .table.table-stack-lg td.cell-wide { max-width: none; }
+}
 dl.details dt { color: var(--text-muted); }
 dl.details dd { margin: 0; }
+dl.details dd > a { display: inline-block; min-height: 1.5rem; }
+dl.details.details-stacked { grid-template-columns: minmax(0, 1fr); row-gap: .1rem; }
+dl.details.details-stacked dd { margin-bottom: .55rem; }
+dl.details.details-stacked dd:last-child { margin-bottom: 0; }
 
 /* ----- tabs -------------------------------------------------------------- */
 .tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; overflow-x: auto; }
@@ -420,6 +540,35 @@ dl.details dd { margin: 0; }
 }
 .tabs a:hover, .tabs button:hover { color: var(--text); }
 .tabs [aria-current="page"], .tabs [aria-selected="true"] { color: var(--text); border-bottom-color: var(--primary); }
+.tabs a { display: inline-flex; align-items: center; gap: .35rem; }
+@media (max-width: 640px) {
+  .tabs { flex-wrap: wrap; overflow-x: visible; column-gap: 0; }
+  .tabs a, .tabs button { padding-inline: .7rem; }
+}
+
+/* ----- section navigation (account, customize) ------------------------------ */
+/* core.js marks the section being read (aria-current="location") and, when the row scrolls, which edge has more. */
+.account-toc, .customize-toc { container-type: inline-size; }
+.section-nav { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: .15rem; }
+.section-nav a { display: flex; align-items: center; gap: .5rem; min-height: var(--control-compact); padding: .4rem .6rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .875rem; line-height: 1.45; }
+.section-nav a:hover { background: var(--hover); color: var(--text); }
+.section-nav a[aria-current="location"] { color: var(--text); background: var(--hover); text-decoration: underline; text-decoration-color: var(--primary); text-underline-offset: .35em; }
+@media (max-width: 640px) {
+  /* Phones: one scrolling row of section links instead of ragged rows, the cut-off edge faded. */
+  .section-nav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: .2rem; margin: -.2rem; scroll-padding-inline: 1.5rem; }
+  .section-nav::-webkit-scrollbar { display: none; }
+  .section-nav a { flex: none; white-space: nowrap; padding-inline: .5rem; }
+  .section-nav[data-overflow="end"] { mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent); }
+  .section-nav[data-overflow="start"] { mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent); }
+  .section-nav[data-overflow="both"] { mask-image: linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent); }
+}
+/* Large text leaves room for only two or three links in that row: they wrap, so none is hidden. */
+@container (max-width: 18rem) {
+  .section-nav, .section-nav[data-overflow] { flex-wrap: wrap; overflow-x: visible; mask-image: none; }
+}
+@media (pointer: coarse) {
+  .section-nav a { min-height: var(--touch-target); }
+}
 
 /* ----- dialogs ----------------------------------------------------------- */
 dialog {
@@ -431,6 +580,7 @@ dialog[open] { animation: pop .14s ease-out; }
 @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
 .dialog-body { padding: 1.25rem 1.25rem .5rem; }
 .dialog-body h2 { font-size: 1.15rem; }
+.dialog-body > :last-child, .dialog-body > .stack > :last-child { margin-bottom: 0; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; padding: 1rem 1.25rem 1.25rem; flex-wrap: wrap; }
 dialog.wide { width: min(760px, calc(100vw - 2rem)); }
 .secret-box { display: flex; gap: .5rem; align-items: stretch; }
@@ -448,20 +598,29 @@ dialog.wide { width: min(760px, calc(100vw - 2rem)); }
 .toast-warning { border-left-color: var(--warning); }
 .toast .grow { padding-top: .1rem; }
 .toast button { flex: none; }
+@media (max-width: 640px) {
+  .toasts { left: 1rem; right: 1rem; max-width: none; bottom: calc(1rem + env(safe-area-inset-bottom)); }
+}
 
 /* ----- auth pages -------------------------------------------------------- */
 .auth-shell { min-height: 100vh; display: grid; place-items: center; padding: 2rem 1rem; }
 .auth-card { width: min(420px, 100%); }
 .auth-card .brand { font-size: 1.1rem; margin-bottom: 1.75rem; }
-.auth-card .brand img { width: 30px; height: 30px; }
 .auth-card > .card { background: transparent; border: 0; padding: 0; }
 .auth-card h1 { font-size: 1.5rem; }
 .auth-footer { margin-top: 1.25rem; text-align: center; color: var(--text-muted); font-size: .9rem; }
+.auth-messages { margin-bottom: 1rem; }
+/* The setup command on a line of its own, so it reads (and copies) as one command. */
+.setup-command { display: block; width: fit-content; max-width: 100%; margin: .35rem 0; padding: .3rem .5rem; overflow-wrap: anywhere; user-select: all; }
+/* The current language is plain text-coloured, the other one a link. */
+.auth-footer a[aria-current="true"] { color: var(--text); font-weight: 600; text-decoration: none; }
+.topbar-end a.btn[aria-current="true"] { background: var(--active); color: var(--text); }
 .honeypot { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
 
 /* ----- footer ------------------------------------------------------------ */
 .site-footer { color: var(--text-faint); font-size: .75rem; text-align: center; padding: 1rem 1rem 1.5rem; }
 .site-footer a { color: inherit; }
+.auth-footer .site-footer { padding: 0; margin-top: 1rem; }
 
 /* ----- code blocks and rendered markdown -------------------------------- */
 .prose { overflow-wrap: anywhere; }
@@ -473,7 +632,7 @@ dialog.wide { width: min(760px, calc(100vw - 2rem)); }
 .prose li + li { margin-top: .25em; }
 .prose blockquote { margin: 0 0 .9em; padding: .2rem 0 .2rem 1rem; border-left: 3px solid var(--border-strong); color: var(--text-muted); }
 .prose table { border-collapse: collapse; margin: 0 0 1em; display: block; overflow-x: auto; }
-.prose th, .prose td { border: 1px solid var(--border); padding: .4rem .65rem; }
+.prose th, .prose td { border: 1px solid var(--border); padding: .4rem .65rem; overflow-wrap: break-word; }
 .prose th { background: var(--hover); }
 .prose hr { margin: 1.2em 0; }
 .prose img { border-radius: var(--radius); }
@@ -491,6 +650,8 @@ body.sem-code-1 .prose :not(pre) > code { color: color-mix(in srgb, var(--succes
 body.sem-code-2 .prose :not(pre) > code { color: var(--success); background: var(--success-bg); }
 body.sem-link-1 .prose a { text-decoration-thickness: 2px; }
 body.sem-link-2 .prose a { background: var(--active); padding: 0 .15em; border-radius: 3px; text-decoration-thickness: 2px; }
+/* The real destination of a link whose label names another site (markdown.js). */
+.prose .link-host { color: var(--text-muted); font-size: .9em; overflow-wrap: anywhere; }
 body.sem-heading-1 .prose :is(h1, h2, h3, h4) { color: color-mix(in srgb, var(--primary) 50%, var(--text)); }
 body.sem-heading-2 .prose :is(h1, h2, h3, h4) { color: var(--primary); border-bottom: 1px solid var(--border); padding-bottom: .2em; }
 
@@ -499,7 +660,6 @@ body.sem-heading-2 .prose :is(h1, h2, h3, h4) { color: var(--primary); border-bo
   .page { padding: 1.25rem .9rem 3rem; }
   h1 { font-size: 1.35rem; }
   .card { padding: 1rem; border-radius: var(--radius); }
-  .card.flush > .card-header { padding: 1rem 1rem 0; }
   .card.flush .table :is(th, td):first-child { padding-left: 1rem; }
   .card.flush .table :is(th, td):last-child { padding-right: 1rem; }
   .table th, .table td { padding: .55rem .6rem; }
@@ -516,11 +676,12 @@ body.sem-heading-2 .prose :is(h1, h2, h3, h4) { color: var(--primary); border-bo
   .segmented button, .segmented label { display: inline-flex; align-items: center; justify-content: center; min-height: var(--touch-target); }
   summary, .tabs a, input[type="range"] { min-height: var(--touch-target); }
   input[type="color"] { height: var(--touch-target); }
-  .check, .switch { min-height: var(--touch-target); align-items: center; }
+  .check, .switch { min-height: var(--touch-target); }
+  .check { align-items: center; }
   .check input { margin-top: 0; }
 }
 
 @media print {
-  .topbar, .site-footer, .toasts, .no-print { display: none !important; }
+  .topbar, .site-footer, .toasts { display: none !important; }
   body { background: #fff; color: #000; }
 }

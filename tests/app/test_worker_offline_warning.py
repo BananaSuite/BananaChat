@@ -7,21 +7,15 @@ from dataclasses import replace
 import pytest
 
 from bananachat import db
-from bananachat.db import access, catalog, claude_pool as accounts, settings
-from bananachat.services import claude_pool, health, status
+from bananachat.db import access, catalog, external_providers as provider_store, settings
+from bananachat.services import external_providers, health, status
+from bananachat.services.ollama import Chunk
 from tests.app.fixtures import Browser
 from tests.app.test_api import assert_error, chat, ledger, token_for
 from tests.app.test_chat import new_chat, parse_sse, send, setup_models
 
-CLAUDE_MODEL = "warning-test-sonnet"
+HOSTED_MODEL = "warning-test-model"
 LOCAL_MODEL = "llama3.2:3b"
-
-
-@pytest.fixture(autouse=True)
-def isolated_transport():
-    claude_pool.reset_transport()
-    yield
-    claude_pool.reset_transport()
 
 
 def workers_down(app, monkeypatch, *, mode="shutdown"):
@@ -36,23 +30,24 @@ def warning_enabled(app, enabled):
         settings.update(worker_offline_warning_enabled=int(enabled))
 
 
-def register_claude(app, *, published=True):
+def register_hosted(app, monkeypatch, *, published=True):
+    """A published external API model whose synthetic provider answers without local workers."""
     calls = []
 
-    def answer(account, model, messages, options, *, cancel):
+    def answer(model, messages, *, options=None, effort=None, tools=None, cancel=None):
         cancel.check()
-        calls.append((account["id"], model))
-        yield {"text": "Claude answered without local workers.", "tokens_in": 3, "tokens_out": 4, "done": True}
+        calls.append(model["backend_model_name"])
+        yield Chunk(content="The hosted model answered without local workers.", done=True, finish_reason="stop",
+                    prompt_tokens=3, completion_tokens=4)
 
-    claude_pool.register_site_chat(answer)
-    claude_pool.register_site_discovery(lambda: [{"name": CLAUDE_MODEL, "family": "sonnet", "reasoning": [],
-                                                 "capabilities": ["completion"]}])
+    monkeypatch.setattr(external_providers, "stream", answer)
     with app.app_context():
-        claude_pool.sync_catalog(selected=[CLAUDE_MODEL], source="admin")
-        model = catalog.get_by_name(CLAUDE_MODEL)
+        provider_id = provider_store.save(name="Warning fixture", protocol="openai",
+                                          base_url="https://provider.invalid/v1")
+        model = external_providers.enroll(provider_store.get(provider_id), HOSTED_MODEL, manual=True)
+        catalog.set_lifecycle(model["id"], enrollment="reviewed")
         catalog.set_rollout(model["id"], published)
-        account_id = accounts.add_account("synthetic-warning-account", window_limit=1_000_000)
-    return model, account_id, calls
+        return catalog.get(model["id"]), provider_id, calls
 
 
 def signed_in(app, make_user, username="warning-user"):
@@ -86,7 +81,7 @@ def test_global_warning_setting_changes_only_rendered_worker_notice(
         app, make_user, monkeypatch, kind, overall, can_send, enabled):
     workers_down(app, monkeypatch, mode="fallback" if kind == "fallback" else "shutdown")
     if kind == "local_outage":
-        register_claude(app)
+        register_hosted(app, monkeypatch)
     warning_enabled(app, enabled)
     user, browser = signed_in(app, make_user)
     report = browser.fetch("/status?banner=1").json
@@ -135,10 +130,10 @@ def test_hidden_warning_does_not_allow_a_local_chat_or_api_generation(app, make_
 
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("surface", ["chat", "api"])
-def test_published_claude_answers_with_workers_off_regardless_of_warning_visibility(
+def test_published_hosted_model_answers_with_workers_off_regardless_of_warning_visibility(
         app, make_user, monkeypatch, fake_ollama, enabled, surface):
     workers_down(app, monkeypatch)
-    model, account_id, calls = register_claude(app)
+    model, _, calls = register_hosted(app, monkeypatch)
     warning_enabled(app, enabled)
     user, browser = signed_in(app, make_user)
     report = browser.fetch("/status?banner=1").json
@@ -146,54 +141,54 @@ def test_published_claude_answers_with_workers_off_regardless_of_warning_visibil
     assert report["notices"][0]["kind"] == "local_outage"
     assert report["notices"][0]["visible"] is enabled
     if surface == "chat":
-        response = send(browser, new_chat(browser), model=CLAUDE_MODEL)
+        response = send(browser, new_chat(browser), model=model["ollama_name"])
         assert response.status_code == 200
         items = parse_sse(response.get_data(as_text=True))
         assert "".join(item["text"] for item in items if item["type"] == "delta") == \
-            "Claude answered without local workers."
+            "The hosted model answered without local workers."
         assert items[-1]["type"] == "done" and items[-1]["state"] == "completed"
     else:
-        response = chat(app, token_for(app, user), model=CLAUDE_MODEL)
+        response = chat(app, token_for(app, user), model=model["ollama_name"])
         assert response.status_code == 200
-        assert response.json["choices"][0]["message"]["content"] == "Claude answered without local workers."
+        assert response.json["choices"][0]["message"]["content"] == \
+            "The hosted model answered without local workers."
         assert response.json["usage"] == {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}
     response.close()
-    assert calls == [(account_id, CLAUDE_MODEL)] and fake_ollama.chat_bodies() == []
+    assert calls == [HOSTED_MODEL] and fake_ollama.chat_bodies() == []
     rows = ledger(app, user)
     assert len(rows) == 1 and rows[0]["model_id"] == model["id"]
     with app.app_context():
-        assert accounts.get(account_id)["window_used"] == 7
-        assert db.scalar("SELECT COUNT(*) FROM claude_account_leases") == 0
         assert db.scalar("SELECT COUNT(*) FROM inference_queue") == 0
 
 
-@pytest.mark.parametrize("reason", ["unpublished", "no_transport", "access_denied"])
-def test_hidden_warning_does_not_make_an_ineligible_claude_model_available(
+@pytest.mark.parametrize("reason", ["unpublished", "provider_disabled", "access_denied"])
+def test_hidden_warning_does_not_make_an_ineligible_hosted_model_available(
         app, make_user, monkeypatch, reason):
     workers_down(app, monkeypatch)
-    model, _, calls = register_claude(app, published=reason != "unpublished")
+    model, provider_id, calls = register_hosted(app, monkeypatch, published=reason != "unpublished")
     warning_enabled(app, False)
     user, browser = signed_in(app, make_user)
-    if reason == "no_transport":
-        claude_pool.register_site_chat(None)
+    if reason == "provider_disabled":
+        with app.app_context():
+            provider_store.save(provider_id, enabled=0)
     elif reason == "access_denied":
         with app.app_context():
             access.set_policy("model", model["id"], "deny_except_allowlist", False, None)
     report = browser.fetch("/status?banner=1").json
     # Monitors describe the whole site; this user's permissions still block
-    # sending even when another account can use the published Claude model.
+    # sending even when another account can use the published hosted model.
     assert report["status"] == ("degraded" if reason == "access_denied" else "outage")
     assert report["can_send"] is False and report["notices"][0]["kind"] == "outage"
     assert report["notices"][0]["visible"] is False
     assert 'data-kind="outage"' not in report["banner_html"]
-    refused = send(browser, new_chat(browser), model=CLAUDE_MODEL)
+    refused = send(browser, new_chat(browser), model=model["ollama_name"])
     assert refused.status_code == 503 and refused.json["error"]["code"] == "outage"
     assert calls == [] and ledger(app, user) == []
 
 
 def test_hiding_worker_warnings_does_not_hide_maintenance_or_announcements(app, make_user, monkeypatch):
     workers_down(app, monkeypatch)
-    register_claude(app)
+    register_hosted(app, monkeypatch)
     warning_enabled(app, False)
     user, browser = signed_in(app, make_user)
     with app.app_context():

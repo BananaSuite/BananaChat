@@ -63,7 +63,7 @@ rules for templates and scripts, translations and the inference pipeline.
 * Database migrations are appended, additive and tested against
   `tests/fixtures/legacy_v4.sql`, a database written by the previous release.
 * Add a translation in both `en` and `it`; the test suite fails when the
-  catalogs differ. The administrator interface stays English-only.
+  catalogues differ. The administrator interface stays English-only.
 * Web and compute servers update independently: keep their protocol backward
   compatible or document the upgrade order. The same holds for the worker
   daemon protocol.

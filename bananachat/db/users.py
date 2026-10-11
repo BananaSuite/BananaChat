@@ -119,7 +119,8 @@ def list_page(limit: int = 50, offset: int = 0, search: str = ""):
         params.append("%" + _escape_like(search) + "%")
     return db.query(
         "SELECT u.*, q.window_tokens AS quota_tokens, q.window_slow_tokens AS quota_slow_tokens, "
-        "l.speed AS limit_speed FROM users u LEFT JOIN user_limit_overrides q ON q.user_id=u.id AND q.pool='api' "
+        "l.speed AS limit_speed, EXISTS(SELECT 1 FROM user_two_step t WHERE t.user_id=u.id) AS two_step "
+        "FROM users u LEFT JOIN user_limit_overrides q ON q.user_id=u.id AND q.pool='api' "
         f"LEFT JOIN user_limits l ON l.user_id=u.id {where} "
         "ORDER BY u.created_at DESC, u.username LIMIT ? OFFSET ?", (*params, limit, offset))
 
@@ -226,13 +227,20 @@ def lift_expired_suspension(user) -> bool:
 
 
 def delete(user_id: str) -> None:
-    """Delete an account and everything it owns; refuses the last administrator."""
+    """Delete an account and everything it owns; refuses the last administrator.
+
+    Answers it is generating are asked to stop: their leases (``active_streams``) outlive the
+    account's chats, and the run, in whichever process, sees the request. Its agent tasks are
+    deleted with it, so their runs lose their lease and stop at the next check.
+    """
     with db.transaction():
         current = get(user_id)
         if current is None:
             return
         if current["role"] == "admin" and not current["suspended"] and count_active_admins() <= 1:
             raise ValueError("The last administrator cannot be deleted.")
+        db.execute("UPDATE active_streams SET stop_requested=1 WHERE user_id=? OR session_id IN "
+                   "(SELECT id FROM chat_sessions WHERE user_id=?)", (user_id, user_id))
         db.execute("DELETE FROM users WHERE id=?", (user_id,))
 
 
@@ -255,6 +263,38 @@ def create_session(user_id: str, days: int, *, user_agent: str = "", ip_address:
         (_hash(token), user_id, db.now(), db.now(), db.now(timedelta(days=days)), user_agent[:300], ip_address[:64]),
     )
     return token
+
+
+def move_session(token: str, *, user_agent: str, started_before: float) -> str | None:
+    """Re-issue a session signed in before *started_before* (Unix time) under a new token, once.
+
+    For the session cookie's move to its ``__Host-`` name. The browser must identify itself as the one
+    that signed in; a copy of the cookie in another browser ends the session instead, and after a move
+    the old token no longer works, so a saved copy cannot be planted anywhere. Browsers of one make and
+    version send the same User-Agent, so one session per account and User-Agent moves: the account's
+    other sessions signed in before *started_before* from that User-Agent end, and several saved
+    cookies of one account cannot sign several look-alike browsers in. The moved session counts as not
+    recently confirmed. Returns the new token, or None.
+    """
+    if not token or len(token) > 128:
+        return None
+    with db.transaction():
+        row = db.one("SELECT id_hash, user_id, created_at, user_agent FROM auth_sessions "
+                     "WHERE id_hash=? AND expires_at>?", (_hash(token), db.now()))
+        started = db.parse_timestamp(row["created_at"]) if row else None
+        if started is None or started.timestamp() >= started_before:
+            return None
+        if (row["user_agent"] or "") != (user_agent or "")[:300]:
+            db.execute("DELETE FROM auth_sessions WHERE id_hash=?", (row["id_hash"],))
+            return None
+        for other in db.query("SELECT id_hash, created_at FROM auth_sessions WHERE user_id=? AND id_hash<>? "
+                              "AND COALESCE(user_agent, '')=?", (row["user_id"], row["id_hash"], row["user_agent"] or "")):
+            other_started = db.parse_timestamp(other["created_at"])
+            if other_started is None or other_started.timestamp() < started_before:
+                db.execute("DELETE FROM auth_sessions WHERE id_hash=?", (other["id_hash"],))
+        fresh = secrets.token_urlsafe(32)
+        db.execute("UPDATE auth_sessions SET id_hash=?, verified_at=NULL WHERE id_hash=?", (_hash(fresh), row["id_hash"]))
+        return fresh
 
 
 def load_session(token: str):
@@ -324,6 +364,24 @@ def revoke_sessions(user_id: str, *, except_hash: str | None = None) -> None:
             db.execute("DELETE FROM auth_sessions WHERE user_id=?", (user_id,))
 
 
+def mark_session_verified(id_hash: str | None) -> None:
+    """Record that this login session just proved its password or code (see :func:`session_verified_within`)."""
+    if id_hash:
+        db.execute("UPDATE auth_sessions SET verified_at=? WHERE id_hash=?", (db.now(), id_hash))
+
+
+def session_verified_within(id_hash: str | None, seconds: int) -> bool:
+    """True when the session signed in or confirmed its password or code in the last *seconds*.
+
+    Sessions created before schema version 24, or upgraded from an older
+    release's cookie, have never confirmed anything here.
+    """
+    if not id_hash:
+        return False
+    return bool(db.one("SELECT 1 FROM auth_sessions WHERE id_hash=? AND expires_at>? AND verified_at>?",
+                       (id_hash, db.now(), db.now(-timedelta(seconds=seconds)))))
+
+
 def purge_expired_sessions() -> int:
     return db.execute("DELETE FROM auth_sessions WHERE expires_at<=?", (db.now(),)).rowcount
 
@@ -342,6 +400,32 @@ def hit(key: str, limit: int, window_seconds: int, *, record: bool = True) -> bo
         if record:
             db.execute("INSERT INTO rate_limit_hits (key, hit_at) VALUES (?, ?)", (key, db.now()))
     return True
+
+
+def reserve(limits, window_seconds: int) -> list[int] | None:
+    """Record one event for every ``(key, limit)`` pair, or none when any limit is reached.
+
+    A ``(key, limit, window)`` triple counts over its own window instead of
+    *window_seconds* (at most a day: older events are purged). Check and
+    record happen under one write lock, so parallel requests cannot all pass
+    the check before any of them is counted. Returns the recorded rows for
+    :func:`release`, or None when refused.
+    """
+    with db.transaction():
+        for key, limit, *window in limits:
+            since = db.now(-timedelta(seconds=window[0] if window else window_seconds))
+            if limit <= 0 or db.scalar("SELECT COUNT(*) FROM rate_limit_hits WHERE key=? AND hit_at>?",
+                                       (key, since), 0) >= limit:
+                return None
+        return [db.execute("INSERT INTO rate_limit_hits (key, hit_at) VALUES (?, ?)", (key, db.now())).lastrowid
+                for key, *_ in limits]
+
+
+def release(hit_ids) -> None:
+    """Forget events recorded by :func:`reserve` (the attempt turned out not to count)."""
+    hit_ids = [int(hit_id) for hit_id in hit_ids or ()]
+    if hit_ids:
+        db.execute(f"DELETE FROM rate_limit_hits WHERE id IN ({','.join('?' * len(hit_ids))})", tuple(hit_ids))
 
 
 def count_hits(key: str, window_seconds: int) -> int:

@@ -3,10 +3,15 @@
 Sending (``POST /chat/<sid>/send``)
 -----------------------------------
 :func:`prepare` checks a request in this order, cheapest first: the message
-(size, no files in no-history chats), the chat pool's request rate
-(``services.limits``, administrators exempt), the chat's 5-hour and weekly
-tokens for models that consume them, whether a run is already active, and only then the uploaded files
-(images are decoded and PDFs parsed only for requests that may run). It then
+(size, no files in no-history chats), the chat's 5-hour and weekly
+tokens for models that consume them, whether a run is already active, the
+chat pool's request rate (``services.limits``, administrators exempt; a request
+refused before this point does not use a token) and only then the uploaded
+files (images are decoded and PDFs parsed only for requests that may run, and
+one at a time per chat and per account), within the chat's and the account's
+attachment storage (``BC_CHAT_MAX_SESSION_ATTACHMENT_MB``,
+``BC_CHAT_MAX_ACCOUNT_ATTACHMENT_MB``, counting what the files store, such as a
+document's extracted text; administrators exempt from the latter). It then
 selects the model (vision when the chat holds images), the reasoning effort
 (``effort``: a level the account has unlocked for the model, else 403
 ``reasoning_effort_locked``), checks the model's own limits
@@ -18,7 +23,9 @@ in a worker thread. The run is independent of the HTTP connection: when the
 browser disconnects it keeps going, saves checkpoints of the partial answer
 every :data:`CHECKPOINT_SECONDS` and stores the final answer, credits and
 metrics. Stop requests and lease renewal go through ``services.supervisor``,
-so they work whichever process serves them.
+so they work whichever process serves them. When the process exits (a gunicorn
+worker replaced or stopped), :func:`shutdown` lets runs finish for a while,
+then saves the rest as interrupted answers.
 
 Streaming protocol
 ------------------
@@ -44,9 +51,10 @@ was produced) and ``user_message_id`` the saved message that was sent.
 
 A request refused before it runs gets a JSON error instead of a stream:
 400 (invalid input), 403 (a locked model or effort level), 404, 409 (a response
-is already being generated), 429 (rate limit, used-up tokens or a full queue,
-with ``Retry-After``) or 503 (no
-model available). If a stream ends without a terminal event, the client polls
+is already being generated), 413 (too large, or the account's attachment storage
+is full: ``storage_limit``), 429 (rate limit, used-up tokens or a full queue,
+with ``Retry-After``) or 503 (no model available, or too many images being
+processed). If a stream ends without a terminal event, the client polls
 ``GET /chat/<sid>/status``, which reports the saved partial answer and state.
 """
 
@@ -57,6 +65,7 @@ import logging
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -77,6 +86,17 @@ HEARTBEAT_SECONDS = 10.0
 FIRST_EVENT_WAIT = 15.0
 TITLE_LENGTH = 60
 OPTION_FIELDS = ("temperature", "top_p", "top_k", "num_ctx")
+# External API failures before any output (``services.external_api`` codes); other provider codes are
+# configuration problems (chat.error_provider_setup).
+PROVIDER_PROBLEMS = {
+    "provider_rate_limited": "chat.error_provider_busy", "provider_overloaded": "chat.error_provider_busy",
+    "provider_capacity_unavailable": "chat.error_provider_busy",
+    "provider_unavailable": "chat.error_provider_down", "provider_unreachable": "chat.error_provider_down",
+    "provider_timeout": "chat.error_provider_down", "provider_stream_error": "chat.error_provider_down",
+    "provider_protocol_error": "chat.error_provider_down",
+    "provider_model_not_found": "chat.error_provider_model",
+    "provider_rejected_request": "chat.error_provider_rejected",
+}
 
 
 class SendError(Exception):
@@ -185,6 +205,31 @@ def _field(form, name: str) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+_parsing_lock = threading.Lock()
+_parsing_keys: set[str] = set()
+
+
+@contextmanager
+def _parsing(session_id: str, user_id: str | None):
+    """Let one upload per chat, and per non-administrator account, be parsed at a time.
+
+    The run lease is only taken after the files are read, so without this a
+    burst of requests could each start a slow PDF parse before any of them
+    holds the lease.
+    """
+    keys = {f"session:{session_id}"} | ({f"user:{user_id}"} if user_id else set())
+    with _parsing_lock:
+        free = not keys & _parsing_keys
+        if free:
+            _parsing_keys.update(keys)
+    try:
+        yield free
+    finally:
+        if free:
+            with _parsing_lock:
+                _parsing_keys.difference_update(keys)
+
+
 def prepare(user, session, form, files, *, lang: str) -> Prepared:
     """Validate a send request (see the module docstring for the order). Raises :class:`SendError`."""
     with limits.snapshot():  # the rate, the tokens, auto and the fallbacks read each limit setting once
@@ -208,10 +253,6 @@ def _prepare(user, session, form, files, *, lang: str) -> Prepared:
     if uploads and session["is_incognito"]:
         raise SendError(t("chat.error_no_history_files"))
 
-    decision = limits.check_rate(user, "chat")
-    if not decision.allowed:
-        raise SendError(t("chat.error_rate", seconds=decision.retry_after), 429, "rate_limited",
-                        retry_after=decision.retry_after)
     requested = _field(form, "model") or "auto"
     budget = credits.budget(user, "chat")
     # A model that does not count toward the chat limits can still be asked for by name, and ``auto`` moves to
@@ -225,14 +266,27 @@ def _prepare(user, session, form, files, *, lang: str) -> Prepared:
         raise SendError(quota_message(budget, lang), 429, "quota_exhausted", retry_after=budget.seconds_until_reset())
     if runs.session_busy(session["id"]) or (not is_admin and runs.user_busy(user["id"])):
         raise SendError(t("chat.error_busy"), 409, "busy", retry_after=5)
+    decision = limits.check_rate(user, "chat")
+    if not decision.allowed:
+        raise SendError(t("chat.error_rate", seconds=decision.retry_after), 429, "rate_limited",
+                        retry_after=decision.retry_after)
 
-    try:
-        stored = attachments.process(uploads, config)
-    except attachments.AttachmentError as error:
-        raise SendError(t(error.key, **error.params)) from None
-    if stored and chats.attachment_bytes(session["id"]) + sum(item["size_bytes"] for item in stored) > \
-            config.chat_max_session_attachment_bytes:
+    with _parsing(session["id"], None if is_admin else user["id"]) as free:
+        if not free:
+            raise SendError(t("chat.error_busy"), 409, "busy", retry_after=5)
+        try:
+            stored = attachments.process(uploads, config, owner=None if is_admin else f"user:{user['id']}")
+        except attachments.AttachmentBusy as error:
+            raise SendError(t(error.key), 503, "busy", retry_after=10) from None
+        except attachments.AttachmentError as error:
+            raise SendError(t(error.key, **error.params)) from None
+    size = sum(item["stored_bytes"] for item in stored)  # what the files take in the database, not their size
+    if stored and chats.attachment_bytes(session["id"]) + size > config.chat_max_session_attachment_bytes:
         raise SendError(t("chat.file_session_budget"))
+    if stored and not is_admin and \
+            chats.account_attachment_bytes(user["id"]) + size > config.chat_max_account_attachment_bytes:
+        raise SendError(t("chat.file_account_budget", size=config.chat_max_account_attachment_bytes // 2**20),
+                        413, "storage_limit")
     if not content:
         content = t("chat.default_attachment_prompt")
 
@@ -387,6 +441,8 @@ class Run:
         self._last_checkpoint = time.monotonic()
         self._refusal = ""
         self._started_models = 0
+        self._request: inference.TextRequest | None = None
+        self._thread: threading.Thread | None = None
 
     def t(self, key: str, **params) -> str:
         return translate(self.prepared.lang, key, **params)
@@ -397,6 +453,7 @@ class Run:
             _local_runs[self.session_id] = self
         supervisor.register_run(self.session_id, self.begun.token, self.cancel)
         thread = threading.Thread(target=self._main, name=f"chat-{self.session_id[:8]}", daemon=True)
+        self._thread = thread
         try:
             thread.start()
         except BaseException:
@@ -435,6 +492,7 @@ class Run:
             request_type="chat_incognito" if prepared.session["is_incognito"] else "chat", priority=prepared.priority, owner_key=f"user:{prepared.user['id']}:chat",
             fallbacks=prepared.selection.fallbacks, think=prepared.think, effort=prepared.effort,
             authorize=self._authorize, prepare=self._for_model)
+        self._request = request
         try:
             for event in inference.generate(request, self.cancel):
                 self._handle(event)
@@ -450,6 +508,8 @@ class Run:
         except Cancelled:
             if self.cancel.reason == "lease lost":
                 self._lost()
+            elif self.cancel.reason == "shutdown":
+                self._end("interrupted", self.t("chat.state_interrupted"))
             else:
                 self._end("stopped", "")
 
@@ -514,7 +574,9 @@ class Run:
             self.channel.send({"type": "delta", "text": event.text, "thinking": event.thinking})
             if time.monotonic() - self._last_checkpoint >= CHECKPOINT_SECONDS:
                 self._last_checkpoint = time.monotonic()
-                if not runs.checkpoint(self.session_id, self.begun.token, self._content(), self.model["id"]):
+                tokens_in, tokens_out = self._usage_so_far()
+                if not runs.checkpoint(self.session_id, self.begun.token, self._content(), self.model["id"],
+                                       tokens_in=tokens_in, tokens_out=tokens_out):
                     self.cancel.cancel("lease lost")
         elif isinstance(event, inference.Finished):
             self._finished(event)
@@ -522,43 +584,76 @@ class Run:
     def _content(self) -> str:
         return compose("".join(self._thinking), "".join(self._answer))
 
+    def _usage_so_far(self) -> tuple[int, int]:
+        """Tokens to charge if the answer ends now: provider counts where reported, estimates otherwise."""
+        if self._request is None:
+            return 0, 0
+        return inference.interrupted_usage(self._request, "".join(self._thinking) + "".join(self._answer))
+
     def _finished(self, finished: inference.Finished) -> None:
         if self.cancel.reason == "lease lost":
             self._lost()
+            return
+        if self.cancel.reason == "shutdown":
+            # This process is exiting (see shutdown()): keep what was generated, as recovery would.
+            self._end("interrupted", self.t("chat.state_interrupted"), finished)
             return
         message = ""
         if finished.state == "failed":
             if finished.error and not self._refusal:
                 log.warning("Chat answer failed: %s", finished.error)
-            message = self._refusal or self.t("chat.error_partial" if self._content() else "chat.error_failed")
+            message = self._refusal or (self.t("chat.error_partial") if self._content() else
+                                        self._provider_problem(finished) or self.t("chat.error_failed"))
         elif finished.truncated:
             message = self.t("chat.notice_truncated")
         elif self.cancel.reason == "deadline":
             message = self.t("chat.error_deadline")
         self._end(finished.state, message, finished)
 
+    def _provider_problem(self, finished: inference.Finished) -> str:
+        """Why an external API model failed, in the reader's words (``services.external_api`` codes)."""
+        key = PROVIDER_PROBLEMS.get(finished.error_code)
+        if key is None and finished.error_code.startswith("provider_"):
+            key = "chat.error_provider_setup"
+        return self.t(key, model=finished.model["display_name"]) if key else ""
+
     def _end(self, state: str, message: str, finished: inference.Finished | None = None) -> None:
         content = self._content()
+        if finished:
+            tokens_in, tokens_out, estimated = (finished.prompt_tokens, finished.completion_tokens,
+                                                finished.usage_estimated)
+        elif content:
+            # An unexpected error cut the answer short: charge an estimate of
+            # what was generated, as recovering an abandoned run does.
+            (tokens_in, tokens_out), estimated = self._usage_so_far(), True
+        else:
+            tokens_in, tokens_out, estimated = 0, 0, False
         outcome = runs.finish(
             self.session_id, self.begun.token, user_id=self.prepared.user["id"], content=content, state=state,
             error=message, model_id=self.model["id"] if (content or finished) else None,
-            tokens_in=finished.prompt_tokens if finished else 0,
-            tokens_out=finished.completion_tokens if finished else 0,
-            usage_estimated=finished.usage_estimated if finished else False,
+            tokens_in=tokens_in, tokens_out=tokens_out, usage_estimated=estimated,
             duration_ms=finished.duration_ms + finished.wait_ms if finished else 0,
             queue_wait_ms=finished.wait_ms if finished else 0,
-            charge=bool(content) or state == "completed")
+            charge=bool(content) or state == "completed" or bool(finished and finished.billable))
         if outcome is None:
             self._lost()
             return
         self.channel.send({
             "type": "done" if state in ("completed", "stopped") else "error", "state": state, "message": message,
             "message_id": outcome.message_id, "user_message_id": self.begun.message_id,
-            "tokens_in": finished.prompt_tokens if finished else 0,
-            "tokens_out": finished.completion_tokens if finished else 0,
+            "tokens_in": tokens_in, "tokens_out": tokens_out,
             "title": display_title(outcome.title, self.prepared.lang),
             "model": self.model["ollama_name"], "display_name": self.model["display_name"],
         })
+
+    def abandon(self) -> None:
+        """Leave this run to recovery in another process: stop renewing its lease and let it expire now."""
+        supervisor.unregister_run(self.session_id, self.begun.token)
+        try:
+            runs.expire(self.session_id, self.begun.token)
+        except Exception:  # noqa: BLE001 - the lease then expires after runs.LEASE_SECONDS
+            log.warning("Could not hand over the chat answer of %s", self.session_id[:8], exc_info=True)
+            db.close_thread_connection()
 
     def _lost(self) -> None:
         self.channel.send({"type": "error", "state": "interrupted", "message": self.t("chat.error_lease"),
@@ -584,6 +679,52 @@ def start(prepared: Prepared) -> Run:
     if run.rejected is not None:
         raise run.rejected
     return run
+
+
+def _join(items: list[Run], deadline: float) -> None:
+    for run in items:
+        if run._thread is not None:
+            run._thread.join(max(0.0, deadline - time.monotonic()))
+
+
+def _running() -> list[Run]:
+    with _local_lock:
+        return list(_local_runs.values())
+
+
+def shutdown(*, grace: float = 0.0, save_timeout: float = 10.0, release_places: bool = True) -> None:
+    """Hand over this process's chat runs before it exits (gunicorn ``worker_exit``).
+
+    Runs get *grace* seconds to finish (an answer keeps going after its reader
+    left); the rest are stopped and saved as interrupted answers, charged for
+    what they generated. A run that cannot save within *save_timeout* seconds
+    gives up its lease, so another process recovers its last checkpoint at
+    once. Then the inference queue places of this process are released, unless
+    *release_places* is false: the caller still lets other answers of this
+    process (API, playground) finish, which keep counting until it calls
+    :func:`release_queue_places` itself.
+    """
+    _join(_running(), time.monotonic() + max(0.0, grace))
+    remaining = _running()
+    for run in remaining:
+        run.cancel.cancel("shutdown")
+    _join(remaining, time.monotonic() + max(0.0, save_timeout))
+    stuck = _running()
+    for run in stuck:
+        run.abandon()
+    if release_places:
+        release_queue_places()
+    if remaining:
+        log.info("Process exiting: %d chat answer(s) saved as interrupted, %d left to recovery",
+                 len(remaining) - len(stuck), len(stuck))
+
+
+def release_queue_places() -> None:
+    """Free every inference queue place this process holds (it is exiting and its answers were handed over)."""
+    try:
+        queue.release_process()
+    except Exception:  # noqa: BLE001 - the places expire after queue.LEASE_SECONDS
+        log.warning("Could not release the inference queue places of this process", exc_info=True)
 
 
 def stop(session_id: str) -> bool:

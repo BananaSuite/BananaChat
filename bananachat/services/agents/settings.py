@@ -14,13 +14,14 @@ administrator overrides that for the model (``allow`` or ``deny``).
 
 from __future__ import annotations
 
-import time
 import json
+import time
 from dataclasses import dataclass
 
 from bananachat import db
 from bananachat.db import agents as agents_db
 from bananachat.db import users
+from bananachat.numbers import ascii_int
 from bananachat.services.access import AccessContext, is_text_model, usable_models
 from bananachat.services.agents import gitfetch
 
@@ -106,7 +107,7 @@ def normalise(data: dict) -> Settings:
     raw = data.get("model_overrides")
     if isinstance(raw, dict):
         for key, value in list(raw.items())[:1000]:
-            if isinstance(key, str) and key.isdigit() and value in OVERRIDES:
+            if isinstance(key, str) and ascii_int(key) is not None and value in OVERRIDES:
                 overrides[key] = value
     values["model_overrides"] = overrides
     values["git_hosts"] = gitfetch.normalise_hosts(data.get("git_hosts", list(gitfetch.DEFAULT_HOSTS)))
@@ -142,7 +143,7 @@ def enabled() -> bool:
 # ----- models ----------------------------------------------------------------------
 
 def supports_tools(model, caps: dict, overrides: dict) -> bool:
-    # Claude Code chat disables tools; Ollama and external API transports support them.
+    # Ollama and external API transports support tools.
     if model["backend"] not in ("ollama", "external"):
         return False
     override = overrides.get(str(model["id"]))

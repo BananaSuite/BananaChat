@@ -1,17 +1,29 @@
 {% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
 {% block body_class %}auth-page{% endblock %}
 {% block topbar %}{% endblock %}
 {% block status %}{% endblock %}
 {% block footer %}{% endblock %}
+{#- Messages show inside the card (auth-messages below), next to the form they are about. -#}
+{% block toasts %}<div class="toasts" id="toasts" role="status" aria-live="polite"></div>{% endblock %}
 {% block content %}
 <div class="auth-shell">
   <div class="auth-card">
     <a class="brand" href="{{ url_for('core.index') }}">
-      <img src="{{ url_for('static', filename='img/favicon.png') }}" alt="" width="40" height="40">
+      <img src="{{ url_for('static', filename='img/favicon.png') }}" alt="" width="32" height="32">
       <span>{{ site_name }}</span>
     </a>
     {% if status_notices | selectattr('visible') | list %}<div class="auth-status">{% include "partials/status_banner.html" %}</div>{% endif %}
     <div class="card">
+      {%- set flashes = get_flashed_messages(with_categories=true) %}
+      {%- if flashes %}
+      <div class="auth-messages stack-sm" id="auth-messages">
+        {%- for category, text in flashes %}
+        {%- set tone = category if category in ("success", "error", "warning") else "info" %}
+        <div class="alert alert-{{ tone }}" role="{{ 'alert' if tone == 'error' else 'status' }}">{{ icon({"success": "check", "error": "alert", "warning": "alert"}.get(tone, "info")) }}<p>{{ text }}</p></div>
+        {%- endfor %}
+      </div>
+      {%- endif %}
       {% block card %}{% endblock %}
     </div>
     <div class="auth-footer">
@@ -19,11 +31,11 @@
       <nav class="row" aria-label="{{ t('nav.language') }}">
         <span class="grow"></span>
         {% for code, name in language_names.items() %}
-        <a href="{{ language_switch_url(code) }}" lang="{{ code }}"{% if code == lang %} aria-current="true"{% endif %}>{{ name }}</a>
+        {% if code == lang %}<a href="{{ language_switch_url(code) }}" lang="{{ code }}" aria-current="true">{{ name }}</a>{% else %}<a href="{{ language_switch_url(code) }}" lang="{{ code }}" hreflang="{{ code }}">{{ name }}</a>{% endif %}
         {% endfor %}
         <span class="grow"></span>
       </nav>
-      <p class="mt-2 faint small"><a href="{{ url_for('core.source') }}">{{ t("common.source_code") }}</a> · {{ product_name }} {{ product_version }}</p>
+      {% include "partials/footer.html" %}
     </div>
   </div>
 </div>

@@ -1,5 +1,6 @@
 """Isolated tests for the compute-side checkpoint agent."""
 
+import errno
 import hashlib
 import io
 import json
@@ -156,6 +157,28 @@ class CheckpointAgentTests(unittest.TestCase):
                 return job
             time.sleep(0.01)
         self.fail("job did not reach a terminal state")
+
+    def test_a_storage_error_fails_one_job_and_keeps_the_worker_alive(self):
+        payload = safetensors()
+        agent = self.agent(payload=payload, start_worker=False)
+        original = agent._persist_locked
+        failures = []
+
+        def failing_once():
+            if threading.current_thread() is agent._worker and not failures:
+                failures.append(True)
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return original()
+
+        agent._persist_locked = failing_once
+        first, _ = agent.submit(self.request(payload, key="first", target_name="vendor/first.safetensors"))
+        second, _ = agent.submit(self.request(payload, key="second", target_name="vendor/second.safetensors"))
+        agent._worker = threading.Thread(target=agent._worker_loop, daemon=True)
+        agent._worker.start()
+
+        self.assertEqual(self.wait(agent, first["id"])["status"], "failed")
+        self.assertEqual(self.wait(agent, second["id"])["status"], "completed")
+        self.assertTrue(agent._worker.is_alive())
 
     def test_token_file_must_be_mode_0600(self):
         self.token_file.chmod(0o644)

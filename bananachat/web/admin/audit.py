@@ -25,9 +25,21 @@ def _details(raw: str):
     except ValueError:
         return raw
     if isinstance(value, dict):
-        return ", ".join(f"{key}: {item if not isinstance(item, (dict, list)) else json.dumps(item)}"
-                         for key, item in value.items())
+        return ", ".join(f"{key}: {_value(key, item)}" for key, item in value.items())
     return raw
+
+
+def _value(key: str, item) -> str:
+    """One detail value in words: no Python reprs (None, True) or JSON lists."""
+    if item is None:
+        return "no end date" if key in ("until", "ends_at", "expires_at") else "—"
+    if isinstance(item, bool):
+        return "yes" if item else "no"
+    if isinstance(item, list):
+        return ", ".join(_value(key, part) for part in item) or "—"
+    if isinstance(item, dict):
+        return json.dumps(item)
+    return str(item)
 
 
 @bp.get("/audit", endpoint="audit")

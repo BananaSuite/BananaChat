@@ -24,8 +24,10 @@ document.addEventListener("submit", async (event) => {
   const button = form.querySelector("[type=submit]");
   setBusy(button, true);
   try {
-    const name = form.elements.name ? form.elements.name.value.trim() : undefined;
-    const data = await api(form.action, { json: name === undefined ? {} : { name } });
+    // Every field but the CSRF token (sent as a header): name, scope and lifetime when creating, none when rotating.
+    const fields = Object.fromEntries([...new FormData(form)].filter(([key]) => key !== "csrf_token"));
+    if (typeof fields.name === "string") fields.name = fields.name.trim();
+    const data = await api(form.action, { json: fields });
     if (form.elements.name) form.elements.name.value = "";
     showToken(data, form.dataset.tokenForm === "rotate");
   } catch (error) {

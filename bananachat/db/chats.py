@@ -3,11 +3,15 @@
 A session (``chat_sessions``) belongs to one user. Normal chats are listed in
 the user's history; *no-history* chats (``is_incognito=1``) never are, cannot
 be shared and are erased after a period of inactivity, while a copy of each
-of their messages is kept in ``incognito_audit`` for administrators.
+of their messages is kept in ``incognito_audit`` for administrators. A chat an
+administrator stopped sharing (``share_blocked_at``) cannot be shared again by
+its owner until an administrator allows it.
 
 Deleting a chat sets ``deleted_at`` (it disappears from every user-facing
 view); :func:`purge_deleted` erases it for good after the retention period.
-Generation runs (``active_streams``) live in :mod:`bananachat.db.runs`.
+Generation runs (``active_streams``) live in :mod:`bananachat.db.runs`:
+deleting or erasing a chat asks its run to stop but never removes the run's
+lease, so the run (in whichever process) still charges what it generated.
 """
 
 from __future__ import annotations
@@ -125,13 +129,19 @@ def set_personality(session_id: str, personality_id) -> None:
 
 # ----- sharing -------------------------------------------------------------
 
+class ShareBlocked(ValueError):
+    """An administrator stopped sharing this chat; its owner cannot share it until an administrator allows it."""
+
+
 def share(session_id: str) -> str:
-    """The session's share token, created on first use and stable until revoked."""
+    """The session's share token, created on first use and stable until revoked. Raises :class:`ShareBlocked`."""
     with db.transaction():
-        row = db.one("SELECT shared_token, is_incognito FROM chat_sessions WHERE id=? AND deleted_at IS NULL",
-                     (session_id,))
+        row = db.one("SELECT shared_token, is_incognito, share_blocked_at FROM chat_sessions "
+                     "WHERE id=? AND deleted_at IS NULL", (session_id,))
         if row is None or row["is_incognito"]:
             raise ValueError("This chat cannot be shared.")
+        if row["share_blocked_at"]:
+            raise ShareBlocked("An administrator stopped sharing this chat.")
         if row["shared_token"]:
             return row["shared_token"]
         token = secrets.token_urlsafe(24)
@@ -139,8 +149,20 @@ def share(session_id: str) -> str:
         return token
 
 
-def revoke_share(session_id: str) -> None:
-    db.execute("UPDATE chat_sessions SET shared_token=NULL WHERE id=?", (session_id,))
+def revoke_share(session_id: str, *, block: bool = False) -> None:
+    """Take the share link offline; with *block* (an administrator's moderation) the owner cannot share the chat
+    again until :func:`allow_share`."""
+    if block:
+        db.execute("UPDATE chat_sessions SET shared_token=NULL, share_blocked_at=COALESCE(share_blocked_at, ?) "
+                   "WHERE id=?", (db.now(), session_id))
+    else:
+        db.execute("UPDATE chat_sessions SET shared_token=NULL WHERE id=?", (session_id,))
+
+
+def allow_share(session_id: str) -> bool:
+    """Lift an administrator's block on sharing the chat. False when it was not blocked."""
+    return db.execute("UPDATE chat_sessions SET share_blocked_at=NULL WHERE id=? AND share_blocked_at IS NOT NULL",
+                      (session_id,)).rowcount == 1
 
 
 def by_share_token(token):
@@ -161,9 +183,12 @@ def soft_delete(session_id: str) -> None:
 
 
 def hard_delete(session_id: str) -> None:
-    """Erase a session, its messages and attachments (no-history audit copies are kept)."""
+    """Erase a session, its messages and attachments (no-history audit copies are kept).
+
+    A running answer is asked to stop; its lease stays until the run (or recovery) has charged it.
+    """
     with db.transaction():
-        db.execute("DELETE FROM active_streams WHERE session_id=?", (session_id,))
+        db.execute("UPDATE active_streams SET stop_requested=1 WHERE session_id=?", (session_id,))
         db.execute("DELETE FROM chat_sessions WHERE id=?", (session_id,))
 
 
@@ -171,20 +196,18 @@ def delete_all_for_user(user_id: str, *, hard: bool = False) -> int:
     """Delete every chat of a user ("delete all my chats"). Returns how many.
 
     Normal chats are soft-deleted (erased after the retention period) unless
-    *hard*; no-history chats are always erased at once. Running answers stop.
+    *hard*; no-history chats are always erased at once. Running answers stop
+    and are still charged (see :func:`hard_delete`).
     """
     with db.transaction():
         db.execute("UPDATE active_streams SET stop_requested=1 WHERE session_id IN "
                    "(SELECT id FROM chat_sessions WHERE user_id=?)", (user_id,))
         count = db.execute("DELETE FROM chat_sessions WHERE user_id=? AND is_incognito=1", (user_id,)).rowcount
         if hard:
-            db.execute("DELETE FROM active_streams WHERE session_id IN "
-                       "(SELECT id FROM chat_sessions WHERE user_id=?)", (user_id,))
             count += db.execute("DELETE FROM chat_sessions WHERE user_id=?", (user_id,)).rowcount
         else:
             count += db.execute("UPDATE chat_sessions SET deleted_at=?, shared_token=NULL "
                                 "WHERE user_id=? AND deleted_at IS NULL", (db.now(), user_id)).rowcount
-        db.execute("DELETE FROM active_streams WHERE session_id NOT IN (SELECT id FROM chat_sessions)")
     return count
 
 
@@ -280,13 +303,18 @@ ATTACHMENT_META = "t.id, t.message_id, t.kind, t.filename, t.media_type, t.size_
 
 
 def add_attachments(message_id: int, items: list[dict]) -> None:
+    """Store attachment rows (``services.attachments.process``): ``size_bytes`` is the uploaded file's size,
+    ``stored_bytes`` what the row takes in the database, which the storage limits count."""
     now = db.now()
     for item in items:
+        stored = item.get("stored_bytes")
+        if stored is None:
+            stored = len(item.get("image_data") or b"") + len((item.get("extracted_text") or "").encode("utf-8"))
         db.execute(
             "INSERT INTO chat_attachments (id, message_id, kind, filename, media_type, size_bytes, sha256, "
-            "extracted_text, image_data, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "extracted_text, image_data, created_at, stored_bytes) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (item["id"], message_id, item["kind"], item["filename"], item["media_type"], item["size_bytes"],
-             item["sha256"], item.get("extracted_text"), item.get("image_data"), now))
+             item["sha256"], item.get("extracted_text"), item.get("image_data"), now, stored))
 
 
 def attachments_for(message_ids) -> dict[int, list]:
@@ -309,9 +337,22 @@ def get_attachment(session_id: str, attachment_id: str):
                   "WHERE t.id=? AND m.session_id=?", (attachment_id, session_id))
 
 
+# What an attachment takes in the database (rows stored by earlier releases since version 25 have it too).
+_STORED = "COALESCE(t.stored_bytes, t.size_bytes)"
+
+
 def attachment_bytes(session_id: str) -> int:
-    return db.scalar("SELECT COALESCE(SUM(t.size_bytes), 0) FROM chat_attachments t "
+    """Attachment bytes stored in a chat (extracted text and stored images, not the uploaded files' sizes)."""
+    return db.scalar(f"SELECT COALESCE(SUM({_STORED}), 0) FROM chat_attachments t "
                      "JOIN chat_messages m ON m.id=t.message_id WHERE m.session_id=?", (session_id,), 0)
+
+
+def account_attachment_bytes(user_id: str) -> int:
+    """Attachment bytes stored in a user's chats (as :func:`attachment_bytes`); deleted chats count until they are
+    erased."""
+    return db.scalar(f"SELECT COALESCE(SUM({_STORED}), 0) FROM chat_sessions s "
+                     "JOIN chat_messages m ON m.session_id=s.id JOIN chat_attachments t ON t.message_id=m.id "
+                     "WHERE s.user_id=?", (user_id,), 0)
 
 
 def has_images(session_id: str) -> bool:
@@ -436,7 +477,8 @@ def admin_list(*, user_id: str | None = None, include_deleted: bool = False, inc
                limit: int = 50, offset: int = 0):
     where, params = _admin_where(user_id, include_deleted, incognito)
     return db.query(
-        "SELECT s.id, s.user_id, s.title, s.is_incognito, s.shared_token IS NOT NULL AS shared, s.created_at, "
+        "SELECT s.id, s.user_id, s.title, s.is_incognito, s.shared_token IS NOT NULL AS shared, "
+        "s.share_blocked_at IS NOT NULL AS share_blocked, s.created_at, "
         "s.updated_at, s.deleted_at, s.generation_state, u.username, "
         "(SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=s.id) AS message_count "
         f"FROM chat_sessions s JOIN users u ON u.id=s.user_id {where} "

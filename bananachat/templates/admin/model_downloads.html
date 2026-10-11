@@ -25,7 +25,7 @@
   </div>
   <div class="grid grid-3 queue-stats">
     <div><span class="stat-label">Waiting or running</span> <strong id="queue-active">{{ queue.active }}</strong></div>
-    <div><span class="stat-label">At the same time</span> <strong>{{ queue.concurrency }}</strong> <a class="small" href="{{ url_for('admin.model_settings') }}#downloads-settings">Change</a></div>
+    <div><span class="stat-label">At the same time</span> <strong>{{ queue.concurrency }}</strong> <a class="small inline-target" href="{{ url_for('admin.model_settings') }}#downloads-settings">Change</a></div>
     <div class="queue-meter">
       <span class="stat-label">Overall progress</span>
       <progress class="meter" id="queue-progress" max="100" value="{{ queue.percent }}" aria-label="Overall download progress">{{ queue.percent }}%</progress>
@@ -39,7 +39,7 @@
 <div class="grid grid-2 mb-3 download-forms">
   <form method="post" action="{{ url_for('admin.pull_create') }}" class="stack sub-card" data-busy>
     {{ csrf() }}
-    <h3>Ollama model</h3>
+    <h3>One model</h3>
     <div class="field">
       <label for="pull-name" class="required">Model name</label>
       <input type="text" id="pull-name" name="name" required maxlength="300" placeholder="llama3.2:3b" autocomplete="off" spellcheck="false" aria-describedby="pull-name-hint">
@@ -58,7 +58,7 @@
     </div>
     {% if missing %}
     <fieldset class="admin-fieldset">
-      <legend>Catalog models no longer on the server</legend>
+      <legend>Catalogue models no longer on the server</legend>
       <div class="check-list">
         {% for item in missing %}
         <label class="check"><input type="checkbox" name="models" value="{{ item.name }}"><span><span class="mono">{{ item.name }}</span><small>{{ item.display_name }}{% if item.published %} · published{% endif %}</small></span></label>
@@ -97,11 +97,11 @@
     <div class="form-actions form-actions-start"><button type="submit" class="btn btn-primary">{{ icon("download") }}Download checkpoint</button></div>
   </form>
   {% elif not checkpoint.images_enabled %}
-  <p class="muted mb-0">Image generation is disabled (<code>BC_IMAGE_BACKEND</code>), so checkpoints are not downloaded from here.</p>
+  <p class="muted small mb-0">Image generation is disabled (<code>BC_IMAGE_BACKEND</code>), so checkpoints are not downloaded from here.</p>
   {% elif checkpoint.problem %}
   <p class="danger-text mb-0">{{ checkpoint.problem }}</p>
   {% else %}
-  <p class="muted mb-0">Configure the checkpoint download agent (<code>BC_CHECKPOINT_AGENT_URL</code> and <code>BC_CHECKPOINT_AGENT_TOKEN_FILE</code>) to download Hugging Face checkpoints for ComfyUI.</p>
+  <p class="muted small mb-0">Configure the checkpoint download agent (<code>BC_CHECKPOINT_AGENT_URL</code> and <code>BC_CHECKPOINT_AGENT_TOKEN_FILE</code>) to download Hugging Face checkpoints for ComfyUI.</p>
   {% endif %}
 </section>
 
@@ -116,7 +116,7 @@
   </div>
   {% if jobs %}
   <div class="table-wrap">
-    <table class="table" id="download-table">
+    <table class="table table-stack table-stack-md" id="download-table">
       <thead><tr><th scope="col"><span class="visually-hidden">Order</span></th><th scope="col">Model</th><th scope="col">Status</th><th scope="col">Progress</th><th scope="col">Requested</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
       <tbody>
       {% set waiting = jobs | selectattr("status", "equalto", "queued") | list %}
@@ -131,16 +131,16 @@
             </form>
             {% endif %}
           </td>
-          <td class="name-cell"><span class="mono break-anywhere">{{ job.ollama_name }}</span>{% if job.backend == "comfyui" %} <span class="badge">Checkpoint</span>{% endif %}{% if job.source == "bulk" %} <span class="badge">Bulk</span>{% endif %}</td>
+          <td class="name-cell cell-full"><span class="mono break-anywhere">{{ job.ollama_name }}</span>{% if job.backend == "comfyui" %} <span class="badge">Checkpoint</span>{% endif %}{% if job.source == "bulk" %} <span class="badge">Bulk</span>{% endif %}</td>
           <td data-job-status>{{ status_badge(job.status) }}{% if job.paused and job.status == "queued" %} <span class="badge badge-warning">paused</span>{% endif %}{% if job.status == "queued" and job.next_attempt_at %} <span class="badge badge-warning" title="Next attempt {{ job.next_attempt_at | datetime }}">retrying</span>{% endif %}</td>
-          <td class="progress-cell">
+          <td class="progress-cell cell-full">
             {% if job.status in ("queued", "pulling") %}
             <progress class="meter" max="100" value="{{ job.progress_pct }}" aria-label="Download progress of {{ job.ollama_name }}">{{ job.progress_pct }}%</progress>
             {% endif %}
             <span class="small {{ 'danger-text' if job.status == 'failed' else 'muted' }}" data-job-detail>{{ job.error_message if job.status == "failed" else job.progress_detail }}</span>
             {% if job.status == "done" and job.digest %}<span class="small faint mono" title="{{ job.digest }}">verified {{ job.digest[:12] }}</span>{% endif %}
           </td>
-          <td class="nowrap small">{{ when(job.created_at) }}{% if job.requested_by_name %}<br><span class="muted">{{ job.requested_by_name }}</span>{% endif %}</td>
+          <td class="nowrap small" data-label="Requested:">{{ when(job.created_at) }}{% if job.requested_by_name %}<br class="stack-break"><span class="muted"><span class="stack-sep"> · </span>{{ job.requested_by_name }}</span>{% endif %}</td>
           <td class="actions">
             {% if job.status in ("queued", "pulling") %}
             <form method="post" action="{{ url_for('admin.pull_pause', job_id=job.id) }}">

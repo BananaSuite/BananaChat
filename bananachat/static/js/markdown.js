@@ -51,8 +51,83 @@ function safeUrl(url) {
   return SAFE_URL.test(trimmed) ? trimmed : null;
 }
 
-function linkHtml(url, labelHtml) {
-  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow">${labelHtml}</a>`;
+function linkHtml(url, labelHtml, host = "") {
+  // host: shown after a label that names another site, so "[bank.example](https://evil.example)" cannot pass.
+  const title = host ? ` title="${escapeHtml(host)}"` : "";
+  const suffix = host ? ` <span class="link-host">(${escapeHtml(host)})</span>` : "";
+  return `<a href="${escapeHtml(url)}"${title} target="_blank" rel="noopener noreferrer nofollow">${labelHtml}${suffix}</a>`;
+}
+
+/** The host name of an http(s) URL, lower case and in ASCII (punycode), or "". */
+function hostOf(url) {
+  try {
+    const parsed = new URL(url);
+    return /^https?:$/.test(parsed.protocol) ? parsed.hostname.replace(/\.$/, "") : "";
+  } catch {
+    return "";
+  }
+}
+
+// Labels are read the way they look: NFKC folds fullwidth letters and dots (U+FF0E, U+2024, U+FE52),
+// these dots of other scripts render like "." too (browsers map the ideographic ones to "." in host
+// names), as do the Arabic-Indic zero (U+0660, U+06F0, drawn as a dot) and the Arabic full stop
+// (U+06D4), and invisible characters (zero-width space, soft hyphen, joiners) can split a name unseen.
+// The middle dot (U+00B7) is left alone: Catalan writes it inside words ("col·legi").
+const LOOKALIKE_DOTS = /[\u3002\uff61\u0701\u0702\u2e3c\ua4f8\u0660\u06f0\u06d4]/g;
+const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
+const MARKS = /\p{M}/gu;
+// A host anywhere in a word: a domain name (two or more labels, the last from a letter and at least two
+// characters) or an IPv4 address. Combining marks belong to the name, as scripts such as Devanagari need
+// them, so a mark drawn into the underline or over a dot (U+0332, U+0301) cannot split "bank.example".
+const LABEL = "[\\p{L}\\p{M}\\p{N}]";
+const DOMAIN = new RegExp(
+  `(^|[^\\p{L}\\p{M}\\p{N}.-])(` +
+    `(?:${LABEL}(?:[\\p{L}\\p{M}\\p{N}-]{0,61}${LABEL})?\\.)+\\p{M}*\\p{L}[\\p{L}\\p{M}\\p{N}-]*${LABEL}` +
+    `|\\d{1,3}(?:\\.\\d{1,3}){3}(?![\\p{L}\\p{M}\\p{N}-]|\\.[\\p{L}\\p{N}])` +
+  `)`,
+  "gu",
+);
+
+/** The names a link label gives, such as "Sign in at https://bank.example/login" or "bank\uff0eexample".
+ *  Each name comes as the hosts it may be read as: as written, and without its combining marks, which
+ *  outside the scripts that need them only decorate a name. */
+function namedHosts(labelText) {
+  const plain = labelText.normalize("NFKC").replace(INVISIBLE, "").replace(LOOKALIKE_DOTS, ".").toLowerCase();
+  const names = [];
+  for (const word of plain.split(/[\s<>()[\]{}"'`|,;!«»“”‘’]+/u)) {
+    // Only the part before the path: "https://github.com/user/repo.git" names github.com alone.
+    const authority = word.replace(/^[a-z][a-z\d+.-]*:\/\//, "").split(/[/?#\\]/, 1)[0];
+    for (const match of authority.matchAll(DOMAIN)) {
+      const readings = new Set([hostOf(`http://${match[2]}`), hostOf(`http://${match[2].replace(MARKS, "")}`)]);
+      readings.delete("");
+      if (readings.size) names.push([...readings]);
+    }
+  }
+  return names;
+}
+
+/** The same site: equal, or one a subdomain of the other. Two sites under a shared domain
+ *  (a.github.io, b.github.io) stay apart, which a guess at registrable domains would merge. */
+function sameSite(a, b) {
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+/** The real host when a link's visible label names a different site anywhere in it, else "". */
+function deceptiveHost(target, labelText) {
+  const host = hostOf(target);
+  if (!host) return "";
+  for (const readings of namedHosts(labelText)) {
+    if (!readings.some((named) => sameSite(named, host))) return host;
+  }
+  return "";
+}
+
+/** A link label as plain text: code spans already cut out are put back, Markdown markers dropped. */
+function labelText(label, tokens) {
+  return label
+    .replace(/\u0000(\d+)\u0000/g, (match, index) => (tokens[Number(index)] ?? "").replace(/<[^>]*>/g, ""))
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&")
+    .replace(/[*_~`\\]/g, "");
 }
 
 /** Trim trailing punctuation that belongs to the sentence, not to a bare URL. */
@@ -132,6 +207,20 @@ function codeSpans(source, hold) {
 }
 
 /**
+ * TeX between $...$ or $$...$$ is kept as written, like a code span: there is no math
+ * renderer, so backslashes (\frac, \,) must survive for the text to stay valid TeX.
+ * A dollar amount is not math: the opening $ is followed and the closing $ preceded
+ * by a non-space, and the closing $ is not followed by a digit or letter ("$5 and $10").
+ * Neither pattern crosses a $, so each attempt stops at the next one (linear time).
+ */
+function mathSpans(source, hold) {
+  const math = (tex) => hold(`<code class="math">${escapeHtml(tex)}</code>`);
+  return source
+    .replace(/\$\$([^$]{1,4000}?)\$\$/g, (match) => math(match))
+    .replace(/(^|[^\\$\w])(\$(?=[^\s$])[^$\n]{0,1000}?[^\s$\\]\$)(?![\w$])/g, (match, before, tex) => before + math(tex));
+}
+
+/**
  * Inline Markdown to HTML. Code spans and links are cut out first and kept as
  * placeholders, the rest is escaped, emphasis is applied to the escaped text,
  * then the placeholders are restored.
@@ -143,13 +232,15 @@ export function renderInline(text, { links = true } = {}, shared = null) {
   let source = shared ? String(text) : String(text).replace(/\u0000/g, "�");
 
   source = codeSpans(source, hold);
+  source = mathSpans(source, hold);
   if (links) {
     // An image becomes a link to it, labelled with its alt text: remote images are never loaded.
     source = source.replace(/(!?)\[([^\[\]\n]{0,500})\]\(\s*<?((?:[^()\s<>]|\([^()\s<>]*\)){1,2000})>?(?:\s+"[^"\n]*")?\s*\)/g, (match, image, label, url) => {
       if (!image && !label) return match;
       const target = safeUrl(url);
       const labelHtml = label ? renderInline(label, { links: false }, tokens) : escapeHtml(target || url);
-      return target ? hold(linkHtml(target, labelHtml)) : hold(`${labelHtml} (${escapeHtml(url)})`);
+      const host = target && label ? deceptiveHost(target, labelText(label, tokens)) : "";
+      return target ? hold(linkHtml(target, labelHtml, host)) : hold(`${labelHtml} (${escapeHtml(url)})`);
     });
     source = source.replace(/<((?:https?:\/\/|mailto:)[^\s<>]{1,2000})>/gi, (match, url) => {
       const target = safeUrl(url);
@@ -234,14 +325,26 @@ function expandTabs(line) {
   return line.replace(/\t/g, "    ");
 }
 
+// Display names for the usual fence languages; others are shown as written.
+const LANGUAGE_NAMES = {
+  bash: "Bash", sh: "Shell", shell: "Shell", zsh: "Zsh", console: "Console", powershell: "PowerShell", ps1: "PowerShell",
+  c: "C", cpp: "C++", "c++": "C++", cs: "C#", csharp: "C#", css: "CSS", diff: "Diff", dockerfile: "Dockerfile",
+  go: "Go", html: "HTML", ini: "INI", java: "Java", javascript: "JavaScript", js: "JavaScript", json: "JSON",
+  jsx: "JSX", kotlin: "Kotlin", kt: "Kotlin", latex: "LaTeX", tex: "TeX", lua: "Lua", make: "Makefile", makefile: "Makefile",
+  markdown: "Markdown", md: "Markdown", php: "PHP", py: "Python", python: "Python", r: "R", rb: "Ruby", ruby: "Ruby",
+  rs: "Rust", rust: "Rust", scss: "SCSS", sql: "SQL", swift: "Swift", toml: "TOML", ts: "TypeScript", tsx: "TSX",
+  typescript: "TypeScript", xml: "XML", yaml: "YAML", yml: "YAML",
+};
+
 function codeBlock(language, code, labels) {
   const lang = String(language || "").replace(/[^A-Za-z0-9_+#.-]/g, "").slice(0, 30);
-  const label = escapeHtml(lang || labels.code);
+  const plain = ["text", "txt", "plain", "plaintext"].includes(lang.toLowerCase());
+  const label = escapeHtml(plain || !lang ? labels.code : LANGUAGE_NAMES[lang.toLowerCase()] || lang);
   const langAttribute = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
   return `<div class="code-block"><header><span class="code-lang">${label}</span><span class="code-actions">`
     + `<button type="button" class="btn btn-ghost btn-sm" data-code-copy>${escapeHtml(labels.copy)}</button>`
     + `<button type="button" class="btn btn-ghost btn-sm" data-code-download${langAttribute}>${escapeHtml(labels.download)}</button>`
-    + `</span></header><pre><code${lang ? ` class="language-${escapeHtml(lang)}"` : ""}>${escapeHtml(code)}</code></pre></div>`;
+    + `</span></header><pre tabindex="0"><code${lang ? ` class="language-${escapeHtml(lang)}"` : ""}>${escapeHtml(code)}</code></pre></div>`;
 }
 
 function splitCells(line) {
@@ -275,7 +378,8 @@ function table(header, divider, rows) {
     const cells = splitCells(line);
     return `<tr>${headCells.map((_, index) => cell("td", cells[index] ?? "", index)).join("")}</tr>`;
   }).join("");
-  return `<div class="table-scroll"><table><thead>${head}</thead>${body ? `<tbody>${body}</tbody>` : ""}</table></div>`;
+  // Focusable, so a table wider than the message can be scrolled with the keyboard (like code blocks).
+  return `<div class="table-scroll" tabindex="0"><table><thead>${head}</thead>${body ? `<tbody>${body}</tbody>` : ""}</table></div>`;
 }
 
 function startsBlock(line, next) {
@@ -301,7 +405,9 @@ function list(lines, start, labels, depth) {
     const match = readListItem(lines[index]);
     if (!match || match.indent.length !== base || /\d/.test(match.marker) !== ordered) break;
     const offset = base + match.marker.length + Math.min(match.spacing.length, 4);
-    const body = [match.content];
+    // A task item ("- [ ] to do", "- [x] done") shows a box in place of the bullet.
+    const task = ordered ? null : /^\[([ xX])\]\s+(?=\S)/.exec(match.content);
+    const body = [task ? match.content.slice(task[0].length) : match.content];
     index += 1;
     while (index < lines.length) {
       const line = lines[index];
@@ -324,7 +430,7 @@ function list(lines, start, labels, depth) {
     const single = /^<p>([\s\S]*)<\/p>$/.exec(html);
     if (single && !single[1].includes("<p>")) html = single[1];
     else html = html.replace(/^<p>([\s\S]*?)<\/p>(?=<(?:ul|ol)[ >])/, "$1");
-    items.push(`<li>${html}</li>`);
+    items.push(task ? `<li class="task-item"><span class="task-mark">${task[1] === " " ? "\u2610" : "\u2611"}</span> ${html}</li>` : `<li>${html}</li>`);
   }
   const number = parseInt(first.marker, 10);
   const open = ordered ? (number !== 1 && Number.isFinite(number) ? `<ol start="${number}">` : "<ol>") : "<ul>";

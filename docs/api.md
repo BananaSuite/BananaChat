@@ -32,8 +32,20 @@ created or rotated; the server stores only its SHA-256 hash, so a lost key
 cannot be recovered. Rotate it instead. Each account can have up to 10 active
 keys. A key acts on behalf of its owner: it sees the models the owner may
 use and spends the owner's allowance. Rotating replaces the value and keeps the
-name; revoking disables the key immediately. Creating, rotating and revoking
-keys is recorded in the audit log.
+name, access and lifetime; revoking disables the key immediately. Creating,
+rotating and revoking keys is recorded in the audit log.
+
+* **Access.** A *full access* key can use every endpoint. A *read only* key can
+  only read (`GET /v1/models`); anything that generates answers 403
+  `insufficient_scope`. Keys created before access levels existed have full
+  access.
+* **Lifetime.** A key can expire after 7, 30, 90 or 365 days, or never (the
+  default, and what older keys keep). An expired key is refused like a revoked
+  one and disappears from the list.
+* **Revocation with the account.** Changing the password, or signing out all
+  other devices on the account page, also revokes every key unless the owner
+  unticks *Also revoke my API keys*. An administrator's password reset always
+  revokes them.
 
 API keys authenticate requests. Model tokens measure text consumption and
 are counted against the account's quota; creating another key does not increase
@@ -41,8 +53,9 @@ that quota.
 
 | Situation | Status | `type` | `code` |
 |---|---|---|---|
-| Missing, malformed, unknown or revoked key | 401 | `authentication_error` | `invalid_api_key` |
+| Missing, malformed, unknown, revoked or expired key | 401 | `authentication_error` | `invalid_api_key` |
 | Owner's account is suspended | 403 | `permission_error` | `account_suspended` |
+| A read-only key on an endpoint that generates | 403 | `permission_error` | `insufficient_scope` |
 | More than 30 failed authentications from one address in a minute | 429 | `rate_limit_error` | `rate_limit_exceeded` |
 
 ---
@@ -128,17 +141,17 @@ allowance**, counted in tokens (prompt plus completion).
   refused until the week ends, even if the five-hour allowance has tokens left.
 * **Model weight:** a request counts its tokens × the model's weight (a heavy
   model ×3 spends the allowance three times as fast). Some models do not count
-  toward the allowance at all and have limits of their own instead; model
+  towards the allowance at all and have limits of their own instead; model
   limits count the model's tokens in every service (API, chat and agents).
 * The numbers can grow with the account's tier, a dynamic adjustment to demand,
-  the music-program bonus and grants from an administrator; the developer page
+  the music-programme bonus and grants from an administrator; the developer page
   shows the current figures and why. Fixed music bonuses can be configured
   independently for five-hour and weekly allowances. Administrators are not
   limited.
 
 Upgrades combine previous regular and slow allocations when slow tokens were
 enabled; otherwise the regular allocation is kept. Historical usage from
-both allocations counts toward the single allowance without resetting its
+both allocations counts towards the single allowance without resetting its
 window. Header names and quota error codes remain the same.
 
 A request is refused before it starts when no tokens remain, and again when it
@@ -159,10 +172,17 @@ administrator locked for the account gets 403 `model_locked`.
 
 Usage is charged once per request, with the token counts reported by the
 model server. If a streamed answer is interrupted (the client disconnects, the
-deadline passes) the text produced so far is charged using an estimate of four
-characters per token; the usage history marks such entries as estimates. A
-request that fails before producing any text is not charged. Every request is
-listed in the usage history with its key and the tokens it counted.
+deadline passes) it is charged with the counts the server already reported,
+else with estimates: about four characters per token (one per Chinese,
+Japanese or Korean character), 765 tokens per image and, for external
+reasoning models that do not stream their reasoning, 20 tokens per second of
+silent reasoning within the output limit. The usage history marks such
+entries as estimates. A request to an external API that is interrupted after
+it was sent is charged at least its input; any other request that fails
+before producing any text is charged only for an input count the server
+reported. See [external providers](external-providers.md#token-usage-limits-and-credits)
+for why a stopped answer is estimated rather than reserved in advance. Every
+request is listed in the usage history with its key and the tokens it counted.
 
 ---
 
@@ -218,7 +238,7 @@ backend, and allowed by every access policy that applies (uncensored models,
 image generation, categories scoped to the API or to both surfaces, and the
 model's own policy). Image models (ids starting with `comfyui:`) appear only
 when image generation is enabled. `created` is when the model was added to the
-catalog (Unix time).
+catalogue (Unix time).
 
 `GET /v1/models/{id}` returns one of these objects, or 404 (`model_not_found`)
 when the model does not exist or is not available to you.
@@ -371,10 +391,19 @@ locked ones marked and a link to request them.
 | The model's own request rate or tokens are used up | 429 | `rate_limit_exceeded`, `insufficient_quota` |
 | The model failed before answering | 502 | `upstream_error` |
 | The inference server is unreachable | 503 | `backend_unavailable` |
-| Claude subscription capacity is exhausted, busy or cannot be verified | 503 (`Retry-After: 30`) | `provider_capacity_unavailable` |
 | The answer exceeded `BC_GENERATION_TIMEOUT` | 504 | `timeout` |
+| The server restarted while answering; what was produced was charged (in a stream, sent as an error event) | 503 (`Retry-After: 5`) | `server_restarting` |
+| The answer stalled and another server process already charged what it produced (in a stream, sent as an error event) | 503 (`Retry-After: 5`) | `interrupted` |
+| The server is decoding other images: each account's images are checked one at a time, and a request waits only a few seconds | 503 (`Retry-After: 10`) | `busy` |
+| A hosted model's provider is rate limiting or overloaded | 503 (`Retry-After` from the provider, at most 300) | `provider_rate_limited`, `provider_overloaded` |
+| A hosted model's provider has a server error or cannot be reached | 503 (`Retry-After: 30`) | `provider_unavailable` |
+| A hosted model's provider refused the request (too long, unsupported content) | 400 | `provider_rejected_request` |
+| A hosted model's provider refused the server's key, permissions or credit | 502 | `provider_misconfigured` |
+| A hosted model is no longer offered by its provider | 404 | `model_not_found` |
 
-Backend messages are passed on with addresses and URLs removed.
+Backend messages are passed on with addresses and URLs removed. Hosted-provider
+failures use fixed messages; the provider's own text is shown only to
+administrators (see [external providers](external-providers.md#errors)).
 
 ---
 
@@ -522,8 +551,8 @@ conversation as the equivalent `curl` request.
 
 ## Hosted API models
 
-Administrators may publish hosted models alongside Ollama and Claude subscription
-models. Obtain their provider-scoped IDs from `/v1/models`, for example
+Administrators may publish hosted models from external API providers alongside
+Ollama models. Obtain their provider-scoped IDs from `/v1/models`, for example
 `external:1:gpt-model-id`, and use them in ordinary `/v1/chat/completions` requests.
 Your BananaChat API key is unchanged; all of your keys still share your account's
 API quotas. Hosted-provider credentials stay on the server. See

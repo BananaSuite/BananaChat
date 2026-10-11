@@ -21,6 +21,8 @@ hand. Settings (environment variables):
 | `BC_COMPUTE_HOST`, `BC_COMPUTE_PORT` | `127.0.0.1`, `11435` | Listen address |
 | `BC_COMPUTE_UPSTREAM` | `http://127.0.0.1:11434` | The Ollama it protects; loopback `http://` only (an existing Ollama chosen with `install --ollama-url`, or the managed one) |
 | `BC_COMPUTE_TOKEN_FILE` | (required) | Bearer token: a regular file, mode 0600, at least 32 characters |
+| `BC_COMPUTE_MANAGEMENT_TOKEN_FILE` | `data/.compute-management-token` on new managed installations | Second token (same file rules) that model management then requires; it works for nothing else. The pairing code carries it to the web server (`BC_OLLAMA_MANAGEMENT_API_KEY`) |
+| `BC_COMPUTE_MODEL_MANAGEMENT` | `1` | `0` refuses model management (`pull`, `create`, `copy`, `delete`) with any token; pull models on this machine with `ollama pull` instead |
 | `BANANA_MAINTENANCE_FILE` | | While this file exists, model requests answer 503 |
 | `BC_SOURCE_URL` | the BananaChat repository | Corresponding source, offered at `/source` |
 | `BC_COMPUTE_MAX_CONNECTIONS` | `32` | Requests served at once; more get a JSON 503 |
@@ -36,6 +38,19 @@ hand. Settings (environment variables):
   `/api/create`, `/api/copy`, `/api/embed`, `/api/embeddings`,
   `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`;
   `DELETE /api/delete`. Other paths get 404, other methods 405.
+- Model management (`/api/pull`, `/api/create`, `/api/copy`, `/api/delete`)
+  can download from any registry and delete every model, so a leaked
+  inference token should not be enough for it: with
+  `BC_COMPUTE_MANAGEMENT_TOKEN_FILE` (and `BC_OLLAMA_MANAGEMENT_API_KEY` on the
+  web server, which sends it only for downloads and deletions) only that
+  token may manage models; or switch management off with
+  `BC_COMPUTE_MODEL_MANAGEMENT=0`. A refused management request gets 403.
+  Managed installations made by 1.7 or later create the management token and
+  put it in the pairing code; older ones get it with `compute rotate-token`.
+  Without either setting the single token may do everything, as in earlier
+  releases.
+- After 20 wrong tokens within a minute from one address, further wrong tokens
+  from it get 429 without being checked; the right token keeps working.
 - Request bodies need `Content-Length` and may be up to 32 MB; chunked uploads
   get 411. Responses stream through; every response closes its connection.
   Clients that stall for 30 seconds are disconnected. Headers must finish in
@@ -134,9 +149,9 @@ Face token is sent only to `huggingface.co` and dropped on redirects.
 
 For a web server on another host, expose the agent through an HTTPS reverse
 proxy and configure that URL in BananaChat. Loopback HTTP is accepted. A
-direct Tailscale HTTP URL requires the web side's
-`BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE=1` and sends the bearer token
-without TLS.
+direct plain-HTTP URL on a private network (a LAN, WireGuard, Tailscale)
+requires the web side to list that network in
+`BC_CHECKPOINT_AGENT_INSECURE_NETWORKS` and sends the bearer token without TLS.
 
 ## Sandbox runner
 

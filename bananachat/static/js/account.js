@@ -62,6 +62,8 @@ function initQuotaForm() {
     for (const option of pool.options) option.disabled = !allowed.includes(option.value);
     if (!allowed.includes(pool.value) && allowed.length) pool.value = allowed[0];
     if (poolField) poolField.hidden = kind.value === "effort";
+    // Hints about token amounts only show for the kinds of request they are about.
+    for (const hint of document.querySelectorAll("#quota [data-kinds]")) hint.hidden = !hint.dataset.kinds.split(" ").includes(kind.value);
     for (const set of document.querySelectorAll(".quota-form fieldset[data-kind]")) {
       const shown = set.dataset.kind === kind.value;
       set.hidden = !shown;
@@ -94,7 +96,16 @@ function initQuotaForm() {
   };
   const syncEffort = () => {
     const target = (data.efforts || []).find((item) => item.value === effortModel?.value);
-    if (target && effortLevel) replaceOptions(effortLevel, target.levels, effortLevel.value);
+    if (!target || !effortLevel) return;
+    replaceOptions(effortLevel, target.levels, effortLevel.value);
+    // Off/on models have no levels: "Reasoning: On" and a hint without levels.
+    const mode = target.binary ? "binary" : "levels";
+    const label = document.querySelector('label[for="quota_effort_level"]');
+    if (label) label.textContent = label.dataset[`${mode}Text`];
+    for (const hint of document.querySelectorAll("[data-effort-hint]")) {
+      hint.hidden = hint.dataset.effortHint !== mode;
+      if (!hint.hidden) effortLevel.setAttribute("aria-describedby", hint.id);
+    }
   };
   kind.addEventListener("change", () => { const before = pool.value; sync(); if (pool.value !== before) fill(); });
   pool.addEventListener("change", () => { sync(); fill(); });
@@ -106,35 +117,5 @@ function initQuotaForm() {
   if (kind.value === "effort" && window.location.hash === "#quota") document.getElementById("quota_reason")?.focus();
 }
 
-// Keep the section navigator useful while reading a long account page.
-function initSectionNavigation() {
-  const links = [...document.querySelectorAll('.account-toc a[href^="#"]')];
-  const sections = links.map((link) => document.getElementById(link.hash.slice(1)));
-  if (!links.length) return;
-  let scheduled = false;
-  const update = () => {
-    scheduled = false;
-    const edge = (document.querySelector('.topbar')?.getBoundingClientRect().bottom || 0) + 32;
-    let current = 0;
-    sections.forEach((section, index) => {
-      if (section && section.getBoundingClientRect().top <= edge) current = index;
-    });
-    // Short final sections cannot always reach the top edge of the viewport.
-    if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) current = links.length - 1;
-    links.forEach((link, index) => {
-      if (index === current) link.setAttribute('aria-current', 'location');
-      else link.removeAttribute('aria-current');
-    });
-  };
-  const schedule = () => {
-    if (!scheduled) { scheduled = true; requestAnimationFrame(update); }
-  };
-  window.addEventListener('scroll', schedule, { passive: true });
-  window.addEventListener('resize', schedule);
-  window.addEventListener('hashchange', schedule);
-  update();
-}
-
-initSectionNavigation();
 initCounters();
 initQuotaForm();

@@ -151,6 +151,11 @@ def environment(settings, previous=None):
                     "BC_COMPUTE_UPSTREAM": settings.get("ollama_url") or DEFAULT_OLLAMA_URL,
                     "BC_COMPUTE_TOKEN_FILE": str(data / ".compute-api-token"),
                     "BC_SOURCE_URL": source_link(settings["source_url"])}
+        if first_install and "BC_COMPUTE_TOKEN_FILE" not in values:
+            # A new compute server: model management (downloads, deletions) needs its own token. One
+            # that already had a configuration (an update, a restore, install --reuse-data) keeps its
+            # one token until 'compute rotate-token': its web server does not have a second one yet.
+            defaults["BC_COMPUTE_MANAGEMENT_TOKEN_FILE"] = str(data / ".compute-management-token")
     else:
         defaults = {"BC_HOST": "127.0.0.1", "BC_PORT": str(settings["port"]), "BC_INSTANCE_DIR": str(data),
                     "BC_DATABASE_PATH": str(data / "bananachat.db"), "BC_LOG_FILE": str(data / "logs" / "bananachat.log"),

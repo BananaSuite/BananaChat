@@ -5,11 +5,28 @@ line-length = 120
 exclude = [".venv", "venv", "build", "dist", "__pycache__", "node_modules"]
 
 [lint]
-# Correctness rules only. Formatting and style are left to the author.
+# Correctness and security rules only. Formatting and style are left to the author.
 #   F   pyflakes: undefined names, unused imports and variables, shadowing
 #   E9  syntax and IO errors that stop the file being parsed
 #   B   bugbear: mutable defaults, loop-variable capture, silent exception loss
-select = ["F", "E9", "B"]
+#   S   flake8-bandit: shell use, unchecked URL schemes, weak randomness,
+#       temporary paths, swallowed exceptions, hard-coded secrets
+select = ["F", "E9", "B", "S"]
+# Security rules that would only repeat a review already done for the whole
+# code base. Everything else in S is fixed, or marked "# noqa: Sxxx - reason"
+# on the one line where a reviewer confirmed it is not a problem.
+ignore = [
+    # subprocess is always given an argument list and never a shell (S602 and
+    # S605 stay on and have no hits); each call site was reviewed.
+    "S603",
+    # docker/podman, git, systemctl, nvidia-smi and the like are found on PATH
+    # on purpose: the services run with a fixed, administrator-owned PATH.
+    "S607",
+    # SQL is assembled from literal fragments, "?" placeholder lists and column
+    # names checked against allowlists (EDITABLE_FIELDS, COLUMNS, ...); values
+    # always go through ? parameters.
+    "S608",
+]
 
 [lint.per-file-ignores]
 # Package roots re-export their public API, so those imports are used by
@@ -20,6 +37,10 @@ select = ["F", "E9", "B"]
 # A fixture is imported and then named again as a parameter, which looks like
 # an unused import and a redefinition but is how pytest injects it. Tamper and
 # corruption tests assert that *something* fails, and narrowing the expected
-# exception there would make them brittle rather than stricter.
-"tests/**" = ["F401", "F811", "B017"]
-"conftest.py" = ["F401"]
+# exception there would make them brittle rather than stricter. Tests also use
+# assert, fixed passwords, local HTTP servers and /tmp paths by design.
+"tests/**" = ["F401", "F811", "B017", "S"]
+"conftest.py" = ["F401", "S"]
+# A browser test driver: assert is how it reports a failed check. Application
+# code keeps S101, because python -O would remove an assert used as a guard.
+"scripts/check_browser.py" = ["S101"]

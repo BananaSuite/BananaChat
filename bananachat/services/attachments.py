@@ -2,12 +2,24 @@
 
 Accepted files:
 
-* images (PNG, JPEG, WebP): decoded with a pixel limit, EXIF orientation
-  applied, animation refused, and re-encoded (PNG with transparency, else
-  JPEG) so metadata and malformed payloads never reach storage or a model;
+* images (PNG, JPEG, WebP): decoded with a pixel limit, made no larger than
+  ``BC_CHAT_MAX_IMAGE_DIMENSION`` on their longest side (large photos are
+  decoded at a reduced scale), EXIF orientation applied, animation refused,
+  and re-encoded (PNG with transparency, else JPEG) so metadata and malformed
+  payloads never reach storage or a model. A process decodes at most
+  :data:`IMAGE_DECODES` images at a time, which bounds the memory uploads take,
+  and each account (or API key's account) one at a time, so no account holds
+  every place; requests wait only briefly for a place (:data:`OWNER_DECODE_WAIT`
+  behind the account's own, :data:`IMAGE_DECODE_WAIT` behind others) and are
+  otherwise refused as busy;
 * PDFs: text extracted with pypdf in a child process with CPU, memory and
   time limits (encrypted files refused, page count and extracted text bounded);
 * UTF-8 text and source code.
+
+Each row keeps the uploaded file's size (``size_bytes``) and what it takes in
+the database (``stored_bytes``: the extracted text in UTF-8, the stored
+image), which the attachment storage limits count: a small compressed PDF can
+hold far more text than its own size.
 
 Problems raise :class:`AttachmentError` carrying a translation key.
 """
@@ -24,6 +36,8 @@ import secrets
 import subprocess
 import sys
 import textwrap
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 TEXT_EXTENSIONS = frozenset({
@@ -39,7 +53,16 @@ MAX_PDF_PAGES = 50
 # runs in a child process with these limits.
 MAX_PDF_SECONDS = 20
 MAX_PDF_MEMORY = 1024 ** 3
+# Decoding an image can take a few hundred megabytes: each process decodes this many at a time, an account one
+# at a time. A request waits up to OWNER_DECODE_WAIT seconds behind its own account's decode and up to
+# IMAGE_DECODE_WAIT seconds for a place, then is refused as busy (it holds a request thread meanwhile).
+IMAGE_DECODES = 2
+IMAGE_DECODE_WAIT = 10
+OWNER_DECODE_WAIT = 3
 ACCEPT = ",".join(sorted(IMAGE_EXTENSIONS | TEXT_EXTENSIONS | {".pdf"}))
+_image_decodes = threading.BoundedSemaphore(IMAGE_DECODES)
+_owners: set[str] = set()  # accounts decoding now
+_owners_changed = threading.Condition()
 
 
 class AttachmentError(ValueError):
@@ -49,6 +72,33 @@ class AttachmentError(ValueError):
         super().__init__(key)
         self.key = key
         self.params = params
+
+
+class AttachmentBusy(AttachmentError):
+    """Too many images are being decoded right now; the upload may be sent again shortly."""
+
+
+@contextmanager
+def decoding_image(owner: str | None = None):
+    """Hold one of this process's image decoding places, and *owner*'s one place (an account: ``user:<id>``; None
+    for administrators). Raises :class:`AttachmentBusy`."""
+    if owner is not None:
+        with _owners_changed:
+            if not _owners_changed.wait_for(lambda: owner not in _owners, timeout=OWNER_DECODE_WAIT):
+                raise AttachmentBusy("chat.file_busy")
+            _owners.add(owner)
+    try:
+        if not _image_decodes.acquire(timeout=IMAGE_DECODE_WAIT):
+            raise AttachmentBusy("chat.file_busy")
+        try:
+            yield
+        finally:
+            _image_decodes.release()
+    finally:
+        if owner is not None:
+            with _owners_changed:
+                _owners.discard(owner)
+                _owners_changed.notify_all()
 
 
 def sanitize_filename(filename) -> str:
@@ -64,7 +114,13 @@ def _read_bounded(storage, maximum: int, filename: str) -> bytes:
     return raw
 
 
-def _normalize_image(raw: bytes, max_pixels: int, filename: str) -> tuple[bytes, str]:
+def _normalize_image(raw: bytes, max_pixels: int, filename: str, max_side: int | None = None, *,
+                     owner: str | None = None) -> tuple[bytes, str]:
+    with decoding_image(owner):
+        return _reencode_image(raw, max_pixels, filename, max_side)
+
+
+def _reencode_image(raw: bytes, max_pixels: int, filename: str, max_side: int | None) -> tuple[bytes, str]:
     from PIL import Image, ImageOps, UnidentifiedImageError
 
     try:
@@ -75,7 +131,15 @@ def _normalize_image(raw: bytes, max_pixels: int, filename: str) -> tuple[bytes,
             raise AttachmentError("chat.file_image_pixels", name=filename)
         if getattr(image, "is_animated", False):
             raise AttachmentError("chat.file_image_animated", name=filename)
-        image.load()
+        scale = max_side / max(image.size) if max_side else 1.0
+        if scale < 1:
+            target = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+            # A JPEG decodes at 1/2 to 1/8 of its size directly, never needing the memory of the full photo.
+            image.draft(image.mode, target)
+            image.load()
+            image.thumbnail(target, Image.Resampling.LANCZOS)
+        else:
+            image.load()
         image = ImageOps.exif_transpose(image)
     except AttachmentError:
         raise
@@ -166,8 +230,16 @@ def present(storages) -> list:
     return [item for item in storages if item is not None and item.filename]
 
 
-def process(storages, config) -> list[dict]:
-    """Validate and normalise uploaded files. Returns rows for ``chat_attachments``."""
+def stored_size(item: dict) -> int:
+    """Bytes an attachment row takes in the database: its stored image and its extracted text (UTF-8)."""
+    return len(item.get("image_data") or b"") + len((item.get("extracted_text") or "").encode("utf-8"))
+
+
+def process(storages, config, *, owner: str | None = None) -> list[dict]:
+    """Validate and normalise uploaded files. Returns rows for ``chat_attachments``.
+
+    *owner* is the account whose images are decoded (see :func:`decoding_image`).
+    """
     storages = present(storages)
     if len(storages) > config.chat_max_files:
         raise AttachmentError("chat.file_count", count=config.chat_max_files)
@@ -177,7 +249,8 @@ def process(storages, config) -> list[dict]:
         extension = os.path.splitext(filename.lower())[1]
         if extension in IMAGE_EXTENSIONS:
             raw = _read_bounded(storage, config.chat_max_image_bytes, filename)
-            data, media_type = _normalize_image(raw, config.chat_max_image_pixels, filename)
+            data, media_type = _normalize_image(raw, config.chat_max_image_pixels, filename,
+                                                config.chat_max_image_dimension, owner=owner)
             if len(data) > config.chat_max_image_bytes:
                 raise AttachmentError("chat.file_too_large", name=filename)
             item = {"kind": "image", "media_type": media_type, "image_data": data, "extracted_text": None,
@@ -197,7 +270,8 @@ def process(storages, config) -> list[dict]:
         total += len(raw)
         if total > config.chat_max_request_bytes:
             raise AttachmentError("chat.file_total")
-        item.update(id=secrets.token_urlsafe(18), filename=filename, sha256=hashlib.sha256(raw).hexdigest())
+        item.update(id=secrets.token_urlsafe(18), filename=filename, sha256=hashlib.sha256(raw).hexdigest(),
+                    stored_bytes=stored_size(item))
         result.append(item)
     return result
 

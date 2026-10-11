@@ -94,7 +94,7 @@ def _client(docker_runner):
 
     config = types.SimpleNamespace(agents_runner_url=docker_runner.url,
                                    agents_runner_token_file=str(docker_runner.token_file), agents_runner_token="",
-                                   agents_runner_allow_insecure_tailscale=False)
+                                   agents_runner_insecure_networks=(), agents_runner_allow_insecure_tailscale=False)
     return runner_mod.Runner(config)
 
 

@@ -133,13 +133,15 @@ def test_secondary_text_meets_wcag_aa_on_the_default_palettes():
 
 def test_configuration_reference_lists_every_setting():
     source = (ROOT / "bananachat" / "config.py").read_text()
-    read = set(re.findall(r'r\.(?:text|flag|integer|number|choice)\("(BC_[A-Z_]+)"', source))
+    # The typed readers, and helpers that take the reader and a setting name.
+    read = set(re.findall(r'(?:r\.(?:text|flag|integer|number|choice)\(|_[a-z_]+\(r, )"(BC_[A-Z_]+)"', source))
+    assert {"BC_OLLAMA_URL", "BC_AGENTS_RUNNER_INSECURE_NETWORKS"} <= read  # the scan finds helper calls
     read -= {"BC_DEBUG"}  # parsed for compatibility, has no effect
     documented = (ROOT / "docs" / "configuration.md").read_text()
-    sample = (ROOT / ".env.sample").read_text()
+    sample = (ROOT / ".env.example").read_text()
     for name in sorted(read):
         parts = name.split("_")
         shortened = {"…_" + "_".join(parts[index:]) for index in range(2, len(parts))}
         assert name in documented or any(f"`{short}`" in documented for short in shortened), \
             f"{name} is missing from docs/configuration.md"
-        assert f"# {name}=" in sample, f"{name} is missing from .env.sample"
+        assert f"# {name}=" in sample, f"{name} is missing from .env.example"

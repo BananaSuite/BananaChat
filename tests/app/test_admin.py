@@ -181,6 +181,60 @@ def test_suspend_without_end_and_password_reset_sign_the_user_out(app, admin, ma
     assert browser.get("/admin/").status_code == 302
 
 
+def test_password_reset_revokes_api_tokens(app, admin, make_user):
+    from bananachat.db import tokens
+
+    erin = make_user("erin")
+    with app.app_context():
+        _token_id, raw = tokens.create(erin["id"], "laptop")
+        assert tokens.authenticate(raw)[0] is not None
+    admin.post(f"/admin/users/{erin['id']}/password", {"password": "new-password-1",
+                                                       "confirm_password": "new-password-1"})
+    with app.app_context():
+        assert tokens.authenticate(raw) == (None, None)
+
+
+def _user_row(html, username):
+    """The users table row of *username*."""
+    rows = [row for row in html.split("<tr>") if f"<strong>{username}</strong>" in row]
+    assert len(rows) == 1, username
+    return rows[0].split("</tr>")[0]
+
+
+def test_user_pages_count_only_usable_api_keys_and_show_two_step_verification(app, admin, make_user):
+    from bananachat import db
+    from bananachat.db import tokens
+
+    erin = make_user("erin")
+    make_user("frank")
+    make_user("ops", role="admin")
+    with app.app_context():
+        tokens.create(erin["id"], "live")
+        tokens.create(erin["id"], "for a week", expires_days=7)
+        expired, _ = tokens.create(erin["id"], "expired", expires_days=7)
+        db.execute("UPDATE api_tokens SET expires_at=? WHERE id=?", (db.now(-timedelta(minutes=1)), expired))
+        revoked, _ = tokens.create(erin["id"], "revoked")
+        tokens.revoke(revoked, erin["id"])
+        db.execute("INSERT INTO user_two_step (user_id, secret_encrypted, recovery_hashes, enabled_at) "
+                   "VALUES (?,?,?,?)", (erin["id"], "secret", "[]", db.now()))
+    detail = admin.get(f"/admin/users/{erin['id']}").get_data(as_text=True)
+    assert "<dt>Active API keys</dt><dd>2</dd>" in detail
+
+    html = admin.get("/admin/users").get_data(as_text=True)
+    assert '<th scope="col">Two-step verification</th>' in html
+    assert ">On</span>" in _user_row(html, "erin")
+    assert ">Off</span>" in _user_row(html, "frank") and "required" not in _user_row(html, "frank")
+    assert ">Off</span>" in _user_row(html, "ops") and "required" not in _user_row(html, "ops")
+    with app.app_context():
+        # The requirement sends administrators without it to set it up first; this one has it.
+        db.execute("INSERT INTO user_two_step (user_id, secret_encrypted, recovery_hashes, enabled_at) "
+                   "SELECT id, 'secret', '[]', ? FROM users WHERE username='admin'", (db.now(),))
+        db.execute("UPDATE site_settings SET admin_two_step_required=1")
+    html = admin.get("/admin/users").get_data(as_text=True)
+    # Administrators who still have to set it up stand out; regular accounts are not affected.
+    assert "Off, required" in _user_row(html, "ops") and "required" not in _user_row(html, "frank")
+
+
 def test_administrators_cannot_lock_themselves_out(app, admin):
     me = _one(app, "SELECT * FROM users WHERE username='admin'")
     for url, data in ((f"/admin/users/{me['id']}/role", {"role": "user"}),
@@ -278,15 +332,15 @@ def test_user_exports_call_the_export_service(app, admin, make_user, monkeypatch
 # ----- invitations ----------------------------------------------------------------------
 
 def test_invitation_is_created_used_and_deleted(app, admin):
-    admin.post("/admin/invites/create", {"max_uses": "2", "expires": "7d", "role": "user", "code": "team-2026"})
-    row = _one(app, "SELECT * FROM invite_codes WHERE code='TEAM-2026'")
+    admin.post("/admin/invites/create", {"max_uses": "2", "expires": "7d", "role": "user", "code": "team-2026-spring"})
+    row = _one(app, "SELECT * FROM invite_codes WHERE code='TEAM-2026-SPRING'")
     assert row and row["max_uses"] == 2 and row["expires_at"] > "2000"
     html = admin.get("/admin/invites").get_data(as_text=True)
-    assert "/signup?invite=TEAM-2026" in html and "data-copy=" in html
+    assert "/signup?invite=TEAM-2026-SPRING" in html and "data-copy=" in html
 
     visitor = Browser(app)
     response = visitor.post("/signup", {"username": "ivan", "password": "ivan-password",
-                                        "confirm_password": "ivan-password", "invite_code": "team-2026"})
+                                        "confirm_password": "ivan-password", "invite_code": "team-2026-spring"})
     assert response.status_code == 302
     assert _one(app, "SELECT use_count FROM invite_codes WHERE id=?", (row["id"],))["use_count"] == 1
     assert "ivan" in admin.get("/admin/invites").get_data(as_text=True)

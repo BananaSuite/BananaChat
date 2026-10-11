@@ -10,9 +10,9 @@
 {{ header("Enable " ~ model.ollama_name, "Choose what users see, who may use it and its limits. It is published when you save.") }}
 
 <section class="settings-section mb-3" aria-labelledby="detected-title">
-  <h2 id="detected-title">Detected</h2>
-  <dl class="command-list">
-    <dt>Capabilities</dt><dd>{% for capability in caps %}<span class="badge">{{ capability }}</span> {% else %}<span class="muted">Not reported</span>{% endfor %}</dd>
+  <h2 id="detected-title">Model details</h2>
+  <dl class="command-list model-facts">
+    <dt>Detected</dt><dd>{% for capability in caps %}<span class="badge">{{ capability }}</span> {% else %}<span class="muted">Not reported</span>{% endfor %}</dd>
     <dt>Size</dt><dd>{{ model.parameter_size or "Unknown" }} parameters{% if model.quantization %} · {{ model.quantization }}{% endif %}{% if model.size_bytes %} · {{ model.size_bytes | filesize }}{% endif %}</dd>
     {% if model.context_length %}<dt>Context</dt><dd>{{ model.context_length | number }} tokens</dd>{% endif %}
     <dt>Reasoning</dt><dd>{{ levels | join(" / ") if levels else "None" }}</dd>
@@ -39,7 +39,7 @@
       {% if all_categories %}
       <div class="check-list">
         {% for category in all_categories %}
-        <label class="check"><input type="checkbox" name="categories" value="{{ category.id }}"{% if category.id in selected %} checked{% endif %}><span>{{ category.name }}{% if category.description %}<small>{{ category.description }}</small>{% endif %}</span></label>
+        <label class="check"><input type="checkbox" name="categories" value="{{ category.id }}"{% if category.id in selected %} checked{% endif %}><span>{{ category.name }}<small>{{ {"chat": "Chat only", "api": "API only", "both": "Chat and API"}[category.scope] }}{% if category.description %} · {{ category.description }}{% endif %}</small></span></label>
         {% endfor %}
       </div>
       {% else %}
@@ -47,10 +47,10 @@
       {% endif %}
     </fieldset>
     <fieldset class="admin-fieldset">
-      <legend>Features</legend>
+      <legend>Capabilities</legend>
       {% if text_model %}
-      <label class="check"><input type="checkbox" name="supports_vision" value="1"{{ checked('supports_vision') }}><span>Understands images{% if "vision" in caps %}<small>Reported by the model server.</small>{% endif %}</span></label>
-      <label class="check"><input type="checkbox" name="is_reasoning" value="1"{{ checked('is_reasoning') }}><span>Reasoning model{% if "thinking" in caps %}<small>Reported by the model server.</small>{% endif %}</span></label>
+      <label class="check"><input type="checkbox" name="supports_vision" value="1"{{ checked('supports_vision') }}><span>Understands images<small>Users can attach pictures when chatting with this model.{% if "vision" in caps %} Reported by the model server.{% endif %}</small></span></label>
+      <label class="check"><input type="checkbox" name="is_reasoning" value="1"{{ checked('is_reasoning') }}><span>Reasoning model<small>Shows its thinking separately and gets a reasoning toggle.{% if "thinking" in caps %} Reported by the model server.{% endif %}</small></span></label>
       {% endif %}
       <label class="check"><input type="checkbox" name="is_uncensored" value="1"{{ checked('is_uncensored') }}><span>Uncensored<small>Only users allowed by the “Uncensored models” access rule can use it.</small></span></label>
     </fieldset>

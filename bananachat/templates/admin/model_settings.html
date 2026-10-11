@@ -19,7 +19,7 @@
   <section class="settings-section stack" aria-labelledby="enrollment-title">
     <h2 id="enrollment-title">New models</h2>
     <fieldset class="admin-fieldset">
-      <legend class="visually-hidden">Enrollment</legend>
+      <legend class="visually-hidden">Enrolment</legend>
       <label class="check"><input type="radio" name="enrollment" value="manual"{% if policy.enrollment == "manual" %} checked{% endif %}><span>Manual review<small>A model found on the model server is added as “new — waiting for review” and hidden until you enable it and choose its name, access, limits and features.</small></span></label>
       <label class="check"><input type="radio" name="enrollment" value="automatic"{% if policy.enrollment == "automatic" %} checked{% endif %}><span>Enable automatically<small>New chat models are published at once with limits for their size (heavy from 30B parameters, standard from 7B, light below) and flagged “enabled automatically — review” until you mark them reviewed. Embedding models and models on the ignore list are never enabled.</small></span></label>
     </fieldset>
@@ -28,10 +28,14 @@
   <section class="settings-section stack" aria-labelledby="retirement-title">
     <h2 id="retirement-title">Missing and broken models</h2>
     <p class="muted small">A missing model is hidden from users (chats keep their history) and returns to its previous state when it is back. A failing model is hidden from selection and fallback and re-tested with a small prompt when the server has room; outages, busy servers and cancelled answers do not count as failures.</p>
+    <h3 class="mb-0">Missing models</h3>
     <div class="form-grid">
       {{ number_field("missing_syncs", "Missing after this many syncs", "Consecutive successful syncs without the model. Failed syncs never count.") }}
       {{ number_field("missing_minutes", "…or after this many minutes", "0 to count syncs only.") }}
-      {{ number_field("retention_days", "Remove missing models after (days)", "Then it leaves the catalog; chats keep its name.") }}
+      {{ number_field("retention_days", "Remove after (days)", "Then it leaves the catalogue; chats keep its name.") }}
+    </div>
+    <h3 class="mb-0 mt-1">Failing models</h3>
+    <div class="form-grid">
       {{ number_field("failure_threshold", "Failing after this many failures") }}
       {{ number_field("failure_window_minutes", "…within (minutes)", "Without a successful answer in between.") }}
       {{ number_field("recheck_minutes", "First re-check after (minutes)", "Later checks wait twice as long each time, up to six hours.") }}
@@ -43,7 +47,7 @@
     <div class="form-grid">
       {{ number_field("download_concurrency", "Downloads at the same time", "1 is kindest to the model server's disk and network.") }}
       {{ number_field("download_retries", "Retries after a network error", "With a growing pause (30 s, 2 min, 8 min…). Errors that name the model, and a full disk, are not retried.") }}
-      {{ number_field("stall_minutes", "Retry a download without progress for (minutes)") }}
+      {{ number_field("stall_minutes", "Stalled download timeout (minutes)", "A download without progress for this long is retried.") }}
     </div>
   </section>
   <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
@@ -66,17 +70,17 @@
   </form>
   {% if rules %}
   <div class="table-wrap">
-    <table class="table">
+    <table class="table table-stack">
       <thead><tr><th scope="col">Rule</th><th scope="col">Note</th><th scope="col">Added</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
       <tbody>
         {% for rule in rules %}
         <tr>
-          <td class="mono break-anywhere name-cell">{{ rule.pattern }}</td>
-          <td class="small">{{ rule.note or "—" }}</td>
-          <td class="small nowrap">{{ when(rule.created_at) }}{% if rule.created_by_name %}<br><span class="muted">{{ rule.created_by_name }}</span>{% endif %}</td>
+          <td class="mono break-anywhere name-cell cell-full">{{ rule.pattern }}</td>
+          <td class="small cell-full" data-label="Note:">{{ rule.note or "—" }}</td>
+          <td class="small nowrap" data-label="Added:">{{ when(rule.created_at) }}{% if rule.created_by_name %}<br class="stack-break"><span class="muted"><span class="stack-sep"> · </span>{{ rule.created_by_name }}</span>{% endif %}</td>
           <td class="actions">
             <form method="post" action="{{ url_for('admin.model_ignore_rule_delete', rule_id=rule.id) }}">
-              {{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost" aria-label="Remove the rule {{ rule.pattern }}">{{ icon("close") }}Remove</button>
+              {{ csrf() }}<button type="submit" class="btn btn-sm" aria-label="Remove the rule {{ rule.pattern }}">{{ icon("close") }}Remove</button>
             </form>
           </td>
         </tr>

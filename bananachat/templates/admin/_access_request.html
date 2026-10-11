@@ -5,7 +5,8 @@
     <h3 id="req-{{ req.id }}-title" class="mb-0">{{ req.username }} → {{ req.resource_name or scope_labels.get(req.scope, req.scope) }}</h3>
     <span class="small muted">{{ when(req.created_at) }}</span>
   </div>
-  <p class="small muted mb-1">{{ scope_labels.get(req.scope, req.scope) }}{% if req.scope in ("model", "category") %} · <a href="{{ url_for('admin.access_detail', scope=req.scope, resource_id=req.resource_id) }}">Access rule</a>{% endif %}</p>
+  {#- The rule's page is linked from the overview, not from the rule's own page. Capabilities use resource 0. -#}
+  <p class="small muted mb-1">{{ "Capability" if req.scope not in ("model", "category") else scope_labels.get(req.scope, req.scope) }}{% if return_to != "detail" %} · <a href="{{ url_for('admin.access_detail', scope=req.scope, resource_id=(req.resource_id if req.scope in ('model', 'category') else 0)) }}">Access rule</a>{% endif %}</p>
   <blockquote class="quote">{{ req.use_case }}</blockquote>
   {% if req.status == "pending" %}
   <form method="post" action="{{ url_for('admin.access_request_resolve', request_id=req.id) }}" class="stack-sm">

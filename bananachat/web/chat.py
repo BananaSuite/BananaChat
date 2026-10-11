@@ -16,8 +16,9 @@ from flask import (Blueprint, Response, abort, current_app, g, redirect, render_
 
 from bananachat import db, security
 from bananachat.config import Config
-from bananachat.db import chats, runs
+from bananachat.db import chats, runs, users
 from bananachat.i18n import translate
+from bananachat.numbers import ascii_int
 from bananachat.security import login_required
 from bananachat.services import attachments, limits
 from bananachat.services import status as service_status
@@ -340,9 +341,9 @@ def set_personality(session_id):
     if raw in (None, "", 0, "0"):
         chats.set_personality(session_id, None)
         return _json({"ok": True, "personality_id": None})
-    try:
-        personality_id = int(raw)
-    except (TypeError, ValueError):
+    # Ids are SQLite integers: at most 18 digits keeps them in range.
+    personality_id = ascii_int(raw, 18) if isinstance(raw, (int, str)) and not isinstance(raw, bool) else None
+    if personality_id is None:
         return security.json_error(_t("chat.error_personality"), 400)
     if chat_service.usable_personality(g.user, personality_id) is None:
         return security.json_error(_t("chat.error_personality"), 403, "forbidden")
@@ -372,7 +373,10 @@ def share(session_id):
         return security.json_error(_t("chat.error_share_no_history"), 400)
     if not chats.count_messages(session_id):
         return security.json_error(_t("chat.error_share_empty"), 400)
-    token = chats.share(session_id)
+    try:
+        token = chats.share(session_id)
+    except chats.ShareBlocked:  # an administrator stopped sharing it (moderation)
+        return security.json_error(_t("chat.error_share_blocked"), 403, "share_blocked")
     return _json({"ok": True, "shared": True, "url": url_for("chat.shared", token=token, _external=True)})
 
 
@@ -423,6 +427,8 @@ def search():
     text = " ".join((request.args.get("q") or "").split())[:200]
     if len(text) < 2:
         return _json({"results": []})
+    if not security.allow("chat-search", 60, 60, key="user:" + g.user["id"]):
+        return security.too_many_requests()
     rows = chats.search(g.user["id"], text)
     return _json({"results": [_session_json(row) for row in rows]})
 
@@ -438,8 +444,12 @@ def sessions():
 # ----- shared links (no sign-in) -----------------------------------------------------
 
 def _shared_or_404(token: str):
+    """The shared chat, while its owner's account is in good standing (a suspension takes its links offline)."""
     session = chats.by_share_token(token)
     if session is None:
+        abort(404)
+    owner = users.get(session["user_id"])
+    if owner is None or users.is_suspended(owner):
         abort(404)
     return session
 

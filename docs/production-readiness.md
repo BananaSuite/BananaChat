@@ -1,18 +1,71 @@
-# Production validation — 3 October 2026
+# Production validation
 
-This assessment covers the current source, disposable local services and one
-operator-authorized paid Claude subscription. The changes have not been deployed
-to the operator's production servers.
+## Release check for 1.7.0 — 10 October 2026
 
-## Current behavior
+This check covers the 1.7.0 source (one release commit on top of `164420e`,
+not yet tagged), on Python 3.14.4 and Linux,
+with disposable local services. Nothing was deployed to the operator's
+servers. READINESS.md gives each checklist item with its command.
+
+What changed since the 3 October assessment below: the Claude subscription
+connector was removed; external providers gained presets, connection tests,
+model discovery and encrypted keys; accounts can use two-step verification and
+administrators confirm high-impact actions; API keys have scopes, expiry and
+revocation on password change and two-step changes; secure cookies use the
+`__Host-` prefix; sign-in limits no longer lock out shared networks; chat
+deletion, account deletion and Gunicorn worker replacement no longer skip
+charging (API and playground answers included) or stall the queue; attachment
+limits count stored bytes; volunteer workers are paused fairly; encrypted
+backups are authenticated, retention counts only authenticated snapshots and
+restores check the source they deploy; managed updates follow signed,
+annotated release tags and install hash-pinned wheels; a visual review of
+every page fixed 248 layout, accessibility and wording issues. The schema is
+at version 25. AUDIT.md (fourth and fifth rounds) lists each finding with its
+regression test.
+
+| Check | Command | Result |
+|---|---|---|
+| Tests | `BC_REQUIRE_NODE=1 python -m pytest -q -n 4` (under `eatmydata`) with `age`, Node.js 22.11.0, Playwright 1.62.0 and its headless Chromium | **2,177 passed, 13 subtests passed, 5 skipped, 0 failed** in 9 minutes (after the final pass; 2,175 before it). The skips need Docker (4) or root (1). CI runs the Docker cases |
+| Browser check | `python scripts/check_browser.py` (the CI `browser` job) | passed: sign-in, streamed chat, Markdown escaping, model picker, phone layout, maintenance, reasoning selector, account, developer, administration and agent pages, with no script error, failed request or CSP violation |
+| Visual crawl | Playwright crawl of 169 pages and states, seven roles, light and dark, English and Italian, at 375, 768 and 1440 px, then at 700, 950 and 1180 px | 375/768/1440: 1,118 visits, 8,898 checks, 0 issues (overflow, axe-core WCAG 2.1 AA, console and page errors, failed requests, CSP, untranslated text, 41 keyboard walks, the core chat flow in 12 variants). 700/950/1180 (the 113 pages crawled in every variant): 996 visits, 8,106 checks, 0 issues, the core flow included. |
+| Lint | `ruff check .` with 0.16.6 (the CI pin) and 0.16.10, security rules (S) included | all checks passed |
+| Shared sources | `scripts/sync_lifecycle.py --check`, `scripts/sync_backups.py --check` | verified |
+| Dependency locks | `scripts/lock_requirements.py --check` and `--verify`; a clean install from both locks | complete; every pin has a wheel with a pinned hash for CPython 3.12 to 3.14 on x86_64 and aarch64; the clean install succeeds without warnings |
+| Dependency audit | `pip-audit` 2.10.1 on `requirements.lock`, `requirements-build.lock` and the clean install | no known vulnerabilities |
+| Production start | Gunicorn from the clean install, first-run setup and sign-in in Chromium | `/health` and `/login` 200, setup and sign-in work, clean stop |
+| Documented schema | `tests/test_docs_schema_version.py` | CHANGELOG.md and docs/deployment.md name schema version 25 |
+
+Not covered by this check, and still needed on the target installation: real
+provider keys (Anthropic, OpenAI-compatible services, Gemini) and a real agent
+run on Claude with thinking replay, which the tests exercise only against fake
+servers; Docker, Podman and gVisor sandboxes (no container engine here; CI
+runs Docker and, from this release, Podman); a live Ollama and real volunteer
+workers; the managed install, update from 1.6 and rollback on a disposable
+host, which was last done for the 3 October assessment (the upgrade path was
+reviewed by the second audit and is covered by migration tests); HTTPS,
+trusted proxies and the real hardware's capacity.
+
+## Assessment of 3 October 2026
+
+The sections below are the assessment made on 3 October 2026, before the
+1.7.0 changes; their test counts and checks refer to that source.
+
+This assessment covers the current source and disposable local services. The
+changes were not deployed to a production server for this assessment.
+
+The Claude subscription connector covered by the original assessment has since
+been removed, because it pooled consumer subscriptions; its findings and live
+checks were dropped from this report. Test counts below predate that removal.
+
+### Current behaviour
 
 Ordinary pages share a 1120px frame, consistent controls and short task names.
 The composer groups model, reasoning and personality choices before secondary
 tools. Common settings appear before optional controls; disclosures preserve
 keyboard access, deep links, form values and native validation. Account, API and
 administration pages use the same interface conventions. Both landing languages
-include seventeen freshly generated screenshots using sample data, including
-external provider settings, the Claude account pool and cloud sessions.
+include freshly generated screenshots using sample data, including external
+provider settings and cloud sessions.
 
 Token budgets use five-hour windows and optional weekly windows. Every API key
 shares its owner's request buckets. Service, model and account/model token and
@@ -21,12 +74,7 @@ and actual provider capacity. Higher effort approvals unlock supported lower
 levels; automatic promotion respects administrator ceilings and opt-outs.
 
 External OpenAI-compatible and native Anthropic API providers use private
-server-side keys and enrolled models. The optional official Claude Code
-connector uses private subscription profiles, automatic model/effort discovery
-and native plan/usage observations. Local token budgets are separate from
-provider percentages. Failed, stale, reset-crossed and exhausted observations
-restrict the affected account or family; healthy subscriptions remain eligible.
-The connector is disabled until the server operator configures it.
+server-side keys and enrolled models.
 
 Administrators can globally show or hide model-server offline notices. Users
 can hide a notice for 24 hours per account in their browser, with its original
@@ -38,11 +86,10 @@ Cloud sessions are disabled by default. Administrators can choose administrators
 only, everyone signed in, or the existing Agents access lists. Fresh installations
 select administrators only; legacy explicitly configured installations preserve
 their capability policy. The audience does not override model access or quotas.
-Ollama and external API models need tool support; native Claude Code subscription
-profiles currently serve chat only. Commands run in disposable containers on the
+Ollama and external API models need tool support. Commands run in disposable containers on the
 configured compute runner. Provider credentials stay outside workspaces.
 
-## Confirmed fixes
+### Confirmed fixes
 
 Sensitive account changes recheck credentials, revocation and account status
 inside the write transaction. Automatic password rehashing cannot undo a reset.
@@ -59,9 +106,9 @@ model that ran. Cloud sessions recheck permissions, account status, model
 availability, tool policy, reasoning and token budgets after queuing, before
 retries and before tools run. Lowering a run budget constrains outstanding
 parallel reservations as well as completed steps. Revocation stops subsequent
-work at the next safe checkpoint; repeated authorization does not debit another
+work at the next safe checkpoint; repeated authorisation does not debit another
 model request bucket. Stale leases cannot mutate a newer run. Cancellation retains
-usage and closes provider resources before releasing the account lease.
+usage and closes provider resources.
 
 Concurrent follow-ups cannot exceed the five-message pending bound. Enqueueing
 an active session's message checks the bound under the database write lock.
@@ -88,24 +135,6 @@ addresses even on trusted private networks, and do not forward credentials
 through redirects. Schema-19 upgrades preserve IDs, deleted-ID high-water marks,
 foreign keys, indexes and triggers.
 
-Claude metadata refreshes use four workers, a bounded overall deadline and
-short shared snapshots; concurrent telemetry readers share one in-flight call.
-The original native observation timestamp prevents cached usage from appearing
-fresh. Validated old percentages remain visible to administrators with their
-original timestamp and a stale label, while routing remains paused. Automatic
-stale checks back off for five minutes; manual checks run at most once per
-minute. Cached plan multipliers must follow the most recent login change.
-Distinct authenticated identities are required. Re-authentication clears
-cached models/usage and requires new admission before generation. Model-family
-limits stay scoped. If process-group shutdown cannot be confirmed, the account
-is disabled for review before releasing its lease.
-
-An unavailable Claude quota, stale observation or occupied request slot returns
-`503 provider_capacity_unavailable` with `Retry-After: 30`, without a token
-charge or model health failure. Internal token limits remain `429`; failed
-provider streams remain `502`. Configured fallback remains available before
-output, while partial answers keep accounting and are never replayed.
-
 Compute/checkpoint requests have hard header/body deadlines. Backup packages
 retain update signer trust, and failed restores restore repository credentials
 and trust settings. Sandbox capacity, isolation and cleanup remain covered.
@@ -131,15 +160,15 @@ protected destinations, including when an operator permits trusted private
 providers. Ordinary supported public and private provider addresses retain their
 existing policy.
 
-## Verification
+### Verification
 
 The final Python 3.14.4 full current-source run passed **2,097 tests and 13 subtests**,
 with one ownership case skipped under the non-root test user. The ownership
 case separately passed on Python 3.12 in a disposable root container. All
 **2,098 collected primary cases** were therefore exercised; all 466 recorded
 source hashes and the repository HEAD matched before and after the full run.
-This complete snapshot includes the native sandbox, follow-up admission and
-repository-import admission fixes described above.
+This complete snapshot includes the follow-up admission and repository-import
+admission fixes described above.
 All configured Chromium regressions and required real Docker/agent-image
 checks ran in the full suite. A focused transport, malformed-protocol,
 accounting, image and streaming run passed **132 cases**. All nine real-socket
@@ -165,8 +194,7 @@ barrier, so its concurrency assertion does not depend on a timing-only overlap.
 The minimum Python **3.12** current-source selection passed **80 cases** in an
 unprivileged read-only, network-disabled container with fresh compatible
 runtime wheels. It includes every new start/follow-up case, runtime admission,
-production authentication, native sandbox validation and actual HTTP swarm
-concurrency. Dependency compatibility passed.
+production authentication and actual HTTP swarm concurrency. Dependency compatibility passed.
 
 Cloud-session regressions cover all audiences, legacy and malformed settings,
 queued revocation, live reductions to run budgets, provider retries, reasoning,
@@ -174,13 +202,12 @@ model rollout and tool-policy changes without double rate charging. Thirteen
 real Chromium cases exercise English and Italian at desktop and phone widths:
 keyboard session creation, uploads, escaped file previews, downloads, archives,
 Git import and patch export, follow-ups, revocation, admin audience changes,
-missing-runner behavior and cross-user workspace denial. The Git host, model
+missing-runner behaviour and cross-user workspace denial. The Git host, model
 services and account metadata in these checks are simulated; the application
 and browser interactions are real.
 
 A fresh Python **3.12** run passed **205 cases** for endpoint configuration,
-real-socket deadlines, Ollama protocol validation, authentication and Claude
-observations, including the final native sandbox and transport cases. Its
+real-socket deadlines, Ollama protocol validation and authentication. Its
 wheels-only runtime dependency audit covered **13 packages,
 including pip, with no known vulnerability findings**. CI audits newly
 installed runtime dependencies.
@@ -188,7 +215,7 @@ installed runtime dependencies.
 Offline-warning checks exercised global show/hide settings, original 24-hour
 expiry across reloads and unchanged or failed status polls, account isolation,
 blocked or malformed browser storage, maintenance, hidden login-page wrappers
-and actual chat replies through a simulated Claude connection with workers
+and actual chat replies through a simulated hosted provider with workers
 offline. English/Italian desktop and phone captures passed without layout or
 script errors. Monitoring and local request refusals remain unchanged when
 warnings are hidden.
@@ -197,10 +224,8 @@ Asset checks covered deterministic content revisions, shared module URLs,
 legacy revalidation, content types, traversal protection, setup access and
 fresh HTML with new security nonces.
 
-Desktop (1280px) and phone (390px) checks exercised three synthetic Claude
-profiles, quota/model refresh and automatic enrollment, without overflow or
-JavaScript errors. External-provider creation, discovery, publication and
-connection editing were previously checked at both widths. English/Italian
+External-provider creation, discovery, publication and connection editing were
+previously checked at desktop (1280px) and phone (390px) widths. English/Italian
 account, admin, selector, preference and quota forms passed browser checks.
 All 36 landing views decoded current images and passed layout/script checks;
 9 pages passed link, fragment, image dimensions, alt-text and cache-hash checks.
@@ -220,7 +245,7 @@ preserving accounts, passwords, sign-ins, chats, shares, API tokens,
 personalities, preferences and administration access. The standalone browser
 check also passed against a disposable current application instance.
 
-## Live Ollama verification
+### Live Ollama verification
 
 Three complete smoke runs used official Ollama **0.35.1** and the official
 Qwen3 **0.6B** weight layer in a disposable localhost-only CPU container.
@@ -230,7 +255,7 @@ limit and was removed after verification. Automatic eight-thread selection
 previously caused long delays and a controlled backend timeout; see
 [CPU inference tuning](capacity.md#cpu-inference-in-containers).
 
-Real HTTP inventory, capability discovery and catalog synchronization passed.
+Real HTTP inventory, capability discovery and catalogue synchronisation passed.
 The public completion routes streamed and returned complete replies; one
 nonstream answer's **25 input + 21 output = 46 tokens** matched its ledger.
 Saved chats retained their messages and exact completed usage. Stop returned
@@ -242,47 +267,7 @@ and retained SQLite integrity. Reusing the warm backend after cancellation
 also passed. These exercised Flask routes and background chat workers with a
 real Ollama service; the separate Gunicorn load run used an imitation backend.
 
-## Live Claude verification — 2 October 2026
-
-Official Claude Code **2.1.287** authenticated one native paid subscription.
-A minimal low-effort response passed through BananaChat's public
-`/v1/models` and streamed `/v1/chat/completions` routes. Its **498 input + 9
-output = 507 tokens** matched the pool ledger exactly; its lease was released.
-A separate live response cancelled after output began also released its lease.
-No API key or paid-API fallback was used. Required proxy settings and certificate
-trust are inherited while API credentials and provider overrides are excluded.
-
-Automatic initialization and `get_usage` were then verified without generating
-a model answer. The native CLI returned canonical models, supported efforts,
-the verified Max plan, five-hour/weekly remaining fractions and reset times,
-and a model-scoped weekly allowance. No exact subscription token entitlement
-or unverified Max multiplier was inferred. Observations expire and must refresh.
-A subsequent automatic API check received a fresh upstream observation of
-zero five-hour capacity and correctly refused generation. This confirmed
-that local unused tokens cannot override an exhausted subscription.
-The final native automatic configuration returned the expected retryable
-capacity error without starting a generation process, consuming tokens or
-leaving an account lease.
-Private authentication, temporary API keys and the downloaded binary remain
-outside the repositories and source archives.
-
-Regression fixtures test multiple-account selection, scoped limits, failover,
-identity changes, concurrent metadata reads and cleanup. Only one actual paid
-subscription and selected chat model have been exercised here. Other real
-accounts and every model you publish require their own live checks.
-
-The subsequent native usage read encountered upstream HTTP 429 and returned
-Claude Code’s unchanged cached observation. At 12:52 UTC on 2 October, the
-adapter correctly retained the verified Max plan, the original 12:19 UTC
-observation, 100% five-hour usage and 16% weekly usage with `available: false`
-and `status: stale`. It did not invent a fresh balance or authorize generation.
-Desktop and phone checks separately confirmed that this last-known readout stays
-visible while other healthy accounts can continue serving requests. A second
-native read at 13:01 UTC, after the reported five-hour reset, still returned the
-same stale observation; routing stayed paused rather than assuming a reset had
-restored capacity. Neither metadata check generated a model answer.
-
-## Deployment checks
+### Deployment checks
 
 The actual generated systemd deployment was exercised on a disposable Debian
 13 host with Python 3.12. Three synthetic source revisions stayed isolated from
@@ -293,25 +278,7 @@ rollback and restore into a separate installation. The restore preserved
 database records, upload bytes and the private application secret key; installed source
 and virtual environments remained unwritable by the service identity. The
 Ollama endpoint was a synthetic local contract fixture in these lifecycle
-checks; live provider verification is reported separately above.
-
-Production native Claude calls now use Bubblewrap and permit only the active
-profile's persistent writes. An actual generated service, using a root-owned
-synthetic native CLI, verified profile/config writes, removal of Chat data,
-source, manifest, other profiles and host process descriptors, zero capabilities,
-no new privileges, external-file CA trust and proxy inheritance. Its timeout
-stopped a detached, SIGTERM-ignoring descendant before returning. Replacing a
-nested configuration directory with another profile's symlink refused the next
-call before any native process started. Overlapping profile configuration
-and a manifest stored within the active profile refused restart before stopping
-the healthy service; unmanaged production adapters reject that manifest layout
-too. Unreadable manifests, nonwritable profiles and root-only executable paths
-also refused restart while the service stayed active. These checks passed
-**29 cases**. The official publisher-verified Claude Code **2.1.287** binary
-passed **five** additional version, flag-parser and logged-out authentication
-checks under the actual systemd/Bubblewrap policy with an empty synthetic
-profile. The connector remains opt-in; no paid subscription request or real
-credential access occurred in these sandbox checks.
+checks; live Ollama verification is reported separately above.
 
 Separate compute and web installations passed **11 checks** using the actual
 generated services and a synthetic local Ollama endpoint. They covered private
@@ -322,11 +289,7 @@ acceptance check.
 
 Verify HTTPS and trusted proxies, backend pairing, backup restore, managed
 update/rollback, hardware capacity and sustained provider load on the target
-installation. Keep compute/sandbox management listeners private. Run the
-Claude transport under an unprivileged identity with the required Bubblewrap
-namespaces available. Review managed CLI hooks and authenticate each distinct
-profile. Filesystem isolation retains outbound networking and the operator's
-approved egress policy.
+installation. Keep compute/sandbox management listeners private.
 
 Token limits govern admission and record completed/interrupted usage. An
 admitted response can finish past its remaining token allowance within the
@@ -334,6 +297,5 @@ configured output/deadline bounds. Provider-side spending limits are needed
 when a strict monetary cap is required.
 
 See [deployment](deployment.md), [configuration](configuration.md),
-[Claude setup](claude-code.md), [external providers](external-providers.md) and
-[agents](agents.md). This source assessment does not certify an untested live
+[external providers](external-providers.md) and [agents](agents.md). This source assessment does not certify an untested live
 server configuration.

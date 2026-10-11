@@ -52,9 +52,9 @@
       <form method="post" action="{{ url_for('agents.create') }}" enctype="multipart/form-data" class="stack" id="new-task-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="field">
-          <label for="task-prompt">{{ t("agents.prompt_label") }}</label>
+          <label for="task-prompt" class="required">{{ t("agents.prompt_label") }}</label>
           <textarea id="task-prompt" name="prompt" rows="6" required maxlength="{{ max_prompt }}" placeholder="{{ t('agents.prompt_placeholder') }}" aria-describedby="task-prompt-hint"></textarea>
-          <span class="hint" id="task-prompt-hint">{{ t("agents.prompt_hint") }}</span>
+          <span class="hint" id="task-prompt-hint">{{ t("agents.prompt_hint_repo") if settings.git_enabled else t("agents.prompt_hint") }}</span>
         </div>
         <div class="form-grid">
           <div class="field">
@@ -67,9 +67,10 @@
             <span class="label" id="files-label">{{ t("agents.files_label") }}</span>
             <label class="btn agents-file-button" for="task-files">{{ icon("paperclip") }}<span id="task-files-summary">{{ t("agents.files_choose") }}</span></label>
             <input type="file" id="task-files" name="files" multiple class="visually-hidden" aria-describedby="task-files-hint">
-            <span class="hint" id="task-files-hint">{{ t("agents.files_hint", size=max_upload_mb) }}</span>
           </div>
         </div>
+        {#- Below both fields, across the form: in the files column it was squeezed into four short lines. -#}
+        <span class="hint agents-files-hint" id="task-files-hint">{{ t("agents.files_hint", size=max_upload_mb) }}</span>
         {% if settings.git_enabled %}
         <details class="agents-repo" id="task-repo">
           <summary>{{ icon("code") }}<span>{{ t("agents.repo_label") }}</span></summary>
@@ -102,6 +103,7 @@
     </section>
     {% endif %}
 
+    {% if access == "ok" or tasks %}
     <section class="agents-list" aria-labelledby="tasks-title">
       <h2 id="tasks-title">{{ t("agents.your_tasks") }}</h2>
       {% if not tasks %}
@@ -117,7 +119,7 @@
             <span class="grow">
               <span class="agents-task-title truncate">{{ row.title or t("agents.untitled") }}</span>
               <span class="agents-task-meta">
-                <span>{{ row.model_name }}</span>
+                <span>{{ item.model_label }}</span>
                 {% if row.swarm %}<span>· {{ t("agents.swarm_badge") }}</span>{% endif %}
                 <span>· {{ row.created_at | timeago }}</span>
               </span>
@@ -130,6 +132,7 @@
       </ul>
       {% endif %}
     </section>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

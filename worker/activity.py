@@ -138,8 +138,8 @@ def get_gpu_name() -> Optional[str]:
                 names.append(name.decode() if isinstance(name, bytes) else str(name))
             if names:
                 return " + ".join(names)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - fall back to nvidia-smi below
+            log.debug("NVML could not name the GPUs", exc_info=True)
     output = _run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
     if output:
         names = [line.strip() for line in output.splitlines() if line.strip()]

@@ -2,8 +2,9 @@
 
 BananaChat uses Ollama for text and an optional ComfyUI server for image
 generation. ComfyUI runs on the Linux/NVIDIA compute machine and BananaChat calls
-it over a private Tailscale connection. The compute machine does not need the
-BananaChat web application, database, session keys, or API-token database.
+it over a private network. This guide uses Tailscale; a WireGuard tunnel or a
+LAN works the same way with its own addresses. The compute machine does not need
+the BananaChat web application, database, session keys, or API-token database.
 
 Image generation is disabled by default (`BC_IMAGE_BACKEND=disabled`). A
 chat-only installation needs none of the components in this guide.
@@ -46,12 +47,12 @@ redirects; every request has a connect, read and total deadline and every
 response a size limit (8 MB for JSON, 30 MB for an image).
 
 **Checkpoint discovery.** `GET /object_info/CheckpointLoaderSimple` lists the
-checkpoint files. A background job reconciles them with the model catalog
+checkpoint files. A background job reconciles them with the model catalogue
 every ten minutes while image generation is enabled, and administrators can
 sync immediately with **Sync models** in Admin -> Models. New checkpoints are
 added as image models named `comfyui:<checkpoint file>`, **not rolled out**;
-checkpoints that disappeared are marked unavailable (their catalog entries,
-policies and edits are kept). If ComfyUI cannot be reached the catalog is left
+checkpoints that disappeared are marked unavailable (their catalogue entries,
+policies and edits are kept). If ComfyUI cannot be reached the catalogue is left
 as it was. The outcome of the last sync is kept for the administrator status
 view.
 
@@ -114,7 +115,7 @@ The built-in workflow supports standard all-in-one SD 1.x and SDXL
 LoRA workflows, ControlNet, and arbitrary uploaded workflows are not supported.
 
 For a 10 GB RTX 3080, begin with a standard SDXL checkpoint known to fit the
-machine. Test at `512x512` before moving to `1024x1024`. Check the model license
+machine. Test at `512x512` before moving to `1024x1024`. Check the model licence
 and obtain its SHA-256 from a trusted source before installing it.
 
 ## 1. Install ComfyUI
@@ -227,14 +228,17 @@ Also use the compute host firewall to permit both ports only on `tailscale0`.
 
 The checkpoint agent requires HTTPS for a non-loopback URL by default. Direct
 Tailscale HTTP remains encrypted by Tailscale but has no application-layer TLS.
-To use it, the VPS must explicitly set:
+To use it, the VPS must list the network the agent's address is in:
 
 ```ini
-BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE=1
+BC_CHECKPOINT_AGENT_INSECURE_NETWORKS=100.64.0.0/10
 ```
 
-Prefer an authenticated HTTPS reverse proxy reachable only through Tailscale
-when feasible.
+On another private network list its range instead (for example
+`192.168.10.0/24`); see
+[plain HTTP on private networks](configuration.md#plain-http-on-private-networks).
+Prefer an authenticated HTTPS reverse proxy reachable only through the private
+network when feasible.
 
 ## 4. Configure The BananaChat VPS
 
@@ -253,7 +257,7 @@ BC_IMAGE_BACKEND=comfyui
 BC_COMFYUI_URL=http://100.x.y.z:8188
 BC_CHECKPOINT_AGENT_URL=http://100.x.y.z:8765
 BC_CHECKPOINT_AGENT_TOKEN_FILE=/opt/bananachat/instance/checkpoint-agent.token
-BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE=1
+BC_CHECKPOINT_AGENT_INSECURE_NETWORKS=100.64.0.0/10
 BC_IMAGE_GENERATION_RPM=6
 BC_IMAGE_TOKENS_PER_GENERATION=5000
 ```
@@ -305,7 +309,7 @@ New checkpoints are restricted and flagged as image models automatically. Use
 | `BC_IMAGE_CREDIT_RESERVATION_TTL` | `1200` | Lifetime of an unrefreshed reservation (at least the generation timeout + 360 s). |
 | `BC_IMAGE_CREDIT_RESERVATION_HEARTBEAT` | `30` | How often a running request refreshes its reservation. |
 
-## Optional And Failure Behavior
+## Optional And Failure Behaviour
 
 With `BC_IMAGE_BACKEND=disabled` or unset:
 
@@ -313,7 +317,7 @@ With `BC_IMAGE_BACKEND=disabled` or unset:
 - No ComfyUI requests are made and no checkpoint sync runs.
 - The Images navigation link is hidden and `/images` returns 404.
 - `POST /v1/images/generations` returns 404 with `code: "images_disabled"`.
-- Existing image policies and catalog records remain stored.
+- Existing image policies and catalogue records remain stored.
 
 With ComfyUI enabled but no installed or rolled-out checkpoint:
 
@@ -324,14 +328,14 @@ With ComfyUI enabled but no installed or rolled-out checkpoint:
 
 With ComfyUI enabled but unreachable:
 
-- The periodic sync logs the problem and leaves the catalog untouched.
+- The periodic sync logs the problem and leaves the catalogue untouched.
 - Image requests fail with 502 and are not charged.
 - ComfyUI outages do not trigger BananaChat's AI-server outage notice and do
   not affect text inference.
 
 With ComfyUI enabled but no checkpoint agent:
 
-- Manually installed checkpoints can still be synchronized and used.
+- Manually installed checkpoints can still be synchronised and used.
 - The admin checkpoint pull form is hidden.
 
 During maintenance mode or an outage of the text inference server, starting
@@ -340,11 +344,11 @@ new images is paused like any other generation (HTTP 503 with
 
 ## Backup And Removal
 
-BananaChat database backups include catalog metadata, access policies, pull
+BananaChat database backups include catalogue metadata, access policies, pull
 history, and usage. They do not include Ollama weights, ComfyUI checkpoints,
 agent tokens, or generated images (BananaChat never stores generated images).
 
-Removing a ComfyUI model from the BananaChat catalog does not delete its
+Removing a ComfyUI model from the BananaChat catalogue does not delete its
 checkpoint, and the next sync adds it again (not rolled out) while the file
 exists. Use the managed agent API with its digest precondition or remove the
-file deliberately on the compute host, then synchronize again.
+file deliberately on the compute host, then synchronise again.

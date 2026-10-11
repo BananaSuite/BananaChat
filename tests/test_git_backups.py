@@ -124,9 +124,18 @@ def test_renamed_backup_fails_authenticated_snapshot_binding(store, remote, tmp_
         part = git.work / "part-00000.age"
         atomic_write(part, git.run("cat-file", "blob", entries[part.name][0]))
         git.push(git.commit([index_path, part]), store.prefix(store.settings()) + fake_id)
+        # Without the (no longer matching) tag, as if it predated authentication.
+        del index["authentication"]
+        stripped = "20000101T000000Z-22222222"
+        index["snapshot"] = stripped
+        write_json(index_path, index)
+        git.push(git.commit([index_path, part]), store.prefix(store.settings()) + stripped)
     target = tmp_path / "restored.tar.gz"
-    with pytest.raises(ValueError, match="different product, series, or snapshot"):
+    with pytest.raises(ValueError, match="authentication failed"):
         store.download(fake_id, target)
+    # The binding inside the ciphertext still holds when an operator accepts an unauthenticated snapshot.
+    with pytest.raises(ValueError, match="different product, series, or snapshot"):
+        store.download(stripped, target, allow_unauthenticated=True)
     assert not target.exists()
 
 
@@ -279,3 +288,130 @@ def test_backup_git_errors_are_diagnosable_without_repeating_credentials(tmp_pat
     assert calls[-1][calls[-1].index("--"):] == ["--", str(missing), "a" * 40 + ":refs/heads/banana-backups/x"]
     with pytest.raises(ValueError):
         transport.Git(tmp_path / "other", {"url": "--upload-pack=touch", "max_mib": 1}, token, allow_local=True)
+
+
+def forge(store, tmp_path, *, authentication=None, identifier="20260930T000000.000000Z-deadbeef"):
+    """What anyone who can push to the backup repository can do, knowing only the public recipient.
+
+    It is also what a snapshot uploaded before snapshots were authenticated looks like.
+    """
+    import hashlib
+    config = store.settings()
+    context = store.context(config, identifier)
+    payload = b"a package whose source.tar.gz and app.env a restore would deploy as root"
+    header = {**context, "schema": 1, "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+    with store.transport(config) as git:
+        part = git.work / "part-00000.age"
+        subprocess.run(["age", "--encrypt", "--recipient", config["recipient"], "--output", str(part)],
+                       input=crypto.MAGIC + json.dumps(header, sort_keys=True).encode() + b"\n" + payload, check=True)
+        index = {**context, "schema": 1, "parts": [{"name": part.name, "bytes": part.stat().st_size, "sha256": digest(part)}]}
+        if authentication is not None:
+            index["authentication"] = authentication
+        write_json(git.work / "index.json", index)
+        git.push(git.commit([part, git.work / "index.json"]), store.prefix(config) + identifier)
+    return identifier
+
+
+def backup_arguments(*argv):
+    import argparse
+    from banana_backup import cli
+    parser = argparse.ArgumentParser()
+    cli.add_commands(parser.add_subparsers(dest="command"))
+    return cli, parser.parse_args(["backups", *argv])
+
+
+def test_only_a_restore_that_deploys_takes_allow_unpinned():
+    """The operator's explicit choice for a 1.7 or later release without its dependency locks (OPS2-09), as on
+    restore and update; downloading, verifying and an agent's restore into a directory deploy nothing."""
+    import argparse
+    from banana_backup import cli
+
+    assert backup_arguments("restore", "snapshot")[1].allow_unpinned is False
+    assert backup_arguments("restore", "snapshot", "--allow-unpinned")[1].allow_unpinned is True
+    for agent in (False, True):
+        parser = argparse.ArgumentParser()
+        cli.add_commands(parser.add_subparsers(dest="command"), agent=agent)
+        commands = [("download", "--output", "x"), ("verify",)] + [("restore", "--output", "x")] * agent
+        for action, *extra in commands:
+            assert "allow_unpinned" not in vars(parser.parse_args(["backups", action, "snapshot", *extra]))
+
+
+def test_a_snapshot_forged_with_the_public_recipient_is_refused(store, tmp_path):
+    identifier = forge(store, tmp_path)
+    assert identifier in {item["snapshot"] for item in store.list()}
+    target = tmp_path / "restored.tar.gz"
+    with pytest.raises(ValueError, match="not authenticated"):
+        store.download(identifier, target)
+    with pytest.raises(ValueError, match="not authenticated"):
+        store.verify(identifier)
+    assert not target.exists()
+
+
+def test_a_genuine_tag_does_not_cover_a_forged_index(store, remote, tmp_path):
+    genuine = store.upload(package(tmp_path))
+    index = json.loads(command(remote, "show", store.prefix(store.settings()) + genuine["snapshot"] + ":index.json"))
+    assert index["authentication"]["scheme"] == crypto.AUTHENTICATION
+    identifier = forge(store, tmp_path, authentication=index["authentication"])
+    for allow in (False, True):
+        with pytest.raises(ValueError, match="authentication failed"):
+            store.download(identifier, tmp_path / f"restored-{allow}.tar.gz", allow_unauthenticated=allow)
+
+
+def test_unauthenticated_snapshots_restore_only_with_the_explicit_opt_in(store, tmp_path, capsys):
+    """Snapshots from before authentication look exactly like a forgery; the operator decides, loudly warned."""
+    identifier = forge(store, tmp_path)
+    restored = []
+
+    def restore_package(path, options):
+        restored.append(Path(path).read_bytes())
+        return {"outcome": "complete"}
+
+    cli, args = backup_arguments("restore", identifier)
+    with pytest.raises(ValueError, match="--allow-unauthenticated"):
+        cli.handle(args, store, create_package=None, restore_package=restore_package)
+    assert restored == []
+    cli, args = backup_arguments("restore", identifier, "--allow-unauthenticated")
+    assert cli.handle(args, store, create_package=None, restore_package=restore_package) == {"outcome": "complete"}
+    assert restored and restored[0].startswith(b"a package")
+    assert "WARNING" in capsys.readouterr().err
+    verified = store.verify(identifier, allow_unauthenticated=True)
+    assert verified["verified"] and verified["authenticated"] is False
+
+
+def test_the_authentication_key_comes_from_the_recovery_identity(store, tmp_path):
+    """A full-server-loss restore needs only the recovery key the operator saved offline."""
+    identifier = store.upload(package(tmp_path))["snapshot"]
+    assert store.verify(identifier)["authenticated"] is True
+    fresh = Store(tmp_path / "new-server", store.product)
+    fresh.root.mkdir(mode=0o700)
+    for name in ("repository.json", "repo.token", "recovery.agekey"):
+        atomic_write(fresh.root / name, (store.root / name).read_bytes())
+    assert fresh.verify(identifier)["authenticated"] is True
+    crypto.keygen(tmp_path / "other.agekey")
+    atomic_write(fresh.identity, (tmp_path / "other.agekey").read_bytes())
+    with pytest.raises(ValueError, match="authentication failed"):
+        fresh.verify(identifier)
+
+
+def test_append_only_series_never_delete_snapshots(store, remote, tmp_path):
+    """The token then needs no permission to delete branches; pruning is a separate, explicit step."""
+    cli, args = backup_arguments("configure", "--repo", "https://forge.example/owner/backups.git", "--forge", "forgejo",
+                                 "--name", "wiki-production", "--token-file", str(store.token),
+                                 "--key-file", str(store.identity), "--keep", "2", "--max-mib", "1", "--append-only")
+    assert cli.handle(args, store, create_package=None, restore_package=None)["repository"]["append_only"] is True
+    removed = []
+    real_remove = transport.Git.remove
+    transport.Git.remove = lambda self, *refs: removed.append(refs)
+    try:
+        identifiers = [store.upload(package(tmp_path, bytes([number])))["snapshot"] for number in range(3)]
+    finally:
+        transport.Git.remove = real_remove
+    assert removed == []
+    assert {item["snapshot"] for item in store.list()} == set(identifiers)
+    privileged = tmp_path / "delete.token"
+    atomic_write(privileged, "fixture-delete-token")
+    cli, args = backup_arguments("prune", "--token-file", str(privileged))
+    result = cli.handle(args, store, create_package=None, restore_package=None)
+    assert result["removed"] == [identifiers[0]] and not result["warnings"]
+    assert [item["snapshot"] for item in store.list()] == identifiers[:0:-1]
+    assert "fixture-delete-token" not in (store.root / "repo.token").read_text()

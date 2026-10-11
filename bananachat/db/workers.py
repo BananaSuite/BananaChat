@@ -4,11 +4,17 @@ Tables (fixed by earlier releases):
 
 * ``worker_nodes`` - registered worker PCs. ``token_hash`` is the SHA-256 hex
   digest of the bearer token; ``last_heartbeat`` is epoch seconds;
-  ``capabilities`` is JSON ``{"models": [...]}``.
+  ``capabilities`` is JSON ``{"models": [...]}``. ``strikes`` counts failed or
+  stalled jobs since the last completed one, and the worker gets no job until
+  ``cooldown_until`` (epoch seconds).
 * ``worker_jobs`` - one row per request sent to the worker pool. Times are
   epoch seconds (REAL). ``heartbeat_at`` is the last sign of life of the
   worker running the job. ``messages``/``options`` hold the prompt only while
-  the job is live; every terminal transition clears them.
+  the job is live; every terminal transition clears them. ``requeues`` counts
+  how often the job went back to the pool, ``deferred_by`` is the last worker
+  that handed it back (it is not offered the job again). ``requested_by`` is
+  the account the job serves; ``fault`` says whether its failure was held
+  against the worker (``worker``) or the request (``request``).
 * ``worker_job_chunks`` - streamed pieces waiting to be relayed.
 """
 
@@ -23,10 +29,10 @@ LIVE = ("pending", "claimed", "streaming")
 TERMINAL = ("done", "failed", "timeout")
 
 _WORKER_COLUMNS = ("id, name, token_hash, platform, gpu_name, gpu_util, ollama_version, capabilities, "
-                   "activity_state, status, last_heartbeat, registered_at")
+                   "activity_state, status, last_heartbeat, registered_at, strikes, cooldown_until")
 _JOB_COLUMNS = ("id, worker_id, model_name, messages, options, status, priority, stop_requested, created_at, "
                 "claimed_at, done_at, heartbeat_at, tokens_in, tokens_out, error_message, stream_bytes, "
-                "next_chunk_seq, finish_reason")
+                "next_chunk_seq, finish_reason, requeues, deferred_by, requested_by, fault")
 
 
 def _marks(values) -> str:
@@ -87,6 +93,16 @@ def touch(worker_id: str, now: float) -> None:
                (now, worker_id))
 
 
+def pause(worker_id: str, strikes: int, until: float) -> int:
+    return db.execute("UPDATE worker_nodes SET strikes=?, cooldown_until=? WHERE id=?",
+                      (strikes, until, worker_id)).rowcount
+
+
+def clear_pause(worker_id: str) -> int:
+    return db.execute("UPDATE worker_nodes SET strikes=0, cooldown_until=NULL WHERE id=? "
+                      "AND (strikes<>0 OR cooldown_until IS NOT NULL)", (worker_id,)).rowcount
+
+
 def workers_with_active_jobs() -> set[str]:
     rows = db.query(f"SELECT DISTINCT worker_id FROM worker_jobs WHERE status IN ({_marks(ACTIVE)}) "
                     "AND worker_id IS NOT NULL", ACTIVE)
@@ -95,19 +111,64 @@ def workers_with_active_jobs() -> set[str]:
 
 # ----- jobs ---------------------------------------------------------------------
 
-def insert_job(job_id: str, model_name: str, messages_json: str, options_json, priority: int, now: float) -> None:
-    db.execute("INSERT INTO worker_jobs (id, model_name, messages, options, status, priority, created_at, heartbeat_at) "
-               "VALUES (?,?,?,?,'pending',?,?,?)", (job_id, model_name, messages_json, options_json, priority, now, now))
+def insert_job(job_id: str, model_name: str, messages_json: str, options_json, priority: int, now: float, *,
+               requested_by: str | None = None) -> None:
+    db.execute("INSERT INTO worker_jobs (id, model_name, messages, options, status, priority, created_at, heartbeat_at, "
+               "requested_by) VALUES (?,?,?,?,'pending',?,?,?,?)",
+               (job_id, model_name, messages_json, options_json, priority, now, now, requested_by))
+
+
+def set_fault(job_id: str, fault: str) -> None:
+    """Record who a failed job is held against: ``worker`` or ``request``."""
+    db.execute("UPDATE worker_jobs SET fault=? WHERE id=?", (fault, job_id))
+
+
+def account_fault_since(user_id: str, since: float, *, fault: str | None = None, exclude: str | None = None) -> bool:
+    """Whether a job of the account ended in a failure (held against *fault*, or anyone) after *since*."""
+    sql = "SELECT 1 FROM worker_jobs WHERE requested_by=? AND done_at>=? AND fault IS NOT NULL"
+    params: list = [user_id, since]
+    if fault is not None:
+        sql += " AND fault=?"
+        params.append(fault)
+    if exclude is not None:
+        sql += " AND id<>?"
+        params.append(exclude)
+    return db.one(sql + " LIMIT 1", params) is not None
+
+
+def workers_that_failed(user_id: str, since: float) -> set[str]:
+    """The workers on which a job of the account ended in a failure held against anyone after *since*."""
+    rows = db.query("SELECT DISTINCT worker_id FROM worker_jobs WHERE requested_by=? AND done_at>=? "
+                    "AND fault IS NOT NULL AND worker_id IS NOT NULL", (user_id, since))
+    return {row[0] for row in rows}
+
+
+def request_fault_accounts(worker_id: str, since: float) -> int:
+    """How many accounts had a job fail on the worker, held against their request, after *since* and after the
+    worker last answered a job."""
+    return int(db.scalar(
+        "SELECT COUNT(DISTINCT requested_by) FROM worker_jobs WHERE worker_id=? AND fault='request' "
+        "AND requested_by IS NOT NULL AND done_at>=? AND done_at>COALESCE((SELECT MAX(done_at) FROM worker_jobs "
+        "WHERE worker_id=? AND status='done'), 0)", (worker_id, since, worker_id), 0))
 
 
 def get_job(job_id: str):
     return db.one(f"SELECT {_JOB_COLUMNS} FROM worker_jobs WHERE id=?", (job_id,))
 
 
-def next_pending(model_names=None):
-    """The next job waiting for a worker (optionally only for these model names)."""
+def next_pending(model_names=None, *, worker_id: str | None = None, failed_since: float | None = None):
+    """The next job waiting for a worker (optionally only for these model names, not one *worker_id* handed back,
+    and, with *failed_since*, not one of an account whose job failed on *worker_id* after that)."""
     sql = f"SELECT {_JOB_COLUMNS} FROM worker_jobs WHERE status='pending' AND stop_requested=0"
     params: list = []
+    if worker_id is not None:
+        sql += " AND (deferred_by IS NULL OR deferred_by<>?)"
+        params.append(worker_id)
+        if failed_since is not None:
+            sql += (" AND (requested_by IS NULL OR NOT EXISTS (SELECT 1 FROM worker_jobs AS failed "
+                    "WHERE failed.requested_by=worker_jobs.requested_by AND failed.done_at>=? "
+                    "AND failed.worker_id=? AND failed.fault IS NOT NULL))")
+            params += [failed_since, worker_id]
     if model_names is not None:
         names = sorted(model_names)
         if not names:
@@ -141,9 +202,10 @@ def set_claimed(job_id: str, worker_id: str, now: float) -> int:
 
 
 def requeue(job_id: str, now: float) -> int:
-    """Give a claimed job that produced nothing back to the pool."""
+    """Give a claimed job that produced nothing back to the pool (not to the worker that held it)."""
     return db.execute(
-        "UPDATE worker_jobs SET status='pending', worker_id=NULL, claimed_at=NULL, heartbeat_at=? "
+        "UPDATE worker_jobs SET status='pending', deferred_by=worker_id, worker_id=NULL, claimed_at=NULL, "
+        "heartbeat_at=?, requeues=requeues+1 "
         f"WHERE id=? AND status IN ({_marks(ACTIVE)}) AND stop_requested=0 AND next_chunk_seq=0",
         (now, job_id, *ACTIVE)).rowcount
 

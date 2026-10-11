@@ -140,8 +140,9 @@ function initDownloads() {
       if (row.dataset.status !== job.status || row.dataset.paused !== (job.paused ? "1" : "0")) { changed = true; continue; }
       const meter = row.querySelector("progress");
       if (meter) { meter.value = job.progress; meter.textContent = `${job.progress}%`; }
+      // A failed row shows its error (as rendered); only running rows report progress.
       const detail = row.querySelector("[data-job-detail]");
-      if (detail) detail.textContent = job.detail;
+      if (detail) detail.textContent = (job.status === "failed" ? job.error : job.detail) || "";
     }
     const queue = result.queue;
     if (queue) {

@@ -236,3 +236,72 @@ def test_deleting_verified_retry_history_does_not_revive_old_cancellation(app, f
         ollama.sync_catalog(source="test")
         discovered = catalog.get_by_name(MODEL)
         assert discovered is not None and discovered["enrollment"] == "new"
+
+
+class FlakyAgent:
+    """Answers the second status poll with *error*, then reports progress until the download completes."""
+
+    def __init__(self, error):
+        self.error = error
+        self.polls = 0
+        self.cancelled = []
+
+    def submit_download(self, **recipe):
+        return {"id": REMOTE_ID}
+
+    def get_download(self, remote_id):
+        self.polls += 1
+        if self.polls == 2:
+            raise self.error
+        status = "completed" if self.polls >= 4 else "downloading"
+        return {"id": remote_id, "status": status, "bytes_received": 25 * self.polls, "expected_size": 100}
+
+    def cancel_download(self, remote_id):
+        self.cancelled.append(remote_id)
+
+
+def run_flaky_checkpoint(make_app, monkeypatch, error):
+    app = make_app(image_backend="comfyui")
+    agent = FlakyAgent(error)
+    monkeypatch.setattr(checkpoint_agent, "client", lambda config=None: agent)
+    monkeypatch.setattr(pulls, "_sync_comfyui", lambda: None)
+    monkeypatch.setattr(pulls.CancelToken, "wait", lambda self, seconds=None: False)
+    job_id = enqueue_checkpoint(app)
+    with app.app_context():
+        assert pulls.process_next(stopping=lambda: False)
+        return pulls_db.get(job_id), agent
+
+
+@pytest.mark.parametrize("error", [
+    checkpoint_agent.CheckpointAgentError("The checkpoint agent is unavailable.", transient=True),
+    checkpoint_agent.CheckpointAgentError("Busy.", 503),
+])
+def test_a_failed_checkpoint_poll_keeps_following_the_download(make_app, monkeypatch, error):
+    job, agent = run_flaky_checkpoint(make_app, monkeypatch, error)
+    assert job["status"] == "done"
+    assert agent.polls == 4 and agent.cancelled == []
+
+
+def test_a_refused_checkpoint_poll_still_fails_the_job(make_app, monkeypatch):
+    job, _agent = run_flaky_checkpoint(make_app, monkeypatch, checkpoint_agent.CheckpointAgentError("Forbidden.", 403))
+    assert job["status"] == "failed"
+
+
+def test_a_download_whose_outcome_could_not_be_saved_is_queued_again(app, monkeypatch):
+    import sqlite3
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("unexpected")
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(pulls, "_run_ollama", broken)
+    monkeypatch.setattr(pulls_db, "finish", locked)
+    with app.app_context():
+        job_id = pulls.enqueue_ollama(MODEL, None)
+        job = pulls_db.claim_next()
+    with pytest.raises(sqlite3.OperationalError):
+        pulls._job_thread(app, job)
+    with app.app_context():
+        assert pulls_db.get(job_id)["status"] == "queued"

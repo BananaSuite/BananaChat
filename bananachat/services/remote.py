@@ -25,7 +25,48 @@ A request goes to the pool only when all of these hold:
 * an online worker (fresh heartbeat, not disabled, not gaming, no job running)
   advertises the model (``name`` and ``name:latest`` are the same model), and
   there are more such idle workers than jobs already waiting for that model;
-* no worker failed to pick up this model during the last ``COOLDOWN_SECONDS``.
+* no worker failed to pick up this model during the last ``COOLDOWN_SECONDS``;
+* no failure of the account's jobs was held against a worker during the last
+  :data:`USER_FAULT_SECONDS`, and an idle worker is left on which none of its
+  jobs failed in that time (see below).
+
+Misbehaving workers
+-------------------
+A worker that breaks the protocol or abandons a job it was answering is
+paused: it is offered no job and no request is routed to it for
+:data:`PAUSE_SECONDS`, doubling with each further failure up to
+:data:`PAUSE_MAX_SECONDS`; a completed job clears the record. A worker whose
+job times out (no first chunk within ``BC_FIRST_TOKEN_TIMEOUT`` of claiming
+it, or silent past its lease; not when it last spoke before this server started,
+as it could not reach the server meanwhile) or that reports a failure is
+paused the same way, because the request may be at fault too:
+
+* a failure that follows from the request is held against the request, not the
+  worker: input its model cannot read, a request its Ollama refused (HTTP 4xx)
+  and memory the request needs that the worker's hardware does not have (a
+  large ``num_ctx`` or context);
+* each account holds at most one worker responsible per
+  :data:`USER_FAULT_SECONDS`: a further failure of its jobs in that time is
+  held against the request;
+* after a failure of one of its jobs was held against a worker, the account is
+  answered by the local server for :data:`USER_FAULT_SECONDS`; after one held
+  against the request, it is not sent to that worker again in that time;
+* the worker reports why a job failed, so the reason is not taken on trust
+  forever: a worker on which the jobs of :data:`REQUEST_FAULT_ACCOUNTS`
+  different accounts failed for their requests' sake within
+  :data:`USER_FAULT_SECONDS`, with no answered job in between, cannot serve
+  what it advertises (or lies about it) and is paused like any failing worker.
+
+So one account's requests cannot pause every worker, and a worker that fails
+every job cannot take the accounts it failed off the other workers. A job a worker
+hands back (``requeue``, gaming, a restart) is never offered to that worker
+again and goes back to the pool at most :data:`MAX_REQUEUES` times. An
+administrator enabling a disabled worker clears its pause. Without
+output, the pool has ``BC_WORKER_CLAIM_TIMEOUT`` + ``BC_FIRST_TOKEN_TIMEOUT``
+seconds in all before the local server answers instead; when that time runs
+out, the worker holding the job is held responsible only if it held the job for
+``BC_FIRST_TOKEN_TIMEOUT`` itself (not when it took over a job another worker
+handed back late).
 
 The job never reaching a worker is not an error for the user: when no worker
 claims it within ``BC_WORKER_CLAIM_TIMEOUT`` seconds (or a worker fails, or its
@@ -57,6 +98,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import secrets
 import sqlite3
 import threading
@@ -83,12 +125,25 @@ MAX_MODELS = 512
 MAX_NAME_LENGTH = 80
 PURGE_AFTER_SECONDS = 3600
 COOLDOWN_SECONDS = 60
+PAUSE_SECONDS = 60
+PAUSE_MAX_SECONDS = 3600
+# After a failure of one of its jobs was held against a worker, an account is answered locally for this long (after
+# one held against the request, it is not sent to that worker for this long), and further failures of its jobs in
+# this time are not held against a worker. Kept below PURGE_AFTER_SECONDS, which keeps the record (worker_jobs.fault).
+USER_FAULT_SECONDS = 1800
+# A worker on which the jobs of this many accounts failed for their requests' sake within USER_FAULT_SECONDS, with no
+# answered job in between, is paused all the same: fewer accounts' requests may really be at fault.
+REQUEST_FAULT_ACCOUNTS = 3
+MAX_REQUEUES = 3
 RELAY_MIN_INTERVAL = 0.05
 RELAY_MAX_INTERVAL = 0.25
 ACTIVITY_STATES = ("idle", "light", "active", "gaming")
 WORKER_STATUSES = ("online", "busy", "offline")
 NO_REMOTE_REQUEST_TYPES = frozenset({"chat_incognito", "incognito", "no_history", "agent"})
-TOKEN_PREFIX = "bcw_"
+# When this server started (imported by Gunicorn's master before it starts workers): a worker could not reach it
+# before, so a lease that ran out while it was down (an update, a restart) is not held against the worker.
+_SERVER_STARTED = time.time()
+TOKEN_PREFIX = "bcw_"  # noqa: S105 - the public prefix of worker tokens, not a token
 # Users are charged by the usage a worker reports, so a report is capped at what
 # the job can have used: a token is at least one byte of the prompt or of the
 # relayed answer, plus room for the chat template around the prompt.
@@ -195,7 +250,107 @@ def _cooling(name: str) -> bool:
 def worker_is_available(worker, now: float) -> bool:
     return (_field(worker, "status") == "online"
             and float(_field(worker, "last_heartbeat", 0)) >= now - HEARTBEAT_FRESH_SECONDS
-            and _field(worker, "activity_state") != "gaming")
+            and _field(worker, "activity_state") != "gaming"
+            and not _paused(worker, now))
+
+
+def _paused(worker, now: float) -> bool:
+    return float(_field(worker, "cooldown_until", 0)) > now
+
+
+def _penalize(worker_id, now: float, reason: str) -> None:
+    """Pause a worker that failed or stalled a job (see the module docstring). Joins the caller's transaction."""
+    if not worker_id:
+        return
+    with db.transaction():
+        worker = store.get(worker_id)
+        if worker is None:
+            return
+        strikes = int(_field(worker, "strikes", 0)) + 1
+        pause = min(PAUSE_MAX_SECONDS, PAUSE_SECONDS * 2 ** min(strikes - 1, 16))
+        store.pause(worker_id, strikes, now + pause)
+    log.warning("Worker %s is paused for %d s (%s; failure %d in a row)", worker["name"], pause, reason, strikes)
+
+
+def _misbehaved(job, worker_id, now: float, reason: str) -> None:
+    """The worker broke the protocol or abandoned a job it was answering: always its own fault."""
+    store.set_fault(job["id"], "worker")
+    _penalize(worker_id, now, reason)
+
+
+def _blame(job, now: float, reason: str) -> None:
+    """A job failed or stalled on its worker in a way its request may have caused (a reported failure, no first
+    output in time, silence): pause the worker, unless the job's account already held a worker responsible within
+    :data:`USER_FAULT_SECONDS`. Joins the caller's transaction."""
+    account = _field(job, "requested_by")
+    if account and store.account_fault_since(account, now - USER_FAULT_SECONDS, fault="worker", exclude=job["id"]):
+        store.set_fault(job["id"], "request")
+        log.info("Worker job %s failed (%s); not held against its worker: the account already paused one",
+                 job["id"][:8], reason)
+        return
+    store.set_fault(job["id"], "worker")
+    _penalize(_field(job, "worker_id"), now, reason)
+
+
+# Memory the request needs that the worker's hardware does not have (Ollama and llama.cpp wording): a context the
+# request made too large, not a broken worker.
+_RESOURCE_FAULTS = ("out of memory", "more system memory", "not enough memory", "insufficient memory",
+                    "unable to allocate", "failed to allocate", "cudamalloc failed")
+# How the worker daemon reports a refusal by its Ollama (the local server treats any 4xx as the request's fault).
+_REFUSED = re.compile(r"\bHTTP 4\d\d\b")
+
+
+def _request_fault(message: str, job) -> bool:
+    """A failure that follows from what the request asked (as the local server's would) is not the worker's fault."""
+    from bananachat.services.inference import input_fault
+
+    lowered = message.lower()
+    return (input_fault(message, images='"images"' in (_field(job, "messages") or ""))
+            or any(marker in lowered for marker in _RESOURCE_FAULTS) or _REFUSED.search(message) is not None)
+
+
+def _request_faults_add_up(job, worker, now: float) -> None:
+    """A failure was held against the request on the worker's word: pause the worker once the jobs of
+    :data:`REQUEST_FAULT_ACCOUNTS` accounts failed on it that way (see the module docstring). Joins the caller's
+    transaction."""
+    accounts = store.request_fault_accounts(worker["id"], now - USER_FAULT_SECONDS)
+    if _field(job, "requested_by") and accounts >= REQUEST_FAULT_ACCOUNTS:
+        _penalize(worker["id"], now, f"the jobs of {accounts} accounts failed on it, reportedly for their requests' sake")
+
+
+def account_benched(user, now: float | None = None) -> bool:
+    """Whether a failure of one of *user*'s jobs was held against a worker lately: the account is answered locally
+    for a while (see the module docstring)."""
+    account = _field(user, "id")
+    if not account:
+        return False
+    now = time.time() if now is None else now
+    return store.account_fault_since(account, now - USER_FAULT_SECONDS, fault="worker")
+
+
+def _workers_avoided_by(user, now: float) -> set[str]:
+    """The workers on which a job of *user* failed lately: its jobs are not sent there for a while."""
+    account = _field(user, "id")
+    return store.workers_that_failed(account, now - USER_FAULT_SECONDS) if account else set()
+
+
+def _lease_ran_out(job, now: float, reason: str) -> None:
+    """A claimed job timed out (no first output in time, or silence): blame its worker unless it last spoke before
+    this server started, when it could not reach the server for part of its lease."""
+    last_seen = float(_field(job, "heartbeat_at") or _field(job, "claimed_at") or 0)
+    if last_seen < _SERVER_STARTED:
+        log.info("Worker job %s timed out while this server was not running; not held against its worker",
+                 job["id"][:8])
+        return
+    _blame(job, now, reason)
+
+
+def _requeue(job, now: float) -> bool:
+    """Hand an unstarted job back to the pool, or fail it once it went back too often. True when re-queued."""
+    if int(_field(job, "requeues", 0)) >= MAX_REQUEUES:
+        store.finish(job["id"], "failed", now, error="No worker kept the job.", only_from=store.ACTIVE)
+        return False
+    return bool(store.requeue(job["id"], now))
 
 
 def idle_workers_for(name: str, now: float | None = None) -> list:
@@ -213,7 +368,7 @@ def should_route(user, model, *, request_type: str | None = None, think=None, co
     if not config.workers_enabled or model is None:
         return False
     if _field(model, "backend") not in (None, "ollama"):
-        return False  # worker PCs run Ollama models only (never the Claude pool)
+        return False  # worker PCs run Ollama models only (never external API providers)
     if think:
         # Worker jobs carry no reasoning setting and the daemon relays only the
         # answer, so a request that asks for reasoning stays on this server.
@@ -226,7 +381,12 @@ def should_route(user, model, *, request_type: str | None = None, think=None, co
     if not name or _cooling(name):
         return False
     try:
-        return len(idle_workers_for(name)) > store.count_pending(model_aliases(name))
+        now = time.time()
+        if account_benched(user, now):
+            return False
+        avoided = _workers_avoided_by(user, now)
+        idle = [worker for worker in idle_workers_for(name, now) if worker["id"] not in avoided]
+        return len(idle) > store.count_pending(model_aliases(name))
     except sqlite3.Error:
         log.warning("Worker routing check failed; using the local server", exc_info=True)
         return False
@@ -252,7 +412,8 @@ def lease_expired(job, now: float, lease: float, first_token_timeout: float) -> 
 
 
 def stream(model_name, messages, options, *, cancel, priority, first_token_timeout, total_timeout, think=None,
-           config=None):
+           config=None, user_id: str | None = None):
+    """See the module docstring; *user_id* is the account the job serves (see "Misbehaving workers")."""
     config = _config(config)
     deadline = time.monotonic() + float(total_timeout)
     messages_json = json.dumps(messages, ensure_ascii=False)
@@ -261,7 +422,8 @@ def stream(model_name, messages, options, *, cancel, priority, first_token_timeo
         log.info("A %s request is too large for the worker pool; answering locally", model_name)
     else:
         job_id = uuid.uuid4().hex
-        store.insert_job(job_id, model_name, messages_json, options_json, int(priority), time.time())
+        store.insert_job(job_id, model_name, messages_json, options_json, int(priority), time.time(),
+                         requested_by=user_id)
         _announce()
         try:
             yield from _relay(job_id, cancel, config, float(first_token_timeout), deadline)
@@ -289,8 +451,17 @@ def _release(job_id: str) -> None:
         log.warning("Could not clean up worker job %s; the worker-jobs task will", job_id[:8], exc_info=True)
 
 
-def _fail_relay(job_id: str, status: str, message: str, produced: bool):
-    store.finish(job_id, status, time.time(), error=message)
+def _fail_relay(job_id: str, status: str, message: str, produced: bool, *, blame: str | None = None):
+    """End the job. *blame* ``worker``: the worker running it broke the protocol and is paused; ``stall``: it
+    stalled, which may be the request's doing too (:func:`_blame`)."""
+    now = time.time()
+    with db.transaction():
+        job = store.get_job(job_id) if blame else None
+        if store.finish(job_id, status, now, error=message) and job is not None and job["worker_id"]:
+            if blame == "worker":
+                _misbehaved(job, job["worker_id"], now, message)
+            else:
+                _blame(job, now, message)
     if not produced:
         raise _NotStarted(message)
     raise UpstreamError(message)
@@ -300,6 +471,8 @@ def _relay(job_id: str, cancel, config, first_token_timeout: float, deadline: fl
     claim_timeout = float(config.worker_claim_timeout)
     lease = lease_seconds(config)
     pending_since = time.monotonic()
+    # However often the job changes hands, the pool has this long to start answering.
+    pool_deadline = pending_since + claim_timeout + first_token_timeout
     previous_status = "pending"
     last_seq = -1
     terminal = False
@@ -310,6 +483,14 @@ def _relay(job_id: str, cancel, config, first_token_timeout: float, deadline: fl
         if cancel.cancelled:
             store.finish(job_id, "failed", time.time(), error="Generation stopped")
             raise Cancelled(cancel.reason or "cancelled")
+        if not produced and time.monotonic() >= min(deadline, pool_deadline):
+            # The local server answers instead (with whatever time is left). The worker holding the job is held
+            # responsible only if it had the whole first-token time itself, not when it took the job over late.
+            current = store.get_job(job_id)
+            held = current is not None and current["status"] in store.ACTIVE and \
+                current["claimed_at"] is not None and time.time() - float(current["claimed_at"]) >= first_token_timeout
+            _fail_relay(job_id, "timeout", "No worker started answering in time.", produced,
+                        blame="stall" if held else None)
         if time.monotonic() >= deadline:
             store.finish(job_id, "timeout", time.time(), error="The answer took too long.")
             raise UpstreamError("The worker took too long to answer.")
@@ -317,7 +498,7 @@ def _relay(job_id: str, cancel, config, first_token_timeout: float, deadline: fl
         rows = store.chunks_after(job_id, last_seq)
         for row in rows:
             if row["seq"] != last_seq + 1 or terminal:
-                _fail_relay(job_id, "failed", "The worker sent an incomplete answer.", produced)
+                _fail_relay(job_id, "failed", "The worker sent an incomplete answer.", produced, blame="worker")
             last_seq = row["seq"]
             terminal = bool(row["done"])
             if row["content"]:
@@ -339,7 +520,8 @@ def _relay(job_id: str, cancel, config, first_token_timeout: float, deadline: fl
             continue
         if status == "done":
             if not terminal or last_seq != job["next_chunk_seq"] - 1:
-                _fail_relay(job_id, "failed", "The worker ended without a completion marker.", produced)
+                _fail_relay(job_id, "failed", "The worker ended without a completion marker.", produced,
+                            blame="worker")
             yield Chunk(done=True, finish_reason=job["finish_reason"] or "stop",
                         prompt_tokens=job["tokens_in"] or None, completion_tokens=job["tokens_out"] or None)
             return
@@ -367,7 +549,7 @@ def _relay(job_id: str, cancel, config, first_token_timeout: float, deadline: fl
                     raise _NotStarted("no worker took the job in time")
                 continue
         elif lease_expired(job, now, lease, first_token_timeout):
-            _fail_relay(job_id, "timeout", "The worker stopped responding.", produced)
+            _fail_relay(job_id, "timeout", "The worker stopped responding.", produced, blame="stall")
         previous_status = status
 
         if rows:
@@ -447,7 +629,7 @@ def heartbeat(worker, body, config=None) -> dict:
             # started answering go back to the pool (older daemons silently
             # sat on them until the lease expired).
             for job in store.active_jobs_for_worker(worker["id"]):
-                if job["next_chunk_seq"] == 0 and store.requeue(job["id"], now):
+                if job["next_chunk_seq"] == 0 and _requeue(job, now):
                     log.info("Worker %s is %s; job %s returned to the pool", worker["name"],
                              activity if activity == "gaming" else status, job["id"][:8])
                     _announce()
@@ -477,8 +659,10 @@ def claim(worker, models: list[str] | None, config=None):
     config = _config(config)
     names = _alias_set(models) if models is not None else None
     now = time.time()
+    failed_since = now - USER_FAULT_SECONDS
     active = store.active_jobs_for_worker(worker["id"])
-    if not active and store.next_pending(names) is None:
+    if not active and (_paused(worker, now)
+                       or store.next_pending(names, worker_id=worker["id"], failed_since=failed_since) is None):
         return None
     with db.transaction():
         current = store.get(worker["id"])
@@ -488,10 +672,12 @@ def claim(worker, models: list[str] | None, config=None):
             # Daemons run one job at a time: a worker asking for work has
             # abandoned whatever it still holds (a restart, a lost reply).
             if job["next_chunk_seq"] == 0:
-                store.requeue(job["id"], now)
-            else:
-                store.finish(job["id"], "failed", now, error="The worker abandoned the job.")
-        job = store.next_pending(names)
+                _requeue(job, now)
+            elif store.finish(job["id"], "failed", now, error="The worker abandoned the job."):
+                _misbehaved(job, worker["id"], now, "abandoned a job it was answering")
+        if _paused(store.get(worker["id"]), now):
+            return None
+        job = store.next_pending(names, worker_id=worker["id"], failed_since=failed_since)
         if job is None or not store.set_claimed(job["id"], worker["id"], now):
             return None
     log.info("Worker job %s (%s) claimed by %s", job["id"][:8], job["model_name"], worker["name"])
@@ -542,7 +728,8 @@ def _owned(job, worker, config) -> bool:
         return False
     now = time.time()
     if lease_expired(job, now, lease_seconds(config), config.first_token_timeout):
-        store.finish(job["id"], "timeout", now, error="The worker stopped responding.")
+        if store.finish(job["id"], "timeout", now, error="The worker stopped responding."):
+            _lease_ran_out(job, now, "stopped responding")
         return False
     return True
 
@@ -585,10 +772,12 @@ def submit_chunk(worker, job_id: str, body, config=None) -> dict:
                 store.renew_lease(worker["id"], now)
                 return {"ok": True, "stop": False}
             store.finish(job_id, "failed", now, error="The worker sent conflicting chunks.")
+            _misbehaved(job, worker["id"], now, "sent conflicting chunks")
             return {"ok": False, "stop": True}
         previous = store.chunk(job_id, expected - 1) if expected else None
         if seq > expected or (previous is not None and previous["done"]):
             store.finish(job_id, "failed", now, error="The worker sent chunks out of order.")
+            _misbehaved(job, worker["id"], now, "sent chunks out of order")
             return {"ok": False, "stop": True}
         budget = config.chat_max_response_bytes - job["stream_bytes"]
         if size > budget:
@@ -630,11 +819,13 @@ def complete(worker, job_id: str, body, config=None) -> dict:
         last = store.chunk(job_id, job["next_chunk_seq"] - 1) if job["next_chunk_seq"] else None
         if last is None or not last["done"]:
             store.finish(job_id, "failed", now, error="The worker ended without a completion marker.")
+            _misbehaved(job, worker["id"], now, "ended a job without a completion marker")
             return {"ok": False, "stop": True}
         tokens_in = min(tokens_in, len((job["messages"] or "").encode("utf-8")) + PROMPT_TOKEN_ALLOWANCE)
         tokens_out = min(tokens_out, int(job["stream_bytes"] or 0) + ANSWER_TOKEN_ALLOWANCE)
         store.finish(job_id, "done", now, tokens_in=tokens_in, tokens_out=tokens_out, finish_reason=reason,
                      only_from=store.ACTIVE)
+        store.clear_pause(worker["id"])
     return {"ok": True, "stop": False}
 
 
@@ -655,13 +846,19 @@ def fail(worker, job_id: str, body, config=None) -> dict:
         if job["status"] not in store.ACTIVE:
             return {"ok": False, "stop": True}
         if requeue and job["next_chunk_seq"] == 0 and not job["stop_requested"]:
-            store.requeue(job_id, now)
-            log.info("Worker %s deferred job %s; it is back in the pool", worker["name"], job_id[:8])
-            requeued = True
+            requeued = _requeue(job, now)
+            if requeued:
+                log.info("Worker %s deferred job %s; it is back in the pool", worker["name"], job_id[:8])
         else:
             # One printable line: the text reaches the server log and API clients.
             message = " ".join("".join(char if char.isprintable() else " " for char in error).split())
-            store.finish(job_id, "failed", now, error=message[:500] or "The worker failed.")
+            if store.finish(job_id, "failed", now, error=message[:500] or "The worker failed.") \
+                    and not job["stop_requested"]:
+                if _request_fault(message, job):
+                    store.set_fault(job_id, "request")
+                    _request_faults_add_up(job, worker, now)
+                else:
+                    _blame(job, now, "reported a failure")
             requeued = False
     if requeued:
         _announce()
@@ -692,7 +889,9 @@ def set_enabled(worker_id: str, enabled: bool) -> bool:
         if store.get(worker_id) is None:
             return False
         store.set_status(worker_id, "offline" if enabled else "disabled")
-        if not enabled:
+        if enabled:
+            store.clear_pause(worker_id)  # an administrator vouches for it again
+        else:
             store.finish_worker_jobs(worker_id, "The worker was disabled.", now)
     return True
 
@@ -720,6 +919,8 @@ def describe(worker, now: float | None = None, busy: set | None = None) -> dict:
         "status": status,
         "activity": _field(worker, "activity_state") if status != "offline" else None,
         "working": bool(busy and worker["id"] in busy),
+        # Paused after failed or stalled jobs (see the module docstring).
+        "paused": status != "disabled" and _paused(worker, now),
         "gpu_name": _field(worker, "gpu_name"),
         "gpu_util": round(float(worker["gpu_util"])) if _field(worker, "gpu_util") is not None else None,
         "ollama_version": _field(worker, "ollama_version"),
@@ -753,9 +954,10 @@ def maintain(config=None) -> dict:
     with db.transaction():
         timed_out += store.expire_pending(now - max(120.0, config.worker_claim_timeout * 3.0), now)
         for job in store.active_jobs():
-            if lease_expired(job, now, lease, config.first_token_timeout):
-                timed_out += store.finish(job["id"], "timeout", now, error="The worker stopped responding.",
-                                          only_from=store.ACTIVE)
+            if lease_expired(job, now, lease, config.first_token_timeout) and store.finish(
+                    job["id"], "timeout", now, error="The worker stopped responding.", only_from=store.ACTIVE):
+                timed_out += 1
+                _lease_ran_out(job, now, "stopped responding")
         timed_out += store.expire_created_before(now - (config.generation_timeout + 120.0), now)
     with db.transaction():
         store.scrub_terminal()

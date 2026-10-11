@@ -17,11 +17,11 @@
     <section class="settings-section" aria-labelledby="history-title">
       <div class="section-header">
         <h2 id="history-title">{{ t("developer.usage_title") }}</h2>
-        {% if history %}<span class="hint">{{ t("developer.usage_limit", count=limit) }}</span>{% endif %}
+        {% if history %}<span class="hint">{{ t("developer.usage_limit", count=history | length) }}</span>{% endif %}
       </div>
       {% if history %}
       <div class="table-wrap">
-        <table class="table dev-usage">
+        <table class="table table-stack table-stack-md dev-usage">
           <caption class="visually-hidden">{{ t("developer.usage_title") }}</caption>
           <thead>
             <tr>
@@ -36,17 +36,17 @@
           <tbody>
           {% for row in history %}
             <tr>
-              <td class="nowrap"><time datetime="{{ row.created_at }}">{{ row.created_at | datetime }}</time></td>
-              <td>
+              <td class="nowrap cell-lead"><time datetime="{{ row.created_at }}">{{ row.created_at | datetime }}</time></td>
+              <td class="dev-usage-source">
                 {% if row.request_type == "playground" %}<span class="badge badge-primary">{{ t("developer.source_playground") }}</span>
                 {% elif row.token_name is not none or row.token_prefix %}<span class="badge">{{ t("developer.source_token", name=row.token_name or row.token_prefix) }}</span>
                 {% elif row.token_id %}<span class="badge">{{ t("developer.source_api") }}</span>
                 {% else %}<span class="badge">{{ t("developer.source_web") }}</span>{% endif %}
               </td>
-              <td>{{ row.model_name or "—" }}</td>
-              <td class="text-right mono">{{ row.tokens_in | number }}</td>
-              <td class="text-right mono">{{ row.tokens_out | number }}</td>
-              <td class="text-right mono nowrap">
+              <td class="cell-full">{{ row.model_name or "—" }}</td>
+              <td class="text-right dev-usage-number" data-label="{{ t('developer.usage_tokens_in') }}">{{ row.tokens_in | number }}</td>
+              <td class="text-right dev-usage-number" data-label="{{ t('developer.usage_tokens_out') }}">{{ row.tokens_out | number }}</td>
+              <td class="text-right nowrap dev-usage-number" data-label="{{ t('developer.usage_counted') }}">
                 {{ row.counted_tokens | number }}
                 {% if row.usage_estimated %}<span class="badge" title="{{ t('developer.usage_estimated_hint') }}">{{ t("developer.usage_estimated") }}</span>{% endif %}
               </td>

@@ -70,9 +70,9 @@
           <input type="file" id="file-input" name="files" multiple hidden{% if paused %} disabled{% endif %} accept="{{ data.limits.accept }}">
           {% endif %}
           <button type="button" class="btn btn-ghost btn-sm composer-action" id="params-toggle" aria-expanded="false" aria-controls="params-panel" aria-label="{{ t('chat.params_toggle') }}" title="{{ t('chat.params_toggle') }}">{{ icon("sliders") }}<span class="composer-action-label">{{ t("chat.options") }}</span></button>
-          <button type="button" class="icon-btn" id="voice-button"{% if paused %} disabled{% endif %} aria-pressed="false" aria-label="{{ t('chat.voice_start') }}" title="{{ t('chat.voice_start') }}" hidden>{{ icon("mic") }}</button>
         </div>
       </div>
+      <button type="button" class="icon-btn voice-button" id="voice-button"{% if paused %} disabled{% endif %} aria-pressed="false" aria-label="{{ t('chat.voice_start') }}" title="{{ t('chat.voice_start') }}" hidden>{{ icon("mic") }}</button>
       <button type="submit" class="btn btn-primary send-button" id="send-button"{% if paused %} disabled{% endif %} aria-label="{{ t('chat.send') }}" title="{{ t('chat.send') }}">{{ icon("arrow-up") }}<span class="composer-action-label">{{ t("chat.send") }}</span></button>
       <button type="button" class="btn stop-button" id="stop-button" hidden>{{ icon("stop") }}<span>{{ t("chat.stop") }}</span></button>
     </div>

@@ -13,15 +13,15 @@
       <button type="button" class="icon-btn" id="sidebar-toggle" aria-controls="chat-sidebar" aria-expanded="true" aria-label="{{ t('chat.toggle_sidebar') }}" title="{{ t('chat.toggle_sidebar') }}">{{ icon("sidebar") }}</button>
       <h1 class="chat-title truncate" id="chat-title">{{ title }}</h1>
       {% if personality_allowed %}<button type="button" class="persona-chip" id="persona-chip" aria-haspopup="listbox" aria-controls="persona-popover" hidden></button>{% endif %}
-      {% if session.is_incognito %}<span class="badge badge-info">{{ icon("eye-off") }}{{ t("chat.no_history_badge") }}</span>{% endif %}
+      {% if session.is_incognito %}<span class="badge badge-info chat-badge" title="{{ t('chat.no_history_badge') }}">{{ icon("eye-off") }}<span class="chat-badge-label">{{ t("chat.no_history_badge") }}</span></span>{% endif %}
       <div class="chat-header-actions">
         {% if session.is_incognito %}
         <form method="post" action="{{ url_for('chat.delete', session_id=session.id) }}" data-confirm="{{ t('chat.end_confirm') }}" data-confirm-label="{{ t('chat.end_chat') }}" data-confirm-danger>
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="btn btn-sm">{{ icon("close") }}{{ t("chat.end_chat") }}</button>
+          <button type="submit" class="btn btn-sm chat-header-button" aria-label="{{ t('chat.end_chat') }}" title="{{ t('chat.end_chat') }}">{{ icon("close") }}<span class="chat-action-label">{{ t("chat.end_chat") }}</span></button>
         </form>
         {% else %}
-        <button type="button" class="btn btn-ghost btn-sm" id="share-button" aria-label="{{ t('chat.share') }}" title="{{ t('chat.share') }}">{{ icon("share") }}<span>{{ t("chat.share") }}</span></button>
+        <button type="button" class="btn btn-ghost btn-sm chat-header-button" id="share-button" aria-label="{{ t('chat.share') }}" title="{{ t('chat.share') }}">{{ icon("share") }}<span class="chat-action-label">{{ t("chat.share") }}</span></button>
         {% endif %}
         <button type="button" class="icon-btn" id="chat-menu-button" aria-haspopup="menu" aria-expanded="false" aria-label="{{ t('chat.chat_options') }}" title="{{ t('chat.chat_options') }}">{{ icon("more") }}</button>
       </div>
@@ -35,7 +35,7 @@
     <div class="chat-scroll" id="chat-scroll">
       <div class="chat-thread">
         <button type="button" class="btn btn-ghost btn-sm load-earlier" id="load-earlier" hidden>{{ t("chat.show_earlier") }}</button>
-        <div class="chat-messages" id="chat-messages" aria-label="{{ t('chat.conversation') }}"></div>
+        <div class="chat-messages" id="chat-messages" role="region" aria-label="{{ t('chat.conversation') }}"></div>
         <div class="chat-empty" id="chat-empty" hidden>
           <div class="chat-welcome" id="chat-welcome">
             <h2>{{ t("chat.empty_title_no_history") if session.is_incognito else t("chat.empty_title") }}</h2>

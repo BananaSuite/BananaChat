@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from collections import deque
 
 
 class ConnectionDeadlines:
@@ -54,3 +55,36 @@ class ConnectionDeadlines:
             connections = list(self._ends)
             self._ends.clear()
         self._disconnect(connections)
+
+
+class FailureLimiter:
+    """Counts failed authentications per peer address within a sliding window.
+
+    After *limit* failures in *window* seconds, ``blocked`` is true for that
+    peer: callers answer 429 to further bad tokens without checking them.
+    Valid tokens are still accepted, so a noisy neighbour behind the same
+    proxy cannot lock the web server out. At most 1024 peers are tracked.
+    """
+
+    def __init__(self, limit: int, window: float = 60.0, clock=time.monotonic):
+        self.limit = limit
+        self.window = window
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._failures: dict[str, deque] = {}
+
+    def blocked(self, peer: str) -> bool:
+        with self._lock:
+            events = self._failures.get(peer)
+            if not events:
+                return False
+            now = self.clock()
+            while events and now - events[0] > self.window:
+                events.popleft()
+            return len(events) >= self.limit
+
+    def failed(self, peer: str) -> None:
+        with self._lock:
+            if peer not in self._failures and len(self._failures) >= 1024:
+                self._failures.pop(next(iter(self._failures)))
+            self._failures.setdefault(peer, deque(maxlen=self.limit * 2)).append(self.clock())

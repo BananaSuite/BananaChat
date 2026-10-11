@@ -1,4 +1,8 @@
-"""Site settings: name, sign-up, maintenance, warning banner, default theme and palettes."""
+"""Site settings: name, sign-up, maintenance, warning banner, two-step verification for
+administrators, default theme and palettes.
+
+Changing the two-step requirement for administrators, or opening sign-up to everyone, needs a
+recent confirmation (:mod:`._reauth`)."""
 
 from __future__ import annotations
 
@@ -6,9 +10,10 @@ from flask import flash, render_template, request
 
 from bananachat.db import settings as site_settings
 from bananachat.security import admin_required
+from bananachat.services import two_step
 
-from . import bp
-from ._helpers import FormError, audit, back, choice, flag, text
+from . import _reauth, bp
+from ._helpers import FormError, audit, back, choice, flag, me, text
 
 SIGNUP_MODES = ("invite", "open", "disabled")
 THEMES = ("dark", "light")
@@ -27,6 +32,8 @@ def show():
     settings = site_settings.get()
     palettes = {mode: site_settings.palette(settings, mode) for mode in THEMES}
     return render_template("admin/settings.html", section="settings", s=settings, palettes=palettes,
+                           admins_without_two_step=two_step.admins_without(),
+                           own_two_step=two_step.enabled(me()["id"]),
                            defaults={"dark": site_settings.DARK_PALETTE, "light": site_settings.LIGHT_PALETTE},
                            color_labels=COLOR_LABELS, fields={mode: _palette_fields(mode) for mode in THEMES},
                            page_data={"defaults": {"dark": site_settings.DARK_PALETTE,
@@ -51,6 +58,11 @@ def save():
         # Only the current form's sentinel makes an unchecked value explicit.
         if request.form.get("worker_offline_warning_present") == "1":
             values["worker_offline_warning_enabled"] = 1 if flag("worker_offline_warning_enabled") else 0
+        if request.form.get("admin_two_step_present") == "1":
+            values[two_step.REQUIRED_SETTING] = 1 if flag(two_step.REQUIRED_SETTING) else 0
+            if values[two_step.REQUIRED_SETTING] and not two_step.enabled(me()["id"]):
+                raise FormError("Turn on two-step verification for your own account first (Account → Two-step "
+                                "verification).")
         if values["warning_banner_enabled"] and not values["warning_banner_message"]:
             raise FormError("Write the banner message before turning the banner on.")
         for mode in THEMES:
@@ -64,6 +76,11 @@ def save():
         flash(str(error), "error")
         return back("admin.settings")
     before = site_settings.get()
+    requirement = values.get(two_step.REQUIRED_SETTING)
+    sensitive = (requirement is not None and requirement != before.get(two_step.REQUIRED_SETTING)) or (
+        values["signup_mode"] == "open" and before.get("signup_mode") != "open")
+    if sensitive and not _reauth.confirmed():
+        return back("admin.settings")
     site_settings.update(**values)
     changed = {key: value for key, value in values.items() if before.get(key) != value}
     audit("settings_save", "site", changed)

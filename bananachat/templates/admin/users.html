@@ -1,5 +1,6 @@
 {% extends "admin/_layout.html" %}
 {% from "admin/_macros.html" import header, csrf, when, empty, pagination %}
+{% from "admin/_reauth.html" import reauth_field with context %}
 {% from "partials/icons.html" import icon %}
 {% block title %}Users{% endblock %}
 {% block admin_content %}
@@ -10,7 +11,7 @@
     <label class="visually-hidden" for="user-search">Search by username</label>
     <input type="search" id="user-search" name="q" value="{{ search }}" placeholder="Search by username" maxlength="64">
     <button type="submit" class="btn">{{ icon("search") }}Search</button>
-    {% if search %}<a class="btn btn-ghost" href="{{ url_for('admin.users') }}">Clear</a>{% endif %}
+    {% if search %}<a class="btn" href="{{ url_for('admin.users') }}">Clear</a>{% endif %}
   </form>
   <details class="disclosure">
     <summary class="btn btn-primary">{{ icon("plus") }}New user</summary>
@@ -36,39 +37,50 @@
           <input type="password" id="new-password2" name="confirm_password" required minlength="{{ min_password }}" maxlength="1024" autocomplete="new-password">
         </div>
       </div>
+      {{ reauth_field("new-user-reauth", needed_for="to create an administrator") }}
       <div class="form-actions"><button type="submit" class="btn btn-primary">Create account</button></div>
     </form>
   </details>
 </div>
 
 {% if rows %}
+<p class="muted small mb-1" id="users-range">
+  {%- if search %}{{ page.total | number }} account{{ "s" if page.total != 1 }} match “{{ search }}”{% if page.pages > 1 %} · showing {{ page.offset + 1 }}–{{ page.offset + rows | length }}{% endif %}
+  {%- else %}Accounts {{ page.offset + 1 }}–{{ page.offset + rows | length }} of {{ page.total | number }}{% endif -%}
+</p>
 <div class="table-wrap">
-  <table class="table">
+  <table class="table table-stack users-table">
     <caption class="visually-hidden">Accounts{% if search %} matching “{{ search }}”{% endif %}</caption>
     <thead><tr>
       <th scope="col">Username</th><th scope="col">Role</th><th scope="col">Status</th>
-      <th scope="col">API tokens per 5 hours</th><th scope="col">Last sign-in</th><th scope="col">Created</th>
-      <th scope="col"><span class="visually-hidden">Actions</span></th>
+      <th scope="col" class="col-optional">API tokens per 5 hours</th><th scope="col">Two-step verification</th>
+      <th scope="col" class="col-optional">Last sign-in</th><th scope="col" class="col-optional col-lg">Created</th>
+      <th scope="col" class="col-optional"><span class="visually-hidden">Actions</span></th>
     </tr></thead>
     <tbody>
     {% for row in rows %}
       <tr>
-        <td><a href="{{ url_for('admin.user_detail', user_id=row.id) }}"><strong>{{ row.username }}</strong></a>{% if row.id == current_user.id %} <span class="badge">you</span>{% endif %}</td>
-        <td>{% if row.role == "admin" %}<span class="badge badge-primary">Admin</span>{% else %}User{% endif %}</td>
-        <td>
+        <td class="cell-full"><a href="{{ url_for('admin.user_detail', user_id=row.id) }}"><strong>{{ row.username }}</strong></a>{% if row.id == current_user.id %} <span class="badge">you</span>{% endif %}</td>
+        <td data-label="Role:">{% if row.role == "admin" %}<span class="badge badge-primary">Admin</span>{% else %}User{% endif %}</td>
+        <td data-label="Status:">
           {% if row.suspended and (not row.suspended_until or row.suspended_until > now) %}
           <span class="badge badge-danger">Suspended{% if row.suspended_until %} until {{ row.suspended_until | datetime }}{% endif %}</span>
           {% else %}<span class="badge badge-success">Active</span>{% endif %}
         </td>
-        <td class="nowrap">
+        <td class="nowrap col-optional">
           {% if row.role == "admin" %}<span class="muted">Unlimited</span>
           {% elif row.quota_tokens is none %}<span class="muted">Default ({{ defaults[0] | compact }})</span>
           {% else %}{{ row.quota_tokens | compact }} <span class="badge">custom</span>{% endif %}
           {% if row.limit_speed == "slow" %} <span class="badge badge-warning">slowed down</span>{% elif row.limit_speed == "fast" %} <span class="badge badge-info">sped up</span>{% endif %}
         </td>
-        <td class="nowrap">{{ when(row.last_login_at) }}</td>
-        <td class="nowrap">{{ row.created_at | datetime(true) }}</td>
-        <td class="actions"><a class="btn btn-sm" href="{{ url_for('admin.user_detail', user_id=row.id) }}">Manage</a></td>
+        <td class="nowrap" data-label="Two-step:">
+          {% if row.two_step %}<span class="badge badge-success">On</span>
+          {% elif row.role == "admin" and two_step_required %}<span class="badge badge-warning">Off, required</span>
+          {% else %}<span class="badge">Off</span>{% endif %}
+        </td>
+        <td class="nowrap col-optional">{{ when(row.last_login_at) }}</td>
+        <td class="nowrap col-optional col-lg">{{ row.created_at | datetime(true) }}</td>
+        <td class="actions col-optional"><a class="btn btn-sm" href="{{ url_for('admin.user_detail', user_id=row.id) }}" aria-label="Manage {{ row.username }}">Manage</a></td>
       </tr>
     {% endfor %}
     </tbody>

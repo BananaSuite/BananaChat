@@ -1,5 +1,6 @@
 {% extends "admin/_layout.html" %}
 {% from "admin/_macros.html" import header, csrf %}
+{% from "admin/_reauth.html" import reauth_field with context %}
 {% from "partials/icons.html" import icon %}
 {% block title %}Site settings{% endblock %}
 {% block admin_content %}
@@ -29,6 +30,7 @@
 
 <nav class="admin-section-nav" aria-label="Site settings sections">
   <a href="#general">General</a>
+  <a href="#sign-in">Sign-in security</a>
   <a href="#notices">Maintenance and announcements</a>
   <a href="#palette-dark">Dark palette</a>
   <a href="#palette-light">Light palette</a>
@@ -49,6 +51,7 @@
           <label class="check"><input type="radio" name="signup_mode" value="invite"{% if s.signup_mode == "invite" %} checked{% endif %}><span>Invitation only<small>People need an <a href="{{ url_for('admin.invites') }}">invitation</a> to create an account.</small></span></label>
           <label class="check"><input type="radio" name="signup_mode" value="open"{% if s.signup_mode == "open" %} checked{% endif %}><span>Open<small>Anyone who can reach the site can create an account.</small></span></label>
           <label class="check"><input type="radio" name="signup_mode" value="disabled"{% if s.signup_mode == "disabled" %} checked{% endif %}><span>Closed<small>Only administrators create accounts.</small></span></label>
+          {% if s.signup_mode != "open" %}<p class="hint mt-1 mb-0">Opening sign-up to everyone asks for your password or authenticator code under Sign-in security below.</p>{% endif %}
         </fieldset>
         <fieldset class="admin-fieldset">
           <legend>Default theme</legend>
@@ -57,6 +60,23 @@
             <label><input type="radio" name="default_theme_mode" value="light"{% if s.default_theme_mode == "light" %} checked{% endif %}><span>{{ icon("sun") }} Light</span></label>
           </div>
           <p class="hint mt-1">Used for visitors and for users who did not choose a theme.</p>
+        </fieldset>
+      </div>
+    </section>
+
+    <section class="settings-section admin-setting-row" id="sign-in" aria-labelledby="sign-in-title">
+      <h2 id="sign-in-title">Sign-in security</h2>
+      <div class="stack form-width">
+        <fieldset class="admin-fieldset stack-sm">
+          <legend>Two-step verification</legend>
+          <input type="hidden" name="admin_two_step_present" value="1">
+          {{ toggle("admin_two_step_required", "Require two-step verification for administrators", s.admin_two_step_required, "Administrators without it are sent to set up an authenticator app before the administration pages open. Everyone else can turn it on from their account page. API keys keep working.") }}
+          {% if not own_two_step %}
+          <p class="hint">Turn it on for <a href="{{ url_for('account.two_step') }}">your own account</a> before you require it.</p>
+          {% elif admins_without_two_step %}
+          <p class="hint">{{ admins_without_two_step }} active administrator{{ "s have" if admins_without_two_step != 1 else " has" }} not set it up yet.</p>
+          {% endif %}
+          {{ reauth_field("settings-reauth", needed_for="to change this requirement or to open sign-up to everyone") }}
         </fieldset>
       </div>
     </section>
@@ -89,7 +109,7 @@
           {{ toggle("warning_banner_dismissible", "Users can dismiss it", s.warning_banner_dismissible, "Dismissed announcements come back in a new browser session or when the text changes.") }}
           <div class="field">
             <label for="banner-message">Announcement</label>
-            <input type="text" id="banner-message" name="warning_banner_message" maxlength="500" value="{{ s.warning_banner_message }}">
+            <textarea id="banner-message" name="warning_banner_message" maxlength="500" rows="2">{{ s.warning_banner_message }}</textarea>
           </div>
         </fieldset>
       </div>

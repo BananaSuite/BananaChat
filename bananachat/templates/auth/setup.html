@@ -7,8 +7,8 @@
   {% include "auth/_bot_fields.html" %}
   <div class="field">
     <label for="setup_token" class="required">{{ t("auth.setup_token") }}</label>
-    <input type="password" id="setup_token" name="setup_token" required autocomplete="off" spellcheck="false" aria-describedby="token-hint">
-    <span class="hint" id="token-hint">{{ t("auth.setup_token_hint") }}</span>
+    <input type="password" id="setup_token" name="setup_token" required autofocus autocomplete="off" spellcheck="false" aria-describedby="{% if get_flashed_messages() %}auth-messages {% endif %}token-hint">
+    <span class="hint" id="token-hint">{{ t_html("auth.setup_token_hint_command", command=('<code translate="no">banana</code>' | safe)) }} <code class="setup-command">sudo grep BC_SETUP_TOKEN /opt/bananachat/config/app.env</code> {{ t("auth.setup_token_hint_log") }}</span>
   </div>
   <div class="field">
     <label for="site_name">{{ t("auth.site_name") }}</label>

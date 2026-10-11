@@ -759,7 +759,8 @@ def test_admins_manage_one_accounts_limits(app, admin, make_user):
         settings = store.user_settings(user["id"])
         assert settings.tier_id == tiers[2]["id"] and settings.tier_locked and settings.dynamic_exempt
     html = admin.get(base).get_data(as_text=True)
-    assert "Custom limit for your account" in html and "Sped up" in html
+    # The administrator reads about someone else's account: third person, not the user-facing "your account".
+    assert "Custom limit for this account" in html and "Custom limit for your account" not in html and "Sped up" in html
     admin.post(base + "/restore")
     with app.app_context():
         assert store.overrides_for(user["id"]) == {}
@@ -863,7 +864,7 @@ def test_admins_resolve_every_kind_of_request(app, admin, make_user):
     with app.app_context():
         request_id = credits.submit_request(joe["id"], reason="A bot for my club", kind="rate", pool="chat",
                                             per="second", requests=2)["id"]
-    html = admin.get("/admin/quotas/requests").get_data(as_text=True)
+    html = admin.get("/admin/quotas/requests").get_data(as_text=True).replace("\xa0", " ")  # no-break joins
     assert "A bot for my club" in html and "2 requests per second · Chat" in html
     assert "now 1 request per second (bursts of up to 5)" in html
     admin.post(f"/admin/quotas/requests/{request_id}", {"decision": "approve", "message": "Enjoy"})
@@ -895,6 +896,7 @@ def test_the_account_page_shows_limits_in_both_languages(app, make_user, languag
         _grant(user_id=user["id"], pool="api", scope="window", kind="multiplier", amount=2,
                ends_at=db.now(timedelta(hours=5)))
     html = _signed_in(app, f"lang{language}", language=language).get("/account").get_data(as_text=True)
+    html = html.replace("\xa0", " ")  # phrases such as "(bursts of up to 10)" are joined with no-break spaces
     for text in texts:
         assert text in html, text
     assert 'max="180000.0"' in html  # 45k x2 (tier) x2 (grant)
@@ -908,7 +910,7 @@ def test_the_developer_page_shows_the_api_pool(app, make_user):
     with app.app_context():
         _policy("api", weekly={"enabled": True, "tokens": 50_000}, rate={"rules": _rules((2, "second", 8))})
         _charge(user["id"], 50_000)
-    html = _signed_in(app, "devon").get("/developer").get_data(as_text=True)
+    html = _signed_in(app, "devon").get("/developer").get_data(as_text=True).replace("\xa0", " ")
     assert "Request rate: at most 2 requests per second (bursts of up to 8)." in html
     assert "Tokens this week" in html and "This week&#39;s tokens are used up" in html
     with app.app_context():

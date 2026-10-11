@@ -176,6 +176,9 @@ class Reply:
     tokens_in: int
     tokens_out: int
     duration_ms: int
+    # The provider's record of the turn (Claude: its blocks with the signed thinking), kept in the history so
+    # the next step can send it back unchanged and Claude keeps thinking through the tool round.
+    replay: dict | None = None
 
 
 # ----- system prompts ---------------------------------------------------------------------
@@ -258,13 +261,16 @@ def _tool_message(name: str, text: str) -> dict:
     return {"role": "tool", "content": text, "tool_name": name}
 
 
-def _assistant_message(content: str, calls: list[dict]) -> dict:
+def _assistant_message(content: str, calls: list[dict], replay: dict | None = None) -> dict:
     item = {"role": "assistant", "content": content}
     if calls:
         item["tool_calls"] = [{"function": {"name": call.get("name") or "",
                                             "arguments": call.get("arguments") if isinstance(call.get("arguments"),
                                                                                                dict) else {}}}
                               for call in calls]
+    if replay is not None:
+        # Only in this run's memory (never stored): a later run continues from a new user message.
+        item["replay"] = replay
     return item
 
 
@@ -635,7 +641,7 @@ class TaskRun:
                        tool_calls=[{"name": str(call.get("name") or "")[:80],
                                     "arguments": _stored_arguments(call.get("arguments"))} for call in calls] or None,
                        tokens_in=reply.tokens_in, tokens_out=reply.tokens_out, duration_ms=reply.duration_ms)
-            messages.append(_assistant_message(reply.content, calls))
+            messages.append(_assistant_message(reply.content, calls, reply.replay))
             if not calls:
                 if reply.content.strip():
                     return "finished", reply.content.strip()
@@ -751,7 +757,7 @@ class TaskRun:
                 if finished.state == "completed" or finished.truncated:
                     return Reply("".join(content), "".join(thinking), finished.tool_calls if not finished.truncated
                                  else [], finished.prompt_tokens, finished.completion_tokens,
-                                 finished.duration_ms)
+                                 finished.duration_ms, None if finished.truncated else finished.replay)
                 problem = finished.error or "the model failed"
             self._check_cancel()
             attempt += 1

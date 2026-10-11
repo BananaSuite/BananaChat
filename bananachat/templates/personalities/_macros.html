@@ -5,11 +5,13 @@
 <span class="persona-avatar accent-{{ row.color or 'default' }}{% if size %} {{ size }}{% endif %}{% if not row.avatar %} is-letter{% endif %}" aria-hidden="true">{{ row.avatar or ((row.name or "?")[:1] | upper) }}</span>
 {%- endmacro %}
 
-{#- Style chips (only what differs from the balanced default) and the preferred model. Needs t(). -#}
-{% macro traits(card) -%}
+{#- Style chips (only what differs from the balanced default) and the preferred model. Needs t().
+    count_starters=false leaves out "N conversation starters" where the starters are listed anyway. -#}
+{% macro traits(card, count_starters=true) -%}
 {%- set row = card.row -%}
 {%- set show_model = row.preferred_model and not card.hide_model -%}
-{%- if row.response_length != "balanced" or row.creativity != "balanced" or show_model or card.starters %}
+{%- set show_starters = card.starters and count_starters -%}
+{%- if row.response_length != "balanced" or row.creativity != "balanced" or show_model or show_starters %}
 <ul class="chip-list" aria-label="{{ t('personality.traits') }}">
   {% if row.response_length and row.response_length != "balanced" %}<li class="chip">{{ t("personality.length_" ~ row.response_length) }}</li>{% endif %}
   {% if row.creativity and row.creativity != "balanced" %}<li class="chip">{{ t("personality.creativity_" ~ row.creativity) }}</li>{% endif %}
@@ -18,7 +20,7 @@
     {{ t("personality.model_chip", model=card.model_label) }}{% if card.model_missing %} · {{ t("personality.model_missing") }}{% endif %}
   </li>
   {% endif %}
-  {% if card.starters %}<li class="chip">{{ t("personality.starters_chip", count=card.starters | length) }}</li>{% endif %}
+  {% if show_starters %}<li class="chip">{{ t("personality.starters_chip", count=card.starters | length) }}</li>{% endif %}
 </ul>
 {%- endif %}
 {%- endmacro %}

@@ -161,6 +161,36 @@ def test_gdpr_export_contains_everything_but_secrets(app, make_user):
     assert "image_base64" not in json.dumps(chats)
 
 
+def test_gdpr_export_lists_key_scopes_and_two_step_status_without_secrets(app, make_user):
+    from datetime import timedelta
+
+    from bananachat import db, totp
+    from bananachat.db import tokens
+    from bananachat.services import exports, two_step
+
+    user = make_user("ida")
+    secret = totp.generate_secret()
+    with app.app_context():
+        assert exports.gdpr_export(user["id"])["two_step"] == {"enabled": False, "enabled_at": None,
+                                                                "recovery_codes_left": 0}
+        tokens.create(user["id"], "reader", scope="read", expires_days=30)
+        expired, raw = tokens.create(user["id"], "old", expires_days=7)
+        db.execute("UPDATE api_tokens SET expires_at=? WHERE id=?", (db.now(-timedelta(minutes=1)), expired))
+        codes = two_step.enable(user["id"], secret, 0)
+        stored = db.one("SELECT secret_encrypted, recovery_hashes, enabled_at FROM user_two_step WHERE user_id=?",
+                        (user["id"],))
+        data = exports.gdpr_export(user["id"])
+    keys = {row["name"]: row for row in data["api_tokens"]}
+    assert keys["reader"]["scope"] == "read" and keys["reader"]["expires_at"] and keys["reader"]["expired"] is False
+    assert keys["old"]["scope"] == "full" and keys["old"]["expired"] is True and keys["old"]["revoked"] is False
+    assert data["two_step"] == {"enabled": True, "enabled_at": stored["enabled_at"], "recovery_codes_left": 10}
+    text = json.dumps(data)
+    assert secret not in text and stored["secret_encrypted"] not in text and raw not in text
+    assert not any(digest in text for digest in json.loads(stored["recovery_hashes"]))
+    assert not any(code in text for code in codes)
+    assert "two-step" in data["notes"]["secrets"]
+
+
 def test_chats_export_download(app, make_user):
     make_user("gus")
     browser = _signed_in(app, "gus")

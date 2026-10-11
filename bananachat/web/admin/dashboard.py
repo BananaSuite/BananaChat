@@ -35,10 +35,33 @@ def dashboard():
         inference_server=ollama.describe_server(config),
         today=metrics_db.summary(start),
         snapshot=metrics_db.latest_snapshot(),
-        recent_audit=users.list_audit(limit=8),
+        recent_audit=_with_target_names(users.list_audit(limit=8)),
         recovery=model_recovery.status(),
         page_data={"inference_url": url_for("admin.inference_status")},
     )
+
+
+# Actions whose target is an account id; other ids (keys, requests, invitations) are not usernames.
+_ACCOUNT_TARGETS = ("account.", "auth.", "admin.user_", "admin.limits_user_")
+_TARGET_LABELS = {"api_token.": "API key #{}", "quota.": "Request #{}", "access.request": "Request #{}",
+                  "community.": "Request #{}"}
+
+
+def _with_target_names(rows) -> list[dict]:
+    """Audit rows whose target is an account id also carry that account's username (shown instead of the id);
+    numeric ids of other things are named ("API key #16")."""
+    result = []
+    for row in rows:
+        entry = dict(row)
+        action = entry.get("action") or ""
+        account = action.startswith(_ACCOUNT_TARGETS)
+        target = users.get(entry["target"]) if account and entry.get("target") else None
+        entry["target_name"] = target["username"] if target else None
+        entry["target_id"] = target["id"] if target else None
+        label = next((text for prefix, text in _TARGET_LABELS.items() if action.startswith(prefix)), None)
+        entry["target_label"] = label.format(entry["target"]) if label and str(entry.get("target") or "").isdigit() else None
+        result.append(entry)
+    return result
 
 
 @bp.get("/api/inference", endpoint="inference_status")

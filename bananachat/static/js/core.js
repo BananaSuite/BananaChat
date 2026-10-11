@@ -188,12 +188,30 @@ export async function readEventStream(response, onEvent) {
 
 // ----- feedback -----------------------------------------------------------
 const toastRegion = () => document.getElementById("toasts");
+const SVG = "http://www.w3.org/2000/svg";
+
+/** Icons of partials/icons.html for pages without <template id="icon-..."> elements, built without markup strings. */
+const ICON_SHAPES = {
+  close: [["path", { d: "M18 6 6 18M6 6l12 12" }]],
+  copy: [["rect", { x: "9", y: "9", width: "12", height: "12", rx: "2" }], ["path", { d: "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" }]],
+};
+function builtIcon(name) {
+  const svg = document.createElementNS(SVG, "svg");
+  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2",
+    "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" })) svg.setAttribute(key, value);
+  for (const [tag, attributes] of ICON_SHAPES[name] || []) {
+    const shape = document.createElementNS(SVG, tag);
+    for (const [key, value] of Object.entries(attributes)) shape.setAttribute(key, value);
+    svg.append(shape);
+  }
+  return svg;
+}
 
 /** Show a transient message. kind: info | success | warning | error. */
 export function toast(message, kind = "info", { timeout } = {}) {
   const region = toastRegion();
   if (!region) return;
-  const close = el("button", { type: "button", class: "icon-btn", "aria-label": t("dismiss"), text: "×" });
+  const close = el("button", { type: "button", class: "icon-btn", "aria-label": t("dismiss") }, builtIcon("close"));
   const node = el("div", { class: `toast toast-${kind}`, role: kind === "error" ? "alert" : null }, el("div", { class: "grow", text: message }), close);
   close.addEventListener("click", () => node.remove());
   region.append(node);
@@ -252,10 +270,11 @@ export function promptDialog({ title, label, value = "", maxLength = 200, confir
 /** Show a value that is displayed only once (tokens, share links) with a copy button. */
 export function secretDialog({ title, message, secret, note }) {
   const input = el("input", { type: "text", readonly: true, value: secret, "aria-label": title });
-  const copy = el("button", { type: "button", class: "btn", text: t("copy") });
-  copy.addEventListener("click", async () => { if (await copyText(secret)) copy.textContent = t("copied"); });
+  const label = el("span", { text: t("copy") });
+  const copy = el("button", { type: "button", class: "btn" }, builtIcon("copy"), label);
+  copy.addEventListener("click", async () => { if (await copyText(secret)) label.textContent = t("copied"); });
   const body = el("div", { class: "stack" }, el("div", { class: "secret-box" }, input, copy));
-  if (note) body.append(el("p", { class: "hint", text: note }));
+  if (note) body.append(el("p", { class: "hint mb-0", text: note }));
   const done = el("button", { type: "button", class: "btn btn-primary", text: t("done") });
   const dialog = makeDialog({ title, message, body, actions: [done], wide: true });
   done.addEventListener("click", () => dialog.close());
@@ -352,6 +371,15 @@ function initNavigation() {
     const collapsed = required > topbar.clientWidth;
     topbar.classList.remove("nav-fitting");
     topbar.classList.toggle("nav-collapsed", collapsed);
+    // A site name cut short looks broken: with large text it first drops the text-size preference,
+    // then only the logo shows (the link keeps the name for assistive technology).
+    const name = topbar.querySelector(".brand span");
+    topbar.classList.remove("brand-small", "brand-icon");
+    if (collapsed && name) {
+      const cut = () => name.scrollWidth > name.clientWidth + 1;
+      if (cut()) topbar.classList.add("brand-small");
+      if (cut()) topbar.classList.add("brand-icon");
+    }
     if (!collapsed) {
       close();
       if (focused === toggle) nav.querySelector('[aria-current="page"], a')?.focus();
@@ -609,6 +637,63 @@ function initDisclosureValidation() {
   document.addEventListener("invalid", (event) => revealDisclosures(event.target), true);
 }
 
+/** A table or code block that scrolls sideways must be reachable with the keyboard. */
+// Section navigation of long settings pages (account, customize): marks the section being read;
+// on phones the links are one scrolling row with a faded edge, and the current one stays in view.
+function initSectionNavigation() {
+  const strip = document.querySelector("[data-section-nav]");
+  if (!strip) return;
+  const links = [...strip.querySelectorAll('a[href^="#"]')];
+  const sections = links.map((link) => document.getElementById(link.hash.slice(1)));
+  if (!links.length) return;
+  let shown = -1;
+  const markOverflow = () => {
+    const end = strip.scrollWidth - strip.clientWidth - strip.scrollLeft > 2;
+    const start = strip.scrollLeft > 2;
+    if (start || end) strip.dataset.overflow = start && end ? "both" : start ? "start" : "end";
+    else delete strip.dataset.overflow;
+  };
+  strip.addEventListener("scroll", markOverflow, { passive: true });
+  let scheduled = false;
+  const update = () => {
+    scheduled = false;
+    const edge = (document.querySelector(".topbar")?.getBoundingClientRect().bottom || 0) + 32;
+    let current = 0;
+    sections.forEach((section, index) => {
+      if (section && section.getBoundingClientRect().top <= edge) current = index;
+    });
+    // Short final sections cannot always reach the top edge of the viewport.
+    if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) current = links.length - 1;
+    links.forEach((link, index) => {
+      if (index === current) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    });
+    if (current !== shown && strip.scrollWidth > strip.clientWidth) {
+      const link = links[current];
+      strip.scrollLeft = link.offsetLeft - (strip.clientWidth - link.offsetWidth) / 2;  // the strip is the offset parent
+    }
+    shown = current;
+    markOverflow();
+  };
+  const schedule = () => {
+    if (!scheduled) { scheduled = true; requestAnimationFrame(update); }
+  };
+  window.addEventListener("scroll", schedule, { passive: true });
+  window.addEventListener("resize", schedule);
+  window.addEventListener("hashchange", schedule);
+  update();
+}
+
+function initScrollRegions() {
+  const regions = document.querySelectorAll("pre, .table-wrap");
+  const sync = () => regions.forEach((region) => {
+    if (region.scrollWidth > region.clientWidth) region.setAttribute("tabindex", "0");
+    else region.removeAttribute("tabindex");
+  });
+  sync();
+  window.addEventListener("resize", sync);
+}
+
 initMenus();
 initNavigation();
 initToasts();
@@ -618,3 +703,5 @@ initAutoSubmit();
 initCopyButtons();
 initBusyForms();
 initDisclosureValidation();
+initScrollRegions();
+initSectionNavigation();

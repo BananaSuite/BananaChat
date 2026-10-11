@@ -44,10 +44,11 @@
 /* ----- page furniture ------------------------------------------------------------- */
 .persona-page .section-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .75rem; }
 .persona-page .section-head h2 { margin: 0; }
-.persona-page .label { display: block; font-weight: 550; font-size: .92rem; margin: 0; }
+/* Same size and weight as the <label> elements beside them (app.css .field > label, .label). */
+.persona-page .label { display: block; margin: 0; }
 .persona-page h2.label, .persona-page h3.label { color: var(--text-muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; margin-bottom: .5rem; }
 .breadcrumb { margin: 0 0 .75rem; font-size: .9rem; }
-.breadcrumb a { display: inline-flex; align-items: center; gap: .25rem; color: var(--text-muted); text-decoration: none; }
+.breadcrumb a { display: inline-flex; align-items: center; gap: .25rem; min-height: 1.5rem; color: var(--text-muted); text-decoration: none; }
 .breadcrumb a:hover { color: var(--text); }
 .breadcrumb svg { width: 16px; height: 16px; }
 
@@ -82,10 +83,16 @@
 .persona-grid .persona-footer { padding: 0; border: 0; margin: 0; align-items: flex-end; }
 .persona-grid .persona-footer > .hint { font-size: .78rem; }
 .persona-grid .chip { background: none; border: 0; border-radius: 0; padding: 0; }
-.persona-grid .chip + .chip::before { content: "·"; color: var(--text-faint); margin-right: .25rem; }
+/* The separator ends the previous trait, so a wrapped line never starts with a dot. */
+.persona-grid .chip-list { gap: .2rem .35rem; }
+/* The chip's own gap before the dot matches the list's gap after it. */
+.persona-grid .chip:not(:last-child)::after { content: "·"; color: var(--text-faint); margin-left: .05rem; }
 .persona-grid .share-row { max-width: 32rem; }
 .persona-card.is-off .persona-avatar { filter: grayscale(.8); opacity: .75; }
 .persona-head { display: flex; align-items: flex-start; gap: .85rem; min-width: 0; }
+/* Without a description the name is centred on the avatar instead of leaving an empty line under it. */
+.persona-head:not(:has(.persona-description)) { align-items: center; }
+.persona-head:not(:has(.persona-description)) :is(h2, h3) { margin-block: 0; }
 .persona-head h2, .persona-head h3 { margin: .1rem 0 .15rem; font-size: 1rem; overflow-wrap: anywhere; }
 .persona-description { margin: 0; color: var(--text-muted); font-size: .9rem; overflow-wrap: anywhere; }
 .persona-grid .persona-description { max-width: 62ch; }
@@ -101,8 +108,13 @@
 .chip-link { text-decoration: none; color: var(--text); }
 .chip-link:hover { border-color: color-mix(in srgb, var(--persona, var(--primary)) 60%, var(--bg)); color: var(--text); background: var(--hover); }
 .chip-link[aria-current="true"] { border-color: var(--persona, var(--primary)); background: color-mix(in srgb, var(--persona, var(--primary)) 14%, transparent); }
+/* Disclosures use the chevron after the label, like the API pages ("How limits work"). */
+:is(.persona-instructions, .persona-avatar-options) > summary { display: flex; align-items: center; gap: .4rem; list-style: none; }
+:is(.persona-instructions, .persona-avatar-options) > summary::-webkit-details-marker { display: none; }
+:is(.persona-instructions, .persona-avatar-options) > summary svg { width: 14px; height: 14px; flex: none; transition: transform var(--speed); }
+:is(.persona-instructions, .persona-avatar-options)[open] > summary svg { transform: rotate(180deg); }
 .persona-instructions > summary { cursor: pointer; color: var(--text-muted); font-size: .88rem; width: fit-content; }
-.persona-instructions > summary:hover { color: var(--text); }
+.persona-instructions > summary:hover, .persona-avatar-options > summary:hover { color: var(--text); }
 .persona-instructions[open] > summary { margin-bottom: .5rem; }
 .persona-card .instructions, .persona-page .instructions {
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14em; overflow: auto; margin: 0; padding: .65rem .8rem;
@@ -159,11 +171,16 @@
   width: 32px; height: 32px; border-radius: 50%; background: var(--persona); border: 2px solid var(--surface);
   box-shadow: 0 0 0 1px var(--border-strong); transition: box-shadow var(--speed), transform var(--speed);
 }
-.swatch.accent-default { background: radial-gradient(circle, var(--surface) 0 30%, var(--primary) 32%); }
+/* "Site colour" is split diagonally (the site's colour and the page), unlike the solid colours and unlike a ticked radio. */
+.swatch.accent-default { background: linear-gradient(135deg, var(--primary) 0 50%, var(--surface) 50% 100%); }
 .swatch-option:hover .swatch { transform: scale(1.06); }
-.swatch-option input:checked + .swatch { box-shadow: 0 0 0 2px var(--text); }
+.swatch-option input:checked + .swatch { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text); }
 .swatch-option input:focus-visible + .swatch { outline: 2px solid var(--focus); outline-offset: 3px; }
-.starter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: .5rem; margin-top: .25rem; }
+/* One starter per line: each can be a long sentence and must be readable before it is saved. */
+.starter-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: .5rem; margin-top: .25rem; }
+/* One line that grows with the text, so a long starter or description is never cut off (personalities.js
+   sizes it where field-sizing is not supported, and keeps it one paragraph). */
+.starter-input { min-height: var(--control-height); resize: none; overflow: hidden; field-sizing: content; }
 .persona-counter { align-self: flex-end; margin-top: -.15rem; font-size: .76rem; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .persona-counter.is-near { color: var(--warning); }
 .persona-counter.is-over { color: var(--danger); font-weight: 600; }
@@ -190,20 +207,34 @@
 }
 .persona-intro-preview { display: flex; flex-direction: column; gap: .5rem; }
 .persona-intro-preview .persona-starters { margin: 0; }
+/* Starters on the shared page are a plain list (nothing to press here), not text fields or buttons. */
+.persona-starter-chips { gap: .3rem; }
+.persona-starter-chips li { display: flex; align-items: flex-start; gap: .5rem; padding: 0; border: 0; border-radius: 0; background: none; font-size: .9rem; cursor: default; }
+.persona-starter-chips svg { width: 15px; height: 15px; flex: none; margin-top: .2rem; color: var(--persona, var(--text-muted)); }
 
 @media (max-width: 900px) {
   .persona-editor { grid-template-columns: minmax(0, 1fr); }
+  /* One column: the preview follows the first section it previews, before the form's buttons. */
+  .persona-editor { display: flex; flex-direction: column; align-items: stretch; gap: 1rem; }
+  .persona-editor > .persona-form { display: contents; }
+  .persona-form > * { order: 3; }
+  .persona-form > fieldset:first-of-type { order: 1; }
+  .persona-editor > .persona-preview { order: 2; }
+  .persona-form > .form-actions { order: 4; }
   .persona-preview { position: static; }
-  .persona-preview-inner { padding: 1.25rem 0 0; border-left: 0; border-top: 1px solid var(--border); }
+  /* The rule above comes from the Look section; one rule below separates it from Instructions. */
+  .persona-preview-inner { padding: 0 0 1.25rem; border-left: 0; border-bottom: 1px solid var(--border); }
 }
 @media (max-width: 640px) {
   .template-grid { grid-template-columns: minmax(0, 1fr); }
   .persona-grid > .persona-card { grid-template-columns: minmax(0, 1fr); }
-  .persona-grid .persona-card-content > :not(.persona-head) { margin-left: 0; }
+
   .persona-grid .persona-footer { align-items: flex-start; gap: .4rem; }
   .identity-row { gap: .75rem; }
   .avatar-field { width: 4.5rem; }
   .persona-default-form { max-width: none; }
+  /* Ten accent colours: two even rows of five instead of nine and an orphan. */
+  .swatches { display: grid; grid-template-columns: repeat(5, max-content); justify-content: start; }
   .share-row { flex-wrap: wrap; }
   .share-row input { flex: 1 1 100%; }
 }
@@ -218,9 +249,9 @@
 .persona-chip:hover { background: color-mix(in srgb, var(--persona, var(--primary)) 18%, transparent); }
 .persona-chip .truncate { min-width: 0; }
 .persona-picker { position: relative; min-width: 0; }
-.persona-button { max-width: 200px; min-width: 0; gap: .35rem; padding-left: .45rem; }
+.persona-button { max-width: 16em; min-width: 0; gap: .35rem; padding-left: .45rem; }
 .persona-button .persona-avatar { --size: 22px; border-radius: 7px; }
-.persona-button > svg { width: 15px; height: 15px; }
+.persona-button > svg { width: .9375rem; height: .9375rem; }
 .persona-button.is-set { color: var(--text); }
 .persona-popover { width: min(400px, calc(100vw - 1.5rem)); }
 .persona-group-label { padding: .5rem .6rem .2rem; font-size: .74rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--text-faint); list-style: none; }
@@ -235,7 +266,7 @@
 .chat-empty .persona-intro-description { margin: 0; color: var(--text-muted); font-size: .9rem; }
 .chat-empty .persona-note { margin: .35rem 0 0; font-size: .85rem; color: var(--warning); }
 @media (max-width: 640px) {
-  .persona-button { max-width: 44px; padding-right: .35rem; }
+  .persona-button { max-width: none; padding-inline: .45rem; }
   .persona-button .persona-button-label, .persona-button > svg:last-child { display: none; }
   .persona-chip { max-width: 9.5rem; }
   /* The popover spans the composer instead of starting at the button, so it never leaves the screen. */
@@ -247,7 +278,23 @@
 /* ----- administrator list ------------------------------------------------------------------ */
 .admin-persona { display: flex; align-items: flex-start; gap: .65rem; min-width: 0; }
 .admin-persona .persona-avatar { --size: 32px; border-radius: 9px; }
-.admin-persona strong { overflow-wrap: anywhere; }
+/* break-word (not anywhere) keeps the column's minimum width, so names wrap by word and the table scrolls. */
+.admin-persona strong { overflow-wrap: break-word; }
+/* The actions wrap in their own column instead of setting the row's width, so the name and the
+   description get the room (about 20rem) and the rows stay short. */
+.admin-persona-table td.cell-wide { min-width: 20rem; }
+@media (max-width: 1279px) {
+  .admin-persona-table td.cell-wide { min-width: 14rem; }
+}
+@media (min-width: 901px) {
+  .admin-persona-table td.actions { width: 12rem; white-space: normal; }
+}
+/* The actions wrap as one group: the same gap between lines as between buttons. */
+.row-end.admin-persona-actions { gap: .35rem; }
+/* Up to 900px each personality is a card (.table-stack-md) with its actions under it. */
+@media (max-width: 900px) {
+  .admin-persona-table td.cell-wide { min-width: 0; max-width: none; }
+}
 .persona-avatar-none { background: var(--hover); border-color: var(--border); color: var(--text-muted); }
 .persona-avatar-none svg { width: 16px; height: 16px; }
 

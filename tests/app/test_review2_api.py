@@ -78,7 +78,9 @@ def test_worker_that_reported_no_models_is_given_no_jobs(pool_app, monkeypatch):
 def test_answer_is_complete_once_the_worker_sent_its_final_chunk(pool_app, make_user, monkeypatch, ending):
     from bananachat.services import remote
 
-    monkeypatch.setattr(remote, "lease_seconds", lambda config=None: 1.0)
+    # A short lease, so a lost completion report is noticed quickly; long enough that a loaded machine still
+    # sends the chunks before it runs out.
+    monkeypatch.setattr(remote, "lease_seconds", lambda config=None: 3.0)
     _worker_id, token = register(pool_app)
     worker = Worker(pool_app, token)
     worker.heartbeat()

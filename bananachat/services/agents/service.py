@@ -722,10 +722,13 @@ def purge_old_tasks() -> int:
     for _ in range(10):
         rows = agents_db.old_tasks(cutoff)
         for row in rows:
+            # A follow-up may have resumed the task while earlier sandboxes
+            # were being deleted; the row is the claim on its sandbox.
+            if not agents_db.delete_if_old(row["id"], cutoff):
+                continue
             _delete_sandbox(row["sandbox_id"])
             uploads.discard(row["id"])
-            agents_db.delete(row["id"])
-        total += len(rows)
+            total += 1
         if len(rows) < 200:
             break
     return total

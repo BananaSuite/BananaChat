@@ -32,7 +32,7 @@ const PALETTE_NAME = { custom_bg: "bg", custom_text: "text", custom_primary: "pr
 const INTEGER_KEYS = new Set(["contrast", "line_height", "letter_spacing", "sidebar_width", "semantic_bold", "semantic_italic", "semantic_code", "semantic_link", "semantic_heading"]);
 const SEMANTIC = ["bold", "italic", "code", "link", "heading"];
 const LINE_HEIGHTS = ["1.55", "1.8", "2.05"];
-const LETTER_SPACINGS = ["normal", "0.03em", "0.07em"];
+const LETTER_SPACINGS = ["0em", "0.03em", "0.07em"];
 
 let prefs = { ...data.preferences };
 let backgroundUrl = data.background_url || null;

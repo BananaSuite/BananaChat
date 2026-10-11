@@ -61,20 +61,25 @@
       {% for step in steps %}
       <li class="card admin-step">
         <div class="row admin-step-head">
-          <span class="badge {{ {'tool': 'badge-primary', 'error': 'badge-danger', 'summary': 'badge-success', 'user': 'badge-info'}.get(step.kind, '') }}">{{ step.kind }}</span>
+          <span class="badge {{ {'tool': 'badge-primary', 'error': 'badge-danger', 'summary': 'badge-success', 'user': 'badge-info'}.get(step.kind, '') }}">{{ step.kind | capitalize }}</span>
           <span class="muted small">{{ "main agent" if step.agent == 0 else "sub-agent " ~ step.agent }}</span>
           {% if step.tool_name %}<code>{{ step.tool_name }}</code>{% endif %}
           {% if step.tool_status and step.tool_status != "ok" %}<span class="badge badge-danger">{{ step.tool_status }}</span>{% endif %}
           <span class="grow"></span>
-          {% if step.tokens_in or step.tokens_out %}<span class="muted small">{{ step.tokens_in | number }} + {{ step.tokens_out | number }} tokens</span>{% endif %}
-          {% if step.duration_ms %}<span class="muted small">{{ step.duration_ms | number }} ms</span>{% endif %}
-          <span class="muted small">#{{ step.id }} · {{ step.created_at | datetime }}</span>
+          {#- One group, so the figures wrap together instead of half on each line. -#}
+          {%- set meta = [] %}
+          {%- if step.tokens_in or step.tokens_out %}{% set _ = meta.append((step.tokens_in | number) ~ " + " ~ (step.tokens_out | number) ~ " tokens") %}{% endif %}
+          {%- if step.duration_ms %}{% set _ = meta.append((step.duration_ms | number) ~ " ms") %}{% endif %}
+          {%- set _ = meta.append("#" ~ step.id) %}{% set _ = meta.append(step.created_at | datetime) %}
+          <span class="muted small admin-step-meta">{{ meta | join(" · ") }}</span>
         </div>
-        {% if step.content %}<pre class="tool-pre">{{ step.content }}</pre>{% endif %}
-        {% if step.thinking %}<details class="inline-details"><summary>Reasoning</summary><pre class="tool-pre">{{ step.thinking }}</pre></details>{% endif %}
-        {% if step.tool_calls %}<details class="inline-details"><summary>{{ step.tool_calls | length }} tool call(s) requested</summary><pre class="tool-pre">{{ step.tool_calls | tojson(indent=2) }}</pre></details>{% endif %}
+        {#- What the agent wrote is Markdown, shown as the person saw it; tool input and output stay verbatim. -#}
+        {% if step.content and step.kind in ("assistant", "summary") %}<div class="prose admin-step-text" data-markdown>{{ step.content }}</div>
+        {% elif step.content %}<pre class="tool-pre">{{ step.content }}</pre>{% endif %}
+        {% if step.thinking %}<details class="inline-details"><summary>Reasoning{{ icon("chevron-down") }}</summary><pre class="tool-pre">{{ step.thinking }}</pre></details>{% endif %}
+        {% if step.tool_calls %}<details class="inline-details"><summary>{{ step.tool_calls | length }} tool call{{ "" if step.tool_calls | length == 1 else "s" }} requested{{ icon("chevron-down") }}</summary><pre class="tool-pre tool-pre-code">{{ step.tool_calls | pretty_json }}</pre></details>{% endif %}
         {% if step.kind == "tool" %}
-        <div class="tool-label">Arguments</div><pre class="tool-pre">{{ step.tool_args | tojson(indent=2) }}</pre>
+        <div class="tool-label">Arguments</div><pre class="tool-pre tool-pre-code">{{ step.tool_args | pretty_json }}</pre>
         <div class="tool-label">Result</div><pre class="tool-pre">{{ step.tool_result or "" }}</pre>
         {% endif %}
       </li>
@@ -84,3 +89,4 @@
   </section>
 </div>
 {% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/chat-view.js') }}"></script>{% endblock %}

@@ -80,10 +80,11 @@ def restore_database(manager, source):
             raise ValueError("Move the database inside the managed data directory before importing")
         with stage_database(source, manager.root / "staging") as staged:
             model_inventory = inventory(staged.parent, {"BC_DATABASE_PATH": str(staged)})
+            manager.check_package_space(settings, copies=2, rollback=True)
             journal = manager.snapshot_state(settings)
             try:
                 manager.quiesce(journal)
-                before = manager.package(settings, manager.backup_name("before-legacy-import"))
+                before = manager.package(settings, manager.backup_name("before-legacy-import"), rollback=True)
                 journal.update(backup=str(before), phase="backed_up")
                 write_json(manager.config_dir / "transaction.json", journal)
                 # No old process or sidecar can observe the new schema mid-import.

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import urllib.parse
 import urllib.request
 
 from .files import read_json, write_json
@@ -118,11 +119,22 @@ def _manifest_size(path):
     return total or None
 
 
+def _ollama_url(upstream):
+    """*upstream* without a trailing slash, when it is an HTTP(S) address.
+
+    urllib opens ``file:`` and other schemes as readily as HTTP, so an address
+    from the configuration is checked before anything is read or sent to it.
+    """
+    if not isinstance(upstream, str) or urllib.parse.urlsplit(upstream).scheme not in ("http", "https"):
+        raise ValueError("The Ollama address must be an http:// or https:// URL.")
+    return upstream.rstrip("/")
+
+
 def _listed_models(upstream, timeout=10):
     """``{name: size}`` from an Ollama's /api/tags, or None when it cannot be asked."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with opener.open(upstream.rstrip("/") + "/api/tags", timeout=timeout) as response:
+        with opener.open(_ollama_url(upstream) + "/api/tags", timeout=timeout) as response:
             value = json.loads(response.read(16 * 1024 * 1024))
     except (OSError, ValueError):
         return None
@@ -223,13 +235,14 @@ def compute_recovery(data, action, *, assume_yes=False, upstream="http://127.0.0
     if not assume_yes:
         raise ValueError(f"{len(missing)} model(s) would be downloaded. Review models status, then use models restore "
                          "--yes, or models skip.")
+    address = _ollama_url(upstream)
     failed, completed = [], []
     for name in missing:
         if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,299}", name)
                 or ".." in name or ("/" in name and name.split("/", 1)[0].count(".") and not name.startswith(("hf.co/", "huggingface.co/")))):
             failed.append({"model": str(name)[:300], "reason": "Review this model's registry manually."})
             continue
-        request = urllib.request.Request(upstream.rstrip("/") + "/api/pull",
+        request = urllib.request.Request(address + "/api/pull",  # noqa: S310 - scheme checked by _ollama_url()
                                          data=json.dumps({"name": name, "stream": True}).encode(),
                                          headers={"Content-Type": "application/json"})
         success = False

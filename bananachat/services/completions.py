@@ -8,6 +8,15 @@ model's own limits), runs the request through ``services.inference.generate``
 and charges it exactly once, also when the client goes away in the middle of a
 streamed answer.
 
+From its first output on, an answer holds a lease (``db.runs``,
+``completion_leases``) that records, every ``supervisor.LEASE_INTERVAL``
+seconds, what it would be charged if it ended then. The answer charges and
+drops its lease in one transaction; if its process dies first (killed after a
+replacement or a stop), another process charges the last record
+(:func:`recover_completions`), so an answer is never left uncharged and never
+charged twice. When a process exits normally, :func:`shutdown` lets answers
+finish for a while, then stops the rest and charges what they produced.
+
 Problems are raised as :class:`CompletionError` with an HTTP status; the web
 layer turns them into its own error format.
 """
@@ -19,14 +28,16 @@ import binascii
 import io
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 
 from flask import current_app
 
-from bananachat.db import catalog, credits, tokens, users
+from bananachat import db
+from bananachat.db import catalog, runs, tokens, users
 from bananachat.i18n import translate
-from bananachat.services import api_usage, inference, limits, model_lifecycle, queue
+from bananachat.services import api_usage, background, inference, limits, model_lifecycle, queue, supervisor
 from bananachat.services.access import AccessContext
 from bananachat.services.upstream import MAX_CONTEXT_IMAGE_BYTES, Cancelled, CancelToken
 
@@ -49,6 +60,28 @@ _ADDRESS = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b|\[[0-9a-f:]+\](?::\
 EFFORTS = {"none": "off", "minimal": "low", "low": "low", "medium": "medium", "high": "high",
            "extra": "extra", "xhigh": "extra", "max": "max"}
 _UNREACHABLE = ("could not be reached", "did not answer in time", "stopped responding", "connection to the backend")
+_PROVIDER_SETUP = ("The model's provider refused this server's account or settings (credentials, permissions or "
+                   "credit). Ask the administrator to check the provider settings.")
+_PROVIDER_DOWN = "The model's provider is not available right now. Try again later."
+# External API failures (``services.external_api`` codes, nothing produced): HTTP status, API code, message and
+# the default Retry-After. Unlisted provider codes are configuration problems (_PROVIDER_SETUP).
+PROVIDER_ERRORS = {
+    "provider_rate_limited": (503, "provider_rate_limited", "The model's provider is rate limiting requests. "
+                                                             "Try again later.", 30),
+    "provider_overloaded": (503, "provider_overloaded", "The model's provider is overloaded. Try again later.", 30),
+    "provider_capacity_unavailable": (503, "provider_capacity_unavailable", "The model's provider has no capacity "
+                                                                             "right now. Try again later.", 30),
+    "provider_unavailable": (503, "provider_unavailable", _PROVIDER_DOWN, 30),
+    "provider_unreachable": (503, "provider_unavailable", _PROVIDER_DOWN, 30),
+    "provider_stream_error": (503, "provider_unavailable", _PROVIDER_DOWN, 30),
+    "provider_timeout": (504, "timeout", "The model's provider did not answer in time.", None),
+    "provider_model_not_found": (404, "model_not_found", "The model '{model}' is no longer available from its "
+                                                         "provider.", None),
+    "provider_rejected_request": (400, "provider_rejected_request", "The model's provider rejected the request. It "
+                                  "may be too long or contain content the model does not accept.", None),
+    "provider_protocol_error": (502, "upstream_error", "The model's provider sent a response that could not be "
+                                                      "read.", None),
+}
 
 
 class CompletionError(Exception):
@@ -143,17 +176,37 @@ def _decode_image(url, config, param: str) -> str:
         raise _bad("An image is empty or too large.", param, "invalid_image")
     if not IMAGE_SIGNATURES[declared](data) and not any(check(data) for check in IMAGE_SIGNATURES.values()):
         raise _bad("An image is not a PNG, JPEG or WebP file.", param, "invalid_image")
-    # The model server decodes the image in full: refuse decompression bombs (only the header is read here).
+    # The model server decodes the image in full: refuse decompression bombs before decoding, then decode it
+    # here, so an image the model server cannot read is the client's error, never counted against the model.
     from PIL import Image, UnidentifiedImageError
 
+    from bananachat.services import attachments
+
     try:
-        with Image.open(io.BytesIO(data)) as image:
+        with attachments.decoding_image(_decoding_owner()), Image.open(io.BytesIO(data)) as image:
             width, height = image.size
+            if width * height > config.chat_max_image_pixels:
+                raise _bad(f"An image has more than {config.chat_max_image_pixels:,} pixels.", param,
+                           "image_too_large")
+            image.draft(image.mode, (max(1, width // 8), max(1, height // 8)))  # a JPEG decodes at 1/8 scale
+            image.load()
+    except attachments.AttachmentBusy:
+        raise CompletionError("The server is busy processing other images. Try again shortly.", 503, "busy",
+                              retry_after=10) from None
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError, SyntaxError):
-        raise _bad("An image is not a PNG, JPEG or WebP file.", param, "invalid_image") from None
-    if width * height > config.chat_max_image_pixels:
-        raise _bad(f"An image has more than {config.chat_max_image_pixels:,} pixels.", param, "image_too_large")
+        raise _bad("An image is not a valid PNG, JPEG or WebP file.", param, "invalid_image") from None
     return encoded
+
+
+def _decoding_owner() -> str | None:
+    """The account whose images this request decodes (the API key's or the signed-in user's), so one account's
+    requests decode one image at a time (``attachments.decoding_image``); None for administrators."""
+    from flask import g, has_request_context
+
+    user = (g.get("api_user") or g.get("user")) if has_request_context() else None
+    if not user or user["role"] == "admin":
+        return None
+    return f"user:{user['id']}"
 
 
 def _content(message: dict, role: str, index: int, config, images: list) -> str:
@@ -309,20 +362,6 @@ def refused(refusal: limits.Refusal, lang: str = "en") -> CompletionError:
     return CompletionError(refusal.message(lang), refusal.status, refusal.code, retry_after=refusal.retry_after)
 
 
-def _admission_error(admission: limits.Admission, model, lang: str) -> CompletionError:
-    """Keep provider availability distinct from the account's own token allowance."""
-    if model["backend"] == "claude" and admission.refusal.code == "insufficient_quota" and \
-            admission.model is not None and admission.model.capacity <= 0:
-        return CompletionError("Claude is currently at capacity. Try again shortly.", 503,
-                               "provider_capacity_unavailable", retry_after=30)
-    return refused(admission.refusal, lang)
-
-
-def credits_exhausted(budget: credits.Budget) -> CompletionError:
-    """``insufficient_quota``: the 5-hour tokens (back when the window ends) or the weekly ones."""
-    return refused(limits.pool_refusal(budget))
-
-
 def effort_locked(error: limits.EffortLocked) -> CompletionError:
     return CompletionError(
         f"The reasoning effort '{error.requested}' is locked for {error.model_name or 'this model'}; the highest "
@@ -362,6 +401,9 @@ class CompletionRun:
         self._settled = False
         self._iterator = None
         self._buffer: list = []
+        self._wait_ms = 0
+        self._lease: str | None = None  # its completion_leases row once a model started (see the module docstring)
+        self._done = threading.Event()  # settled, or given up to recovery (see shutdown)
 
         context = AccessContext.load(user)
         try:
@@ -389,7 +431,7 @@ class CompletionRun:
             think = inference.think_for(model, self.effort)
             admission = limits.admit(user, "api", model)
             if not admission.allowed:
-                raise _admission_error(admission, model, lang)
+                raise refused(admission.refusal, lang)
             fallbacks = limits.usable_fallbacks(user, "api", selection.fallbacks, think=think, effort=self.effort)
         messages, options = self._for_model(model)
         self.model = model
@@ -438,7 +480,7 @@ class CompletionRun:
                 if self.refusal is None:
                     admission = limits.admit(user, "api", model, take_rate=self._admitted)
                     if not admission.allowed:
-                        self.refusal = _admission_error(admission, model, self.lang)
+                        self.refusal = refused(admission.refusal, self.lang)
         return self.refusal.message if self.refusal else None
 
     # iteration -------------------------------------------------------------
@@ -464,6 +506,14 @@ class CompletionRun:
             self._iterator.close()
 
     def _run(self):
+        with _active_lock:
+            _active.add(self)
+        try:
+            yield from self._generate()
+        finally:
+            self._release()
+
+    def _generate(self):
         source = inference.generate(self.request, self.cancel)
         interrupted = True
         try:
@@ -472,6 +522,8 @@ class CompletionRun:
                     if isinstance(event, inference.Started):
                         self._admitted = True
                         self.model = event.model
+                        self._wait_ms = event.wait_ms
+                        self._open_lease()
                     elif isinstance(event, inference.Delta):
                         (self.reasoning_parts if event.thinking else self.text_parts).append(event.text)
                     elif isinstance(event, inference.Finished):
@@ -497,7 +549,8 @@ class CompletionRun:
             except queue.QueueTimeout as error:
                 raise CompletionError(str(error), 503, "queue_timeout", retry_after=10) from None
             except Cancelled:
-                raise CompletionError("The request was cancelled.", 503, "cancelled") from None
+                raise self._interruption() or CompletionError("The request was cancelled.", 503,
+                                                              "cancelled") from None
             interrupted = False
         finally:
             if self.finished is None:
@@ -517,18 +570,32 @@ class CompletionRun:
                     if not interrupted:
                         raise
 
+    def _interruption(self) -> CompletionError | None:
+        """Why this process interrupted the answer itself: it is exiting, or its lease was recovered elsewhere."""
+        if self.cancel.reason == "shutdown":
+            return CompletionError("The server restarted while answering; what was produced so far was charged. "
+                                   "Send the request again.", 503, "server_restarting", retry_after=5)
+        if self.cancel.reason == "lease lost":
+            return CompletionError("The answer was interrupted.", 503, "interrupted", retry_after=5)
+        return None
+
     def _problem(self, finished: inference.Finished) -> CompletionError | None:
         if finished.state == "completed" or finished.truncated:
             return None
+        interruption = self._interruption()
+        if interruption is not None:
+            return interruption
         if self.refusal is not None:
             return self.refusal
         error = finished.error or "The model stopped before finishing its answer."
-        if not self.text_parts and not self.reasoning_parts and finished.error_status == 503 and \
-                finished.error_code == "provider_capacity_unavailable":
-            retry_after = finished.retry_after
-            if isinstance(retry_after, bool) or not isinstance(retry_after, int) or not 1 <= retry_after <= 300:
-                retry_after = 30
-            return CompletionError(sanitize_backend_message(error), 503, finished.error_code, retry_after=retry_after)
+        if not self.text_parts and not self.reasoning_parts and finished.error_code.startswith("provider_"):
+            status, code, message, retry_after = PROVIDER_ERRORS.get(
+                finished.error_code, (502, "provider_misconfigured", _PROVIDER_SETUP, None))
+            if retry_after is not None and isinstance(finished.retry_after, int) and \
+                    not isinstance(finished.retry_after, bool) and finished.retry_after >= 1:
+                retry_after = min(finished.retry_after, 300)  # the provider's own wait, within reason
+            return CompletionError(message.format(model=finished.model["ollama_name"]), status, code,
+                                   retry_after=retry_after, param="model" if status == 404 else None)
         if "took too long" in error:
             return CompletionError(error, 504, "timeout")
         if not self.text_parts and not self.reasoning_parts and model_lifecycle.gone(finished.model, error):
@@ -555,6 +622,57 @@ class CompletionRun:
             return "length"
         return finished.finish_reason if finished.finish_reason in ("stop", "length") else "stop"
 
+    # the lease (see the module docstring) --------------------------------------------
+    @property
+    def _watch_key(self) -> str:
+        return f"completion:{self._lease}"
+
+    def _open_lease(self) -> None:
+        if self._lease is not None:
+            return
+        try:
+            self._lease = runs.open_completion(self.user["id"], request_type=self.request_type, token_id=self.token_id,
+                                               model_id=self.model["id"], queue_wait_ms=self._wait_ms)
+        except Exception:  # noqa: BLE001 - an answer that cannot be recorded must not run uncharged
+            log.exception("Recording a %s request failed", self.request_type)
+            raise CompletionError(translate(self.lang, "errors.storage_unavailable"), 503,
+                                  "storage_unavailable", retry_after=5) from None
+        supervisor.register_watch(self._watch_key, self.cancel, self._checkpoint)
+
+    def _checkpoint(self, renew: bool) -> str | None:
+        """Supervisor watch: renew the lease with what the answer would be charged if it ended now."""
+        lease = self._lease
+        if not renew or lease is None or self._settled:
+            return None
+        tokens_in, tokens_out = self._usage_if_interrupted()
+        if runs.checkpoint_completion(lease, model_id=self.model["id"], tokens_in=tokens_in, tokens_out=tokens_out):
+            return None
+        return None if self._settled else "lease lost"
+
+    def _usage_if_interrupted(self) -> tuple[int, int]:
+        produced = self.produced
+        if not produced and not inference.billable(self.request, interrupted=True):
+            return 0, 0
+        return inference.interrupted_usage(self.request, produced)
+
+    def abandon(self) -> None:
+        """Leave the answer to recovery in another process: stop renewing its lease and let it expire now."""
+        if self._lease is None:
+            return
+        supervisor.unregister_watch(self._watch_key, self.cancel)
+        try:
+            runs.expire_completion(self._lease)
+        except Exception:  # noqa: BLE001 - the lease then expires after runs.LEASE_SECONDS
+            log.warning("Could not hand over a %s answer", self.request_type, exc_info=True)
+            db.close_thread_connection()
+
+    def _release(self) -> None:
+        if self._lease is not None:
+            supervisor.unregister_watch(self._watch_key, self.cancel)
+        with _active_lock:
+            _active.discard(self)
+        self._done.set()
+
     def _settle(self, finished: inference.Finished | None) -> None:
         """Charge the request once: exact usage when known, an estimate for interrupted answers."""
         if self._settled:
@@ -567,8 +685,9 @@ class CompletionRun:
         if completed:
             prompt, completion, estimated = finished.prompt_tokens, finished.completion_tokens, finished.usage_estimated
         else:
-            prompt = sum(credits.estimate_tokens(str(m.get("content", ""))) for m in self.request.messages)
-            completion, estimated = credits.estimate_tokens(produced), True
+            # Interrupted: the provider's own counts where it sent them before the end, estimates otherwise.
+            prompt, completion = inference.interrupted_usage(self.request, produced)
+            estimated = True
         # Metrics durations include the queue wait (as for chat and images).
         duration = finished.duration_ms + finished.wait_ms if finished is not None \
             else int((time.monotonic() - self._began) * 1000)
@@ -576,18 +695,23 @@ class CompletionRun:
         status = "ok" if completed or (finished is not None and finished.truncated) else (
             "stopped" if produced else "error")
         try:
-            if not completed and not produced:
-                # Nothing was produced: record the failure, charge nothing.
-                api_usage.record_metric(request_type=self.request_type, user_id=self.user["id"],
-                                        model_id=self.model["id"], duration_ms=duration, queue_wait_ms=wait,
-                                        status="error")
-                self.usage = (0, 0, False)
-            else:
-                self.tokens_counted = api_usage.charge_text(
-                    user_id=self.user["id"], request_type=self.request_type, model_id=self.model["id"],
-                    token_id=self.token_id, prompt_tokens=prompt, completion_tokens=completion, usage_estimated=estimated,
-                    duration_ms=duration, queue_wait_ms=wait, status=status)
-                self.usage = (prompt, completion, estimated)
+            with db.transaction():  # the charge and the end of the lease together (see the module docstring)
+                if self._lease is not None and not runs.close_completion(self._lease):
+                    # This process stopped renewing the lease for too long: another one charged its last record.
+                    log.warning("A %s answer was already charged by recovery", self.request_type)
+                    self.usage = (prompt, completion, True)
+                elif not completed and not produced and not inference.billable(self.request):
+                    # Nothing was produced and nothing has a cost (inference.billable): record the failure only.
+                    api_usage.record_metric(request_type=self.request_type, user_id=self.user["id"],
+                                            model_id=self.model["id"], duration_ms=duration, queue_wait_ms=wait,
+                                            status="error")
+                    self.usage = (0, 0, False)
+                else:
+                    self.tokens_counted = api_usage.charge_text(
+                        user_id=self.user["id"], request_type=self.request_type, model_id=self.model["id"],
+                        token_id=self.token_id, prompt_tokens=prompt, completion_tokens=completion,
+                        usage_estimated=estimated, duration_ms=duration, queue_wait_ms=wait, status=status)
+                    self.usage = (prompt, completion, estimated)
         except Exception:  # noqa: BLE001 - report a controlled failure, never an uncharged success
             log.exception("Recording usage for a %s request failed", self.request_type)
             raise CompletionError(translate(self.lang, "errors.storage_unavailable"), 503,
@@ -595,6 +719,49 @@ class CompletionRun:
         self._settled = True
 
 
-
 def _token_active(user_id: str, token_id) -> bool:
     return any(row["id"] == token_id for row in tokens.list_for(user_id))
+
+
+# ----- this process's answers ------------------------------------------------------
+
+_active_lock = threading.Lock()
+_active: set[CompletionRun] = set()
+SAVE_TIMEOUT = 10.0
+
+
+def _running() -> list[CompletionRun]:
+    with _active_lock:
+        return list(_active)
+
+
+def shutdown(*, grace: float = 0.0, save_timeout: float = SAVE_TIMEOUT) -> None:
+    """Hand over this process's API and playground answers before it exits (gunicorn ``worker_exit``).
+
+    Answers get *grace* seconds to finish; the rest are stopped (the client gets a ``server_restarting`` error)
+    and charged for what they produced. An answer that cannot be charged within *save_timeout* seconds gives up its
+    lease, so another process charges its last record at once.
+    """
+    deadline = time.monotonic() + max(0.0, grace)
+    for run in _running():
+        run._done.wait(max(0.0, deadline - time.monotonic()))
+    remaining = _running()
+    for run in remaining:
+        run.cancel.cancel("shutdown")
+    deadline = time.monotonic() + max(0.0, save_timeout)
+    for run in remaining:
+        run._done.wait(max(0.0, deadline - time.monotonic()))
+    stuck = _running()
+    for run in stuck:
+        run.abandon()
+    if remaining:
+        log.info("Process exiting: %d API answer(s) stopped and charged, %d left to recovery",
+                 len(remaining) - len(stuck), len(stuck))
+
+
+@background.job("completion-recover", every=30, initial_delay=10)
+def recover_completions(app) -> None:
+    """Charge the API answers whose process stopped before it could (see the module docstring)."""
+    count = runs.recover_completions()
+    if count:
+        log.info("Charged %d API answer(s) whose server process stopped", count)

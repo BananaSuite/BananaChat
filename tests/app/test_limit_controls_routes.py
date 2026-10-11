@@ -40,6 +40,8 @@ def test_admin_model_forms_render_and_preserve_fourth_daily_rule(app, admin, mak
     assert response.status_code == 302
     response = admin.post(f'/admin/users/{user["id"]}/limits/model', {"model_id": model["id"], **_rule_form()})
     assert response.status_code == 302
+    oversized = admin.post(f'/admin/users/{user["id"]}/limits/model', {"model_id": "9" * 30, **_rule_form()})
+    assert oversized.status_code == 404
     with app.app_context():
         assert store.get_model_policy(model)["rate_rules"] == _rules()
         assert list(store.get_model_override(user["id"], model["id"]).rate_rules) == _rules()

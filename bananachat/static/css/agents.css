@@ -12,6 +12,7 @@
 .agents-file-button { justify-content: flex-start; width: 100%; }
 .agents-file-button span { overflow: hidden; text-overflow: ellipsis; }
 .agents-switch-hint { display: block; }
+.agents-files-hint { margin-top: -.5rem; }
 .agents-repo { border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); border-radius: 0; padding: .1rem 0; }
 .agents-repo[open] { padding-bottom: .85rem; }
 .agents-repo > summary { display: flex; align-items: center; gap: .5rem; padding: .6rem 0; cursor: pointer; font-weight: 600; list-style: none; }
@@ -30,12 +31,15 @@
 .agents-task-link:focus-visible { outline-offset: -2px; }
 .agents-task-link > svg { color: var(--text-faint); }
 .agents-task-title { display: block; font-weight: 550; }
-.agents-task-meta { display: flex; flex-wrap: wrap; gap: .3rem; color: var(--text-muted); font-size: .84rem; }
+/* One line: a long model name is shortened, so the time never starts a new line with a lone "·". */
+.agents-task-meta { display: flex; flex-wrap: nowrap; gap: .3rem; min-width: 0; color: var(--text-muted); font-size: .84rem; }
+.agents-task-meta > span { flex: none; white-space: nowrap; }
+.agents-task-meta > span:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) { .agents-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* ----- task page ------------------------------------------------------------ */
 .agents-breadcrumb { margin: 0 0 .75rem; font-size: .9rem; }
-.agents-breadcrumb a { display: inline-flex; align-items: center; gap: .25rem; color: var(--text-muted); text-decoration: none; }
+.agents-breadcrumb a { display: inline-flex; align-items: center; gap: .25rem; min-height: 1.5rem; color: var(--text-muted); text-decoration: none; }
 .agents-breadcrumb a:hover { color: var(--text); }
 .agent-header { align-items: flex-start; }
 .agent-header h1 { margin: 0 0 .45rem; overflow-wrap: anywhere; }
@@ -60,6 +64,8 @@
 .step-label { font-size: .78rem; font-weight: 600; color: var(--text-faint); margin-bottom: .3rem; }
 .step-user { align-self: flex-end; max-width: min(88%, 680px); background: var(--active); border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--bg)); border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg); padding: .7rem .95rem; }
 .step-user .step-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The tinted bubble needs the stronger muted shade for AA contrast. */
+.step-user .step-label { color: var(--text-muted); }
 .step-assistant { padding: .35rem .15rem; }
 .step-thinking { margin-bottom: .5rem; font-size: .88rem; }
 .step-thinking summary { cursor: pointer; color: var(--text-muted); }
@@ -87,16 +93,18 @@
 .tool-preview { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; padding: 0; color: var(--text-muted); }
 .tool-state { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--success); }
 .tool-state.tool-error, .tool-state.tool-invalid { background: var(--danger); }
-.tool-time { flex: none; color: var(--text-faint); font-size: .8rem; font-variant-numeric: tabular-nums; }
+/* A fixed slot, so the status dots line up also on steps without a duration. */
+.tool-time { flex: none; min-width: 3.5rem; text-align: right; color: var(--text-faint); font-size: .8rem; font-variant-numeric: tabular-nums; }
 .step-tool.is-error .tool-call, .step-tool.is-invalid .tool-call { border-color: color-mix(in srgb, var(--danger) 35%, var(--bg)); }
 .tool-body { border-top: 1px solid var(--border); padding: .6rem .75rem .75rem; display: flex; flex-direction: column; gap: .35rem; }
 .tool-label { font-size: .74rem; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); }
 .tool-pre, .workspace-file {
+  --tool-pre-bg: color-mix(in srgb, var(--bg) 60%, #000);
   margin: 0; padding: .6rem .75rem; border-radius: var(--radius-sm); border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 60%, #000); font-size: .82rem; line-height: 1.45;
+  background: var(--tool-pre-bg); font-size: .82rem; line-height: 1.45;
   max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
 }
-:root[data-theme="light"] .tool-pre, :root[data-theme="light"] .workspace-file { background: color-mix(in srgb, var(--bg) 94%, #000); }
+:root[data-theme="light"] .tool-pre, :root[data-theme="light"] .workspace-file { --tool-pre-bg: color-mix(in srgb, var(--bg) 94%, #000); }
 
 .timeline-live { display: flex; align-items: center; gap: .6rem; margin-top: .8rem; color: var(--text-muted); font-size: .9rem; }
 .agent-spinner {
@@ -123,7 +131,9 @@
 .lane-timeline .step-user { max-width: 100%; }
 
 /* ----- composer ------------------------------------------------------------------- */
-.agent-composer { margin-top: 1.25rem; padding: .75rem; display: flex; flex-direction: column; gap: .5rem; position: sticky; bottom: .75rem; }
+/* Pinned to the bottom while the activity scrolls under it: a soft shadow marks its top edge. */
+.agent-composer { margin-top: 1.25rem; padding: .75rem; display: flex; flex-direction: column; gap: .5rem; position: sticky; bottom: .75rem;
+  box-shadow: 0 -6px 14px -8px rgb(0 0 0 / .3); }
 .agent-composer textarea { min-height: 64px; resize: vertical; }
 .agent-composer-bar { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
 .agent-composer-bar .hint { flex: 1 1 200px; }
@@ -162,8 +172,13 @@
 
 @media (max-width: 640px) {
   .agent-actions { width: 100%; }
+  /* A borderless first button lines up its icon with the title above instead of looking indented. */
+  .agent-actions > :is(form:first-child, #stop-button[hidden] + form) .btn-ghost { margin-inline-start: -.85rem; }
+  .agent-facts dl.details { grid-template-columns: fit-content(9rem) minmax(0, 1fr); }
+  .agent-facts dl.details dd { margin-bottom: 0; }
   .step-user { max-width: 100%; }
-  .agent-composer { bottom: .5rem; }
+  /* On a phone a pinned composer would cover a third of the screen: it stays after the activity. */
+  .agent-composer { position: static; box-shadow: none; }
 }
 
 /* ----- administrator log ------------------------------------------------------------ */
@@ -171,3 +186,18 @@
 .admin-step { padding: .8rem 1rem; display: flex; flex-direction: column; gap: .45rem; min-width: 0; }
 .admin-step-head { gap: .5rem; }
 .admin-step .tool-pre { max-height: 360px; }
+.admin-step-text { font-size: .92rem; }
+/* Phones: commands in tool arguments keep their lines (no break inside "ls -la") and scroll sideways,
+   with a shade on each side that has more to scroll to (the covers move with the text and hide the
+   shade at either end). Messages, reasoning and results stay wrapped text. */
+@media (max-width: 640px) {
+  .admin-step .tool-pre-code {
+    white-space: pre; overflow-wrap: normal;
+    background:
+      linear-gradient(to right, var(--tool-pre-bg) 40%, transparent) left / 1.5rem 100% no-repeat local,
+      linear-gradient(to left, var(--tool-pre-bg) 40%, transparent) right / 1.5rem 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--text) 22%, transparent), transparent) left / .6rem 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--text) 22%, transparent), transparent) right / .6rem 100% no-repeat scroll,
+      var(--tool-pre-bg);
+  }
+}

@@ -142,7 +142,16 @@ def _api_rate(requests, per, burst):
     limits.set_policy("api", policy, None)
 
 
-def test_requests_are_rate_limited_per_account(app, user, token):
+def test_requests_are_rate_limited_per_account(app, user, token, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    from bananachat.services import limits
+
+    # The limiter's clock stands still, so a slow machine cannot refill the bucket between the calls and the
+    # Retry-After below is exact.
+    frozen = time.time()
+    monkeypatch.setattr(limits, "time", SimpleNamespace(time=lambda: frozen, monotonic=time.monotonic))
     with app.app_context():
         _api_rate(1, "minute", 2)  # two at once, then one a minute
     second_token = token_for(app, user, "second")

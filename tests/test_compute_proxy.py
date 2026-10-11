@@ -291,3 +291,67 @@ def test_module_imports_without_side_effects_or_web_packages():
     result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=60,
                             env={"PATH": os.environ.get("PATH", "")})
     assert result.returncode == 0 and result.stdout.strip() == "ok", result.stderr
+
+
+# ----- model management and failed authentication -------------------------------------
+
+MANAGEMENT = "m" * 64
+MANAGEMENT_CALLS = (("POST", "/api/pull"), ("POST", "/api/create"), ("POST", "/api/copy"), ("DELETE", "/api/delete"))
+
+
+def test_model_management_needs_its_own_token_when_one_is_configured(make_proxy, backend):
+    proxy = make_proxy(management_token=MANAGEMENT)
+    for method, path in MANAGEMENT_CALLS:
+        status, body, _response = call(proxy, path, method=method, body={})
+        assert status == 403 and b"management" in body, path
+    assert not backend.calls
+    for method, path in MANAGEMENT_CALLS:
+        assert call(proxy, path, token=MANAGEMENT, method=method, body={})[0] == 200, path
+    # The management token is for model management only; inference keeps its own token.
+    assert call(proxy, "/api/chat", token=MANAGEMENT, method="POST", body={})[0] == 403
+    assert call(proxy, "/api/chat", method="POST", body={})[0] == 200
+    assert all(authorization is None for _method, _path, authorization, _body in backend.calls)
+
+
+def test_model_management_can_be_switched_off(make_proxy, backend):
+    proxy = make_proxy(model_management=False)
+    for method, path in MANAGEMENT_CALLS:
+        assert call(proxy, path, method=method, body={})[0] == 403, path
+    assert not backend.calls
+    assert call(proxy, "/api/tags")[0] == 200
+
+
+def test_repeated_wrong_tokens_are_throttled_but_the_right_one_still_works(make_proxy, backend):
+    proxy = make_proxy()
+    limit = inference_proxy.AUTH_FAILURES_PER_MINUTE
+    statuses = [call(proxy, "/api/tags", token="y" * 64)[0] for _ in range(limit + 2)]
+    assert statuses[:limit] == [401] * limit
+    assert statuses[-2:] == [429, 429]
+    assert call(proxy, "/api/tags")[0] == 200
+
+
+def test_management_settings_are_read_from_the_environment(tmp_path):
+    token_file, management_file = tmp_path / "token", tmp_path / "management"
+    for path, value in ((token_file, TOKEN), (management_file, MANAGEMENT)):
+        path.write_text(value + "\n")
+        path.chmod(0o600)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    environ = {"BC_COMPUTE_TOKEN_FILE": str(token_file), "BC_COMPUTE_PORT": str(port),
+               "BC_COMPUTE_MANAGEMENT_TOKEN_FILE": str(management_file)}
+    server = inference_proxy.create_server(environ)
+    try:
+        assert server.management_token == MANAGEMENT.encode() and server.model_management
+    finally:
+        server.server_close()
+    server = inference_proxy.create_server(dict(environ, BC_COMPUTE_MANAGEMENT_TOKEN_FILE="",
+                                                BC_COMPUTE_MODEL_MANAGEMENT="0"))
+    try:
+        assert server.management_token is None and not server.model_management
+    finally:
+        server.server_close()
+    with pytest.raises(ValueError, match="differ"):
+        ComputeServer(("127.0.0.1", 0), upstream="http://127.0.0.1:11434", token=TOKEN, management_token=TOKEN)
+    with pytest.raises(ValueError, match="BC_COMPUTE_MODEL_MANAGEMENT"):
+        inference_proxy.create_server(dict(environ, BC_COMPUTE_MODEL_MANAGEMENT="maybe"))

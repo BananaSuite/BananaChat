@@ -334,16 +334,6 @@ def classify(error) -> DownloadProblem:
     return DownloadProblem(text, transient=True)
 
 
-def current_job_id() -> int | None:
-    with _lock:
-        return min(_running) if _running else None
-
-
-def running_job_ids() -> list[int]:
-    with _lock:
-        return sorted(_running)
-
-
 def _local_token(job_id: int) -> CancelToken | None:
     with _lock:
         return _running.get(job_id)
@@ -743,7 +733,16 @@ def _run_checkpoint(job, token: CancelToken, config, progress: dict | None = Non
             if token.cancelled:
                 _interrupted(job, token, cleanup=cancel_remote)
                 return
-            remote = agent.get_download(remote_id)
+            try:
+                remote = agent.get_download(remote_id)
+            except CheckpointAgentError as error:
+                if not error.transient:
+                    raise
+                # The download goes on without us; the stall timer retries the
+                # job if the agent stays unreachable.
+                log.info("Checkpoint agent poll for %s failed, asking again: %s", target, error)
+                token.wait(2.0)
+                continue
             _check_claim(job, token)
             status = remote.get("status")
             if status not in checkpoint_agent.REMOTE_STATUSES:
@@ -793,9 +792,21 @@ def _run_checkpoint(job, token: CancelToken, config, progress: dict | None = Non
 def _job_thread(app, job) -> None:
     with app.app_context():
         try:
-            _execute(job, app.config["BC"], background.stopping)
+            try:
+                _execute(job, app.config["BC"], background.stopping)
+            finally:
+                _requeue_abandoned(job)
         finally:
             db.release_thread_connection()
+
+
+def _requeue_abandoned(job) -> None:
+    """Queue a job again when its final write failed and left it pulling, which would stall the queue."""
+    try:
+        if pulls_db.requeue(job["id"], "Interrupted by an error; it will resume.", owner=_owner(job)):
+            log.warning("Download job %s ended without saving its outcome; it is queued again", job["id"])
+    except Exception:  # noqa: BLE001 - storage is still failing; the next restart requeues it
+        log.exception("Download job %s could not be queued again", job["id"])
 
 
 @background.job("model-pulls", every=2, long_running=True, initial_delay=3)

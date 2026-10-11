@@ -27,6 +27,7 @@ from bananachat import security
 from bananachat.db import agents as agents_db
 from bananachat.db import catalog
 from bananachat.i18n import translate
+from bananachat.numbers import ascii_int
 from bananachat.services import status
 from bananachat.services.access import AccessContext
 from bananachat.services.agents import gitfetch, service
@@ -166,8 +167,12 @@ def index():
     user = security.current_user()
     access = _access_state(user)
     settings = agent_settings.current()
+    rows = agents_db.list_for_user(user["id"])
+    # The list shows a model's display name, like the model picker and the session page.
+    labels = {model["ollama_name"]: model["display_name"] for model in catalog.list_models()} if rows else {}
     tasks = [{"row": row, "status": "interrupted" if row["status"] in agents_db.ACTIVE_STATES
-              and agents_db.is_stale(row) else row["status"]} for row in agents_db.list_for_user(user["id"])]
+              and agents_db.is_stale(row) else row["status"],
+              "model_label": labels.get(row["model_name"]) or row["model_name"]} for row in rows]
     models = []
     if access == "ok":
         models = [{"name": model["ollama_name"], "label": model["display_name"] or model["ollama_name"]}
@@ -239,8 +244,8 @@ def task(task_id):
 @security.login_required
 def events(task_id):
     row = _owned(task_id)
-    after = request.args.get("after", 0, type=int) or 0
-    response = jsonify(events_payload(row, after=max(0, after), lang=g.lang))
+    after = ascii_int(request.args.get("after", ""), 18) or 0
+    response = jsonify(events_payload(row, after=after, lang=g.lang))
     response.headers["Cache-Control"] = "no-store"
     return response
 

@@ -14,7 +14,7 @@ bananachat/
   security.py        sessions, login_required/admin_required, CSRF, throttling, passwords
   logs.py            logging and the private error log
   formatting.py      template filters (timeago, datetime, number, tokens, filesize)
-  i18n/              translation catalogs, one JSON file per area
+  i18n/              translation catalogues, one JSON file per area
   db/                storage: connection, migrations, one module per domain
   services/          domain logic: inference, queue, Ollama/ComfyUI clients, access, background jobs
   web/               blueprints (one module per area; web/admin/ is a package)
@@ -95,15 +95,15 @@ with db.transaction():                                        # BEGIN IMMEDIATE 
   The chat controller owns sending, streaming and history. `chat-pickers.js`
   owns model and reasoning selection; `chat-personas.js` owns personalities.
   Both receive explicit inputs and callbacks from the controller. Keep shared
-  DOM primitives in `core.js` and page-specific behavior in its own module.
+  DOM primitives in `core.js` and page-specific behaviour in its own module.
 * `<form data-confirm="Question">` asks for confirmation before submitting;
   `data-confirm-danger` styles it as destructive.
 * Icons: `{% from "partials/icons.html" import icon %}{{ icon("trash") }}`.
 * The interface is translated: `{{ t("area.key", name=value) }}` in templates,
-  `t("key")` in scripts for catalog keys starting with `js.` (the prefix is
+  `t("key")` in scripts for catalogue keys starting with `js.` (the prefix is
   dropped in the browser). Each area owns `bananachat/i18n/<area>.json` with
   identical key sets for `en` and `it`; keys are namespaced by area. The
-  administrator interface is English-only by design and does not use the catalogs.
+  administrator interface is English-only by design and does not use the catalogues.
 
 ## Service status
 
@@ -142,19 +142,48 @@ always use the primary server.
 leases and applies Stop requests; `services.background` runs periodic jobs in
 one elected process (`@background.job(name, every=seconds)`).
 
+A chat run's lease (`active_streams`, `db/runs.py`) names its account and
+outlives its chat: deleting or erasing a chat while it answers only asks the
+run to stop, and the run (or recovery, if its process died) still charges what
+was generated. API and playground answers hold a lease too
+(`completion_leases`) from their first output on, which records every five
+seconds what they would be charged if they ended then; the answer charges and
+drops it in one transaction, and if its process dies first another process
+charges the last record, so nothing is left uncharged or charged twice.
+
+When a Gunicorn worker exits, `worker_exit` calls `services.chat.shutdown`
+and `services.completions.shutdown`: after `max_requests` running answers get
+up to 45 seconds (less when `timeout` leaves less room) to finish, on a reload
+or stop they are stopped at once; either way the rest are saved (chat) or
+ended with a `server_restarting` error (API) and charged for what they
+produced, and anything that cannot be saved in time gives up its lease for
+immediate recovery. On SIGTERM the worker does this shortly before the
+master's `graceful_timeout` runs out, even while open streams keep it from
+reaching `worker_exit`. A worker is not replaced before it has run an hour,
+however many requests arrive, so request volume alone cannot force
+replacements. The worker frees its inference queue places, and the master's
+`child_exit` lets the places of any worker that exited, also one that
+crashed, stop counting within 15 seconds instead of after their 90-second
+lease.
+
+A failed attempt counts towards marking a model failing only when the failure
+is the model's own: not for requests the model server refuses (4xx) or input
+it cannot read (an image, the prompt), and not for the fallback attempts of a
+request that already failed. API images are decoded before they are forwarded.
+
 Model access: `services.access.AccessContext.load(user)` answers
-`can_use(model, surface)` for the whole catalog with a constant number of queries.
+`can_use(model, surface)` for the whole catalogue with a constant number of queries.
 
 ## Models
 
-The catalog is `ai_models` (`db/catalog.py`); `ollama_name` is the public
+The catalogue is `ai_models` (`db/catalog.py`); `ollama_name` is the public
 identifier and `provider` the service that runs the model (`ollama`, or
 `comfyui` for image checkpoints). `services/model_lifecycle.py` decides what
 happens to a model, `db/model_lifecycle.py` stores the administrator's policy
 (one JSON row), the ignore list and the state-change events.
 
 * **Detection.** The `ollama-sync` job (and "Sync now", and every finished
-  download) lists `/api/tags` on the primary server and reconciles the catalog
+  download) lists `/api/tags` on the primary server and reconciles the catalogue
   in one transaction. New models, and models whose digest changed, are read with
   `/api/show` (bounded per sync, one failing model never stops the others):
   capabilities, context length, family, parameter size, quantisation and
@@ -164,7 +193,7 @@ happens to a model, `db/model_lifecycle.py` stores the administrator's policy
   chat. A listing that fails changes nothing; an empty listing is believed only
   when it repeats. The result, with per-model errors, is kept in
   `runtime_state` (`model_sync_last`) and shown in Admin → Models.
-* **Enrollment** (`enrollment`). With the `manual` policy (default) a new model
+* **Enrolment** (`enrollment`). With the `manual` policy (default) a new model
   is `new`: hidden until an administrator enables it (name, categories, access,
   features, limit preset). With `automatic`, chat models are published at once
   as `auto` ("enabled automatically — review") with a limit preset from their
@@ -265,7 +294,7 @@ unit of earlier releases). Storage lives in `db/limits.py`, decisions in
   `fast`), dynamic exemption, effort gating off, and usage-reset times.
 * **Windows** (`limit_windows`, per account and scope `pool:<pool>` or
   `model:<id>`): `credits.charge` (and image reservations) open the 5-hour
-  and weekly windows of the pool (when the model counts toward it) and of the
+  and weekly windows of the pool (when the model counts towards it) and of the
   model when none is open; usage counts ledger rows since the window opened
   (and since the account's or the site's last reset). A reset closes the open
   windows (the next request opens new ones); it never deletes ledger rows.
@@ -281,7 +310,7 @@ unit of earlier releases). Storage lives in `db/limits.py`, decisions in
   token usage excludes those rows, so switching consumption on later cannot
   charge earlier free chats. Historical rows retain `consumes_limits=1`.
   Request rates, locks, access rules, effort gating and provider availability
-  remain enforced; other services keep their existing behavior.
+  remain enforced; other services keep their existing behaviour.
 * **Tiers** (`limit_tiers`): an ordered ladder, each with one token multiplier
   and promotion requirements (account age, active days and tokens in the last
   30 days, days since the last suspension). Active days and tokens count only
@@ -297,7 +326,7 @@ unit of earlier releases). Storage lives in `db/limits.py`, decisions in
 
 `limits.effective(user, pool)` and `limits.model_limits(user, model)` return
 every number with its reasons (`Reason` codes rendered from the
-`account.reason_*` catalog keys), in this order: custom limit, else policy ×
+`account.reason_*` catalogue keys), in this order: custom limit, else policy ×
 tier (when `auto_tiers`) → dynamic multiplier (model limits: its deviation ×
 the sensitivity) → provider capacity (model limits) → music bonus (pools) →
 grants (unlimited wins, then multipliers, then extras) → administrators
@@ -310,7 +339,7 @@ status, `Retry-After`, a translated message) or the admitted budget.
 The pool's request rate is checked where requests arrive
 (`limits.check_rate`: API authentication, playground, chat send, image page,
 agent starts). Fallback models are filtered with `limits.usable_fallbacks`;
-`auto` skips models locked or used up for the account, or counting toward a
+`auto` skips models locked or used up for the account, or counting towards a
 service whose tokens are used up (then any other model the request may use).
 Admission is a handful of indexed queries: inside `limits.snapshot()` (chat
 send, API/playground admission) each setting, window and usage figure is read
@@ -342,9 +371,9 @@ allowance) report the capacity it has left; below half, its models' limits
 shrink in proportion. Without a registered provider nothing changes.
 
 **Reasoning effort**: levels `off < low < medium < high < extra < max`. `xhigh`
-normalizes to `extra` at API and provider-discovery boundaries. A model's
+normalises to `extra` at API and provider-discovery boundaries. A model's
 levels come from `ai_models.reasoning_levels` (a JSON list, filled by the
-model catalog; `on` counts as medium), else `("off", "on")` for thinking
+model catalogue; `on` counts as medium), else `("off", "on")` for thinking
 models (`limits.supported_efforts`). An account may use levels up to its
 ceiling (`limits.effort_ceiling`): its own level for the model, else for all
 models (`user_effort_levels`), else the model's `effort_default`, else the
@@ -364,20 +393,6 @@ Account/model exemptions skip that model's own limits only. Global model token
 and rate switches are also independent. Usage is still recorded; permissions,
 model locks, reasoning controls and physical provider capacity remain binding.
 Automatic reasoning promotion supports account/model opt-outs.
-
-The optional Claude provider extension is loaded at app startup from a trusted
-operator-installed module. Its chat, discovery and quota callbacks are installed
-together or all cleared. Discovery is authoritative for availability; curated
-reference metadata cannot publish a model. Exclusive database account leases
-with heartbeats protect concurrent worker selection. Upstream snapshots track
-source/freshness and expire conservatively. The opt-in official Claude Code
-transport discovers canonical models and native subscription usage without
-generating a response. Private profiles supply authentication; per-account
-observations restrict routing separately from local token budgets. Metadata
-refreshes have bounded concurrency and deadlines. Identity changes invalidate
-cached observations and require fresh admission; uncertain process cleanup
-quarantines the account before its lease is released. See
-[connector setup](claude-code.md) and [the extension contract](claude-router.md).
 
 Quota requests (`quota_requests.kind`: `window`, `weekly`, `rate`,
 `temporary`, `effort`) become custom limits, a grant (`temporary`) or an
@@ -401,7 +416,7 @@ reset times or open windows. Legacy slow-allowance columns remain for
 compatibility and rollback but no longer grant extra tokens or select a
 queue lane. Weekly limits, model policies, request rates,
 tiers, grants, dynamic adjustment, music bonuses, reasoning settings and
-explicit account speeds retain their supported customization.
+explicit account speeds retain their supported customisation.
 
 Fixed music bonuses have independent five-hour and weekly amounts.
 `site_settings.music_bonus_fixed_weekly_tokens` preserves seven times the old
@@ -491,8 +506,11 @@ previous release; upgrade tests start from it.
 ## External provider boundary
 
 `db/external_providers.py` stores connection metadata; `services/provider_secrets.py`
-keeps credentials in private instance files. `services/external_api.py` handles
-vetted HTTP destinations, message conversion and bounded provider protocols.
-`services/external_providers.py` handles model discovery, enrollment and lifecycle.
+keeps credentials encrypted (with a key derived from the instance secret) in private
+instance files. `services/provider_presets.py` lists the service presets.
+`services/external_api.py` handles vetted HTTP destinations, message conversion,
+the OpenAI-compatible and Anthropic dialects, model-list normalisation and the
+mapping of provider failures to `provider_*` error codes.
+`services/external_providers.py` handles model discovery, enrolment and lifecycle.
 `web/admin/providers.py` owns administrator configuration. The shared inference
 router delegates to the transport after existing access/quotas are rechecked.

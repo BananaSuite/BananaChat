@@ -53,7 +53,14 @@ hardware (it prints the table above) before setting production limits.
 Gunicorn 26.2 or newer is required: older threaded workers could drop
 accepted connections while recycling a process. `tests/test_gunicorn_recycling.py`
 sends 400 concurrent requests through repeated worker replacements without
-retries.
+retries. Chat answers whose browser left keep generating in the background; a
+worker replaced after `max_requests` (and never before it has run an hour)
+gives running chat and API answers up to 45 seconds to finish, then saves or
+ends the rest and charges what they produced, and its inference queue places
+are freed at once rather than after their 90-second lease. API answers record
+their usage while they stream, so one cut by a killed process is charged by
+another. `tests/test_gunicorn_completion_handover.py` checks this with the real
+server.
 
 ## CPU inference in containers
 
@@ -61,7 +68,7 @@ Match Ollama's computation threads to the CPUs actually available to its
 container. In a disposable two-CPU check with Ollama 0.35.1, its automatic
 eight-thread choice caused long delays and a controlled BananaChat timeout.
 The same official Qwen3 0.6B weights with two computation threads completed
-the API, saved-chat, Stop and interrupted-accounting checks. This behavior is
+the API, saved-chat, Stop and interrupted-accounting checks. This behaviour is
 consistent with Ollama's [reported CPU-quota issue](https://github.com/ollama/ollama/issues/17916).
 
 For a two-CPU deployment, create a model with a matching thread default:
@@ -72,7 +79,7 @@ PARAMETER num_thread 2
 ```
 
 Save this as `Modelfile`, run `ollama create qwen3-cpu:0.6b -f Modelfile`,
-then synchronize and review that model in BananaChat. Choose the count for
+then synchronise and review that model in BananaChat. Choose the count for
 your own CPU allocation; GPU deployments need their own measurements. The
 derived model shares its base weights, and its thread default applies to
 ordinary BananaChat requests.

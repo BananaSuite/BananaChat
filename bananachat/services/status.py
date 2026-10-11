@@ -59,13 +59,10 @@ _CURRENT = object()
 def _hosted_models_available(user):
     from bananachat.db import catalog
     from bananachat.services.access import AccessContext, is_text_model
-    from bananachat.services import claude_pool
 
     context = AccessContext.load(user) if user is not None else None
     for model in catalog.list_models(rolled_out_only=True):
-        if model["backend"] not in ("claude", "external") or not is_text_model(model):
-            continue
-        if model["backend"] == "claude" and claude_pool._site_chat is None:
+        if model["backend"] != "external" or not is_text_model(model):
             continue
         if context is None or context.can_use(model, "chat") or context.can_use(model, "api"):
             return True

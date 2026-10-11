@@ -165,7 +165,8 @@ function kindLabel(kind) {
 
 function attachmentList(items) {
   const list = el("ul", { class: "attachment-list" });
-  for (const item of items) {
+  const images = items.filter((item) => item.kind === "image" && item.url);
+  for (const item of [...images, ...items.filter((item) => !images.includes(item))]) {
     if (item.kind === "image" && item.url) {
       list.append(el("li", { class: "attachment-image" },
         el("a", { href: item.url, target: "_blank", rel: "noopener" },
@@ -185,6 +186,31 @@ function stateNote(stateName, message) {
   return el("p", { class: `message-state state-${stateName}` }, icon(stateName === "stopped" ? "info" : "alert"), el("span", { text }));
 }
 
+/** What each shown user message asked, for "Try again". */
+const questions = new WeakMap();
+
+/**
+ * "Try again" under a saved interrupted answer: sends the question before it again through the normal
+ * send path (the same checks, limits and charging as typing it). CSS shows it only on the newest message.
+ */
+function retryButton() {
+  return el("p", { class: "message-retry" }, el("button", {
+    type: "button", class: "btn btn-sm", onclick: (event) => tryAgain(event.currentTarget.closest(".message")),
+  }, icon("refresh"), el("span", { text: t("chat_try_again") })));
+}
+
+function tryAgain(answer) {
+  const question = answer?.previousElementSibling;
+  const text = question?.classList.contains("message-user") ? questions.get(question) : "";
+  if (!text) {
+    ui.input.focus();
+    return;
+  }
+  send(text, { retry: true });
+  // The button hides once the question is shown again; keyboard focus moves to the composer (no touch keyboard).
+  if (!touchFirst.matches) ui.input.focus({ preventScroll: true });
+}
+
 /** A saved message as an <article>. */
 function buildMessage(message) {
   const content = message.role === "assistant"
@@ -195,9 +221,11 @@ function buildMessage(message) {
   if (message.attachments?.length) body.append(attachmentList(message.attachments));
   const note = message.role === "assistant" ? stateNote(message.state) : null;
   if (note) body.append(note);
+  if (note && message.state === "interrupted" && message.id) body.append(retryButton());
   const article = el("article", { class: `message message-${message.role}`, dataset: message.id ? { id: String(message.id) } : {} },
     body, el("div", { class: "message-footer" },
       el("p", { class: "message-meta", text: metaText(message) }), messageActions(message, content)));
+  if (message.role === "user") questions.set(article, message.content);
   article.setAttribute("aria-label", message.role === "user" ? t("chat_you") : (message.model_name || t("chat_assistant")));
   return article;
 }
@@ -268,6 +296,9 @@ ui.scroller.addEventListener("scroll", () => {
   state.stickToBottom = nearBottom();
   ui.scrollBottom.hidden = state.stickToBottom;
 }, { passive: true });
+
+// Images and rendered Markdown can grow the conversation without a scroll event: stay at the end.
+if ("ResizeObserver" in window) new ResizeObserver(() => scrollToEnd()).observe(ui.messages);
 
 ui.scrollBottom.addEventListener("click", () => {
   state.stickToBottom = true;
@@ -363,8 +394,10 @@ class PendingAnswer {
       };
       const node = buildMessage(message);
       if (event.message && event.state !== "completed") {
-        node.querySelector(".message-state")?.remove();
-        node.querySelector(".message-body").append(stateNote(event.state, event.message));
+        const note = stateNote(event.state, event.message);
+        const shown = node.querySelector(".message-state");
+        if (shown) shown.replaceWith(note);
+        else node.querySelector(".message-body").append(note);
       }
       this.node.replaceWith(node);
       track(message);
@@ -399,7 +432,7 @@ function setGenerating(active) {
   updateEmpty();
 }
 
-function composeForm(text) {
+function composeForm(text, files) {
   const form = new FormData();
   form.append("content", text);
   if (picker.selected !== "auto") form.append("model", picker.selected);
@@ -407,17 +440,18 @@ function composeForm(text) {
   for (const input of document.querySelectorAll("[data-param]")) {
     if (input.value.trim() !== "") form.append(input.name, input.value.trim());
   }
-  for (const file of state.files) form.append("files", file, file.name);
+  for (const file of files) form.append("files", file, file.name);
   return form;
 }
 
-async function send(text) {
+/** Send *text* with the staged files; *retry* ("Try again") sends the text alone and leaves the composer as it is. */
+async function send(text, { retry = false } = {}) {
   if (state.generating) return;
   if (!state.canSend) {
     toast(t("status_paused"), "warning");
     return;
   }
-  const files = [...state.files];
+  const files = retry ? [] : [...state.files];
   if (!text && !files.length) {
     ui.input.focus();
     return;
@@ -426,15 +460,18 @@ async function send(text) {
     toast(t("chat_too_long", { size: Math.floor(limits.max_message_bytes / 1024) }), "error");
     return;
   }
-  const form = composeForm(text);
+  const form = composeForm(text, files);
   const previousLastId = state.lastId;
   const userNode = appendMessage({
     role: "user", content: text || t("chat_files_only"), created_at: new Date().toISOString(),
     attachments: files.map((file) => ({ kind: kindOf(file.name), filename: file.name })),
   });
-  ui.input.value = "";
-  autoGrow();
-  setFiles([]);
+  questions.set(userNode, text);
+  if (!retry) {
+    ui.input.value = "";
+    autoGrow();
+    setFiles([]);
+  }
   setGenerating(true);
   const pending = new PendingAnswer();
   let terminal = null;
@@ -453,9 +490,11 @@ async function send(text) {
       // Refused before it ran: nothing was saved, so give the message back.
       userNode.remove();
       pending.node.remove();
-      ui.input.value = text;
-      autoGrow();
-      setFiles(files);
+      if (!retry) {
+        ui.input.value = text;
+        autoGrow();
+        setFiles(files);
+      }
       setGenerating(false);
       // Refusals for maintenance or an outage are worded for API clients; the page has its own translated text.
       const paused = error instanceof ApiError && error.status === 503 && ["maintenance", "outage"].includes(error.code);
@@ -1015,11 +1054,16 @@ sidebar.search.addEventListener("keydown", (event) => {
 {
   const narrow = window.matchMedia("(max-width: 900px)");
   const main = ui.form.closest(".chat-main");
+  // While the drawer is open, everything it covers is inert: the conversation, the top bar and the
+  // service notices (the toasts stay reachable).
+  const covered = () => [main, ...[...document.body.children].filter((node) => !node.contains(ui.shell)
+    && !node.matches("script, .toasts"))];
+  const setCovered = (inert) => { for (const node of covered()) node.inert = inert; };
   const setExpanded = (expanded) => ui.sidebarToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
   const closeDrawer = (focus) => {
     ui.shell.classList.remove("sidebar-open");
     ui.backdrop.hidden = true;
-    main.inert = false;
+    setCovered(false);
     setExpanded(false);
     if (focus) ui.sidebarToggle.focus();
   };
@@ -1027,7 +1071,7 @@ sidebar.search.addEventListener("keydown", (event) => {
     if (narrow.matches) {
       closeDrawer(false);
     } else {
-      main.inert = false;
+      setCovered(false);
       ui.backdrop.hidden = true;
       ui.shell.classList.remove("sidebar-open");
       setExpanded(!ui.shell.classList.contains("sidebar-collapsed"));
@@ -1036,14 +1080,17 @@ sidebar.search.addEventListener("keydown", (event) => {
   if (storage.getItem(SIDEBAR_KEY) === "1") ui.shell.classList.add("sidebar-collapsed");
   apply();
   narrow.addEventListener("change", apply);
-  ui.sidebarToggle.addEventListener("click", () => {
+  ui.sidebarToggle.addEventListener("click", (event) => {
     if (narrow.matches) {
       if (ui.shell.classList.contains("sidebar-open")) { closeDrawer(true); return; }
       ui.shell.classList.add("sidebar-open");
       ui.backdrop.hidden = false;
-      main.inert = true;
+      // Focus moves into the drawer before the rest becomes inert. From the keyboard it lands on the
+      // search field; after a tap on the first button, so the on-screen keyboard does not cover the list.
+      if (event.detail === 0) sidebar.search.focus();
+      else ui.shell.querySelector(".sidebar-new button")?.focus({ focusVisible: false });
+      setCovered(true);
       setExpanded(true);
-      sidebar.search.focus();
     } else {
       const collapsed = ui.shell.classList.toggle("sidebar-collapsed");
       storage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0");

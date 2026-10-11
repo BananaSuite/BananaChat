@@ -19,7 +19,9 @@
         <div class="section-header"><h2 id="endpoint-title">{{ t("developer.endpoint_title") }}</h2></div>
         <p class="muted">{{ t("developer.endpoint_text") }}</p>
         <div class="secret-box">
-          <input type="text" readonly value="{{ api_base }}" aria-label="{{ t('developer.base_url') }}" class="mono">
+          {#- Shown as wrapping text, not a field: long addresses stay readable with large text on phones. -#}
+          {%- set url_head, url_slash, url_tail = api_base.rpartition("/") %}
+          <code class="dev-endpoint-url" translate="no" title="{{ t('developer.base_url') }}">{% if url_head %}{{ url_head }}/<wbr>{{ url_tail }}{% else %}{{ api_base }}{% endif %}</code>
           <button type="button" class="btn" data-copy="{{ api_base }}">{{ icon("copy") }}{{ t("common.copy") }}</button>
         </div>
         <p class="hint mt-1 mb-0"><a href="{{ url_for('developer.playground') }}">{{ t("developer.try_playground") }}</a></p>
@@ -35,14 +37,16 @@
       <p class="muted">{{ t("developer.tokens_text") }}</p>
       {% if tokens %}
       <div class="table-wrap mb-2">
-        <table class="table dev-tokens">
+        <table class="table table-stack table-stack-md dev-tokens">
           <caption class="visually-hidden">{{ t("developer.tokens_title") }}</caption>
           <thead>
             <tr>
               <th scope="col">{{ t("common.name") }}</th>
               <th scope="col">{{ t("developer.token_prefix") }}</th>
-              <th scope="col">{{ t("common.created") }}</th>
+              <th scope="col">{{ t("developer.token_created") }}</th>
               <th scope="col">{{ t("developer.token_last_used") }}</th>
+              <th scope="col">{{ t("developer.token_scope") }}</th>
+              <th scope="col">{{ t("developer.token_expires") }}</th>
               <th scope="col" class="actions">{{ t("common.actions") }}</th>
             </tr>
           </thead>
@@ -51,13 +55,15 @@
             {% set label = token.name or t("developer.token_unnamed") %}
             <tr>
               <th scope="row" class="dev-token-name">{{ label }}</th>
-              <td><code>{{ token.token_prefix }}…</code></td>
-              <td class="nowrap"><time datetime="{{ token.created_at }}" title="{{ token.created_at | datetime }}">{{ token.created_at | timeago }}</time></td>
-              <td class="nowrap">{% if token.last_used_at %}<time datetime="{{ token.last_used_at }}" title="{{ token.last_used_at | datetime }}">{{ token.last_used_at | timeago }}</time>{% else %}<span class="muted">{{ t("developer.token_never_used") }}</span>{% endif %}</td>
+              <td data-label="{{ t('developer.token_prefix') }}"><code>{{ token.token_prefix }}…</code></td>
+              <td class="nowrap" data-label="{{ t('developer.token_created') }}"><time datetime="{{ token.created_at }}" title="{{ token.created_at | datetime }}">{{ token.created_at | timeago }}</time></td>
+              <td class="nowrap" data-label="{{ t('developer.token_last_used') }}">{% if token.last_used_at %}<time datetime="{{ token.last_used_at }}" title="{{ token.last_used_at | datetime }}">{{ token.last_used_at | timeago }}</time>{% else %}<span class="muted">{{ t("developer.token_never_used") }}</span>{% endif %}</td>
+              <td data-label="{{ t('developer.token_scope') }}">{{ t("developer.scope_" ~ (token.scope or "full")) }}</td>
+              <td class="nowrap" data-label="{{ t('developer.token_expires') }}">{% if token.expires_at %}<time datetime="{{ token.expires_at }}" title="{{ token.expires_at | datetime }}">{{ token.expires_at | datetime(true) }}</time>{% else %}<span class="muted">{{ t("developer.expires_never") }}</span>{% endif %}</td>
               <td class="actions">
                 <div class="row-end">
                   <details class="menu dev-rename" data-menu>
-                    <summary class="btn btn-sm btn-ghost">{{ icon("edit") }}<span>{{ t("developer.rename") }}</span><span class="visually-hidden"> {{ label }}</span></summary>
+                    <summary class="btn btn-sm" title="{{ t('developer.rename') }}">{{ icon("edit") }}<span>{{ t("developer.rename") }}</span><span class="visually-hidden"> {{ label }}</span></summary>
                     <div class="menu-panel">
                       <form method="post" action="{{ url_for('developer.rename_token', token_id=token.id) }}" class="stack-sm">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -70,12 +76,12 @@
                   <form method="post" action="{{ url_for('developer.rotate_token', token_id=token.id) }}" data-token-form="rotate"
                         data-confirm="{{ t('developer.rotate_confirm', name=label) }}" data-confirm-label="{{ t('developer.rotate') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-sm">{{ icon("refresh") }}<span>{{ t("developer.rotate") }}</span><span class="visually-hidden"> {{ label }}</span></button>
+                    <button type="submit" class="btn btn-sm" title="{{ t('developer.rotate') }}">{{ icon("refresh") }}<span>{{ t("developer.rotate") }}</span><span class="visually-hidden"> {{ label }}</span></button>
                   </form>
                   <form method="post" action="{{ url_for('developer.revoke_token', token_id=token.id) }}"
                         data-confirm="{{ t('developer.revoke_confirm', name=label) }}" data-confirm-label="{{ t('developer.revoke') }}" data-confirm-danger>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-sm btn-danger">{{ icon("trash") }}<span>{{ t("developer.revoke") }}</span><span class="visually-hidden"> {{ label }}</span></button>
+                    <button type="submit" class="btn btn-sm btn-danger" title="{{ t('developer.revoke') }}">{{ icon("trash") }}<span>{{ t("developer.revoke") }}</span><span class="visually-hidden"> {{ label }}</span></button>
                   </form>
                 </div>
               </td>
@@ -95,7 +101,23 @@
           <label for="token-name">{{ t("developer.token_name") }} <span class="faint">({{ t("common.optional") }})</span></label>
           <input type="text" id="token-name" name="name" maxlength="64" placeholder="{{ t('developer.token_name_placeholder') }}" autocomplete="off">
         </div>
+        <div class="field">
+          <label for="token-scope">{{ t("developer.token_scope") }}</label>
+          <select id="token-scope" name="scope" aria-describedby="token-scope-hint">
+            <option value="full" selected>{{ t("developer.scope_full") }}</option>
+            <option value="read">{{ t("developer.scope_read") }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="token-expires">{{ t("developer.token_expires") }}</label>
+          <select id="token-expires" name="expires_days">
+            {% for days in expiry_days %}
+            <option value="{{ days }}"{% if days == 0 %} selected{% endif %}>{{ t("developer.expires_never") if days == 0 else t("developer.expires_after", count=days) }}</option>
+            {% endfor %}
+          </select>
+        </div>
         <button type="submit" class="btn btn-primary">{{ icon("plus") }}{{ t("developer.create_token") }}</button>
+        <p class="hint mb-0" id="token-scope-hint">{{ t("developer.scope_hint") }}</p>
       </form>
       {% else %}
       <p class="alert alert-info mb-0" role="status">{{ t("developer.token_limit", count=max_tokens) }}</p>
@@ -119,7 +141,7 @@
         </details>
         {% endfor %}
       </div>
-      <p class="hint mb-0">{{ t("developer.quickstart_hint") }}</p>
+      <p class="hint mt-2 mb-0">{{ t("developer.quickstart_hint") }}</p>
     </section>
 
     <section class="settings-section" aria-labelledby="models-title">
@@ -127,7 +149,7 @@
       {% if models %}
       <p class="muted">{{ t("developer.models_text") }}</p>
       <div class="table-wrap">
-        <table class="table">
+        <table class="table table-stack dev-models">
           <caption class="visually-hidden">{{ t("developer.models_title") }}</caption>
           <thead>
             <tr>
@@ -138,8 +160,11 @@
           </thead>
           <tbody>
             <tr>
-              <td><code>auto</code></td>
-              <td>{{ t("developer.model_auto") }}</td>
+              <td>
+                <span class="row dev-model-id"><code>auto</code>
+                <button type="button" class="icon-btn" data-copy="auto" aria-label="{{ t('developer.copy_model_id', id='auto') }}">{{ icon("copy") }}</button></span>
+              </td>
+              <td class="cell-full">{{ t("developer.model_auto") }}</td>
               <td></td>
             </tr>
             {% for model in models %}
@@ -148,9 +173,11 @@
                 <span class="row dev-model-id"><code>{{ model.ollama_name }}</code>
                 <button type="button" class="icon-btn" data-copy="{{ model.ollama_name }}" aria-label="{{ t('developer.copy_model_id', id=model.ollama_name) }}">{{ icon("copy") }}</button></span>
               </td>
-              <td>{{ model.display_name }}{% if model.enrollment == "new" %} <span class="badge badge-warning">{{ t("developer.model_unreviewed") }}</span>{% endif %}{% if model.description %}<br><span class="hint">{{ model.description }}</span>{% endif %}</td>
+              <td class="cell-full">{{ model.display_name }}{% if model.enrollment == "new" %} <span class="badge badge-warning">{{ t("developer.model_unreviewed") }}</span>{% endif %}{#- Checkpoints found on ComfyUI have no description of their own (older ones stored it in English). -#}
+              {%- set description = t("developer.comfyui_checkpoint") if model.backend == "comfyui" and model.description in ("", none, "ComfyUI checkpoint") else model.description %}
+              {%- if description %}<br><span class="hint">{{ description }}</span>{% endif %}</td>
               <td>
-                <span class="row">
+                <span class="row dev-model-features">
                 {% if model.is_image_generation %}<span class="badge badge-info">{{ t("developer.feature_images") }}</span>{% endif %}
                 {% if model.supports_vision %}<span class="badge badge-primary">{{ t("developer.feature_vision") }}</span>{% endif %}
                 {% if model.is_reasoning %}<span class="badge">{{ t("developer.feature_reasoning") }}</span>{% endif %}

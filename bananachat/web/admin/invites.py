@@ -1,4 +1,7 @@
-"""Invitation codes: create, list with usage, copy the sign-up link, delete."""
+"""Invitation codes: create, list with usage, copy the sign-up link, delete.
+
+An administrator invitation makes a new administrator, so creating one needs a recent
+confirmation (:mod:`._reauth`), as a role change does."""
 
 from __future__ import annotations
 
@@ -10,7 +13,7 @@ from bananachat import db
 from bananachat.db import admin_overview, invites
 from bananachat.security import admin_required
 
-from . import bp
+from . import _reauth, bp
 from ._helpers import FormError, audit, back, choice, integer, me, text, utc_datetime, utc_input_min
 
 EXPIRY_PRESETS = {"": None, "1d": timedelta(days=1), "7d": timedelta(days=7), "30d": timedelta(days=30)}
@@ -22,8 +25,10 @@ def list_invites():
     active, inactive = invites.list_all()
     usage = admin_overview.invite_usage([row["id"] for row in [*active, *inactive]])
     links = {row["id"]: url_for("auth.signup", invite=row["code"], _external=True) for row in active}
+    # Invitations made before the stricter rules keep working; point out the risky ones.
+    weak = {row["id"]: problems for row in active if (problems := invites.weaknesses(row))}
     return render_template("admin/invites.html", section="invites", active=active, inactive=inactive, usage=usage,
-                           links=links, min_datetime=utc_input_min(), now=db.now())
+                           links=links, weak=weak, min_datetime=utc_input_min(), now=db.now())
 
 
 @bp.post("/invites/create", endpoint="invite_create")
@@ -43,6 +48,8 @@ def create_invite():
             expires = db.parse_timestamp(db.now(offset)) if offset else None
         else:
             raise FormError("Choose a valid expiry.")
+        if role == "admin" and not _reauth.confirmed():
+            return back("admin.invites")
         created = invites.create(me()["id"], max_uses=uses, expires_at=expires, assigned_role=role, code=code)
     except (FormError, ValueError) as error:
         flash(str(error), "error")

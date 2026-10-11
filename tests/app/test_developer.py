@@ -128,7 +128,8 @@ def test_overview_page(app, dev):
     html = dev.get("/developer").get_data(as_text=True)
     assert 'style="' not in html
     assert '<progress class="meter' in html and 'value="11.1"' in html  # 10k of 90k (45k x 2 bonus)
-    assert 'value="http://localhost/v1"' in html and "OpenAI(base_url=&#34;http://localhost/v1&#34;" in html
+    # The address is wrapping text (it may break before its last part), not a one-line field.
+    assert '>http://localhost/<wbr>v1</code>' in html and "OpenAI(base_url=&#34;http://localhost/v1&#34;" in html
     assert "llama3.2:3b" in html and "qwen3:4b" in html
     assert "developer.js" in html
 
@@ -211,6 +212,28 @@ def test_playground_reports_backend_failures_in_the_stream(app, dev, fake_ollama
     response = dev.post_json("/developer/playground/send", {"messages": [{"role": "user", "content": "Hi"}]})
     assert response.status_code == 502
     assert ledger(app, dev.user) == []
+
+
+def test_playground_words_provider_failures_in_the_readers_language():
+    """The API answers provider failures in English for clients; the playground translates them, like the chat."""
+    from pathlib import Path
+
+    from bananachat.i18n import catalogs
+    from bananachat.services import completions
+
+    source = (Path(__file__).resolve().parents[2] / "bananachat/static/js/playground.js").read_text()
+    block = re.search(r"const PROVIDER_ERRORS = \{(.*?)\};", source, re.DOTALL)
+    assert block, "playground.js maps API error codes to its own messages"
+    mapping = dict(re.findall(r"(\w+): \"(developer_error_\w+)\"", block.group(1)))
+    api_codes = {code for _status, code, *_ in completions.PROVIDER_ERRORS.values()
+                 if code.startswith("provider_") or code == "model_not_found"}
+    assert api_codes | {"provider_misconfigured"} <= set(mapping), sorted(api_codes - set(mapping))
+    table = catalogs()
+    for key in set(mapping.values()):
+        english, italian = table["en"].get("js." + key), table["it"].get("js." + key)
+        assert english and italian and english != italian, key
+    # Both the JSON answer before streaming and the stream's error event go through the translation.
+    assert source.count("providerMessage(") >= 3
 
 
 def test_playground_requires_csrf(app, dev):

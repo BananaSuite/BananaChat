@@ -2,7 +2,7 @@
 {%- set path = current_path() %}
 <header class="topbar">
   <a class="brand" href="{{ url_for('core.index') }}">
-    <img src="{{ url_for('static', filename='img/favicon.png') }}" alt="" width="28" height="28">
+    <img src="{{ url_for('static', filename='img/favicon.png') }}" alt="" width="32" height="32">
     <span>{{ site_name }}</span>
   </a>
   {% if current_user %}
@@ -49,7 +49,7 @@
         {% for code, name in language_names.items() %}
         <form method="post" action="{{ language_switch_url(code) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" lang="{{ code }}"{% if code == lang %} aria-current="true"{% endif %}>{{ icon("globe") }}{{ name }}{% if code == lang %} ✓{% endif %}</button>
+          <button type="submit" lang="{{ code }}"{% if code == lang %} aria-current="true"{% endif %}>{{ icon("globe") }}{{ name }}{% if code == lang %}<span class="menu-check">{{ icon("check") }}</span>{% endif %}</button>
         </form>
         {% endfor %}
         <hr>
@@ -62,7 +62,7 @@
     {% else %}
     <nav class="row" aria-label="{{ t('nav.language') }}">
       {% for code, name in language_names.items() %}
-      <a class="btn btn-ghost btn-sm" href="{{ language_switch_url(code) }}" lang="{{ code }}"{% if code == lang %} aria-current="true"{% endif %}>{{ code | upper }}</a>
+      <a class="btn btn-ghost btn-sm" href="{{ language_switch_url(code) }}" lang="{{ code }}"{% if code == lang %} aria-current="true"{% endif %} title="{{ name }}"><span aria-hidden="true">{{ code | upper }}</span><span class="visually-hidden">{{ name }}</span></a>
       {% endfor %}
     </nav>
     {% endif %}

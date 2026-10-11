@@ -18,7 +18,7 @@ from banana_ops.files import read_environment, read_json, write_environment, wri
 from banana_ops.manager import Manager
 from banana_ops.models import compute_recovery, inventory
 from compute.inference_proxy import ComputeServer
-from test_managed_lifecycle import Services, checkout, installed, revision  # noqa: F401
+from test_managed_lifecycle import Services, bundled, checkout, installed, revision  # noqa: F401
 from tests.app.fake_ollama import FakeOllama
 
 TOKEN = "c" * 64
@@ -54,8 +54,9 @@ def cli_installer(monkeypatch, tmp_path, checkout):
     """A manager whose CLI installs from the fixture checkout instead of this repository."""
     manager = Manager(tmp_path / "managed", product="BananaChat", system=Services())
     install = manager.install
+    # The fixture has no release tags: it is followed by branch.
     monkeypatch.setattr(manager, "install", lambda _checkout, **options: install(
-        checkout, **{**options, "source_options": {"url": str(checkout), "allow_local": True}}))
+        checkout, **{**options, "source_options": {"url": str(checkout), "allow_local": True, "track": "branch"}}))
     return manager
 
 
@@ -383,7 +384,7 @@ def test_a_managed_package_can_be_restored_onto_an_existing_ollama(tmp_path, che
     manager, _ = installed(tmp_path, checkout, "BananaChat", "compute")
     archive = manager.backup(exclude_model_weights=True)
     restored = Manager(tmp_path / "new-server", product="BananaChat", system=Services())
-    restored.restore(archive, new=True, ollama_url=ollama.url)
+    restored.restore(archive, new=True, ollama_url=ollama.url, trust_source=bundled(archive))
     environment = read_environment(restored.config_dir / "app.env")
     assert environment["BC_COMPUTE_UPSTREAM"] == ollama.url and "OLLAMA_HOST" not in environment
     assert list(profile.service_commands(restored.settings())) == ["bananachat"]
@@ -452,3 +453,243 @@ def test_legacy_import_prepares_the_model_list_once_in_the_data_directory(tmp_pa
     legacy_import.restore_database(manager, _database(tmp_path / "export.db"))
     assert calls == [(manager.root / "data", destination)]
     assert read_json(manager.root / "data/.model-recovery.json")["state"] == "pending"
+
+
+# ----- account recovery on the server with the accounts (single or web) -----------------------------------
+
+def test_reset_two_step_runs_the_application_command_as_the_service(tmp_path, checkout, monkeypatch, capsys):
+    manager, services = installed(tmp_path, checkout, "BananaChat", "web")
+    calls = []
+
+    def application_command(settings, arguments):
+        calls.append((settings["service"], arguments))
+        return json.dumps({"outcome": "reset", "username": "alice", "signed_out": True}) + "\n"
+    services.application_command = application_command
+    assert run_cli(monkeypatch, manager, "reset-two-step", "alice") == 0
+    assert json.loads(capsys.readouterr().out) == {"outcome": "reset", "username": "alice", "signed_out": True}
+    # "--" keeps a name that starts with a dash from being read as an option.
+    assert calls == [("bananachat", ["-m", "bananachat.manage", "reset-two-step", "--", "alice"])]
+    event = read_json(manager.config_dir / "status.json")
+    assert event["operation"] == "reset-two-step" and event["outcome"] == "reset" and event["username"] == "alice"
+
+
+def test_reset_two_step_reports_the_applications_refusal(tmp_path, checkout, monkeypatch, capsys):
+    manager, services = installed(tmp_path, checkout, "BananaChat", "single")
+
+    def application_command(settings, arguments):
+        raise ValueError("BananaChat: No account is named 'bob'.")
+    services.application_command = application_command
+    assert run_cli(monkeypatch, manager, "reset-two-step", "bob") == 1
+    assert "No account is named 'bob'" in capsys.readouterr().err
+
+
+def test_reset_two_step_belongs_to_the_server_with_the_accounts(tmp_path, checkout, monkeypatch, capsys):
+    manager, services = installed(tmp_path, checkout, "BananaChat", "compute")
+    services.application_command = lambda *_: pytest.fail("a compute server has no accounts")
+    assert run_cli(monkeypatch, manager, "reset-two-step", "alice") == 1
+    assert "web server" in capsys.readouterr().err
+
+
+def test_application_commands_run_as_the_service_account_with_its_private_environment(tmp_path, monkeypatch):
+    import subprocess
+
+    from banana_ops import system as system_module
+
+    root = tmp_path / "managed"
+    (root / "config").mkdir(parents=True)
+    (root / "current").mkdir()
+    secret = "s" * 64
+    write_environment(root / "config/app.env", {"BC_DATABASE_PATH": str(root / "data/bananachat.db"),
+                                                "BC_SECRET_KEY": secret})
+    seen = []
+    answers = [subprocess.CompletedProcess([], 0, stdout='{"outcome": "reset"}\n', stderr=""),
+               subprocess.CompletedProcess([], 1, stdout="", stderr="BananaChat: No account is named 'bob'.\n")]
+
+    def run(command, **options):
+        seen.append((command, options))
+        return answers[len(seen) - 1]
+    monkeypatch.setattr(system_module.subprocess, "run", run)
+    settings = {"root": str(root), "service": "chat-a"}
+    arguments = ["-m", "bananachat.manage", "reset-two-step", "--", "alice"]
+    assert system_module.System().application_command(settings, arguments) == '{"outcome": "reset"}\n'
+    command, options = seen[0]
+    assert command == ["runuser", "-u", "chat-a", "--", str(root / "current/.venv/bin/python"), *arguments]
+    # Secrets reach the process through its environment, never its (world-readable) command line.
+    assert secret not in " ".join(command)
+    assert options["env"]["BC_SECRET_KEY"] == secret
+    assert options["env"]["BC_DATABASE_PATH"] == str(root / "data/bananachat.db")
+    assert options["cwd"] == root / "current" and options["umask"] == 0o077
+    assert options["stdin"] == subprocess.DEVNULL and options["timeout"] > 0
+    with pytest.raises(ValueError, match="No account is named 'bob'"):
+        system_module.System().application_command(settings, arguments)
+
+
+# ----- the model management token ------------------------------------------------------------------------
+
+MANAGEMENT = "m" * 64
+
+
+@pytest.fixture
+def managed_gateway(ollama, tmp_path):
+    """A gateway that keeps model management for a second token."""
+    server = ComputeServer(("127.0.0.1", 0), upstream=ollama.url, token=TOKEN, management_token=MANAGEMENT,
+                           maintenance=str(tmp_path / "gateway-maintenance"))
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    server.url = f"http://127.0.0.1:{server.server_port}"
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_pairing_code_may_carry_the_management_token_and_old_codes_still_work():
+    code = backend.encode_pairing("https://compute.example.org", TOKEN, MANAGEMENT)
+    assert backend.pairing_details(code) == {"url": "https://compute.example.org", "token": TOKEN,
+                                             "management_token": MANAGEMENT}
+    assert backend.decode_pairing(code) == ("https://compute.example.org", TOKEN)
+    old = backend.encode_pairing("https://compute.example.org", TOKEN)
+    assert backend.pairing_details(old)["management_token"] is None
+    with pytest.raises(ValueError, match="must differ"):
+        backend.encode_pairing("https://compute.example.org", TOKEN, TOKEN)
+    import base64
+    for value in ("short", 5):
+        body = base64.urlsafe_b64encode(json.dumps({"v": 1, "url": "https://compute.example.org", "token": TOKEN,
+                                                    "management_token": value}).encode()).decode()
+        with pytest.raises(ValueError):
+            backend.pairing_details("bcpair1." + body)
+
+
+def test_a_new_compute_server_keeps_model_management_for_its_own_token(tmp_path, checkout, monkeypatch, capsys):
+    binary = private_file(tmp_path / "ollama", "fixture")
+    manager = cli_installer(monkeypatch, tmp_path, checkout)
+    assert run_cli(monkeypatch, manager, "install", "--mode", "compute", "--domain", "compute.example.org",
+                   "--ollama-binary", str(binary)) == 0
+    output = capsys.readouterr().out
+    data = manager.root / "data"
+    token = (data / ".compute-api-token").read_text().strip()
+    management = (data / ".compute-management-token").read_text().strip()
+    assert len(management) >= 32 and management != token
+    environment = read_environment(manager.config_dir / "app.env")
+    assert environment["BC_COMPUTE_MANAGEMENT_TOKEN_FILE"] == str(data / ".compute-management-token")
+    code = next(word for word in output.split() if word.startswith("bcpair1."))
+    assert backend.pairing_details(code) == {"url": "https://compute.example.org", "token": token,
+                                             "management_token": management}
+    # The gateway starts with exactly this configuration.
+    from compute.inference_proxy import create_server
+    (data / ".compute-api-token").chmod(0o600)
+    (data / ".compute-management-token").chmod(0o600)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = create_server({**environment, "BC_COMPUTE_PORT": str(port)})
+    try:
+        assert server.credential("Bearer " + management) == "management"
+    finally:
+        server.server_close()
+    assert run_cli(monkeypatch, manager, "status") == 0
+    status = capsys.readouterr().out
+    assert json.loads(status)["inference"]["management_token_fingerprint"] == backend.fingerprint(management)
+    assert management not in status
+
+
+def test_updates_do_not_add_a_management_token_to_an_existing_compute_server(tmp_path, checkout):
+    manager, _ = installed(tmp_path, checkout, "BananaChat", "compute")
+    # A compute server installed before the management token existed.
+    environment = read_environment(manager.config_dir / "app.env")
+    environment.pop("BC_COMPUTE_MANAGEMENT_TOKEN_FILE")
+    write_environment(manager.config_dir / "app.env", environment)
+    (manager.root / "data/.compute-management-token").unlink()
+    revision(checkout)
+    assert manager.update()["outcome"] == "complete"
+    assert "BC_COMPUTE_MANAGEMENT_TOKEN_FILE" not in read_environment(manager.config_dir / "app.env")
+    assert not (manager.root / "data/.compute-management-token").exists()
+    assert backend.pairing_details(backend.pairing_code(manager)["pairing_code"])["management_token"] is None
+
+
+def test_reinstalling_an_older_compute_server_keeps_its_one_token(tmp_path, checkout):
+    """install --reuse-data keeps the saved configuration: its web server has no management token."""
+    manager, _ = installed(tmp_path, checkout, "BananaChat", "compute")
+    environment = read_environment(manager.config_dir / "app.env")
+    environment.pop("BC_COMPUTE_MANAGEMENT_TOKEN_FILE")
+    write_environment(manager.config_dir / "app.env", environment)
+    (manager.root / "data/.compute-management-token").unlink()
+    manager.uninstall()
+    manager.install(checkout, mode="compute", ollama_binary=str(tmp_path / "ollama"), reuse_data=True,
+                    source_options={"url": str(checkout), "allow_local": True, "track": "branch"})
+    assert "BC_COMPUTE_MANAGEMENT_TOKEN_FILE" not in read_environment(manager.config_dir / "app.env")
+    assert not (manager.root / "data/.compute-management-token").exists()
+
+
+def test_rotating_the_token_also_separates_model_management(tmp_path, checkout, monkeypatch, capsys):
+    manager, _ = installed(tmp_path, checkout, "BananaChat", "compute")
+    environment = read_environment(manager.config_dir / "app.env")
+    environment.pop("BC_COMPUTE_MANAGEMENT_TOKEN_FILE")
+    write_environment(manager.config_dir / "app.env", environment)
+    (manager.root / "data/.compute-management-token").unlink()
+    assert run_cli(monkeypatch, manager, "compute", "rotate-token") == 0
+    first = backend.pairing_details(json.loads(capsys.readouterr().out)["pairing_code"])
+    path = manager.root / "data/.compute-management-token"
+    assert first["management_token"] == path.read_text().strip() != first["token"]
+    assert read_environment(manager.config_dir / "app.env")["BC_COMPUTE_MANAGEMENT_TOKEN_FILE"] == str(path)
+    assert run_cli(monkeypatch, manager, "compute", "rotate-token") == 0
+    second = backend.pairing_details(json.loads(capsys.readouterr().out)["pairing_code"])
+    assert second["token"] != first["token"] and second["management_token"] != first["management_token"]
+
+
+def test_the_web_server_stores_and_checks_the_management_token(tmp_path, checkout, monkeypatch, managed_gateway,
+                                                               capsys):
+    manager, _ = installed(tmp_path, checkout, "BananaChat", "web")
+    code = backend.encode_pairing(managed_gateway.url, TOKEN, MANAGEMENT)
+    assert run_cli(monkeypatch, manager, "backend", "connect", code, "--yes") == 0
+    output = capsys.readouterr().out
+    environment = read_environment(manager.config_dir / "app.env")
+    assert environment["BC_OLLAMA_API_KEY"] == TOKEN and environment["BC_OLLAMA_MANAGEMENT_API_KEY"] == MANAGEMENT
+    assert json.loads(output)["management_token_fingerprint"] == backend.fingerprint(MANAGEMENT)
+    assert MANAGEMENT not in output
+    assert run_cli(monkeypatch, manager, "backend", "status") == 0
+    assert json.loads(capsys.readouterr().out)["management_token_fingerprint"] == backend.fingerprint(MANAGEMENT)
+
+    # A wrong management token is found before anything changes.
+    before = (manager.config_dir / "app.env").read_text()
+    wrong = backend.encode_pairing(managed_gateway.url, TOKEN, "w" * 64)
+    assert run_cli(monkeypatch, manager, "backend", "connect", wrong, "--yes") == 1
+    assert "management token" in capsys.readouterr().err
+    assert (manager.config_dir / "app.env").read_text() == before
+
+    # A code without one (an older compute server) leaves no stale management token behind.
+    assert run_cli(monkeypatch, manager, "backend", "connect", backend.encode_pairing(managed_gateway.url, TOKEN),
+                   "--yes") == 0
+    capsys.readouterr()
+    assert "BC_OLLAMA_MANAGEMENT_API_KEY" not in read_environment(manager.config_dir / "app.env")
+    token = private_file(tmp_path / "token", TOKEN)
+    management = private_file(tmp_path / "management", MANAGEMENT)
+    assert run_cli(monkeypatch, manager, "backend", "connect", "--url", managed_gateway.url, "--token-file",
+                   str(token), "--management-token-file", str(management)) == 0
+    assert read_environment(manager.config_dir / "app.env")["BC_OLLAMA_MANAGEMENT_API_KEY"] == MANAGEMENT
+
+
+def test_a_web_installation_takes_the_management_token_from_the_pairing_code(tmp_path, checkout, monkeypatch,
+                                                                            managed_gateway):
+    manager = cli_installer(monkeypatch, tmp_path, checkout)
+    code = private_file(tmp_path / "pairing", backend.encode_pairing(managed_gateway.url, TOKEN, MANAGEMENT))
+    assert run_cli(monkeypatch, manager, "install", "--pair-file", str(code), "--yes") == 0
+    environment = read_environment(manager.config_dir / "app.env")
+    assert environment["BC_OLLAMA_API_KEY"] == TOKEN and environment["BC_OLLAMA_MANAGEMENT_API_KEY"] == MANAGEMENT
+
+
+def test_a_web_installation_without_a_pairing_code_takes_a_management_token_file(tmp_path, checkout, monkeypatch,
+                                                                                managed_gateway, capsys):
+    manager = cli_installer(monkeypatch, tmp_path, checkout)
+    token = private_file(tmp_path / "token", TOKEN)
+    management = private_file(tmp_path / "management", MANAGEMENT)
+    code = private_file(tmp_path / "pairing", backend.encode_pairing(managed_gateway.url, TOKEN, MANAGEMENT))
+    assert run_cli(monkeypatch, manager, "install", "--pair-file", str(code), "--backend-management-token-file",
+                   str(management), "--yes") == 1
+    assert "already contains the tokens" in capsys.readouterr().err
+    assert run_cli(monkeypatch, manager, "install", "--mode", "web", "--backend-url", managed_gateway.url,
+                   "--backend-token-file", str(token), "--backend-management-token-file", str(token)) == 1
+    assert "must differ" in capsys.readouterr().err
+    assert not (manager.config_dir / "installation.json").exists()
+    assert run_cli(monkeypatch, manager, "install", "--mode", "web", "--backend-url", managed_gateway.url,
+                   "--backend-token-file", str(token), "--backend-management-token-file", str(management)) == 0
+    assert read_environment(manager.config_dir / "app.env")["BC_OLLAMA_MANAGEMENT_API_KEY"] == MANAGEMENT

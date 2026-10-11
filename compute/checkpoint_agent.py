@@ -21,6 +21,7 @@ import errno
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import signal
@@ -39,6 +40,8 @@ from pathlib import Path
 from typing import Any, BinaryIO, Dict, Mapping, Optional, Tuple
 
 from .http_limits import ConnectionDeadlines
+
+LOG = logging.getLogger("bananachat.checkpoint_agent")
 
 
 STATE_VERSION = 1
@@ -830,7 +833,14 @@ class CheckpointAgent:
                         self._wake.wait(0.5)
                     if self._stop.is_set():
                         return
-                self._run_job(job_id)
+                try:
+                    self._run_job(job_id)
+                except Exception:
+                    LOG.exception("Checkpoint download %s stopped on an unexpected error", job_id)
+                    try:
+                        self._finish_error(job_id, "failed", "internal_error", "the agent could not record the download")
+                    except OSError:
+                        LOG.exception("Could not record the failure of checkpoint download %s", job_id)
         finally:
             if self._stop.is_set():
                 self._close_directories()
@@ -991,8 +1001,8 @@ class CheckpointAgent:
             if response is not None:
                 try:
                     response.close()
-                except Exception:
-                    pass
+                except Exception:  # cleanup must not replace the download's own outcome
+                    LOG.debug("Closing the download response failed", exc_info=True)
             if fd >= 0:
                 try:
                     os.close(fd)

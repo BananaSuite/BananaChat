@@ -3,7 +3,10 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Tiers · Limits{% endblock %}
 {% block admin_content %}
-{% macro tier_fields(tier, prefix) -%}
+{#- entry: the first tier, whose requirements are never checked; they stay editable in the form data
+    (read-only, so they are kept if the tier moves) but look inactive. -#}
+{% macro tier_fields(tier, prefix, entry=false) -%}
+{%- set inactive = (' readonly aria-describedby="' ~ prefix ~ '-entry-hint"') | safe if entry else '' -%}
 <div class="form-grid">
   <div class="field">
     <label for="{{ prefix }}-name" class="required">Name</label>
@@ -14,22 +17,22 @@
     <input type="number" id="{{ prefix }}-multiplier" name="multiplier" required min="0" max="100" step="any" value="{{ ('%g' | format(tier.multiplier)) if tier else 1 }}" aria-describedby="{{ prefix }}-multiplier-hint">
     <span class="hint" id="{{ prefix }}-multiplier-hint">× the 5-hour and weekly tokens where tiers are on.</span>
   </div>
-  <div class="field">
+  <div class="field{{ ' tier-entry-field' if entry }}">
     <label for="{{ prefix }}-age">Account age (days)</label>
-    <input type="number" id="{{ prefix }}-age" name="min_account_days" min="0" max="3650" step="1" value="{{ tier.min_account_days if tier else 0 }}">
+    <input type="number" id="{{ prefix }}-age" name="min_account_days" min="0" max="3650" step="1" value="{{ tier.min_account_days if tier else 0 }}"{{ inactive }}>
   </div>
-  <div class="field">
-    <label for="{{ prefix }}-active">Active days in the last 30</label>
-    <input type="number" id="{{ prefix }}-active" name="min_active_days" min="0" max="30" step="1" value="{{ tier.min_active_days if tier else 0 }}">
+  <div class="field{{ ' tier-entry-field' if entry }}">
+    <label for="{{ prefix }}-active">Active days (of the last 30)</label>
+    <input type="number" id="{{ prefix }}-active" name="min_active_days" min="0" max="30" step="1" value="{{ tier.min_active_days if tier else 0 }}"{{ inactive }}>
   </div>
-  <div class="field">
+  <div class="field{{ ' tier-entry-field' if entry }}">
     <label for="{{ prefix }}-tokens">Tokens used in the last 30 days</label>
-    <input type="text" id="{{ prefix }}-tokens" name="min_tokens_30d" inputmode="decimal" autocomplete="off" maxlength="20" value="{{ (tier.min_tokens_30d | token_input) if tier else 0 }}" aria-describedby="{{ prefix }}-tokens-hint">
+    <input type="text" id="{{ prefix }}-tokens" name="min_tokens_30d" inputmode="decimal" autocomplete="off" maxlength="20" value="{{ (tier.min_tokens_30d | token_input) if tier else 0 }}" aria-describedby="{{ prefix }}-tokens-hint{% if entry %} {{ prefix }}-entry-hint{% endif %}"{% if entry %} readonly{% endif %}>
     <span class="hint" id="{{ prefix }}-tokens-hint">Counted tokens (× each model's weight), e.g. 200k.</span>
   </div>
-  <div class="field">
-    <label for="{{ prefix }}-clean">No suspension in the last (days)</label>
-    <input type="number" id="{{ prefix }}-clean" name="clean_days" min="0" max="3650" step="1" value="{{ tier.clean_days if tier else 0 }}">
+  <div class="field{{ ' tier-entry-field' if entry }}">
+    <label for="{{ prefix }}-clean">Days without a suspension</label>
+    <input type="number" id="{{ prefix }}-clean" name="clean_days" min="0" max="3650" step="1" value="{{ tier.clean_days if tier else 0 }}"{{ inactive }}>
   </div>
 </div>
 {%- endmacro %}
@@ -48,17 +51,18 @@
     {{ csrf() }}
     <div class="section-header">
       <h2 id="tier-{{ tier.id }}-title">{{ loop.index }}. {{ tier.name }} <span class="badge">×{{ "%g" | format(tier.multiplier) }}</span>
-        <span class="badge badge-info">{{ (counts.get(tier.id, 0) + (counts.get(none, 0) if loop.first else 0)) | number }} account(s)</span>
+        {% set tier_accounts = counts.get(tier.id, 0) + (counts.get(none, 0) if loop.first else 0) %}
+        <span class="badge badge-info">{{ tier_accounts | number }} account{{ "" if tier_accounts == 1 else "s" }}</span>
         {% if loop.first %}<span class="badge">entry tier</span>{% endif %}</h2>
       <div class="row">
         <button type="submit" name="action" value="up" class="btn btn-sm" formnovalidate{% if loop.first %} disabled{% endif %} aria-label="Move {{ tier.name }} up">{{ icon("arrow-up") }}</button>
         <button type="submit" name="action" value="down" class="btn btn-sm" formnovalidate{% if loop.last %} disabled{% endif %} aria-label="Move {{ tier.name }} down">{{ icon("arrow-down") }}</button>
       </div>
     </div>
-    {{ tier_fields(tier, "tier-" ~ tier.id) }}
-    {% if loop.first %}<p class="hint mb-0">Accounts start here; its requirements are not checked.</p>{% endif %}
+    {{ tier_fields(tier, "tier-" ~ tier.id, entry=loop.first) }}
+    {% if loop.first %}<p class="hint mb-0" id="tier-{{ tier.id }}-entry-hint">Every account starts in this tier, so its requirements are not checked.</p>{% endif %}
     <div class="form-actions">
-      {% if tiers | length > 1 %}<button type="submit" form="tier-delete-{{ tier.id }}" class="btn btn-ghost">{{ icon("trash") }}Delete</button>{% endif %}
+      {% if tiers | length > 1 %}<button type="submit" form="tier-delete-{{ tier.id }}" class="btn btn-danger">{{ icon("trash") }}Delete</button>{% endif %}
       <button type="submit" name="action" value="save" class="btn btn-primary">Save {{ tier.name }}</button>
     </div>
   </form>

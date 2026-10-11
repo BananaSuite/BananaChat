@@ -45,9 +45,13 @@ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def request(url, *, data=None, headers=None, timeout=120):
+    # urllib would also open file: and other schemes; this tool only talks to the HTTP server it started.
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        raise ValueError(f"Only http:// and https:// addresses can be measured, not {url!r}.")
     started = time.perf_counter()
     try:
-        with OPENER.open(urllib.request.Request(url, data=data, headers=headers or {}), timeout=timeout) as response:
+        prepared = urllib.request.Request(url, data=data, headers=headers or {})  # noqa: S310 - scheme checked above
+        with OPENER.open(prepared, timeout=timeout) as response:
             response.read()
             status = response.status
     except urllib.error.HTTPError as error:

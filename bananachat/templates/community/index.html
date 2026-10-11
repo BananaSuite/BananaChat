@@ -31,14 +31,22 @@
     {% set row = item.row %}
     {% set c = item.consent %}
     <section class="settings-section community-request" id="request-{{ row.id }}" aria-labelledby="request-{{ row.id }}-title">
-      <div class="row-between">
-        <h2 id="request-{{ row.id }}-title">{{ item.summary }}</h2>
-        <span class="hint community-deadline">{{ t("community.closes", date=(row.community_until | datetime)) }}</span>
-      </div>
-      <p class="muted mb-1">{{ t("community.asked_by", user=row.username, date=(row.created_at | datetime)) }}</p>
+      <h2 id="request-{{ row.id }}-title">{{ item.summary }}</h2>
+      {#- One byline under the title: who asked, when, and when voting closes (the dot stays with the first part). -#}
+      <p class="muted mb-1 community-byline">{{ t_html("community.asked_by", user=row.username, date=(row.created_at | datetime_html)) }}&nbsp;· <span class="community-deadline">{{ t_html("community.closes", date=(row.community_until | datetime_html)) }}</span></p>
       <blockquote class="mb-1">{{ row.reason }}</blockquote>
-      <p class="mb-1">{{ t("community.progress", supporters=c.supporters, min=c.min_supporters, objectors=c.objectors, percent=c.percent, approval=c.approval_percent) }}{% if c.needed %} {{ t("community.progress_tokens", pledged=(c.pledged | tokens), needed=(c.needed | tokens)) }}{% endif %}</p>
-      {% if c.needed %}<progress class="meter" value="{{ [c.pledged, c.needed] | min }}" max="{{ c.needed }}" aria-label="{{ t('community.coverage') }}"></progress>{% endif %}
+      <ul class="community-stats">
+        <li>{{ t("community.stat_supporters", supporters=c.supporters, min=c.min_supporters) }}</li>
+        <li>{{ t("community.stat_objections", objectors=c.objectors) }}</li>
+        <li>{{ t("community.stat_favour", percent=c.percent, approval=c.approval_percent) }}</li>
+      </ul>
+      {% if c.needed %}
+      {#- The pledged tokens are the bar's caption, directly above it. -#}
+      <div class="community-tokens">
+        <span class="small" id="request-{{ row.id }}-tokens">{{ t("community.stat_tokens", pledged=(c.pledged | compact), needed=(c.needed | tokens)) }}</span>
+        <progress class="meter" value="{{ [c.pledged, c.needed] | min }}" max="{{ c.needed }}" aria-labelledby="request-{{ row.id }}-tokens"></progress>
+      </div>
+      {% endif %}
 
       {% if item.vote %}
       <p class="hint mb-1">{% if item.vote.stance == "support" %}{{ t("community.you_support", tokens=(item.vote.tokens | tokens)) if item.vote.tokens else t("community.you_support_no_tokens") }}{% else %}{{ t("community.you_object") }}{% endif %}</p>

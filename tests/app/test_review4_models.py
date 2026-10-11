@@ -332,6 +332,24 @@ def test_delete_now_updates_only_that_model_without_a_catalog_sync(app, admin, f
     assert model(app, "qwen3:4b")["missing_at"] == row["missing_at"]
 
 
+def test_a_busy_recovery_record_does_not_undo_a_finished_deletion(app, admin, fake_ollama, monkeypatch):
+    from filelock import Timeout
+
+    from bananachat.services import model_recovery
+
+    sync(app)
+    publish(app, "qwen3:4b")
+
+    def busy(*args, **kwargs):
+        raise Timeout("recovery.lock")
+
+    monkeypatch.setattr(model_recovery, "ignore", busy)
+    qwen = model(app, "qwen3:4b")
+    page = admin.post(f"/admin/models/{qwen['id']}/delete-server", follow_redirects=True).get_data(as_text=True)
+    assert "was deleted from the Ollama server" in page
+    assert model(app, "qwen3:4b")["backend_available"] == 0
+
+
 def test_an_ignored_model_is_published_only_after_it_is_restored(app, admin, fake_ollama):
     sync(app)
     qwen = model(app, "qwen3:4b")

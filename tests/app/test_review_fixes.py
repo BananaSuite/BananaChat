@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 
 from tests.app.conftest import Browser
@@ -33,7 +34,8 @@ def test_an_automatically_approved_quota_is_a_custom_quota(app, make_user, admin
         limits.set_policy("api", policy, None)
         assert credits.get_quota(user["id"]) == (80_000, 0)
     html = admin.get(f"/admin/users/{user['id']}").get_data(as_text=True)
-    assert '80k tokens per 5 hours <span class="badge">custom</span>' in html
+    # The "custom" badge marks the service (its name); the value follows under it.
+    assert re.search(r'<dt>API, playground and images <span class="badge">custom</span></dt>\s*<dd>80k tokens per 5 hours', html)
 
 
 # ----- image reservations -------------------------------------------------------------------------

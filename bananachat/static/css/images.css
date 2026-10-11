@@ -6,8 +6,9 @@
 .img-controls fieldset { border: 0; border-radius: 0; padding: 0; }
 .img-controls legend { padding: 0 0 .4rem; font-size: .88rem; }
 .img-sizes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: .5rem; }
+/* The shape icon has a fixed slot, so the labels line up from tile to tile. */
 .img-size {
-  position: relative; display: flex; align-items: center; gap: .6rem; padding: .55rem .7rem; cursor: pointer;
+  position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: .6rem; padding: .55rem .7rem; cursor: pointer;
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent;
 }
 .img-size:hover { background: var(--hover); }
@@ -16,7 +17,7 @@
 .img-size:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 .img-size-text { display: flex; flex-direction: column; font-size: .9rem; line-height: 1.3; }
 .img-size-text small { color: var(--text-muted); font-size: .78rem; }
-.img-size-shape { flex: none; border: 2px solid currentColor; border-radius: 3px; color: var(--text-muted); width: 20px; height: 20px; }
+.img-size-shape { justify-self: center; border: 2px solid currentColor; border-radius: 3px; color: var(--text-muted); width: 20px; height: 20px; }
 .img-size:has(input:checked) .img-size-shape { color: var(--primary); }
 .img-shape-512x512 { width: 14px; height: 14px; }
 .img-shape-768x768 { width: 17px; height: 17px; }

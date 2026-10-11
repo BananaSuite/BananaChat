@@ -12,12 +12,16 @@ import functools
 import hashlib
 import hmac
 import ipaddress
+import json
+import logging
 import secrets
 import threading
 import time
 from urllib.parse import urlsplit
 
 from flask import abort, current_app, g, jsonify, redirect, request, session, url_for
+from flask.sessions import SecureCookieSessionInterface
+from itsdangerous import BadSignature
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from bananachat import db
@@ -27,6 +31,7 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 # Blueprints authenticated by bearer tokens, never by cookies: CSRF cannot apply.
 BEARER_BLUEPRINTS = frozenset({"api_v1", "worker_api"})
 PASSWORD_MIN, PASSWORD_MAX = 8, 1024
+log = logging.getLogger("bananachat.security")
 
 
 # ----- passwords ------------------------------------------------------------
@@ -76,6 +81,100 @@ def password_problem(password: str, confirmation: str | None = None) -> str | No
     if confirmation is not None and password != confirmation:
         return "auth.password_mismatch"
     return None
+
+
+# ----- session cookie ---------------------------------------------------------
+# Secure session cookies are named "__Host-<name>": browsers accept them only
+# from this exact host over HTTPS, so a sibling subdomain (for example a hosted
+# wiki on another *.school.it name) cannot plant its own session in a visitor's
+# browser. Sessions signed in under the plain name before the switch move to the
+# prefixed name on their first visit within HOST_COOKIE_MIGRATION_SECONDS. The
+# server cannot tell its own old cookie from a copy planted by a sibling
+# subdomain, so a move needs the browser that signed in (users.move_session):
+# a copy in another browser ends that session, each session moves once under
+# a new token, so a saved copy is useless afterwards, and each account moves
+# one session per User-Agent. What remains for that day: someone who controls
+# a sibling subdomain and kept their own pre-switch cookie can sign one fresh
+# browser that sends the same User-Agent into their account. Only signing
+# everyone out at the switch (HOST_COOKIE_MIGRATION_SECONDS = 0) rules it out.
+
+HOST_COOKIE_PREFIX = "__Host-"
+HOST_COOKIE_SINCE_KEY = "security.host_cookie_since"
+HOST_COOKIE_MIGRATION_SECONDS = 24 * 3600
+
+
+class HostCookieSessionInterface(SecureCookieSessionInterface):
+    def __init__(self, legacy_before: float = 0.0):
+        # Plain-name cookies signed after this moment were not issued by this
+        # site (it was already using the prefix) and are never accepted.
+        self.legacy_before = legacy_before
+
+    def get_cookie_name(self, app) -> str:
+        name = app.config["SESSION_COOKIE_NAME"]
+        return HOST_COOKIE_PREFIX + name if app.config["SESSION_COOKIE_SECURE"] else name
+
+    def get_cookie_domain(self, app):
+        return None if app.config["SESSION_COOKIE_SECURE"] else super().get_cookie_domain(app)
+
+    def get_cookie_path(self, app) -> str:
+        return "/" if app.config["SESSION_COOKIE_SECURE"] else super().get_cookie_path(app)
+
+    def open_session(self, app, request):
+        plain = app.config["SESSION_COOKIE_NAME"]
+        if (not app.config["SESSION_COOKIE_SECURE"] or self.get_cookie_name(app) in request.cookies
+                or time.time() >= self.legacy_before + HOST_COOKIE_MIGRATION_SECONDS):
+            return super().open_session(app, request)
+        serializer = self.get_signing_serializer(app)
+        legacy = request.cookies.getlist(plain)
+        if serializer is None or len(legacy) != 1:  # none, or one planted beside the real one
+            return super().open_session(app, request)
+        try:
+            data, signed_at = serializer.loads(legacy[0], max_age=int(app.permanent_session_lifetime.total_seconds()),
+                                               return_timestamp=True)
+        except BadSignature:
+            return self.session_class()
+        if signed_at.timestamp() >= int(self.legacy_before):  # signatures carry whole seconds
+            return self.session_class()
+        # Only a signed-in session moves (older cookie formats sign in again), into the browser that signed in.
+        token = data.get("sid") if isinstance(data, dict) else None
+        token = users.move_session(token, user_agent=request.headers.get("User-Agent", ""),
+                                   started_before=self.legacy_before) if isinstance(token, str) else None
+        if token is None:
+            return self.session_class()
+        moved = self.session_class({**data, "sid": token})
+        moved.modified = True  # re-issued under the prefixed name
+        return moved
+
+    def save_session(self, app, session_obj, response) -> None:
+        super().save_session(app, session_obj, response)
+        plain = app.config["SESSION_COOKIE_NAME"]
+        if app.config["SESSION_COOKIE_SECURE"] and plain in request.cookies:
+            response.delete_cookie(plain, path="/", secure=True, httponly=True, samesite="Lax")
+            response.vary.add("Cookie")
+
+
+def install_session_interface(app) -> None:
+    """Use ``__Host-`` session cookies when they are Secure (call after the database is configured)."""
+    config = app.config["BC"]
+    legacy_before = 0.0
+    if config.secure_cookies:
+        legacy_before = _host_cookie_since()
+    elif config.proxy_mode:
+        log.warning("BC_SECURE_COOKIES is off although BC_PROXY_MODE is on: session cookies are also sent over "
+                    "plain HTTP and are not protected from sibling subdomains.")
+    app.session_interface = HostCookieSessionInterface(legacy_before)
+
+
+def _host_cookie_since() -> float:
+    """When this site first used ``__Host-`` cookies (recorded once, shared by every process)."""
+    now = time.time()
+    db.execute("INSERT INTO runtime_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING",
+               (HOST_COOKIE_SINCE_KEY, json.dumps(now), now))
+    value = db.scalar("SELECT value FROM runtime_state WHERE key=?", (HOST_COOKIE_SINCE_KEY,))
+    try:
+        return float(json.loads(value))
+    except (TypeError, ValueError):
+        return now
 
 
 # ----- current user ---------------------------------------------------------
@@ -335,15 +434,13 @@ def long_request(view):
     return wrapper
 
 
-def long_requests_active() -> int:
-    state = current_app.extensions.get("bananachat.long_requests")
-    return state.active if state else 0
-
-
 # ----- client identity and throttling ---------------------------------------
 
 def client_ip() -> str:
     return request.remote_addr or "unknown"
+
+
+_unproxied_warning: list[bool] = []
 
 
 def client_key() -> str:
@@ -353,6 +450,12 @@ def client_key() -> str:
         parsed = ipaddress.ip_address(address)
     except ValueError:
         return address
+    if parsed.is_loopback and not _unproxied_warning and "X-Forwarded-For" in request.headers \
+            and not current_app.config["BC"].proxy_mode:
+        _unproxied_warning.append(True)
+        log.warning("Requests arrive through a reverse proxy on this host, but BC_PROXY_MODE is off: every "
+                    "visitor shares the proxy's address for sign-in and other per-address limits. "
+                    "Set BC_PROXY_MODE=1.")
     if isinstance(parsed, ipaddress.IPv6Address):
         if parsed.ipv4_mapped:
             return str(parsed.ipv4_mapped)
@@ -387,6 +490,54 @@ def too_many_requests(retry_after: int = 60):
         response = current_app.make_response((render_template("errors/error.html", code=429), 429))
     response.headers["Retry-After"] = str(retry_after)
     return response
+
+
+# ----- device cookies for sign-in throttling --------------------------------
+# A browser that has signed in to an account gets its own failure count for
+# that account, so failed attempts by anyone else cannot lock the owner out.
+
+DEVICE_COOKIE_DAYS = 365
+
+
+def _device_cookie_name() -> str:
+    return current_app.session_interface.get_cookie_name(current_app) + "_device"
+
+
+def _legacy_device_cookie_name() -> str | None:
+    """The device cookie's name before the ``__Host-`` prefix, while it may still be around."""
+    name = current_app.config["SESSION_COOKIE_NAME"] + "_device"
+    return name if name != _device_cookie_name() else None
+
+
+def _device_signature(user, nonce: str) -> str:
+    # The password hash is signed so that a password change retires every
+    # device cookie. Not the session version: each sign-out increments it.
+    message = f"device:{user['id']}:{user['password']}:{nonce}".encode()
+    return hmac.new(current_app.config["SECRET_KEY"].encode(), message, hashlib.sha256).hexdigest()[:32]
+
+
+def device_cookie_nonce(user) -> str | None:
+    """The nonce of this browser's device cookie when it is valid for *user*."""
+    # A legacy cookie is signed for its account and password like a current one,
+    # so a planted one can only describe the planter's own account.
+    legacy = _legacy_device_cookie_name()
+    value = request.cookies.get(_device_cookie_name()) or (request.cookies.get(legacy) if legacy else None)
+    owner, _, rest = (value or "").partition(".")
+    nonce, _, signature = rest.partition(".")
+    if (owner != str(user["id"]) or len(nonce) != 22 or len(signature) != 32
+            or not nonce.isascii() or not signature.isascii()):
+        return None
+    return nonce if hmac.compare_digest(signature, _device_signature(user, nonce)) else None
+
+
+def set_device_cookie(response, user) -> None:
+    nonce = secrets.token_urlsafe(16)
+    response.set_cookie(_device_cookie_name(), f"{user['id']}.{nonce}.{_device_signature(user, nonce)}",
+                        max_age=DEVICE_COOKIE_DAYS * 86400, httponly=True,
+                        secure=current_app.config["SESSION_COOKIE_SECURE"], samesite="Lax")
+    legacy = _legacy_device_cookie_name()
+    if legacy and legacy in request.cookies:
+        response.delete_cookie(legacy, path="/", secure=True, httponly=True, samesite="Lax")
 
 
 # ----- bot protection for anonymous forms -----------------------------------

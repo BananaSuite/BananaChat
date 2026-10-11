@@ -20,7 +20,7 @@
   ("Services", [
     ("workers", "admin.workers", "Workers", "server"),
     ("agents", "admin.agents", "Cloud sessions", "terminal"),
-    ("music", "admin.music", "Music program", "music"),
+    ("music", "admin.music", "Music programme", "music"),
   ]),
   ("System", [
     ("metrics", "admin.metrics", "Metrics", "chart"),
@@ -36,17 +36,18 @@
   {% endfor %}
 {% endfor %}
 {% macro navigation() -%}
-  <a href="{{ url_for('admin.dashboard') }}"{% if section == 'dashboard' %} aria-current="page"{% endif %}>{{ icon("chart") }}<span>Overview</span></a>
+  <a href="{{ url_for('admin.dashboard') }}"{% if section == 'dashboard' %} aria-current="page"{% endif %}>{{ icon("chart") }}<span data-label="Overview">Overview</span></a>
   {% for group_label, links in admin_groups %}
   <div class="admin-nav-group">
     <span class="admin-nav-label">{{ group_label }}</span>
     {% for key, endpoint, label, icon_name in links if has_endpoint(endpoint) %}
-    <a href="{{ url_for(endpoint) }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(icon_name) }}<span>{{ label }}</span></a>
+    <a href="{{ url_for(endpoint) }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(icon_name) }}<span data-label="{{ label }}">{{ label }}</span></a>
     {% endfor %}
   </div>
   {% endfor %}
 {%- endmacro %}
-<div class="admin-shell">
+{#- The administration is English-only: mark it so screen readers use English pronunciation (WCAG 3.1.2). -#}
+<div class="admin-shell"{% if lang != "en" %} lang="en"{% endif %}>
   <nav class="admin-nav admin-nav-desktop" aria-label="Administration">{{ navigation() }}</nav>
   <details class="admin-nav-mobile" data-menu>
     <summary>{{ icon(current.icon) }}<span><span class="muted">Admin</span><span class="admin-nav-divider" aria-hidden="true">/</span>{{ current.label }}</span>{{ icon("chevron-down") }}</summary>

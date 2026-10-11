@@ -13,7 +13,7 @@ from banana_ops import cli
 from banana_ops.files import atomic_write, read_environment, read_json, write_environment, write_json
 from banana_ops.manager import HISTORY_LIMIT, Manager
 from banana_ops.source import GitSource, redact, valid_url
-from test_managed_lifecycle import Services, checkout, installed, populate, revision  # noqa: F401
+from test_managed_lifecycle import Services, bundled, checkout, installed, populate, revision  # noqa: F401
 
 
 def run_cli(monkeypatch, manager, *arguments):
@@ -90,7 +90,7 @@ def test_a_removed_setup_token_is_not_recreated_by_update_or_restore(tmp_path, c
     manager.restore(archive)
     assert key not in read_environment(path)
     restored = Manager(tmp_path / 'restored-root', product=product, system=Services())
-    restored.restore(archive, new=True)
+    restored.restore(archive, new=True, trust_source=bundled(archive))
     assert key not in read_environment(restored.config_dir / 'app.env')
 
 
@@ -300,7 +300,7 @@ def test_a_full_package_restore_does_not_ask_to_download_models(tmp_path, checko
     weights.write_bytes(b'weights')
     archive = manager.backup()
     restored = Manager(tmp_path / 'restored-full', product='BananaChat', system=Services())
-    restored.restore(archive, new=True)
+    restored.restore(archive, new=True, trust_source=bundled(archive))
     assert not (restored.root / 'data/.model-recovery.json').exists()
     assert (restored.root / 'data/models/blobs/fixture').read_bytes() == b'weights'
     with sqlite3.connect(restored.root / 'data/bananachat.db') as connection:
@@ -340,7 +340,7 @@ def test_manual_retry_of_a_failed_revision_requires_retry_failed(tmp_path, check
     capsys.readouterr()
     assert run_cli(monkeypatch, manager, 'update') == 2
     assert '--retry-failed' in capsys.readouterr().err
-    manager.set_updates(True)
+    manager.set_updates(True, allow_unsigned=True)
     assert manager.update(automatic=True)['outcome'] == 'paused'
     assert manager.update(retry_failed=True)['outcome'] == 'complete'
     assert manager.settings()['revision'] == new

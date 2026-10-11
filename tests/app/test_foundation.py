@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sqlite3
-import threading
 from pathlib import Path
 
 import pytest
@@ -196,6 +195,62 @@ def test_login_failures_are_throttled_per_account(client):
     for _ in range(10):
         assert client.post("/login", {"username": "admin", "password": "nope"}).status_code == 401
     assert client.post("/login", {"username": "admin", "password": "admin-password"}).status_code == 429
+
+
+def test_failures_elsewhere_do_not_lock_out_a_browser_that_signed_in_before(app, client):
+    client.login("admin", "admin-password")
+    client.logout()
+    stranger = Browser(app)
+    for _ in range(10):
+        assert stranger.post("/login", {"username": "admin", "password": "nope"}).status_code == 401
+    assert stranger.post("/login", {"username": "admin", "password": "admin-password"}).status_code == 429
+    client.login("admin", "admin-password")
+
+
+def test_a_known_browser_has_its_own_failure_limit(app, client, make_user):
+    make_user("alice")
+    client.login("admin", "admin-password")
+    client.logout()
+    for _ in range(10):
+        assert client.post("/login", {"username": "admin", "password": "nope"}).status_code == 401
+    assert client.post("/login", {"username": "admin", "password": "admin-password"}).status_code == 429
+    # The cookie belongs to admin: alice's sign-in from the same browser is not limited by it.
+    client.login("alice")
+
+
+def test_a_password_reset_retires_device_cookies(app, client, make_user):
+    erin = make_user("erin")
+    old_device = Browser(app)
+    old_device.login("erin")
+    old_device.logout()
+    client.login("admin", "admin-password")
+    client.post(f"/admin/users/{erin['id']}/password", {"password": "new-password-1",
+                                                        "confirm_password": "new-password-1"})
+    stranger = Browser(app)
+    for _ in range(10):
+        assert stranger.post("/login", {"username": "erin", "password": "nope"}).status_code == 401
+    assert old_device.post("/login", {"username": "erin", "password": "new-password-1"}).status_code == 429
+
+
+def test_each_sign_in_issues_a_new_device_cookie(client):
+    client.login("admin", "admin-password")
+    first = client.client.get_cookie("bc_session_device").value
+    client.logout()
+    client.login("admin", "admin-password")
+    assert client.client.get_cookie("bc_session_device").value != first
+
+
+def test_a_forged_device_cookie_is_ignored(app, client):
+    client.login("admin", "admin-password")
+    client.logout()
+    name = "bc_session_device"
+    owner, nonce, signature = client.client.get_cookie(name).value.split(".")
+    stranger = Browser(app)
+    stranger.client.set_cookie(name, f"{owner}.{nonce}.{'0' * len(signature)}")
+    for _ in range(10):
+        assert stranger.post("/login", {"username": "admin", "password": "nope"}).status_code == 401
+    assert client.post("/login", {"username": "admin", "password": "nope"}).status_code == 401
+    assert stranger.post("/login", {"username": "admin", "password": "admin-password"}).status_code == 429
 
 
 def test_open_redirects_are_refused(client):
@@ -401,6 +456,7 @@ def _generate(app, fake_ollama, **overrides):
     from bananachat.services.upstream import CancelToken
 
     cancel = overrides.pop("cancel", None) or CancelToken()
+    consume = overrides.pop("consume", list)
     with app.app_context():
         ollama.sync_catalog()
         for model in catalog.list_models():  # reviewed: models waiting for review are never chosen automatically
@@ -411,7 +467,7 @@ def _generate(app, fake_ollama, **overrides):
         request = inference.TextRequest(user=admin, model=selection.model, fallbacks=selection.fallbacks,
                                         messages=[{"role": "user", "content": "Hi"}],
                                         options=inference.build_options(selection.model), **overrides)
-        return list(inference.generate(request, cancel)), catalog
+        return consume(inference.generate(request, cancel)), catalog
 
 
 def test_generation_streams_and_reports_usage(app, fake_ollama):
@@ -459,8 +515,19 @@ def test_stop_cancels_a_running_generation(app, fake_ollama):
     fake_ollama.reply = " ".join(["token"] * 200)
     fake_ollama.chunk_delay = 0.02
     cancel = CancelToken()
-    threading.Timer(0.3, cancel.cancel, args=("stopped",)).start()
-    events, _ = _generate(app, fake_ollama, cancel=cancel)
+
+    def stop_once_running(stream):
+        # Stop after the first piece of the answer, not after a fixed time: on a loaded machine a timer can fire
+        # while the request still waits in the queue, which raises Cancelled instead (see the queued-stop test
+        # in test_chat.py).
+        events = []
+        for event in stream:
+            events.append(event)
+            if isinstance(event, Delta):
+                cancel.cancel("stopped")
+        return events
+
+    events, _ = _generate(app, fake_ollama, cancel=cancel, consume=stop_once_running)
     assert events[-1].state == "stopped"
     assert 0 < sum(isinstance(event, Delta) for event in events) < 200
 
