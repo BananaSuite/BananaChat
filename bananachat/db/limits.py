@@ -3,7 +3,7 @@ per-model limits, reasoning-effort unlocks, tiers, grants, request-rate buckets 
 
 Decisions (effective limits, dynamic adjustment, tier promotion, effort
 unlocks) live in :mod:`bananachat.services.limits`; this module validates
-what it stores and answers queries. Every amount is in **tokens** (prompt +
+what it stores and answers queries. Every amount is in tokens (prompt +
 completion).
 
 Pool policies are JSON documents (``limit_policy.config``, format 3), one

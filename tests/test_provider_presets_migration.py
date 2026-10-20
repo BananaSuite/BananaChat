@@ -31,7 +31,7 @@ def test_existing_providers_keep_working_after_the_upgrade(tmp_path):
 
 
 def test_gemini_models_are_called_by_the_bare_id_and_keep_their_public_id(tmp_path):
-    """1.6 enrolled Gemini's resource names ("models/…"); 1.7 lists bare IDs (CP-1)."""
+    """1.6 enrolled Gemini's resource names ("models/…"); 1.7 lists bare IDs."""
     import json
 
     with closing(sqlite3.connect(tmp_path / 'v22.db')) as conn:

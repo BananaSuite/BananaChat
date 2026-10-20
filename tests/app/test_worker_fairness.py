@@ -96,7 +96,7 @@ def _fail_on(app, worker_id, token, user, error=_NO_MEMORY):
 
 
 def test_a_worker_that_fails_everyone_for_the_requests_sake_is_paused_and_benches_nobody(pool_app, make_user):  # noqa: F811
-    """CC-2 (final verification): the failure text comes from the worker. A PC that cannot load the model it
+    """The failure text comes from the worker. A PC that cannot load the model it
     advertises, or one that lies, fails every job with "more system memory": after the jobs of a few different
     accounts failed on it (and none succeeded) it is paused like any failing worker, and the accounts it failed
     keep the other workers."""

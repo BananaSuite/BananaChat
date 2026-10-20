@@ -470,7 +470,7 @@ class Manager:
             self.system.resume_containers(journal["containers"])
         self.system.start(list(profile.service_commands(settings)))
         if not self.system.healthy(settings, journal["containers"]):
-            raise RuntimeError("The application or a previously running wiki failed its readiness checks.")
+            raise RuntimeError("The application or one of its hosted instances failed its readiness checks.")
         inactive = [name for name in profile.service_commands(settings) if name not in journal["active"]]
         self.system.stop(inactive)
         self.tenant_maintenance(settings, False)

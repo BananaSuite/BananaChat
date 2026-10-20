@@ -140,7 +140,7 @@
     <p class="muted">An integrity check reads the whole database and can take a while on large installations, so it only runs when you ask for it.</p>
     <form method="post" action="{{ url_for('admin.database_check') }}" data-busy>
       {{ csrf() }}
-      <button type="submit" class="btn">{{ icon("shield") }}Check database integrity</button>
+      <button type="submit" class="btn btn-sm">{{ icon("shield") }}Check database integrity</button>
     </form>
     <div class="section-footer row">
       <a class="btn btn-sm" href="{{ url_for('admin.migration') }}">{{ icon("download") }}Backup &amp; migration</a>

@@ -6,8 +6,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import tempfile
+
+# Working directories under a backup root, made and removed while its lock is held.
+WORKING = ("transfer-", "verify-", "restore-")
 
 
 def directory(path):
@@ -91,6 +95,12 @@ def publish(temporary, destination):
 
 @contextmanager
 def lock(root):
+    """Hold the operation lock of *root*.
+
+    Working directories are made there only while it is held, so one found on
+    taking it was left by an operation that was killed (a timeout, stop or
+    reboot). It can hold ciphertext or a decrypted package: it is removed.
+    """
     directory(root)
     fd = os.open(Path(root) / "operation.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
@@ -98,6 +108,9 @@ def lock(root):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("Another backup operation is running. Retry after it finishes.") from None
+        for path in Path(root).iterdir():
+            if path.name.startswith(WORKING) and path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
         yield
     finally:
         os.close(fd)

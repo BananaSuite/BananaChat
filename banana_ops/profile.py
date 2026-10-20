@@ -6,12 +6,19 @@ import re
 import secrets
 from urllib.parse import urlsplit
 
+from . import cloudflare
 from .files import read_environment
 from .product import PRODUCT
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 HOSTING_STORAGE_NAMES = ("uploads", "attachments", "chat_attachments", "kanban_attachments", "custom_page_files")
+# ``client_ip_headers`` and the ``{client_ip}`` placeholder need Caddy 2.7.
+CLIENT_IP_VERSION = (2, 7)
+# Above Cloudflare's 900 s reuse of idle origin connections: a shorter idle
+# timeout makes Cloudflare reuse a connection Caddy just closed (HTTP 520).
+IDLE_TIMEOUT = "16m"
+CLOUDFLARE_RANGES = " ".join(cloudflare.RANGES)
 
 
 def hosting_storage_link(path, data):
@@ -213,10 +220,53 @@ def health_urls(settings):
     return urls
 
 
-def caddyfile(settings):
+def parse_version(text):
+    """``(2, 10, 2)`` from ``caddy version`` output such as ``v2.10.2 h1:…``; None when unknown."""
+    match = re.search(r"\bv?(\d+)\.(\d+)(?:\.(\d+))?", text or "")
+    return tuple(int(part or 0) for part in match.groups()) if match else None
+
+
+def supports_client_ip(version):
+    """Unknown versions are assumed current (the official packages are)."""
+    return version is None or tuple(version[:2]) >= CLIENT_IP_VERSION
+
+
+def caddy_global(email, cloudflare_proxy, client_ip):
+    """The global options of a single, web or compute server's Caddyfile."""
+    lines = ["{\n"]
+    if email:
+        lines.append(f"\temail {email}\n")
+    if cloudflare_proxy:
+        # TLS-ALPN-01 can never pass Cloudflare's proxy, and Caddy picks challenges at random.
+        lines.append("\tcert_issuer acme {\n\t\tdisable_tlsalpn_challenge\n\t}\n")
+    lines.append(f"\tservers {{\n\t\ttimeouts {{\n\t\t\tread_header 10s\n\t\t\tread_body 5m\n\t\t\tidle {IDLE_TIMEOUT}\n\t\t}}\n")
+    if client_ip:
+        lines.append(f"\t\ttrusted_proxies static {CLOUDFLARE_RANGES}\n\t\tclient_ip_headers CF-Connecting-IP\n")
+    lines.append("\t}\n}\n")
+    return "".join(lines)
+
+
+def caddy_site(domain, port, client_ip):
+    """The site on HTTPS and plain HTTP, for ACME HTTP-01 and the redirect.
+
+    A request Cloudflare received over HTTPS ("Flexible" SSL) is served, not
+    redirected back to itself forever. The application takes the visitor's
+    address from the one-hop ``X-Forwarded-For`` (BC_PROXY_HOPS=1) and sets
+    its own HSTS header.
+    """
+    forwarded = "\t\theader_up X-Forwarded-For {client_ip}\n" if client_ip else ""
+    return (f"{domain}, http://{domain} {{\n\t@needs_https {{\n\t\tprotocol http\n\t\tnot {{\n\t\t\tremote_ip {CLOUDFLARE_RANGES}\n"
+            '\t\t\theader CF-Visitor *"scheme":"https"*\n\t\t}\n\t}\n'
+            f"\tredir @needs_https https://{{host}}{{uri}} 308\n\treverse_proxy 127.0.0.1:{port} {{\n\t\tflush_interval -1\n{forwarded}\t}}\n}}\n")
+
+
+def caddyfile(settings, *, email="", cloudflare_proxy=False, client_ip=True):
+    """The Caddyfile for this server; *cloudflare_proxy* says its DNS records are proxied by Cloudflare."""
     domain = settings.get("domain")
     if not domain:
         raise ValueError("Configure a domain before generating an HTTPS proxy configuration.")
+    if email and not re.fullmatch(r"[^\s{}\"`@]+@[^\s{}\"`@]+", email):
+        raise ValueError("Use a plain e-mail address.")
     port = settings["port"]
     if settings["mode"] == "hosting":
         portal = settings["portal_domain"]
@@ -226,5 +276,4 @@ def caddyfile(settings):
                 f"{domain} {{\n\troot * {site}\n\tfile_server {{\n\t\thide .git .env\n\t}}\n}}\n\n"
                 f"{portal} {{\n\treverse_proxy 127.0.0.1:{port}\n}}\n\n"
                 f":443 {{\n\ttls {{\n\t\ton_demand\n\t}}\n\treverse_proxy 127.0.0.1:{port}\n}}\n")
-    return ("# Managed by BananaSuite\n{\n\tservers {\n\t\ttimeouts {\n\t\t\tread_header 10s\n\t\t\tread_body 5m\n\t\t\tidle 2m\n\t\t}\n\t}\n}\n\n"
-            f"{domain} {{\n\treverse_proxy 127.0.0.1:{port} {{\n\t\tflush_interval -1\n\t}}\n}}\n")
+    return "# Managed by BananaSuite\n" + caddy_global(email, cloudflare_proxy, client_ip) + "\n" + caddy_site(domain, port, client_ip)

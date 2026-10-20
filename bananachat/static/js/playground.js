@@ -20,9 +20,9 @@ const addButton = $("pg-add");
 const requestCode = $("pg-request");
 const pausedNote = $("pg-paused");
 const PAUSE_CODES = new Set(["maintenance", "outage"]);
-// Failures of an external provider (API error codes). The API words them in English for its clients;
-// the page says them in the reader's language, as the chat does.
-const PROVIDER_ERRORS = {
+// Failures of the model, its provider or the server (API error codes). The API words them in English for its
+// clients; the page says them in the reader's language, as the chat does.
+const ERROR_TEXTS = {
   provider_rate_limited: "developer_error_provider_busy",
   provider_overloaded: "developer_error_provider_busy",
   provider_capacity_unavailable: "developer_error_provider_busy",
@@ -31,6 +31,16 @@ const PROVIDER_ERRORS = {
   provider_misconfigured: "developer_error_provider_setup",
   model_not_found: "developer_error_model_gone",
   timeout: "developer_error_timeout",
+  upstream_error: "developer_error_failed",
+  backend_unavailable: "developer_error_server_down",
+  busy: "developer_error_server_busy",
+  queue_full: "developer_error_server_busy",
+  queue_timeout: "developer_error_queue_timeout",
+  too_many_requests: "developer_error_too_many",
+  server_restarting: "developer_error_interrupted",
+  interrupted: "developer_error_interrupted",
+  cancelled: "developer_error_interrupted",
+  account_suspended: "developer_error_account",
 };
 let canSend = true;
 
@@ -168,8 +178,8 @@ function setStatus(text) {
 }
 
 /** The reader's-language text for an API error *code*, else *message* as the server worded it. */
-function providerMessage(code, message) {
-  return Object.prototype.hasOwnProperty.call(PROVIDER_ERRORS, code) ? t(PROVIDER_ERRORS[code]) : message;
+function errorText(code, message) {
+  return Object.prototype.hasOwnProperty.call(ERROR_TEXTS, code) ? t(ERROR_TEXTS[code]) : message;
 }
 
 async function errorFrom(response) {
@@ -180,7 +190,7 @@ async function errorFrom(response) {
     message = payload?.error?.message || message;
     code = payload?.error?.code || code;
   } catch { /* not JSON */ }
-  message = providerMessage(code, message);
+  message = errorText(code, message);
   if (response.status === 401) window.location.reload();
   if (response.status === 503 && PAUSE_CODES.has(code)) {
     // Worded for API clients; the page has its own translated text.
@@ -271,7 +281,7 @@ async function send() {
         setStatus(t("developer_done"));
       } else if (event.type === "error") {
         finished = true;
-        const message = providerMessage(event.code, event.message);
+        const message = errorText(event.code, event.message);
         answer.element.append(el("p", { class: "alert alert-error dev-msg-error", role: "alert", text: message }));
         setStatus(message);
       }
@@ -345,7 +355,7 @@ settings.addEventListener("change", (event) => {
 });
 syncEffort();
 settings.addEventListener("submit", (event) => event.preventDefault());
-// Maintenance or an AI-server outage pauses sending; the page follows the live status.
+// Maintenance or a model-server outage pauses sending; the page follows the live status.
 onStatusChange((state) => {
   canSend = state.canSend;
   sendButton.disabled = !canSend;

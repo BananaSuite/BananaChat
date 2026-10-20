@@ -1,7 +1,6 @@
 version: 2
 updates:
-  # Python dependencies are declared as ranges, so a compromised release inside
-  # a range would install silently. These pull requests make each change visible.
+  # Weekly update pull requests for the requirements.txt ranges; regenerate requirements.lock in the same pull request.
   - package-ecosystem: pip
     directory: /
     schedule:

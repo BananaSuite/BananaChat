@@ -40,8 +40,7 @@ def test_concurrent_owner_followups_keep_pending_bound_without_extra_start(agent
 
     def count(task_id):
         result = original_count(task_id)
-        # The old implementation observed both counts outside the write lock.
-        # Correct admission performs this observation under BEGIN IMMEDIATE.
+        # Only a count read outside a transaction waits at the barrier: admission must read it under BEGIN IMMEDIATE.
         if not db.conn().in_transaction:
             barrier.wait(timeout=10)
         return result

@@ -2,20 +2,22 @@
 
 * A release is an annotated tag signed for its own name (``git tag -s``). A
   signed commit under a tag anyone could push says nothing about which
-  version it is, so it releases nothing (OPS2-03).
+  version it is, so it releases nothing.
 * A higher tag that does not verify is skipped, never a reason to stop
-  updating (OPS2-04).
+  updating.
 * A restore deploys a revision the update source released under such a tag,
-  as the update did, also once its release directory was pruned (OPS2-01),
-  and keeps this server's update source and signature trust (OPS2-05).
+  as the update did, also once its release directory was pruned, and keeps
+  this server's update source and signature trust.
 """
 
+import os
 import shutil
 import subprocess
 
 import pytest
 
 from banana_ops.files import write_json
+from banana_ops.source import GitSource
 from test_managed_lifecycle import Services, checkout, git, installed, revision  # noqa: F401
 
 pytestmark = pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="needs ssh-keygen")
@@ -29,6 +31,27 @@ def keys(tmp_path):
     signers.write_text("maintainer@example.org " + key.with_suffix(".pub").read_text())
     signers.chmod(0o600)
     return key, signers
+
+
+@pytest.fixture
+def keyring(tmp_path, monkeypatch):
+    """A GnuPG keyring the updater consults, holding a key that is not an allowed signer."""
+    if shutil.which("gpg") is None:
+        pytest.skip("needs gpg")
+    home = tmp_path / "gnupg"
+    home.mkdir(mode=0o700)
+    subprocess.run(["gpg", "--homedir", str(home), "--batch", "--pinentry-mode", "loopback", "--passphrase", "",
+                    "--quick-gen-key", "Other <other@example.org>", "ed25519", "sign", "never"],
+                   check=True, capture_output=True)
+    environment = GitSource.environment
+    monkeypatch.setattr(GitSource, "environment", lambda self: {**environment(self), "GNUPGHOME": str(home)})
+    yield home
+    subprocess.run(["gpgconf", "--homedir", str(home), "--kill", "all"], capture_output=True)
+
+
+def openpgp(keyring, *args, **options):
+    return subprocess.run(args, env={**os.environ, "GNUPGHOME": str(keyring)}, capture_output=True, text=True,
+                          check=True, **options).stdout.strip()
 
 
 def signed_tag(source, key, name):
@@ -121,3 +144,40 @@ def test_a_restore_keeps_the_servers_update_source_and_signature_trust(tmp_path,
     assert (manager.config_dir / "source.json").read_bytes() == trusted
     assert (manager.config_dir / "repo.allowed_signers").read_bytes() == allowed
     assert "attacker.example" in result["source_warning"] and "kept" in result["source_warning"]
+
+
+def test_an_openpgp_signed_tag_quoting_an_ssh_signature_releases_nothing(tmp_path, checkout, keys, keyring):
+    key, signers = keys
+    manager = signed_server(tmp_path, checkout, signers)
+    installed_revision = manager.settings()["revision"]
+    signed_tag(checkout, key, "v1.7.0")
+    revision(checkout, "pushed by the holder of a key this machine's GnuPG trusts")
+    openpgp(keyring, "git", "-C", checkout, "-c", "gpg.format=openpgp", "-c", "user.signingkey=other@example.org",
+            "tag", "-s", "-m", "v9.9.9\n\n-----BEGIN SSH SIGNATURE-----\n(quoted from the release notes)", "v9.9.9")
+    result = manager.update()
+    assert result["outcome"] == "current" and result["release"] == "v1.7.0"
+    assert result["skipped_releases"] == ["v9.9.9"]
+    assert manager.settings()["revision"] == installed_revision
+
+
+def test_an_openpgp_signed_commit_with_an_ssh_signature_header_is_refused(tmp_path, checkout, keys, keyring):
+    _key, signers = keys
+    manager, _services = installed(tmp_path, checkout, "BananaChat", "single")
+    manager.configure_source(signers_file=signers)
+    installed_revision = manager.settings()["revision"]
+    header = (f"tree {git('-C', checkout, 'rev-parse', 'HEAD^{tree}')}\nparent {installed_revision}\n"
+              "author Other <other@example.org> 1767225600 +0000\ncommitter Other <other@example.org> 1767225600 +0000\n"
+              "note -----BEGIN SSH SIGNATURE-----")
+    message = "Pushed by the holder of a key this machine's GnuPG trusts\n"
+    signature = openpgp(keyring, "gpg", "--batch", "--armor", "--detach-sign", "--local-user", "other@example.org",
+                        input=header + "\n\n" + message)
+    signed = header + "\ngpgsig " + signature.replace("\n", "\n ") + "\n\n" + message
+    commit = openpgp(keyring, "git", "-C", checkout, "hash-object", "-t", "commit", "-w", "--literally", "--stdin",
+                     input=signed)
+    git("-C", checkout, "update-ref", "refs/heads/main", commit)
+    # Without the format check, this machine's GnuPG would accept it.
+    assert subprocess.run(["git", "-C", checkout, "verify-commit", commit], env={**os.environ, "GNUPGHOME": str(keyring)},
+                          capture_output=True).returncode == 0
+    with pytest.raises(RuntimeError, match="OpenPGP"):
+        manager.update()
+    assert manager.settings()["revision"] == installed_revision

@@ -10,7 +10,7 @@ from flask import g
 from markupsafe import Markup
 
 from bananachat import db
-from bananachat.i18n import translate
+from bananachat.i18n import DECIMAL_COMMA, translate
 
 
 def primary_foreground(color: str) -> str:
@@ -31,13 +31,15 @@ def _language() -> str:
     return getattr(g, "lang", "en")
 
 
-def _display_language() -> str:
-    """For the token and time filters: English on administrator pages (that interface is English-only)."""
+def _is_admin_page() -> bool:
     from flask import has_request_context, request
 
-    if has_request_context() and request.blueprint == "admin":
-        return "en"
-    return _language()
+    return has_request_context() and request.blueprint == "admin"
+
+
+def _display_language() -> str:
+    """For the token and time filters: English on administrator pages (that interface is English-only)."""
+    return "en" if _is_admin_page() else _language()
 
 
 def timeago(value) -> str:
@@ -84,6 +86,26 @@ def time_html(value) -> Markup:
     return Markup('<span class="nowrap">{}</span>').format(text)
 
 
+def local_time(value, style: str = "datetime") -> Markup:
+    """A moment on a user page, shown like the chat's message times: core.js writes it in the reader's
+    time zone and language. The UTC text stays as the fallback, and on administrator pages (always UTC).
+
+    ``style``: ``datetime``; ``date`` (the day only); ``auto`` (the time only when it is today)."""
+    moment = db.parse_timestamp(value)
+    if moment is None:
+        return Markup("—")
+    if style == "date":
+        text = Markup('<span class="nowrap">{}</span>').format(datetime_text(moment, date_only=True))
+    elif style == "auto":
+        text = time_html(moment)
+    else:
+        text = datetime_html(moment)
+    if _is_admin_page():
+        return text
+    iso = moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return Markup('<time datetime="{}" data-local="{}">{}</time>').format(iso, style, text)
+
+
 def break_points(value) -> Markup:
     """An identifier for page text (``account.two_step_enable``) that may wrap only after its dots and
     underscores (``<wbr>``), never in the middle of a word; the text is escaped."""
@@ -100,7 +122,7 @@ def number(value, digits: int = 0) -> str:
     if value is None:
         return "—"
     text = f"{float(value):,.{digits}f}"
-    if _display_language() == "it":
+    if _display_language() in DECIMAL_COMMA:
         text = text.replace(",", " ").replace(".", ",")
     return text
 
@@ -111,7 +133,7 @@ def credits(value) -> str:
 
 
 def compact(value, lang: str | None = None) -> str:
-    """A token amount in a few characters: ``850``, ``45.2k``, ``150k``, ``1.2M`` (decimal comma in Italian)."""
+    """A token amount in a few characters: ``850``, ``45.2k``, ``150k``, ``1.2M`` (decimal comma in Italian and German)."""
     lang = lang or _display_language()
     value = float(value or 0)
     size = abs(value)
@@ -125,7 +147,7 @@ def compact(value, lang: str | None = None) -> str:
                 text = text[:-2]
             if abs(float(text)) >= 1000 and unit != "B":
                 continue
-            return (text.replace(".", ",") if lang == "it" else text) + unit
+            return (text.replace(".", ",") if lang in DECIMAL_COMMA else text) + unit
     return f"{value:g}"
 
 

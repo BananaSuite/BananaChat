@@ -301,6 +301,28 @@ def test_pages(app, people):
         assert stored["quota_fallback_to_local"] == 1 and stored["quota_fallback_to_cloud"] == 0
 
 
+@pytest.mark.parametrize("language,texts", [
+    ("en", ["at least 1 person supports it", "within 1 hour of being sent", "lasts 1 hour ", "at least 1 day old",
+            "Accounts can vote once they are 1 day old.", "With at least 1 supporter and enough consent within 1 hour "]),
+    ("it", ["almeno 1 persona la sostiene", "entro 1 ora dall", "dura 1 ora ", "almeno 1 giorno e",
+            "Gli account possono votare dopo 1 giorno.", "Con almeno 1 sostenitore e consenso sufficiente entro 1 ora "]),
+])
+def test_rules_read_naturally_when_the_settings_are_one(app, people, language, texts):
+    from bananachat.db import users
+
+    asker, ann, *_ = people
+    with app.app_context():
+        _settings(community_min_supporters=1, community_hours=1, community_boost_hours=1, community_min_account_days=1,
+                  community_coverage_percent=0)
+        users.save_preferences(ann["id"], {**users.get_preferences(ann["id"]), "interface_language": language})
+    _submit(app, asker, kind="window", pool="api", tokens=60_000)
+    browser = Browser(app)
+    browser.login("ann")
+    html = browser.get("/community").get_data(as_text=True) + browser.get("/account").get_data(as_text=True)
+    for text in texts:
+        assert text in html
+
+
 def test_migration_14_keeps_requests_and_the_one_pending_rule(app, people):
     import importlib
     import sqlite3

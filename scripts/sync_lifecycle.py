@@ -21,7 +21,7 @@ FIXED_FILES = {
     "banana",
     "scripts/sync_lifecycle.py",
     "tests/test_managed_lifecycle.py",
-    "tests/test_ops_hardening.py",
+    "tests/test_lifecycle_operations.py",
     "tests/test_private_update_source.py",
     "tests/test_release_permissions.py",
     "tests/test_shared_lifecycle.py",
@@ -64,7 +64,7 @@ def product(root):
 
 
 def inventory(root):
-    """Hash common implementation, launcher, maintenance tool, and regressions."""
+    """Hash the shared implementation, launcher, maintenance tool and tests."""
     product(root)
     # Read each checkout's declarations as data, so an older recorded copy can
     # receive a newly shared file without accepting unreviewed local changes.

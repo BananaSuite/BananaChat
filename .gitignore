@@ -8,33 +8,22 @@ build/
 .env
 instance/
 logs/
-app/static/uploads/*
-!app/static/uploads/.gitkeep
 venv/
 .venv/
 .venv-tmp/
 .cache/
 *.db
 .pytest_cache/
-test_output.txt
-config.py.prod
 backups/
-app_output.log
 *.log
 *.agekey
 *.age
 **/.secret_key
-deploy.conf
 .DS_Store
-.opencode/
-.claude/
 .browser-artifacts/
-.browser-artifacts-readiness/
 .ruff_cache/
 
-# Keys, certificates and archives must never be committed. These are not files
-# the project ships; the patterns exist so that a key generated while testing
-# in a working copy cannot be swept up by `git add .`.
+# Keys, certificates and archives made while testing.
 *.key
 *.pem
 *.p12

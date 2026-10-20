@@ -24,7 +24,7 @@
     <section class="settings-section" aria-labelledby="facts-title">
       <h2 id="facts-title">Session</h2>
       <dl class="details">
-        <dt>Status</dt><dd><span class="badge {{ status_badges.get(shown, '') }}">{{ shown | replace("_", " ") }}</span>{% if task.stop_requested and active %} <span class="badge badge-warning">stopping</span>{% endif %}</dd>
+        <dt>Status</dt><dd><span class="badge {{ status_badges.get(shown, '') }}">{{ shown | replace("_", " ") | capitalize }}</span>{% if task.stop_requested and active %} <span class="badge badge-warning">Stopping</span>{% endif %}</dd>
         <dt>Owner</dt><dd>{% if task.username %}<a href="{{ url_for('admin.user_detail', user_id=task.user_id) }}">{{ task.username }}</a>{% else %}<span class="faint">deleted</span>{% endif %}</dd>
         <dt>Model</dt><dd class="mono">{{ task.model_name }}</dd>
         <dt>Parallel agents</dt><dd>{{ "yes" if task.swarm else "no" }}</dd>
@@ -47,7 +47,7 @@
       <h3 class="mt-2">Parallel agents</h3>
       <ul class="stack-sm">
         {% for lane in lanes %}
-        <li><strong>{{ lane.agent }}. {{ lane.title }}</strong> <span class="badge">{{ lane.status | replace("_", " ") }}</span> <span class="muted small">{{ lane.steps_used }} steps</span></li>
+        <li><strong>{{ lane.agent }}. {{ lane.title }}</strong> <span class="badge">{{ lane.status | replace("_", " ") | capitalize }}</span> <span class="muted small">{{ lane.steps_used }} steps</span></li>
         {% endfor %}
       </ul>
       {% endif %}

@@ -59,7 +59,7 @@
         <label for="member-reason">Reason (optional)</label>
         <input type="text" id="member-reason" name="reason" maxlength="500">
       </div>
-      {{ utc_input("expires_at", "member-expires", "Expires (optional)", "Coordinated Universal Time. Leave empty to keep the entry until you remove it.", min=min_datetime) }}
+      {{ utc_input("expires_at", "member-expires", "Expires (optional)", "Time in UTC. Leave empty to keep the entry until you remove it.", min=min_datetime) }}
       <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Add</button></div>
     </form>
   </section>

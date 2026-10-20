@@ -109,8 +109,8 @@ def test_only_administrators_can_allow_sharing_again(app, admin, make_user, fake
 
 
 def test_stopping_sharing_still_blocks_a_chat_its_owner_unshared_first(app, admin, make_user, fake_ollama):
-    """Re-audit verification of CC-6: the owner turning sharing off just before the administrator's click must not
-    make the moderation a no-op that lets them share again at once."""
+    """The owner turning sharing off just before the administrator's click does not make the moderation a
+    no-op that lets them share again at once."""
     from bananachat import db
 
     owner, session_id, _ = _shared_chat(app, make_user, fake_ollama)

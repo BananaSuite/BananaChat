@@ -2,7 +2,7 @@
 // Stop, follow-up messages and the workspace browser. All text from the task
 // (prompts, model output, command output, file contents) is untrusted: it is
 // inserted with textContent, or through the escaping Markdown renderer.
-import { api, ApiError, boot, checkStatusSoon, el, icon, onStatusChange, pageData, setBusy, t, toast } from "./core.js";
+import { api, ApiError, boot, checkStatusSoon, decimal, el, formatDate, icon, onStatusChange, pageData, setBusy, t, toast } from "./core.js";
 import { enhanceMarkdown, renderMarkdown } from "./markdown.js";
 
 const data = pageData();
@@ -13,7 +13,7 @@ const labels = {
   download: t("chat_download_code"),
   code: t("chat_code"),
 };
-const number = new Intl.NumberFormat(boot.lang === "it" ? "it-IT" : "en-US");
+const number = new Intl.NumberFormat({ it: "it-IT", de: "de-DE" }[boot.lang] ?? "en-US");
 const STATUS_BADGE = {
   queued: "badge-info", running: "badge-primary", paused: "badge-warning", finished: "badge-success",
   failed: "badge-danger", stopped: "", out_of_budget: "badge-warning", interrupted: "badge-warning",
@@ -46,13 +46,12 @@ function parseTime(value) {
 
 function clock(value) {
   const date = parseTime(value);
-  // Like the server's times: 24-hour UTC ("15:44 UTC"), so it matches the dates on the page.
-  return date ? `${date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" })} UTC` : "";
+  return date ? formatDate(date, "time") : "";
 }
 
 function duration(ms) {
   if (!ms) return "";
-  return ms < 1000 ? t("agents.duration_ms", { value: ms }) : t("agents.duration_s", { value: (ms / 1000).toFixed(1) });
+  return ms < 1000 ? t("agents.duration_ms", { value: ms }) : t("agents.duration_s", { value: decimal(ms / 1000) });
 }
 
 function markdown(text) {
@@ -368,8 +367,8 @@ function crumbs(path) {
 function fileSize(size) {
   if (typeof size !== "number") return "";
   if (size < 1024) return t("agents.size_bytes", { value: size });
-  if (size < 1024 * 1024) return t("agents.size_kb", { value: (size / 1024).toFixed(1) });
-  return t("agents.size_mb", { value: (size / 1024 / 1024).toFixed(1) });
+  if (size < 1024 * 1024) return t("agents.size_kb", { value: decimal(size / 1024) });
+  return t("agents.size_mb", { value: decimal(size / 1024 / 1024) });
 }
 
 async function loadWorkspace(path, { quiet = false } = {}) {

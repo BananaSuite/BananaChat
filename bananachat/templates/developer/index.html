@@ -59,7 +59,7 @@
               <td class="nowrap" data-label="{{ t('developer.token_created') }}"><time datetime="{{ token.created_at }}" title="{{ token.created_at | datetime }}">{{ token.created_at | timeago }}</time></td>
               <td class="nowrap" data-label="{{ t('developer.token_last_used') }}">{% if token.last_used_at %}<time datetime="{{ token.last_used_at }}" title="{{ token.last_used_at | datetime }}">{{ token.last_used_at | timeago }}</time>{% else %}<span class="muted">{{ t("developer.token_never_used") }}</span>{% endif %}</td>
               <td data-label="{{ t('developer.token_scope') }}">{{ t("developer.scope_" ~ (token.scope or "full")) }}</td>
-              <td class="nowrap" data-label="{{ t('developer.token_expires') }}">{% if token.expires_at %}<time datetime="{{ token.expires_at }}" title="{{ token.expires_at | datetime }}">{{ token.expires_at | datetime(true) }}</time>{% else %}<span class="muted">{{ t("developer.expires_never") }}</span>{% endif %}</td>
+              <td class="nowrap" data-label="{{ t('developer.token_expires') }}">{% if token.expires_at %}{{ token.expires_at | local_time("date") }}{% else %}<span class="muted">{{ t("developer.expires_never") }}</span>{% endif %}</td>
               <td class="actions">
                 <div class="row-end">
                   <details class="menu dev-rename" data-menu>
@@ -133,7 +133,7 @@
         <details class="dev-example"{% if loop.first %} open{% endif %}>
           <summary>{{ title }}{{ icon("chevron-down") }}</summary>
         <figure class="code-block dev-snippet">
-          <header><figcaption class="visually-hidden">{{ title }}</figcaption>
+          <header><figcaption class="visually-hidden">{{ title }}</figcaption><span class="code-lang" aria-hidden="true">{{ "Shell" if snippet.startswith("curl") else "Python" }}</span>
             <button type="button" class="btn btn-sm btn-ghost" data-copy="{{ snippet }}">{{ icon("copy") }}{{ t("common.copy") }}<span class="visually-hidden"> {{ title }}</span></button>
           </header>
           <pre tabindex="0"><code>{{ snippet }}</code></pre>
@@ -173,13 +173,13 @@
                 <span class="row dev-model-id"><code>{{ model.ollama_name }}</code>
                 <button type="button" class="icon-btn" data-copy="{{ model.ollama_name }}" aria-label="{{ t('developer.copy_model_id', id=model.ollama_name) }}">{{ icon("copy") }}</button></span>
               </td>
-              <td class="cell-full">{{ model.display_name }}{% if model.enrollment == "new" %} <span class="badge badge-warning">{{ t("developer.model_unreviewed") }}</span>{% endif %}{#- Checkpoints found on ComfyUI have no description of their own (older ones stored it in English). -#}
+              <td class="cell-full">{{ model.display_name }}{% if model.enrollment == "new" %} <span class="badge badge-warning">{{ t("developer.model_unreviewed") }}</span>{% endif %}{#- ComfyUI checkpoints have no description of their own: show the translated placeholder. -#}
               {%- set description = t("developer.comfyui_checkpoint") if model.backend == "comfyui" and model.description in ("", none, "ComfyUI checkpoint") else model.description %}
               {%- if description %}<br><span class="hint">{{ description }}</span>{% endif %}</td>
               <td>
                 <span class="row dev-model-features">
                 {% if model.is_image_generation %}<span class="badge badge-info">{{ t("developer.feature_images") }}</span>{% endif %}
-                {% if model.supports_vision %}<span class="badge badge-primary">{{ t("developer.feature_vision") }}</span>{% endif %}
+                {% if model.supports_vision %}<span class="badge">{{ t("developer.feature_vision") }}</span>{% endif %}
                 {% if model.is_reasoning %}<span class="badge">{{ t("developer.feature_reasoning") }}</span>{% endif %}
                 </span>
               </td>

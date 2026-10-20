@@ -131,7 +131,7 @@ def test_every_provider_change_needs_a_confirmation_with_or_without_a_key(app, a
 
 
 def test_removing_a_provider_and_its_key_needs_a_confirmation(app, admin):
-    """CP-2."""
+    """Removing a provider deletes its stored key, so it asks for the password again."""
     from bananachat.db import external_providers
     from bananachat.services import provider_secrets
 

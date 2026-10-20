@@ -33,6 +33,8 @@ from bananachat.db import users
 EXPORT_FORMAT_VERSION = 2
 INLINE_IMAGE_MAX_BYTES = 512 * 1024
 INLINE_IMAGES_TOTAL_BYTES = 20 * 1024 * 1024
+# Chats whose messages and attachments are read together.
+SESSION_BATCH = 200
 
 
 def _rows(sql: str, params=()) -> list[dict]:
@@ -62,22 +64,34 @@ def _chats(user_id: str, *, include_images: bool) -> list[dict]:
         f"WHERE s.user_id=?{deleted_clause} ORDER BY s.created_at, s.id",
         (user_id,))
     budget = {"left": INLINE_IMAGES_TOTAL_BYTES}
-    for chat in sessions:
-        chat["is_incognito"] = bool(chat["is_incognito"])
-        messages = _rows(
-            "SELECT m.id, m.role, m.content, m.created_at, m.tokens_in, m.tokens_out, "
-            "a.display_name AS model, a.ollama_name AS model_id FROM chat_messages m "
-            "LEFT JOIN ai_models a ON a.id=m.model_id WHERE m.session_id=? ORDER BY m.id", (chat["id"],))
-        attachments: dict[int, list] = {}
+    for start in range(0, len(sessions), SESSION_BATCH):
+        batch = sessions[start:start + SESSION_BATCH]
+        placeholders = ",".join("?" for _ in batch)
+        ids = [chat["id"] for chat in batch]
+        messages: dict[str, list] = {}
+        for row in db.query(
+                "SELECT m.session_id, m.id, m.role, m.content, m.created_at, m.tokens_in, m.tokens_out, "
+                "a.display_name AS model, a.ollama_name AS model_id FROM chat_messages m "
+                f"LEFT JOIN ai_models a ON a.id=m.model_id WHERE m.session_id IN ({placeholders}) "
+                "ORDER BY m.session_id, m.id", ids):
+            message = row.to_dict()
+            messages.setdefault(message.pop("session_id"), []).append(message)
+        attachments: dict[str, list] = {}
         if messages:
             for row in db.query(
-                    "SELECT t.id, t.message_id, t.kind, t.filename, t.media_type, t.size_bytes, t.sha256, "
-                    "t.extracted_text, t.created_at, "
+                    "SELECT m.session_id, t.id, t.message_id, t.kind, t.filename, t.media_type, t.size_bytes, "
+                    "t.sha256, t.extracted_text, t.created_at, "
                     "CASE WHEN t.image_data IS NOT NULL AND length(t.image_data)<=? THEN t.image_data END AS small_image "
                     "FROM chat_attachments t JOIN chat_messages m ON m.id=t.message_id "
-                    "WHERE m.session_id=? ORDER BY t.created_at, t.id",
-                    (INLINE_IMAGE_MAX_BYTES if include_images else -1, chat["id"])):
+                    f"WHERE m.session_id IN ({placeholders}) ORDER BY t.created_at, t.id",
+                    (INLINE_IMAGE_MAX_BYTES if include_images else -1, *ids)):
                 item = row.to_dict()
+                attachments.setdefault(item.pop("session_id"), []).append(item)
+        for chat in batch:
+            chat["is_incognito"] = bool(chat["is_incognito"])
+            by_message: dict[int, list] = {}
+            # The inline-image budget is spent chat by chat, oldest attachment first.
+            for item in attachments.get(chat["id"], []):
                 image = item.pop("small_image")
                 if item["kind"] == "image":
                     item.pop("extracted_text", None)
@@ -86,10 +100,10 @@ def _chats(user_id: str, *, include_images: bool) -> list[dict]:
                     if included:
                         budget["left"] -= len(image)
                         item["image_base64"] = base64.b64encode(image).decode("ascii")
-                attachments.setdefault(item.pop("message_id"), []).append(item)
-        for message in messages:
-            message["attachments"] = attachments.get(message.pop("id"), [])
-        chat["messages"] = messages
+                by_message.setdefault(item.pop("message_id"), []).append(item)
+            chat["messages"] = messages.get(chat["id"], [])
+            for message in chat["messages"]:
+                message["attachments"] = by_message.get(message.pop("id"), [])
     return sessions
 
 

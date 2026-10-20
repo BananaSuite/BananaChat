@@ -194,8 +194,8 @@ def test_list_prefixes_preserve_numbering_indentation_and_unicode_spacing():
 
 
 def test_long_unmatched_markdown_delimiters_render_promptly_without_losing_text_or_escaping():
-    # A valid answer can contain 1 MiB of text. A code-span regex used to retry
-    # each suffix of an unmatched run, freezing the browser even at 64 KiB.
+    # A valid answer can contain 1 MiB of text; unmatched delimiters in it must
+    # render in linear time.
     script = rf"""
 import assert from "node:assert/strict";
 import {{ renderInline, renderMessage }} from {json.dumps(module_url())};
@@ -252,7 +252,7 @@ def test_links_whose_label_names_another_site_show_the_real_host():
 
 
 def test_a_site_named_anywhere_in_the_label_or_with_look_alike_dots_still_shows_the_real_host():
-    """FNU-1: extra words, dots of other scripts and widths, and invisible characters do not hide a site."""
+    """Extra words, dots of other scripts and widths, and invisible characters do not hide a site."""
     spoofs = [
         "[https://bank.example/login Sign in](https://evil.example/)",
         "[bank.example - official](https://evil.example/)",
@@ -286,7 +286,7 @@ def test_a_site_named_anywhere_in_the_label_or_with_look_alike_dots_still_shows_
 
 
 def test_combining_marks_and_address_literals_in_a_label_still_show_the_real_host():
-    """FNU-1 (final verification): a mark that does not compose, drawn into the underline or over a dot,
+    """A mark that does not compose, drawn into the underline or over a dot,
     does not hide the site a label names, and neither does an IPv4 address."""
     spoofs = [
         "[https://bank\u0332.example/login](https://evil.example/)",  # combining low line, merges with the underline
@@ -342,3 +342,46 @@ def test_code_block_labels_use_display_names_and_keep_the_fence_language_for_dow
     assert '<span class="code-lang">JavaScript</span>' in named and 'data-lang="javascript"' in named
     assert '<span class="code-lang">Code</span>' in plain  # the caller's translated fallback label
     assert '<span class="code-lang">zig</span>' in unknown
+
+
+def test_code_spans_inside_link_labels_are_rendered():
+    (html,) = render("See [the `config` file](https://example.com/config) and `run`.")
+    assert '<a href="https://example.com/config" target="_blank" rel="noopener noreferrer nofollow">' \
+           "the <code>config</code> file</a>" in html
+    assert "<code>run</code>" in html and "�" not in html
+
+
+def test_loose_lists_stay_one_list():
+    """Items separated by blank lines form one loose list, not one list per item."""
+    ordered, bullets, split = render("1. **First**\n\n   Details.\n\n2. Second\n\n3. Third",
+                                     "- a\n\n- b", "1. a\n\nA paragraph.\n\n2. b")
+    assert ordered.count("<ol") == 1 and ordered.count("<li>") == 3
+    assert bullets == "<ul><li>a</li><li>b</li></ul>"
+    assert split.count("<ol") == 2  # a paragraph in between still ends the list
+
+
+def test_link_destinations_may_contain_parentheses():
+    (html,) = render("See [Python](https://en.wikipedia.org/wiki/Python_(programming_language)).")
+    assert html == ('<p>See <a href="https://en.wikipedia.org/wiki/Python_(programming_language)" target="_blank" '
+                    'rel="noopener noreferrer nofollow">Python</a>.</p>')
+
+
+def test_backslash_escapes_and_triple_emphasis():
+    escaped, triple = render(r"5 \* 3 \* 2, snake\_case, \# not a heading and `a\*b`", "***both*** and *one*")
+    assert escaped == r"<p>5 * 3 * 2, snake_case, # not a heading and <code>a\*b</code></p>"
+    assert triple == "<p><strong><em>both</em></strong> and <em>one</em></p>"
+
+
+def test_setext_headings_and_images_as_links():
+    """Text underlined with === or --- is a heading; an image is shown as a link and never loaded."""
+    headings, rule, image, bare = render("Big title\n=========\n\nSmall **title**\n---\ntext",
+                                         "Paragraph\n\n---\n\nNext",
+                                         "See ![a *cat*](https://example.com/cat.png) here",
+                                         "![](https://example.com/x.png)")
+    assert headings == "<h1>Big title</h1><h2>Small <strong>title</strong></h2><p>text</p>"
+    assert rule == "<p>Paragraph</p><hr><p>Next</p>"
+    assert image == ('<p>See <a href="https://example.com/cat.png" target="_blank" rel="noopener noreferrer nofollow">'
+                     'a <em>cat</em></a> here</p>')
+    assert "<img" not in image and "!" not in image
+    assert bare == ('<p><a href="https://example.com/x.png" target="_blank" rel="noopener noreferrer nofollow">'
+                    'https://example.com/x.png</a></p>')

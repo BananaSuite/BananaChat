@@ -52,6 +52,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart={python} {script} run
+Environment="BC_WORKER_ENV_FILE={env_file}"
 EnvironmentFile=-{env_file}
 Restart=on-failure
 RestartSec=10
@@ -138,10 +139,12 @@ def install_linux(system: bool = False):
         env_file = os.path.join(account.pw_dir, ".config", "bananachat-worker.env")
         identity = f"User={account.pw_name}\nGroup={account.pw_gid}"
     for path in (python, script, env_file):
-        if any(char in path for char in '\n\r%"'):
-            raise ValueError("Service paths cannot contain control characters, quotes or systemd specifiers")
+        if any(char in path for char in '\n\r%"\\') or path != path.strip():
+            raise ValueError("Service paths cannot contain control characters, quotes, backslashes, systemd "
+                             "specifiers or surrounding spaces")
+    # EnvironmentFile= takes the rest of the line as an absolute path; quotes would make it a relative one.
     unit_content = _SYSTEMD_UNIT.format(
-        python='"' + python + '"', script='"' + script + '"', env_file='"' + env_file + '"',
+        python='"' + python + '"', script='"' + script + '"', env_file=env_file,
         identity=identity, target="multi-user.target" if system else "default.target",
     )
     if system:

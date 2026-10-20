@@ -1,4 +1,4 @@
-{#- Service notices (maintenance, AI-server outage, backup server, announcements).
+{#- Service notices (maintenance, model-server outage, backup server, announcements).
     Rendered on every page; core.js keeps it current by polling /status. -#}
 {% from "partials/icons.html" import icon %}
 <div class="status-region" id="status-region" data-status-region data-status-user="{{ current_user.id if current_user else 'public' }}">

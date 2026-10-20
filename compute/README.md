@@ -25,7 +25,7 @@ hand. Settings (environment variables):
 | `BC_COMPUTE_MODEL_MANAGEMENT` | `1` | `0` refuses model management (`pull`, `create`, `copy`, `delete`) with any token; pull models on this machine with `ollama pull` instead |
 | `BANANA_MAINTENANCE_FILE` | | While this file exists, model requests answer 503 |
 | `BC_SOURCE_URL` | the BananaChat repository | Corresponding source, offered at `/source` |
-| `BC_COMPUTE_MAX_CONNECTIONS` | `32` | Requests served at once; more get a JSON 503 |
+| `BC_COMPUTE_MAX_CONNECTIONS` | `32` | Requests with the right token served at once; more get a JSON 503 (requests without it do not count) |
 | `BC_COMPUTE_UPSTREAM_TIMEOUT` | `900` | Seconds to wait for Ollama between bytes |
 
 - `GET /health` and `GET /healthz` need no token and answer 200 only while
@@ -128,22 +128,16 @@ Face token is sent only to `huggingface.co` and dropped on redirects.
   them, so the file stays well below its 8 MB limit; an idempotency key is
   remembered only while its job is kept. Records of installed checkpoints are
   never pruned.
-- **Shutdown.** An interrupted download returns to the queue on restart.
-  If its remote read outlasts the shutdown grace period, the worker retains
-  its directory descriptors until it finishes saving that state. Repeated
-  cleanup does not close descriptors that another operation has since reused.
+- **Shutdown.** An interrupted download is queued again on restart.
 - **Deletion** removes only checkpoints the agent installed, and only when
   `If-Match` and the file's content both match. The file is hashed without
   blocking the rest of the API, and deletion is refused (409) if the file
   changed meanwhile.
-- **HTTP.** Every connection has a socket timeout and a hard header deadline
-  (`BC_CHECKPOINT_AGENT_REQUEST_TIMEOUT`).
-  JSON uploads have a hard body deadline too, so trickling bytes cannot retain
-  a connection indefinitely. These deadlines end before authenticated
-  checkpoint processing; background downloads keep their separate limits.
-  At most 16 requests are handled at
-  once (others get 503), and tokens are compared in constant time (a
-  malformed header is a 401).
+- **HTTP.** Each connection has a socket timeout and header and body
+  deadlines (`BC_CHECKPOINT_AGENT_REQUEST_TIMEOUT`); downloads running in the
+  background are not affected. At most 16 requests run at once (others get
+  503), and tokens are compared in constant time (a malformed header is a
+  401).
 - A crash after installing a file but before saving the state leaves a valid
   file the agent does not manage and will never delete.
 

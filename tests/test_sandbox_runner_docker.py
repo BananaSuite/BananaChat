@@ -1,7 +1,7 @@
 """The sandbox runner against a real container engine (skipped when none is available).
 
 These tests start the runner exactly as production does (``create_server``
-with its start-up checks) and prove the isolation from inside real containers.
+with its start-up checks) and check the isolation from inside real containers.
 They need ``docker`` (or ``podman`` with ``BC_SANDBOX_TEST_ENGINE=podman``) and
 the image ``mirror.gcr.io/library/python:3.12-slim`` (pulled beforehand: the
 runner never pulls). Set ``BC_SANDBOX_REQUIRE_DOCKER=1`` to make a missing

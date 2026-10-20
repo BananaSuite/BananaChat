@@ -2,7 +2,7 @@
 
 BananaChat can keep accounts and chats on one machine (the *web* server) and
 run the models on another (the *compute* server). Two stdlib-only programs in
-`compute/` run on compute machines:
+`compute/` run on compute servers:
 
 - the **inference gateway** (`compute/inference_proxy.py`), which puts
   authentication in front of Ollama for the `compute` role; and
@@ -55,13 +55,11 @@ What the gateway does:
   `BC_OLLAMA_MANAGEMENT_API_KEY`), so a leaked inference token cannot delete
   models or download from other registries; that token works for nothing
   else. It can also be switched off with `BC_COMPUTE_MODEL_MANAGEMENT=0`.
-  Compute servers installed before 1.7 keep using one token for both until
-  their next `compute rotate-token` (below), which adds the second one. A
-  compute server installed with 1.7 has both from the start, so pair it with
-  a web server running 1.7 or later: an older one ignores the management
-  token in the pairing code and cannot download or delete models (the
-  gateway answers 403; chat keeps working), until it is updated or the
-  models are pulled on the compute server with `ollama pull`.
+  A compute server installed before 1.7 uses one token for both until
+  `compute rotate-token` (below) adds the second. Pair a compute server that
+  has a management token only with a web server running 1.7 or later: an
+  older one cannot download or delete models (the gateway answers 403; chat
+  keeps working).
 - After 20 wrong tokens within a minute from one address, further wrong tokens
   get 429; the right token keeps working.
 - While the maintenance file exists (updates, restores), model requests get 503
@@ -69,7 +67,9 @@ What the gateway does:
 - Bodies are limited to 32 MB with a `Content-Length` (chunked uploads are
   refused); answers stream through as Ollama produces them; idle clients are
   disconnected after 30 seconds; at most 32 requests run at once and the rest
-  get a JSON 503 with `Retry-After`; every response closes its connection.
+  get a JSON 503 with `Retry-After`; requests without the right token never
+  count towards those 32, so they cannot crowd out the web server; every
+  response closes its connection.
 - The upstream must be a loopback `http://` address, and the token file must
   be private and at least 32 characters, or the gateway refuses to start.
 
@@ -96,7 +96,7 @@ the gateway's loopback port to a loopback port on the web server and pair;
 
 The compute server's operator can see prompts in Ollama's memory and logs;
 the split protects the web server's database, not the conversations
-themselves from whoever runs the compute machine.
+themselves from whoever runs the compute server.
 
 ## Checkpoint agent (image models)
 

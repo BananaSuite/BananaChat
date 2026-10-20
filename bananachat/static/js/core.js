@@ -18,6 +18,31 @@ export function t(key, params = {}) {
   return String(text).replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
 }
 
+const locale = { it: "it-IT", de: "de-DE" }[boot.lang] ?? "en-GB";
+const decimalFormat = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+/** A number with one decimal, written the reader's way ("1.5" in English, "1,5" in Italian and German). */
+export function decimal(value) {
+  return decimalFormat.format(value);
+}
+
+const dateFormats = {
+  datetime: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }),
+  date: new Intl.DateTimeFormat(locale, { dateStyle: "medium" }),
+  time: new Intl.DateTimeFormat(locale, { timeStyle: "short" }),
+};
+
+/**
+ * A moment in the reader's time zone and language ("18 Oct 2026, 14:05"), as every page shows dates.
+ * style: "datetime", "date", "time", or "auto" (the time only when it is today).
+ */
+export function formatDate(value, style = "datetime") {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  if (style === "auto") style = date.toDateString() === new Date().toDateString() ? "time" : "datetime";
+  return (dateFormats[style] || dateFormats.datetime).format(date);
+}
+
 // ----- DOM helpers --------------------------------------------------------
 /** Build an element without innerHTML: el("button", {class: "btn", onclick: fn}, "Label"). */
 export function el(tag, attributes = {}, ...children) {
@@ -111,8 +136,12 @@ export class ApiError extends Error {
   }
 }
 
+const PAUSE_CODES = ["maintenance", "outage"];
+
 function errorMessage(data, status) {
   const error = data && data.error;
+  // The refusal is worded for API clients; the page has its own translated text.
+  if (status === 503 && PAUSE_CODES.includes(error?.code)) return t("status_paused");
   if (typeof error === "string") return error;
   if (error && typeof error.message === "string") return error.message;
   if (status === 413) return t("error_too_large");
@@ -323,8 +352,59 @@ export function debounce(fn, delay) {
 }
 
 // ----- page-wide behaviour ------------------------------------------------
+/**
+ * A menu panel hangs below one edge of its button. Keep it whole on screen: move it back inside when the button sits
+ * near the other side (a page header that wrapped, a table stacked into cards, a larger text size), and lay it over
+ * the page when it opens inside a box that would cut it off (a table that scrolls sideways).
+ */
+function placeMenu(menu) {
+  const panel = menu.querySelector(":scope > .menu-panel");
+  if (!panel) return;
+  for (const name of ["position", "top", "left", "right", "max-height", "translate"]) panel.style.removeProperty(name);
+  if (getComputedStyle(panel).position !== "absolute") return;
+  const gutter = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  let box = panel.getBoundingClientRect();
+  let clipped = false;
+  for (let node = menu.parentElement; node && node !== document.body && !clipped; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    clipped = style.overflowX !== "visible" || style.overflowY !== "visible";
+  }
+  if (clipped) {
+    const button = menu.querySelector(":scope > summary").getBoundingClientRect();
+    const gap = box.top - button.bottom;
+    const below = window.innerHeight - button.bottom - gap - gutter;
+    const above = button.top - gap - gutter;
+    panel.style.position = "fixed";
+    panel.style.left = `${box.left}px`;
+    panel.style.right = "auto";
+    const height = panel.getBoundingClientRect().height;
+    if (height > below && above > below) {
+      panel.style.top = `${Math.max(gutter, button.top - gap - height)}px`;
+      panel.style.maxHeight = `${above}px`;
+    } else {
+      panel.style.top = `${button.bottom + gap}px`;
+      panel.style.maxHeight = `${below}px`;
+    }
+    box = panel.getBoundingClientRect();
+  }
+  const end = document.documentElement.clientWidth - gutter;
+  let shift = 0;
+  if (box.right > end) shift = end - box.right;
+  if (box.left + shift < gutter) shift = gutter - box.left;
+  if (shift) panel.style.translate = `${Math.round(shift)}px 0`;
+}
+
 function initMenus() {
   const menus = () => document.querySelectorAll("details[data-menu][open]");
+  // Attribute changes are seen before the next paint, so the panel never shows in the wrong place.
+  new MutationObserver((records) => {
+    for (const { target } of records) if (target.matches("details[data-menu][open]")) placeMenu(target);
+  }).observe(document.body, { attributes: true, attributeFilter: ["open"], subtree: true });
+  window.addEventListener("resize", () => menus().forEach(placeMenu));
+  // A panel laid over the page follows its button; scrolling inside the panel itself changes nothing.
+  document.addEventListener("scroll", (event) => {
+    for (const menu of menus()) if (!menu.contains(event.target)) placeMenu(menu);
+  }, { capture: true, passive: true });
   document.addEventListener("click", (event) => {
     for (const menu of menus()) if (!menu.contains(event.target)) menu.open = false;
   });
@@ -363,7 +443,10 @@ function initNavigation() {
     topbar.classList.add("nav-fitting");
     const style = getComputedStyle(topbar);
     const navStyle = getComputedStyle(nav);
-    const required = topbar.querySelector(".brand").getBoundingClientRect().width
+    const brand = topbar.querySelector(".brand");
+    // From the mascot, when there is one, to the end of the site name.
+    const required = brand.getBoundingClientRect().right
+      - (topbar.querySelector(".mascot") || brand).getBoundingClientRect().left
       + nav.getBoundingClientRect().width
       + topbar.querySelector(".topbar-end").getBoundingClientRect().width
       + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
@@ -637,9 +720,16 @@ function initDisclosureValidation() {
   document.addEventListener("invalid", (event) => revealDisclosures(event.target), true);
 }
 
-/** A table or code block that scrolls sideways must be reachable with the keyboard. */
-// Section navigation of long settings pages (account, customize): marks the section being read;
-// on phones the links are one scrolling row with a faded edge, and the current one stays in view.
+/** Marks which edge of a sideways-scrolling row has more links (CSS fades that edge). */
+function markOverflow(strip) {
+  const end = strip.scrollWidth - strip.clientWidth - strip.scrollLeft > 2;
+  const start = strip.scrollLeft > 2;
+  if (start || end) strip.dataset.overflow = start && end ? "both" : start ? "start" : "end";
+  else delete strip.dataset.overflow;
+}
+
+// Section navigation of long settings pages (account, customize, administration): marks the section
+// being read; on phones the links are one scrolling row with a faded edge, and the current one stays in view.
 function initSectionNavigation() {
   const strip = document.querySelector("[data-section-nav]");
   if (!strip) return;
@@ -647,13 +737,7 @@ function initSectionNavigation() {
   const sections = links.map((link) => document.getElementById(link.hash.slice(1)));
   if (!links.length) return;
   let shown = -1;
-  const markOverflow = () => {
-    const end = strip.scrollWidth - strip.clientWidth - strip.scrollLeft > 2;
-    const start = strip.scrollLeft > 2;
-    if (start || end) strip.dataset.overflow = start && end ? "both" : start ? "start" : "end";
-    else delete strip.dataset.overflow;
-  };
-  strip.addEventListener("scroll", markOverflow, { passive: true });
+  strip.addEventListener("scroll", () => markOverflow(strip), { passive: true });
   let scheduled = false;
   const update = () => {
     scheduled = false;
@@ -673,7 +757,7 @@ function initSectionNavigation() {
       strip.scrollLeft = link.offsetLeft - (strip.clientWidth - link.offsetWidth) / 2;  // the strip is the offset parent
     }
     shown = current;
-    markOverflow();
+    markOverflow(strip);
   };
   const schedule = () => {
     if (!scheduled) { scheduled = true; requestAnimationFrame(update); }
@@ -684,6 +768,31 @@ function initSectionNavigation() {
   update();
 }
 
+// Tab rows scroll sideways on phones: fade the cut-off edge and start with the current tab in view.
+function initTabRows() {
+  const rows = [...document.querySelectorAll(".tabs")];
+  for (const row of rows) {
+    const current = row.querySelector('[aria-current="page"], [aria-selected="true"]');
+    if (current && row.scrollWidth > row.clientWidth) {
+      row.scrollLeft = current.offsetLeft - (row.clientWidth - current.offsetWidth) / 2;  // the row is the offset parent
+    }
+    row.addEventListener("scroll", () => markOverflow(row), { passive: true });
+    markOverflow(row);
+  }
+  if (rows.length) window.addEventListener("resize", () => rows.forEach(markOverflow));
+}
+
+// Dates on user pages: the server writes UTC (the fallback without scripts); show them like the chat does.
+function initLocalTimes() {
+  for (const node of document.querySelectorAll("time[data-local]")) {
+    const text = formatDate(node.getAttribute("datetime"), node.dataset.local);
+    if (!text) continue;
+    node.title = node.textContent.trim().replace(/\s+/g, " ");
+    node.textContent = text;
+  }
+}
+
+/** A table or code block that scrolls sideways must be reachable with the keyboard. */
 function initScrollRegions() {
   const regions = document.querySelectorAll("pre, .table-wrap");
   const sync = () => regions.forEach((region) => {
@@ -705,3 +814,5 @@ initBusyForms();
 initDisclosureValidation();
 initScrollRegions();
 initSectionNavigation();
+initTabRows();
+initLocalTimes();

@@ -66,7 +66,7 @@ def _result(result: images.ImageResult) -> dict:
 def generate():
     if not _enabled():
         abort(404)
-    blocked = status.guard()  # maintenance or AI-server outage
+    blocked = status.guard()  # maintenance or model-server outage
     if blocked is not None:
         return blocked
     # Like the playground, the Images page shares the API's request rate.

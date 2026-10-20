@@ -1,26 +1,24 @@
 # Code of Conduct
 
-BananaChat is often someone's first look at running a language model on their
-own hardware. Threads here are frequently read by people who are new to that,
-so answer questions the way you would want one answered.
+People run BananaChat on their own machines, often for other people. Keep that
+in mind in issues, pull requests and discussions: someone reading a thread may
+be deciding whether to trust this software with their data.
 
 What is expected:
 
-- Argue with the change, not with whoever proposed it.
-- Be specific about your setup when reporting a problem: model, backend, and
-  what you saw rather than what you expected the model to do.
-- Do not paste conversations belonging to other users. Reproduce with content
-  you are free to publish.
-- Model output is not a bug report on its own. Say what BananaChat itself did
-  wrong: an error, a lost message, a broken quota, a wrong permission.
+- Discuss the change, not the person proposing it.
+- Say what you tested and what you did not.
+- Leave other people's data out of reports. Reproduce a bug with content you
+  are free to publish.
+- A maintainer may decline a feature without a long explanation.
 
-What is not acceptable: harassment, personal attacks, sustained disruption, or
-publishing someone's private information.
+What is not acceptable: harassment, personal attacks, sustained disruption,
+publishing someone's private information, or posting data from someone else's
+installation.
 
-Threads that have stopped being about the software get locked, and comments
-that have stopped being about it get hidden or removed. An account that keeps
-at it gets blocked.
+A maintainer may edit or hide a comment, lock a thread and block an account
+once a discussion has stopped being about the software, and will say why.
 
-Bring a problem to [Luca Zani (OverloadedTech)](https://github.com/OverloadedTech)
-using the contact details on that profile. For anything that looks like a
-vulnerability, use the private route in [SECURITY.md](SECURITY.md) instead.
+Raise a problem with [Luca Zani (OverloadedTech)](https://github.com/OverloadedTech)
+through the contact details on that profile. Vulnerabilities do not belong
+here: [SECURITY.md](SECURITY.md) has the private route for those.

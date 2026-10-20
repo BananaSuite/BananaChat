@@ -1,0 +1,11 @@
+{
+  "binary": "/opt/codex/bin/codex",
+  "timeout_seconds": 180,
+  "profiles": {
+    "account-one": {
+      "codex_home": "/srv/bananachat-codex/account-one",
+      "discovery": "automatic",
+      "usage_source": "automatic"
+    }
+  }
+}

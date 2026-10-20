@@ -3,11 +3,11 @@
 Additive only, safe to run again.
 
 * ``ai_models.backend`` also allows ``'claude'`` (subscription models served
-  through the Claude site pool, see ``services.claude_pool``). The table is
-  rebuilt with the same columns, rows and indexes, only the CHECK widened.
+  through the Claude site pool, removed by v21). The table is rebuilt with
+  the same columns, rows and indexes, only the CHECK widened.
 * New ``claude_accounts`` table: the pooled subscription accounts (label,
-  status, reported 5-hour and weekly quota) whose remaining capacity shrinks
-  the limits of ``provider='claude'`` models via the capacity hook.
+  status, reported 5-hour and weekly quota) whose remaining capacity shrank
+  the limits of ``provider='claude'`` models (removed by v21).
 """
 
 from sqlite_migrations import execute_script

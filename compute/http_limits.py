@@ -75,16 +75,30 @@ class FailureLimiter:
 
     def blocked(self, peer: str) -> bool:
         with self._lock:
-            events = self._failures.get(peer)
-            if not events:
-                return False
-            now = self.clock()
-            while events and now - events[0] > self.window:
-                events.popleft()
-            return len(events) >= self.limit
+            return self._blocked(peer)
 
     def failed(self, peer: str) -> None:
         with self._lock:
-            if peer not in self._failures and len(self._failures) >= 1024:
-                self._failures.pop(next(iter(self._failures)))
-            self._failures.setdefault(peer, deque(maxlen=self.limit * 2)).append(self.clock())
+            self._count(peer)
+
+    def record(self, peer: str) -> bool:
+        """Count a failure unless *peer* is blocked already; False when it is (nothing is counted)."""
+        with self._lock:
+            if self._blocked(peer):
+                return False
+            self._count(peer)
+            return True
+
+    def _blocked(self, peer: str) -> bool:
+        events = self._failures.get(peer)
+        if not events:
+            return False
+        now = self.clock()
+        while events and now - events[0] > self.window:
+            events.popleft()
+        return len(events) >= self.limit
+
+    def _count(self, peer: str) -> None:
+        if peer not in self._failures and len(self._failures) >= 1024:
+            self._failures.pop(next(iter(self._failures)))
+        self._failures.setdefault(peer, deque(maxlen=self.limit * 2)).append(self.clock())

@@ -16,7 +16,7 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "legacy_v4.sql"
 
 
 def _database(path, *, username="alice", busy=False):
-    """A database written by the previous release, optionally mid-generation."""
+    """A database written by the code from before the rewrite, optionally mid-generation."""
     with closing(sqlite3.connect(path)) as conn:
         conn.executescript(FIXTURE.read_text())
         conn.execute("UPDATE users SET username=? WHERE username='alice'", (username,))

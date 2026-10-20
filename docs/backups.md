@@ -7,11 +7,11 @@ A managed BananaChat server can back up to a dedicated private GitHub or Forgejo
 | `single` or `web` | Accounts, chats, attachments, settings, matching source, credentials, and model download recipes. |
 | `compute` | Managed configuration and API token, matching source, and the Ollama model names (read from an existing Ollama's API when one is used with `--ollama-url`; the backup stops with an explanation if that Ollama does not answer). |
 
-Git backups **exclude model weights**. The web and compute servers need separate packages. External ComfyUI installations, checkpoint-agent directories, GPU drivers, and files outside the managed data directory need their own backup. The installed operating-system packages are reinstalled through the deployment prerequisites. [BananaWiki](https://github.com/BananaSuite/BananaWiki) and [BananaVibe](https://github.com/BananaSuite/BananaVibe) store their own backups in the same encrypted format; follow the backup documentation in those repositories.
+Git backups **exclude model weights**. The web and compute servers need separate packages. External ComfyUI installations, checkpoint-agent directories, GPU drivers, and files outside the managed data directory need their own backup. The installed operating-system packages are reinstalled through the deployment prerequisites. [BananaWiki](https://github.com/BananaSuite/BananaWiki) stores its own backups in the same encrypted format; follow its backup documentation.
 
 ## Set up a destination
 
-Install Git and [age](https://age-encryption.org/) through your operating-system packages. On Debian/Ubuntu, `sudo apt install age` supplies `age` and `age-keygen`. No model API is involved in server backups.
+Install Git and [age](https://age-encryption.org/) through your operating-system packages. On Debian/Ubuntu, `sudo apt install age` supplies `age` and `age-keygen`.
 
 Create a private repository for backups. It may be empty. Keep it separate from application source; one backup repository can hold multiple installations if each has a distinct series name. Give the web and compute servers different series names. GitHub Enterprise and Forgejo at a custom HTTPS address are supported. Backup transport uses HTTPS; SSH remains an option for the separate source updater.
 
@@ -25,7 +25,9 @@ sudo bananachat backups prune --token-file /root/banana-backup-admin.token
 
 `prune` keeps the `--keep` newest authenticated snapshots of the series (see below). With deletion blocked on the forge, lift the rule while pruning, or delete old `banana-backups/bananachat/SERIES/…` branches in the forge's interface.
 
-Retention (`prune`, and the pruning after each upload) counts only the snapshots the series' recovery key authenticated, newest first, and deletes only what is older than the `--keep`-th of them: it never deletes while fewer than `--keep` authenticated snapshots would remain. Snapshot IDs are branch names chosen by whoever can push, so unauthenticated snapshots newer than that are kept and not counted, and IDs dated in the future (beyond a day of clock skew) or that are no dates are neither counted nor deleted: branches pushed with a stolen upload token can neither make retention delete genuine snapshots nor break later uploads. Both are listed in the result's `warnings`; check who pushed them and delete them on the forge. Retention reads only each snapshot's index where the forge allows partial fetches (GitHub does); elsewhere it downloads each snapshot it checks.
+Retention (`prune`, and the pruning after each upload) counts only snapshots that the series' recovery key authenticated, newest first. It deletes only what is older than the `--keep`-th of them, so it never leaves fewer than `--keep` authenticated snapshots. Snapshot IDs are branch names that anyone who can push may choose, so retention leaves other branches alone: unauthenticated snapshots newer than the cut-off are kept and not counted, and IDs dated more than a day in the future, or that are not dates, are neither counted nor deleted. Branches pushed with a stolen upload token therefore cannot make retention delete genuine snapshots or break later uploads. Retention lists them in the result's `warnings`; check who pushed them and delete them on the forge.
+
+Where the forge allows partial fetches (GitHub does), retention reads only each snapshot's index; elsewhere it downloads each snapshot it checks.
 
 ```sh
 sudo bananachat backups keygen --output /root/banana-recovery.agekey
@@ -41,7 +43,7 @@ sudo bananachat backups status
 
 For Forgejo, use `--forge forgejo --repo https://forge.example.org/YOUR_TEAM/private-backups.git`. Set `--username` to the account your forge requires; GitHub installation tokens commonly use `x-access-token`. A custom service name installed with `install --name` replaces `bananachat` in these commands.
 
-**Save an offline copy of the recovery key before relying on this backup.** Losing the server and that key makes the encrypted backups unrecoverable, even with repository access. The operator-only working copy and backup token live under `config/remote-backup/`; neither is included in its own backup. `keygen` prints the public recipient and the key filename, never the secret identity. Keep the original key for older snapshots when rotating keys; use a new series name for the new key.
+**Save an offline copy of the recovery key before relying on this backup.** Losing the server and that key makes the encrypted backups unrecoverable, even with repository access. The operator-only working copy and backup token live under `config/remote-backup/`; neither is included in its own backup. `keygen` prints the public recipient and the key filename, never the secret identity. Keep the original key for older snapshots when rotating keys; use a new series name for the new key. Running `configure` again (for a new token, `--keep` or `--max-mib`) without `--key-file` keeps the key the server holds; a different key replaces it only with `--replace-key`, since only the old key restores the snapshots made with it.
 
 The recovery key also authenticates every snapshot: each `index.json` carries an HMAC-SHA256, keyed from the recovery key, over the snapshot's identity and the checksum of every encrypted part. Encryption alone cannot do this, because anyone who knows the public recipient (it is in the series' `identity` branch) can encrypt a package of their own. Restores, downloads and `verify` check the tag before decrypting anything, so a snapshot pushed by someone with write access to the repository but without the recovery key is refused.
 
@@ -63,7 +65,7 @@ The systemd backup timer is independent of automatic updates. The interval is in
 
 `journalctl -u bananachat-backup.service` shows scheduled failures. `backups status` includes the last verified remote snapshot and any retention warnings. If upload fails, the tool keeps the private local package and reports its path; free that disk space only after recovering a verified off-server copy. Periodically check the journal and rehearse restoration. The system does not send external failure notifications.
 
-The tool stops application writers only while creating the consistent local package, then restores their prior running state before network transfers. Busy or interrupted maintenance fails visibly and uses the existing recovery journal; it does not claim an incomplete upload as a successful backup.
+The tool stops application writers only while creating the consistent local package, then restores their prior running state before network transfers. Busy or interrupted maintenance fails visibly and uses the recovery journal. A failed upload is reported as failed.
 
 ## Restore or move servers
 
@@ -83,7 +85,15 @@ sudo bananachat backups restore SNAPSHOT_ID
 
 `download` produces an ordinary private **unencrypted** portable package. Existing output files are never overwritten. `verify` checks the snapshot's authentication tag, its identity, the age decryption, and the full package checksum; a restore additionally validates the package, the application database, the deployment, and readiness.
 
-Snapshots uploaded before snapshots were authenticated carry no tag, and look exactly like a snapshot forged by someone who can push to the repository. `verify`, `download` and `restore` refuse them unless you add `--allow-unauthenticated`, and then print a warning. Even then a snapshot is refused that cannot be from before authentication: one dated at or after the series' first authenticated snapshot (every authenticated snapshot records it, so it holds after retention deleted that one), or dated in the future. Use it only for a snapshot you know predates the upgrade, from a repository whose writers you all trust, and take a new authenticated backup afterwards.
+Snapshots uploaded by 1.6 have no authentication tag, so they cannot be told apart from forged ones. `verify`, `download` and `restore` refuse them unless you pass `--allow-unauthenticated`, and then print a warning. Even then, a snapshot dated at or after the series' first authenticated snapshot, or dated in the future, is refused. Every authenticated snapshot records that date, so the check still works after retention deleted the first one. Use the option only for a snapshot you know predates the upgrade, from a repository whose writers you all trust, and take a new authenticated backup afterwards.
+
+A server that goes back to 1.6 with backups scheduled keeps uploading unauthenticated snapshots to the same series, and once 1.7 runs again they are refused like forgeries, because they are newer than its authenticated ones. Run `backups disable` before going back and `backups enable` after updating again, or configure another series name under 1.6. To recover such a snapshot by hand when you know this server made it, fetch its branch, decrypt its parts in order, and drop the two header lines:
+
+```sh
+git clone --depth 1 --branch banana-backups/bananachat/SERIES/SNAPSHOT_ID https://github.com/YOUR_TEAM/private-backups.git snapshot
+cat snapshot/part-*.age | age --decrypt --identity /root/banana-recovery.agekey | tail -n +3 > /root/recovered-chat.tar.gz
+sudo bananachat restore /root/recovered-chat.tar.gz
+```
 
 A package contains the source code of the release it was made with, and restoring it deploys that code, which runs as the service and, through the installed `bananachat` command, as root. A restore therefore uses the code bundled in a package only when nothing better is available:
 
@@ -116,7 +126,7 @@ The saved mode is restored automatically. `--name` on `backups restore` selects 
 
 Restoring a backup never starts a registry download by itself, and it asks only about models that are actually missing. Old queued or pulling jobs in the restored database are cancelled before workers can see them.
 
-**On the web (or single) server** — the one place to decide in a two-server setup, since it downloads through the compute gateway:
+**On the web (or single) server**, the one place to decide in a two-server setup, since it downloads through the compute gateway:
 
 1. After the restore, BananaChat compares the saved model list with what its model server (the compute server, or the local Ollama of a single server) and ComfyUI have. It does this in the background every minute and whenever an administrator opens the overview or the models page.
 2. If everything is installed, the list is closed silently and nothing is shown.
@@ -125,7 +135,7 @@ Restoring a backup never starts a registry download by itself, and it asks only 
 
 A compute server that is restored from its own backup, or replaced by an empty one, needs no action on its side: the web server notices the published models its compute server no longer has and shows the same card ("published models not installed"). The restore command says which of these happens next.
 
-Ollama names include the saved tags and supported Hugging Face GGUF names. Hugging Face safetensors recipes retain the repository, revision, filename, target name, expected size, and SHA-256 from successful checkpoint downloads. The existing authenticated checkpoint agent performs those downloads and verifies their digest. Preserve or recreate its credentials and enable the integration before downloading them. A manually installed model or cleared pull history may have no retained recipe; the card lists it as needing manual action until it is installed or dismissed. Custom weights that cannot be downloaded again need a separate full backup.
+Ollama names include the saved tags and supported Hugging Face GGUF names. Hugging Face safetensors recipes retain the repository, revision, filename, target name, expected size, and SHA-256 from successful checkpoint downloads. The checkpoint agent performs those downloads and verifies their digest. Preserve or recreate its credentials and enable the integration before downloading them. A manually installed model or cleared pull history may have no retained recipe; the card lists it as needing manual action until it is installed or dismissed. Custom weights that cannot be downloaded again need a separate full backup.
 
 A compute server used **without** a web server (for API clients only) downloads its saved list from the command line; installed models are skipped and the list closes itself when nothing is missing:
 
@@ -138,11 +148,15 @@ sudo bananachat models skip
 
 The explicit `--yes` approves the displayed missing Ollama models; they are downloaded through the configured `BC_COMPUTE_UPSTREAM`. Registry changes, gated or private repositories, missing artifacts, disk limits, or incompatible hardware can require manual intervention; the original source and digest are kept for review.
 
-Existing chat history is preserved. A missing selected text model falls back to an installed model authorised for that user; vision attachments still require a vision model. A model that fails before producing output can trigger a bounded retry with another authorised model, and the chat displays the substitution. The tool never widens model access or substitutes an unapproved tag. It does not combine a partial answer with output from a different model. If no suitable model works, it reports the error and keeps the conversation.
+Chat history is kept. When a chat's text model is missing, an installed model the user may use answers instead; images still need a vision model. A model that fails before producing output can be retried with another permitted model, and the chat shows the substitution. If no suitable model works, the error is shown and the conversation is kept.
 
 `sudo bananachat backup --exclude-model-weights --output /root/chat-data.tar.gz` creates the same lightweight local package. Plain `backup` and `migrate` still include managed weights, for a complete copy that needs no download.
 
-The packages taken automatically before an update, a restore or a legacy database import leave the weights in place instead: those operations never change them, and compressing a model library into every such package would keep the service down for as long as that takes and need its size again in free disk space. If the operation fails, the rollback puts the data back and keeps the weights that are already there; a restore sets the replaced weights aside until it has succeeded. Restoring such a package (or any weight-free package) on the same server keeps the models it already has, and the card above appears only for models that are really missing. Before stopping anything, an update or restore checks that there is room for its package and for extracting it again in a rollback, and refuses with the space it needs otherwise.
+The packages taken automatically before an update, a restore or a legacy database import leave the weights out. Those operations never change the weights, and compressing a model library into each package would keep the service down longer and need its size again in free disk space.
+
+- If the operation fails, the rollback restores the data and keeps the weights already on disk. A restore sets the replaced weights aside until it has succeeded.
+- Restoring a package without weights on the same server keeps the models it already has; the card above appears only for models that are really missing.
+- Before stopping anything, an update or restore checks that there is room for its package and for extracting it again in a rollback. If there is not, it refuses and says how much space it needs.
 
 ## Retention and Git limits
 
@@ -150,4 +164,4 @@ Each snapshot is an independent commit on `banana-backups/bananachat/SERIES/SNAP
 
 The default maximum is 512 MiB per compressed package, configurable up to 1024 MiB. Encryption prevents efficient deduplication, so retained full snapshots consume storage. GitHub/Forgejo repository and push quotas still apply; splitting files does not bypass those quotas. Retention removes branch references; the hosting provider controls when unreachable objects and reflogs are garbage-collected, so space may not shrink immediately. Deleted snapshots may remain recoverable by the forge operator until its retention and garbage collection complete.
 
-Allow staging space for the local package, encryption, and a verification download. Downloads reserve three times the configured package limit plus 128 MiB; upload needs additional package-sized working space. Larger installations should keep using suitable file or object backup storage. A backup in the same forge or account does not replace an independent offline copy and a tested recovery key.
+Allow staging space for the local package, encryption, and a verification download. Under `config/remote-backup/`, `verify`, `download` and `restore` reserve three times the configured package limit plus 128 MiB; `run` needs four times the package plus 144 MiB and checks that before it uploads anything. Working files that an interrupted command leaves there are removed by the next backup command. Larger installations should keep using suitable file or object backup storage. A backup in the same forge or account does not replace an independent offline copy and a tested recovery key.

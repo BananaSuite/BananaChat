@@ -1,39 +1,7 @@
 """Authenticated streaming gateway in front of a loopback Ollama (the ``compute`` server role).
 
-Run from the repository root with ``python -m compute.inference_proxy``; it uses
-only the standard library (managed compute installations have no extra
-packages). Environment:
-
-* ``BC_COMPUTE_HOST`` / ``BC_COMPUTE_PORT`` - listen address (127.0.0.1:11435);
-* ``BC_COMPUTE_UPSTREAM`` - the Ollama to protect; loopback ``http://`` only
-  (http://127.0.0.1:11434);
-* ``BC_COMPUTE_TOKEN_FILE`` - the bearer token, a private (0600) regular file
-  holding at least 32 characters;
-* ``BC_COMPUTE_MANAGEMENT_TOKEN_FILE`` (optional) - a second token, required for
-  model management (``/api/pull``, ``/api/create``, ``/api/copy``,
-  ``/api/delete``) and good for nothing else; the web server sends it as
-  ``BC_OLLAMA_MANAGEMENT_API_KEY``. Without it the main token may manage models;
-* ``BC_COMPUTE_MODEL_MANAGEMENT`` (1) - 0 refuses model management with any
-  token (models are then pulled on this machine with ``ollama pull``);
-* ``BANANA_MAINTENANCE_FILE`` - while this file exists, model requests get 503;
-* ``BC_SOURCE_URL`` - the corresponding source (AGPL), offered at ``/source``;
-* ``BC_COMPUTE_MAX_CONNECTIONS`` (32), ``BC_COMPUTE_UPSTREAM_TIMEOUT`` (900 s).
-
-Endpoints:
-
-* ``GET /health`` and ``/healthz`` (no authentication): 200 only when Ollama
-  answers ``/api/version``; the lifecycle manager checks ``/healthz``;
-* ``GET /source`` (no authentication): the source URL (JSON, or a redirect for browsers);
-* the Ollama and OpenAI-compatible paths in ``ALLOWED`` with
-  ``Authorization: Bearer <token>``; responses are streamed through. After
-  ``AUTH_FAILURES_PER_MINUTE`` wrong tokens from one address, further wrong
-  tokens get 429 for a minute (the right token keeps working).
-
-Bodies are limited to 32 MB and need ``Content-Length`` (chunked uploads are
-refused). Every connection has socket timeouts, at most
-``BC_COMPUTE_MAX_CONNECTIONS`` requests are served at once and the next ones
-get a JSON 503 instead of a dropped connection. Every response closes its
-connection. Importing this module has no side effects.
+Run from the repository root with ``python -m compute.inference_proxy``. It uses only the standard library, and
+importing it has no side effects. Settings, endpoints and limits: compute/README.md.
 """
 
 from __future__ import annotations
@@ -64,6 +32,8 @@ HEALTH_CACHE_SECONDS = 1.0
 # How long a refused request's body is read and dropped, so the client gets the
 # answer instead of a connection reset (closing with unread data resets it).
 DRAIN_SECONDS = 10.0
+# Connections whose token has not been checked yet, apart from the served requests.
+PENDING_CONNECTIONS = 64
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 AUTH_FAILURES_PER_MINUTE = 20
 
@@ -155,7 +125,7 @@ class ComputeServer(ThreadingHTTPServer):
 
     def __init__(self, address, *, upstream, token, management_token=None, model_management=True, maintenance="",
                  source=DEFAULT_SOURCE_URL, max_connections=32, upstream_timeout=900.0, client_timeout=CLIENT_TIMEOUT,
-                 header_deadline=HEADER_DEADLINE, body_deadline=BODY_DEADLINE):
+                 header_deadline=HEADER_DEADLINE, body_deadline=BODY_DEADLINE, max_pending=PENDING_CONNECTIONS):
         self.upstream = check_upstream(upstream)
         self.token = check_token(token).encode("utf-8")
         self.management_token = check_token(management_token).encode("utf-8") if management_token else None
@@ -170,6 +140,11 @@ class ComputeServer(ThreadingHTTPServer):
         self.header_deadline = float(header_deadline)
         self.body_deadline = float(body_deadline)
         self.slots = threading.BoundedSemaphore(max(1, int(max_connections)))
+        # A connection holds a pending place until its token is checked, and a slot only
+        # once the token is valid.
+        self.pending = threading.BoundedSemaphore(max(1, int(max_pending)))
+        self._pending_requests = set()
+        self._pending_lock = threading.Lock()
         # Refusals are answered by short-lived threads of their own, bounded too.
         self.refusals = threading.BoundedSemaphore(64)
         self._health = {"at": 0.0, "ok": False}
@@ -186,11 +161,13 @@ class ComputeServer(ThreadingHTTPServer):
 
     # ----- concurrency -------------------------------------------------------------------------
     def process_request(self, request, client_address):
-        if self.slots.acquire(blocking=False):
+        if self.pending.acquire(blocking=False):
+            with self._pending_lock:
+                self._pending_requests.add(request)
             try:
                 super().process_request(request, client_address)
             except BaseException:
-                self.slots.release()
+                self.end_pending(request)
                 raise
             return
         if self.refusals.acquire(blocking=False):
@@ -203,7 +180,15 @@ class ComputeServer(ThreadingHTTPServer):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self.slots.release()
+            self.end_pending(request)
+
+    def end_pending(self, request) -> None:
+        """Give back the pending place of a connection (once)."""
+        with self._pending_lock:
+            if request not in self._pending_requests:
+                return
+            self._pending_requests.discard(request)
+        self.pending.release()
 
     def _refuse(self, request) -> None:
         try:
@@ -357,14 +342,24 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"source": self.server.source, "license": "AGPL-3.0-only"})
         role = self.server.credential(self.headers.get("Authorization"))
         if role is None:
-            self.discard_body()
-            peer = str(self.client_address[0])
-            if self.server.limiter.blocked(peer):
+            # Counted before the body is drained, so the limiter also bounds how many of
+            # these drains hold a pending place at once; a blocked peer gets no drain.
+            if not self.server.limiter.record(str(self.client_address[0])):
                 return self.reply(429, {"error": "Too many requests with a wrong compute API token."},
                                   {"Retry-After": "60"})
-            self.server.limiter.failed(peer)
+            self.discard_body()
             return self.reply(401, {"error": "A valid compute API token is required."},
                               {"WWW-Authenticate": 'Bearer realm="bananachat-compute"'})
+        if not self.server.slots.acquire(blocking=False):
+            self.discard_body()
+            return self.reply(503, {"error": "The compute server is busy. Retry shortly."}, {"Retry-After": "5"})
+        self.server.end_pending(self.request)
+        try:
+            return self.route_authorized(path, role)
+        finally:
+            self.server.slots.release()
+
+    def route_authorized(self, path: str, role: str) -> None:
         if path not in ALL_PATHS:
             self.discard_body()
             return self.reply(404, {"error": "Unsupported compute request."})
@@ -399,7 +394,8 @@ class Handler(BaseHTTPRequestHandler):
         reset it, and the client (a web server posting a chat with images) then
         sees a broken pipe instead of this answer.
         """
-        self.server.deadlines.set(self.connection, DRAIN_SECONDS)
+        # The watchdog's deadline leaves time to send the answer after the drain.
+        self.server.deadlines.set(self.connection, DRAIN_SECONDS + 1.0)
         if self.headers.get("Transfer-Encoding"):
             return
         remaining = _body_length(self.headers.get("Content-Length"))

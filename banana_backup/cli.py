@@ -2,10 +2,8 @@
 
 from pathlib import Path
 import sys
-import tempfile
 
 from . import crypto
-from .files import directory
 from .git import check_private
 
 
@@ -19,7 +17,12 @@ def add_commands(commands, *, agent=False):
     setup.add_argument("--forge", choices=("github", "forgejo"), required=True)
     setup.add_argument("--name", required=True, help="Unique series name for this installation, such as wiki-production")
     setup.add_argument("--token-file", type=Path, required=True, help="Private file with a read/write repository token")
-    setup.add_argument("--key-file", type=Path, required=True, help="Native age recovery identity saved separately from the repository")
+    setup.add_argument("--key-file", type=Path,
+                       help="Native age recovery identity saved separately from the repository; leave out to keep "
+                            "the one this server already holds")
+    setup.add_argument("--replace-key", action="store_true",
+                       help="Replace a different recovery key this server holds; only the old key restores the "
+                            "snapshots made with it")
     setup.add_argument("--username", default="git")
     setup.add_argument("--keep", type=int, default=7, help="Retain 2–30 snapshots in this series; default 7")
     setup.add_argument("--max-mib", type=int, default=512, help="Maximum compressed package size, 1–1024 MiB; default 512")
@@ -70,7 +73,7 @@ def handle(args, store, *, create_package, restore_package, schedule=None):
     if action == "configure":
         result = store.configure(repo=args.repo, forge=args.forge, name=args.name, token_file=args.token_file,
                                  key_file=args.key_file, username=args.username, keep=args.keep, max_mib=args.max_mib,
-                                 append_only=args.append_only)
+                                 append_only=args.append_only, replace_key=args.replace_key)
         if schedule:
             schedule(store.schedule())
         return result
@@ -113,11 +116,9 @@ def handle(args, store, *, create_package, restore_package, schedule=None):
             Path(package).unlink()
         return result
     if action == "restore":
-        directory(store.root)
-        with tempfile.TemporaryDirectory(prefix="restore-", dir=store.root) as name:
-            package = Path(name) / "package.tar.gz"
-            warn_unauthenticated(store.download(args.snapshot, package, allow_unauthenticated=unauthenticated))
-            result = restore_package(package, args)
+        # No other backup operation runs until the restore is done with the package.
+        with store.fetched(args.snapshot, allow_unauthenticated=unauthenticated) as fetched:
+            result = restore_package(Path(warn_unauthenticated(fetched)["package"]), args)
         # Both the updater and the backup schedule remain opt-in on a restore.
         policy = store.set_schedule(False)
         if schedule:

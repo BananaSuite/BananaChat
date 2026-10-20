@@ -377,7 +377,7 @@ def test_the_master_lets_the_queue_places_of_a_worker_that_died_expire_at_once(a
     settings["child_exit"](SimpleNamespace(log=log), SimpleNamespace(pid=999_999_001))
     with app.app_context():
         assert queue.stats()["running"] == 2  # a live process with that number would renew its row in time
-    # Seconds later the dead worker's place no longer counts (it did for queue.LEASE_SECONDS before).
+    # Seconds later the dead worker's place stops counting, well before queue.LEASE_SECONDS.
     later = now + queue.ORPHAN_GRACE_SECONDS + 1
     counted = _rows(app, "SELECT req_id FROM inference_queue WHERE heartbeat_at>=?", later - queue.LEASE_SECONDS)
     assert [row["req_id"] for row in counted] == ["alive"]

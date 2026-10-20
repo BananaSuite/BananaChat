@@ -23,7 +23,7 @@
     {% endfor %}
   </div>
   {% if summary.window_note %}<p class="hint mt-2 mb-0">{{ summary.window_note }}</p>{% endif %}
-  {% if summary.weekly_exhausted %}<p class="hint mt-1 mb-0">{{ t_html("developer.credits_weekly_exhausted", date=summary.weekly_resets_at | time_html, left=summary.weekly_resets_at | time_left_html) }}</p>{% endif %}
+  {% if summary.weekly_exhausted %}<p class="hint mt-1 mb-0">{{ t_html("developer.credits_weekly_exhausted", date=summary.weekly_resets_at | local_time("auto"), left=summary.weekly_resets_at | time_left_html) }}</p>{% endif %}
   <details class="dev-limit-details">
     <summary>{{ t("developer.limits_help") }}{{ icon("chevron-down") }}</summary>
     <div class="stack-sm">

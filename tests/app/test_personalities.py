@@ -64,6 +64,19 @@ def test_create_edit_toggle_delete(app, make_user):
         assert personalities.get(personality_id) is None
 
 
+def test_a_personality_created_switched_off_stays_off(app, make_user):
+    """The create form's "enabled" checkbox sends nothing when unticked."""
+    from bananachat.db import personalities
+
+    user = make_user("tess")
+    browser = _signed_in(app, "tess")
+    browser.post("/personalities", {"name": "Draft", "instructions": "Not ready yet."})
+    browser.post("/personalities", {"name": "Live", "instructions": "Ready.", "enabled": "1"})
+    with app.app_context():
+        state = {row["name"]: bool(row["is_enabled"]) for row in personalities.list_for(user["id"])}
+    assert state == {"Draft": False, "Live": True}
+
+
 def test_limit_is_enforced(app, make_user):
     from bananachat.db import personalities
 

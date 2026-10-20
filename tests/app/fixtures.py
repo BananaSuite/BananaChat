@@ -7,10 +7,13 @@
   account (password ``admin-password``), and a :class:`Browser` for it.
 * ``make_user(username, role="user")`` - create an account (password
   ``<username>-password``).
+* ``warnings_log`` - ``caplog`` attached to the ``bananachat`` logger, which
+  does not propagate to the root logger.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
 from pathlib import Path
@@ -160,3 +163,13 @@ def browser_for(app):
     def factory():
         return Browser(app)
     return factory
+
+
+@pytest.fixture
+def warnings_log(caplog):
+    """The application's logger does not propagate to the root logger, so capture it directly."""
+    logger = logging.getLogger("bananachat")
+    caplog.set_level(logging.WARNING, logger="bananachat")
+    logger.addHandler(caplog.handler)
+    yield caplog
+    logger.removeHandler(caplog.handler)

@@ -36,7 +36,7 @@
           <tbody>
           {% for row in history %}
             <tr>
-              <td class="nowrap cell-lead"><time datetime="{{ row.created_at }}">{{ row.created_at | datetime }}</time></td>
+              <td class="nowrap cell-lead">{{ row.created_at | local_time }}</td>
               <td class="dev-usage-source">
                 {% if row.request_type == "playground" %}<span class="badge badge-primary">{{ t("developer.source_playground") }}</span>
                 {% elif row.token_name is not none or row.token_prefix %}<span class="badge">{{ t("developer.source_token", name=row.token_name or row.token_prefix) }}</span>

@@ -108,7 +108,7 @@
     </fieldset>
 
     <label class="check"><input type="checkbox" name="enabled" value="1"{% if values.enabled %} checked{% endif %}><span>Published<small>Unpublished personalities are drafts that users cannot see.</small></span></label>
-    <div class="form-actions">
+    <div class="form-actions form-actions-end">
       <a class="btn btn-ghost" href="{{ url_for('admin.personalities', kind='featured') }}">Cancel</a>
       <button type="submit" class="btn btn-primary">{{ "Save" if row else "Create" }}</button>
     </div>

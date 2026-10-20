@@ -34,7 +34,7 @@ test: .venv/bin/python
 	@.venv/bin/python -m pytest -q
 
 lint: .venv/bin/python
-	@.venv/bin/python -m pip install -q ruff
+	@.venv/bin/python -m pip install -q ruff==0.17.1
 	@.venv/bin/python -m ruff check .
 
 clean:

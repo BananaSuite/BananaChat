@@ -4,7 +4,7 @@
 .img-controls { min-width: 0; }
 .img-controls > h2 { margin-bottom: 1rem; }
 .img-controls fieldset { border: 0; border-radius: 0; padding: 0; }
-.img-controls legend { padding: 0 0 .4rem; font-size: .88rem; }
+.img-controls legend { padding: 0 0 .4rem; font-size: var(--text-md); }
 .img-sizes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: .5rem; }
 /* The shape icon has a fixed slot, so the labels line up from tile to tile. */
 .img-size {
@@ -15,8 +15,8 @@
 .img-size input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .img-size:has(input:checked) { border-color: var(--primary); background: var(--active); }
 .img-size:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
-.img-size-text { display: flex; flex-direction: column; font-size: .9rem; line-height: 1.3; }
-.img-size-text small { color: var(--text-muted); font-size: .78rem; }
+.img-size-text { display: flex; flex-direction: column; font-size: var(--text-base); line-height: 1.3; }
+.img-size-text small { color: var(--text-muted); font-size: var(--text-xs); }
 .img-size-shape { justify-self: center; border: 2px solid currentColor; border-radius: 3px; color: var(--text-muted); width: 20px; height: 20px; }
 .img-size:has(input:checked) .img-size-shape { color: var(--primary); }
 .img-shape-512x512 { width: 14px; height: 14px; }
@@ -41,5 +41,5 @@
   .img-result { position: static; min-height: 240px; }
 }
 
-/* Sending paused (maintenance or AI-server outage): the live region stays in the DOM, empty when fine. */
+/* Sending paused (maintenance or model-server outage): the live region stays in the DOM, empty when fine. */
 .status-paused:empty { display: none; }

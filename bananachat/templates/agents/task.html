@@ -46,7 +46,7 @@
         <textarea id="follow-up-input" rows="2" maxlength="{{ max_message }}" placeholder="{{ t('agents.follow_up_placeholder') }}"></textarea>
         <div class="agent-composer-bar">
           <span class="hint" id="follow-up-hint"></span>
-          <button type="submit" class="btn btn-primary" id="follow-up-send" data-send>{{ icon("send") }}{{ t("agents.send") }}</button>
+          <button type="submit" class="btn btn-primary" id="follow-up-send" data-send>{{ icon("arrow-up") }}{{ t("agents.send") }}</button>
         </div>
       </form>
       {% if access != "ok" %}<p class="hint">{{ t("agents.read_only") }}</p>{% endif %}
@@ -80,11 +80,11 @@
       <section class="agent-facts">
         <h2>{{ t("agents.details") }}</h2>
         <dl class="details">
-          <dt>{{ t("agents.created") }}</dt><dd>{{ task.created_at | datetime }}</dd>
+          <dt>{{ t("agents.created") }}</dt><dd>{{ task.created_at | local_time }}</dd>
           <dt>{{ t("agents.steps") }}</dt><dd id="fact-steps"></dd>
           <dt>{{ t("agents.tokens") }}</dt><dd id="fact-tokens"></dd>
           <dt>{{ t("agents.tool_calls") }}</dt><dd id="fact-tools"></dd>
-          <dt>{{ t("agents.limits") }}</dt><dd>{{ t("agents.limits_value", steps=task.limits.steps, minutes=task.limits.minutes) }}</dd>
+          <dt>{{ t("agents.limits") }}</dt><dd>{{ t("agents.limits_value", steps=t("agents.limits_steps", count=task.limits.steps), minutes=task.limits.minutes) }}</dd>
         </dl>
       </section>
     </aside>

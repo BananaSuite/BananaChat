@@ -2,30 +2,16 @@
 
 Sending (``POST /chat/<sid>/send``)
 -----------------------------------
-:func:`prepare` checks a request in this order, cheapest first: the message
-(size, no files in no-history chats), the chat's 5-hour and weekly
-tokens for models that consume them, whether a run is already active, the
-chat pool's request rate (``services.limits``, administrators exempt; a request
-refused before this point does not use a token) and only then the uploaded
-files (images are decoded and PDFs parsed only for requests that may run, and
-one at a time per chat and per account), within the chat's and the account's
-attachment storage (``BC_CHAT_MAX_SESSION_ATTACHMENT_MB``,
-``BC_CHAT_MAX_ACCOUNT_ATTACHMENT_MB``, counting what the files store, such as a
-document's extracted text; administrators exempt from the latter). It then
-selects the model (vision when the chat holds images), the reasoning effort
-(``effort``: a level the account has unlocked for the model, else 403
-``reasoning_effort_locked``), checks the model's own limits
-(``limits.admit``) and builds its options.
+:func:`prepare` checks a request cheapest first: the message, the chat's tokens, whether a run is already
+active and the request rate; only then are uploaded files decoded and parsed, so a request refused early
+neither counts against the rate nor costs the parsing. It then selects the model and the reasoning effort and
+runs ``limits.admit``.
 
-:func:`start` stores the user's message and takes the chat's lease
-(:mod:`bananachat.db.runs`), then runs :func:`services.inference.generate`
-in a worker thread. The run is independent of the HTTP connection: when the
-browser disconnects it keeps going, saves checkpoints of the partial answer
-every :data:`CHECKPOINT_SECONDS` and stores the final answer, credits and
-metrics. Stop requests and lease renewal go through ``services.supervisor``,
-so they work whichever process serves them. When the process exits (a gunicorn
-worker replaced or stopped), :func:`shutdown` lets runs finish for a while,
-then saves the rest as interrupted answers.
+:func:`start` stores the user's message, takes the chat's lease (:mod:`bananachat.db.runs`) and runs
+:func:`services.inference.generate` in a thread. The run does not depend on the HTTP connection: it saves
+checkpoints of the partial answer every :data:`CHECKPOINT_SECONDS` and stores the final answer and its usage.
+Stop requests go through ``services.supervisor``, so any process can serve them. :func:`shutdown` lets runs
+finish for a while when the process exits, then saves the rest as interrupted answers.
 
 Streaming protocol
 ------------------

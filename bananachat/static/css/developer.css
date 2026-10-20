@@ -8,7 +8,7 @@
 .dev-summary .secret-box input { flex: 1 1 18rem; min-width: 0; }
 .dev-endpoint-url { flex: 1 1 18rem; min-width: 0; display: flex; align-items: center; min-height: var(--control-height); padding: .45rem .75rem;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--text);
-  font-size: .88rem; line-height: 1.35; overflow-wrap: anywhere; user-select: all; }
+  font-size: var(--text-md); line-height: 1.35; overflow-wrap: anywhere; user-select: all; }
 .dev-summary .secret-box .btn { flex: none; }
 .dev-summary .muted { max-width: 62ch; }
 .dev-note svg { width: 1em; height: 1em; vertical-align: -.15em; }
@@ -22,7 +22,7 @@
   .dev-meter .row-between > :last-child { margin-inline-start: 0; text-align: start; }
 }
 .dev-limit-details { margin-block: .65rem; }
-.dev-limit-details > summary { display: flex; align-items: center; gap: .5rem; width: fit-content; min-height: var(--control-compact); color: var(--text-muted); font-size: .875rem; cursor: pointer; list-style: none; }
+.dev-limit-details > summary { display: flex; align-items: center; gap: .5rem; width: fit-content; min-height: var(--control-compact); color: var(--text-muted); font-size: var(--text-md); cursor: pointer; list-style: none; }
 .dev-limit-details > summary::-webkit-details-marker { display: none; }
 .dev-limit-details > summary:hover { color: var(--text); }
 .dev-limit-details > summary svg { width: 14px; height: 14px; flex: none; }
@@ -55,11 +55,10 @@
 
 /* snippets */
 .dev-snippet { margin: 0; }
-.dev-snippet > header { justify-content: flex-end; }
 .dev-snippet pre { white-space: pre; }
 .dev-snippet figcaption { font-family: var(--font); }
 .dev-example { border-bottom: 1px solid var(--border); }
-.dev-example > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .65rem .25rem; cursor: pointer; list-style: none; font-weight: 550; font-size: .875rem; }
+.dev-example > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .65rem .25rem; cursor: pointer; list-style: none; font-weight: 550; font-size: var(--text-md); }
 .dev-example > summary::-webkit-details-marker { display: none; }
 .dev-example > summary:hover { background: var(--hover); }
 .dev-example > summary svg { width: 15px; height: 15px; color: var(--text-muted); }
@@ -70,7 +69,7 @@
 .dev-playground { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 2rem; align-items: start; }
 .dev-settings { position: sticky; top: calc(var(--topbar-height) + 1rem); min-width: 0; }
 .dev-parameters { border-top: 1px solid var(--border); }
-.dev-parameters > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .75rem 0; cursor: pointer; list-style: none; font-size: .9rem; font-weight: 550; }
+.dev-parameters > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .75rem 0; cursor: pointer; list-style: none; font-size: var(--text-base); font-weight: 550; }
 .dev-parameters > summary::-webkit-details-marker { display: none; }
 .dev-parameters > summary svg { width: 15px; height: 15px; color: var(--text-muted); }
 .dev-parameters[open] > summary svg { transform: rotate(180deg); }
@@ -89,18 +88,18 @@
 .dev-msg { padding: .75rem 0; border-bottom: 1px solid var(--border); }
 .dev-msg-user { padding: .75rem .85rem; border: 0; border-radius: var(--radius); background: var(--raised); }
 .dev-msg-header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .35rem; }
-.dev-msg-role { font-size: .82rem; font-weight: 600; color: var(--text-muted); }
+.dev-msg-role { font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); }
 .dev-msg-remove { font-size: 1.1rem; }
 .dev-msg-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 .dev-msg-meta { margin: .5rem 0 0; }
 .dev-msg-error { margin: .5rem 0 0; }
 .dev-msg.is-streaming .dev-msg-body:empty::after { content: "…"; color: var(--text-muted); }
-.dev-reasoning { margin-bottom: .5rem; font-size: .92rem; color: var(--text-muted); }
+.dev-reasoning { margin-bottom: .5rem; font-size: var(--text-base); color: var(--text-muted); }
 .dev-reasoning > summary { cursor: pointer; font-weight: 550; }
 .dev-status { min-height: 1.4em; margin: .6rem 0 .3rem; }
 .dev-composer { border-top: 1px solid var(--border); padding-top: .75rem; display: flex; flex-direction: column; gap: .6rem; }
 .dev-role { width: auto; }
-.dev-request > summary { display: flex; align-items: center; gap: .5rem; width: fit-content; min-height: var(--control-compact); cursor: pointer; color: var(--text-muted); font-size: .9rem; list-style: none; }
+.dev-request > summary { display: flex; align-items: center; gap: .5rem; width: fit-content; min-height: var(--control-compact); cursor: pointer; color: var(--text-muted); font-size: var(--text-base); list-style: none; }
 .dev-request > summary::-webkit-details-marker { display: none; }
 .dev-request > summary:hover { color: var(--text); }
 .dev-request > summary svg { width: 14px; height: 14px; flex: none; }
@@ -137,5 +136,5 @@
   .dev-params { grid-template-columns: 1fr 1fr; }
 }
 
-/* Sending paused (maintenance or AI-server outage): the live region stays in the DOM, empty when fine. */
+/* Sending paused (maintenance or model-server outage): the live region stays in the DOM, empty when fine. */
 .status-paused:empty { display: none; }

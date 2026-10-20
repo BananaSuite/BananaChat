@@ -1,8 +1,9 @@
 # Architecture
 
 BananaChat is a Flask application (package `bananachat/`) served by Gunicorn,
-with SQLite storage, Ollama and optional hosted providers for inference. This page explains how the
-code is organised and the conventions every part follows.
+with SQLite storage, and Ollama and optional hosted providers for inference.
+This page explains how the code is organised and the conventions every part
+follows.
 
 ## Layout
 
@@ -60,7 +61,7 @@ with db.transaction():                                        # BEGIN IMMEDIATE 
 * Views use `security.login_required` or `security.admin_required`.
   JSON clients get `{"error": {"code", "message"}}` with the right status
   (`security.json_error(message, status, code)`); browsers get a page or a
-  redirect. `security.wants_json()` tells them apart (our fetch helper sends
+  redirect. `security.wants_json()` tells them apart (the fetch helper in `core.js` sends
   `X-Requested-With`).
 * CSRF is checked for every unsafe request except the bearer-token
   blueprints `api_v1` and `worker_api`. Forms include
@@ -102,13 +103,14 @@ with db.transaction():                                        # BEGIN IMMEDIATE 
 * The interface is translated: `{{ t("area.key", name=value) }}` in templates,
   `t("key")` in scripts for catalogue keys starting with `js.` (the prefix is
   dropped in the browser). Each area owns `bananachat/i18n/<area>.json` with
-  identical key sets for `en` and `it`; keys are namespaced by area. The
+  identical key sets for `en`, `it` and `de`; keys are namespaced by area. The
   administrator interface is English-only by design and does not use the catalogues.
 
 ## Service status
 
-Problems never take the site down. `services.status` turns maintenance mode,
-an unreachable AI server (`BC_INFERENCE_OUTAGE_MODE=shutdown`), the backup
+Maintenance and model-server outages pause new answers but leave the rest of
+the site working. `services.status` turns maintenance mode, an unreachable
+model server (`BC_INFERENCE_OUTAGE_MODE=shutdown`), the backup
 server being in use and the administrator's announcement into notices. Pages
 render them with `partials/status_banner.html`; `core.js` polls `/status` and
 updates the banner and every composer live (`onStatusChange()` in scripts).
@@ -298,19 +300,16 @@ unit of earlier releases). Storage lives in `db/limits.py`, decisions in
   model when none is open; usage counts ledger rows since the window opened
   (and since the account's or the site's last reset). A reset closes the open
   windows (the next request opens new ones); it never deletes ledger rows.
-  Both historical regular and slow ledger rows count against the single
-  five-hour allowance. Exhausting it refuses further counted requests;
-  it does not move them into a second allowance or queue lane.
+  Ledger rows of the former slow allowance count against the five-hour
+  allowance like any other.
 * **Chat consumption** (`site_settings.chat_local_token_consumption`, off by
-  default, and `chat_cloud_token_consumption`, on by default) gates token
-  admission and accounting for regular and incognito chat. Locality follows
-  the model provider, including site-owned remote Ollama workers. Unmetered
-  chats retain raw usage and metrics, write zero counted tokens and
-  `credit_ledger.consumes_limits=0`, and open no pool or model windows. Model
-  token usage excludes those rows, so switching consumption on later cannot
-  charge earlier free chats. Historical rows retain `consumes_limits=1`.
-  Request rates, locks, access rules, effort gating and provider availability
-  remain enforced; other services keep their existing behaviour.
+  default, and `chat_cloud_token_consumption`, on by default) decides whether
+  regular and no-history chats are admitted and charged against token limits.
+  A model is local when Ollama serves it, also on a remote compute server. An
+  uncharged chat writes its usage with zero counted tokens and
+  `credit_ledger.consumes_limits=0` and opens no windows; token usage skips
+  those rows, so turning consumption on later does not charge them. Request
+  rates, locks, access rules and effort gating apply either way.
 * **Tiers** (`limit_tiers`): an ordered ladder, each with one token multiplier
   and promotion requirements (account age, active days and tokens in the last
   30 days, days since the last suspension). Active days and tokens count only
@@ -328,9 +327,8 @@ unit of earlier releases). Storage lives in `db/limits.py`, decisions in
 every number with its reasons (`Reason` codes rendered from the
 `account.reason_*` catalogue keys), in this order: custom limit, else policy ×
 tier (when `auto_tiers`) → dynamic multiplier (model limits: its deviation ×
-the sensitivity) → provider capacity (model limits) → music bonus (pools) →
-grants (unlimited wins, then multipliers, then extras) → administrators
-unlimited. `db.credits.budget(user, pool)` is the pool's short form,
+the sensitivity) → music bonus (pools) → grants (unlimited wins, then
+multipliers, then extras) → administrators unlimited. `db.credits.budget(user, pool)` is the pool's short form,
 including availability, weekly exhaustion and the next reset time.
 **Admission** is `limits.admit(user, pool, model)`: the pool's tokens (unless
 the model is outside the pool), then the model's lock and tokens, then one
@@ -353,8 +351,7 @@ rule starts full), taken all-or-nothing in one short write transaction, so
 every Gunicorn process shares them. The API adds `x-ratelimit-*-requests`
 headers for the tightest rule and `x-ratelimit-*-tokens` for the 5-hour
 window. `queue.priority_for` puts accounts explicitly configured as `slow`
-in the slow lane and `fast` accounts ahead of API requests. Token usage does
-not select a queue lane.
+in the slow lane and `fast` accounts ahead of API requests.
 
 Dynamic adjustment multiplies a demand factor - the inference queue's running
 + waiting requests per `BC_MAX_CONCURRENT` (averaged over ~15 minutes) times
@@ -365,10 +362,6 @@ peak hours, from the `limits-peak-hours` job, and its active days; cached per
 process for 10 minutes). The product is clamped to 0.5–2 and rounded to 5 %
 steps; model limits scale its deviation by their sensitivity. Custom limits
 are a floor, and request rates are only ever lowered.
-`limits.register_capacity_provider(provider, report)` lets a provider (for
-example a future hosted-model provider with its own 5-hour and weekly
-allowance) report the capacity it has left; below half, its models' limits
-shrink in proportion. Without a registered provider nothing changes.
 
 **Reasoning effort**: levels `off < low < medium < high < extra < max`. `xhigh`
 normalises to `extra` at API and provider-discovery boundaries. A model's
@@ -388,11 +381,11 @@ for accounts with enough active days and tokens with a model in the period
 and no recent suspension, one level at a time, never above the ceiling and
 never for levels an administrator kept (`pinned`).
 
-Account token/rate exemptions skip internal service and model limits separately.
-Account/model exemptions skip that model's own limits only. Global model token
-and rate switches are also independent. Usage is still recorded; permissions,
-model locks, reasoning controls and physical provider capacity remain binding.
-Automatic reasoning promotion supports account/model opt-outs.
+Exemptions are separate flags for tokens and for request rates: per account
+(service and model limits), per account and model (that model's own limits),
+and per model for everyone. An exempt request is still recorded, and access
+rules, model locks and effort gating still apply.
+`auto_unlock_effort` skips accounts and models that opted out.
 
 Quota requests (`quota_requests.kind`: `window`, `weekly`, `rate`,
 `temporary`, `effort`) become custom limits, a grant (`temporary`) or an
@@ -405,30 +398,14 @@ the account below later promotions; amounts an administrator sets (or approves)
 are exact and may be lower. A request needs the limit it
 raises to be on, and approval is refused once an administrator switched that
 limit off, since a custom value would switch it back on for one account.
-Migration 9 converted credits (1 credit = 1,000 tokens) and kept the credit
-columns of earlier releases.
+Migration 9 converted credits (1 credit = 1,000 tokens) and migration 16
+folded the slow allowance into the five-hour amount. The old credit and
+slow-allowance columns are kept for rollback and grant nothing.
 
-Migration 16 consolidates the old regular and active slow allocations into
-the five-hour amount. Slow allocations are active only when the site's
-`slow_credits_enabled` setting was on; disabled sites keep their regular
-amounts. Historical usage is counted together without changing ledger rows,
-reset times or open windows. Legacy slow-allowance columns remain for
-compatibility and rollback but no longer grant extra tokens or select a
-queue lane. Weekly limits, model policies, request rates,
-tiers, grants, dynamic adjustment, music bonuses, reasoning settings and
-explicit account speeds retain their supported customisation.
-
-Fixed music bonuses have independent five-hour and weekly amounts.
-`site_settings.music_bonus_fixed_weekly_tokens` preserves seven times the old
-regular bonus during migration, while the five-hour bonus also absorbs active
-slow tokens. When the weekly value is NULL, it follows seven times the current
-five-hour amount. This preserves weekly limits during consolidation and lets
-administrators adjust the two bonuses separately.
-
-The automatic-approval ceiling becomes the sum of the configured regular and
-active slow caps. Requests compare a single total with that ceiling; the old
-exception for an unchanged slow component is retired. The enable flag,
-weekly ceiling and the other approval settings remain separate.
+Fixed music bonuses have independent five-hour and weekly amounts. When
+`site_settings.music_bonus_fixed_weekly_tokens` is NULL, the weekly bonus is
+seven times the five-hour one. Automatic approval compares the requested total
+with one ceiling.
 
 A request's `model_id` also targets one model's own limits for the `window`,
 `weekly`, `rate` and `temporary` kinds (approval sets `user_model_limits`, or a
@@ -474,7 +451,7 @@ user may use it.
 
 Rows have a `kind`: `user` personalities are private to their owner;
 `featured` ones are published by administrators for everyone (read-only, users
-copy them) and are stored under the administrator who created them — a
+copy them) and are stored under the administrator who created them; a
 trigger from migration v7 hands them to another administrator when that
 account is deleted. Share links, "Duplicate" and JSON import always create
 copies; every path goes through `services.personalities.clean`, so forms,
@@ -485,9 +462,23 @@ the preferred model only to viewers who may use it. `personality_defaults` recor
 personality new chats start with. Use of any kind requires the
 `custom_personality` access policy.
 
-## Agents
+## External providers
 
-`services/agents/` runs coding agents (see [Agents](agents.md)): `loop.TaskRun`
+`db/external_providers.py` stores each provider's address, preset and enrolled
+models. `services/provider_secrets.py` encrypts the API keys with a key derived
+from the instance secret and keeps them in private files under the instance
+folder. `services/provider_presets.py` lists the presets.
+`services/external_api.py` makes the HTTP requests (checking each destination
+address), converts messages to the OpenAI-compatible and Anthropic formats and
+maps provider failures to `provider_*` error codes.
+`services/external_providers.py` discovers, enrols and withdraws models, and
+`web/admin/providers.py` is the admin page. `services/inference.py` sends a
+request to an external model only after the same access and limit checks as
+any other model.
+
+## Cloud sessions
+
+`services/agents/` runs cloud sessions (see [cloud sessions](agents.md)): `loop.TaskRun`
 is one background thread per task run that calls the model through
 `inference.generate` with `tools` (request type `agent`, lowest queue priority,
 never on worker PCs) and turns validated tool calls (`tools.py`) into calls to
@@ -501,16 +492,4 @@ runs on the web server.
 build an app on a temporary instance directory with an imitation Ollama
 server (`tests/app/fake_ollama.py`) and provide a `Browser` that handles CSRF
 and sign-in. `tests/fixtures/legacy_v4.sql` is a database written by the
-previous release; upgrade tests start from it.
-
-## External provider boundary
-
-`db/external_providers.py` stores connection metadata; `services/provider_secrets.py`
-keeps credentials encrypted (with a key derived from the instance secret) in private
-instance files. `services/provider_presets.py` lists the service presets.
-`services/external_api.py` handles vetted HTTP destinations, message conversion,
-the OpenAI-compatible and Anthropic dialects, model-list normalisation and the
-mapping of provider failures to `provider_*` error codes.
-`services/external_providers.py` handles model discovery, enrolment and lifecycle.
-`web/admin/providers.py` owns administrator configuration. The shared inference
-router delegates to the transport after existing access/quotas are rechecked.
+code from before the rewrite; upgrade tests start from it.

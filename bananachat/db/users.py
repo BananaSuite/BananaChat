@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from bananachat import db
+from bananachat.config import SUPPORTED_LANGUAGES
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 ROLES = ("user", "admin")
@@ -46,7 +47,7 @@ def clean_preferences(raw) -> dict:
     prefs = dict(PREFERENCE_DEFAULTS)
     if raw.get("theme_mode") in ("default", "dark", "light"):
         prefs["theme_mode"] = raw["theme_mode"]
-    if raw.get("interface_language") in ("default", "it", "en"):
+    if raw.get("interface_language") == "default" or raw.get("interface_language") in SUPPORTED_LANGUAGES:
         prefs["interface_language"] = raw["interface_language"]
     try:
         scale = float(raw.get("font_scale", 1.0))

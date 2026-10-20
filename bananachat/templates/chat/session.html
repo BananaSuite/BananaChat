@@ -29,7 +29,7 @@
     {% if session.is_incognito %}
     <div class="no-history-notice" role="note">
       {{ icon("eye-off") }}
-      <p>{{ t("chat.no_history_explainer", hours=no_history_hours) }}</p>
+      <p>{{ t("chat.no_history_explainer", hours=no_history_hours, count=no_history_hours) }}</p>
     </div>
     {% endif %}
     <div class="chat-scroll" id="chat-scroll">

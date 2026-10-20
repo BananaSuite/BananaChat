@@ -54,8 +54,8 @@
 
 {% macro utc_input(name, id, label, hint=None, value="", min=None) -%}
 <div class="field">
-  <label for="{{ id }}">{{ label }} <span class="badge">UTC</span></label>
+  <label for="{{ id }}">{{ label }}</label>
   <input type="datetime-local" id="{{ id }}" name="{{ name }}" value="{{ value }}"{% if min %} min="{{ min }}"{% endif %} aria-describedby="{{ id }}-hint">
-  <span class="hint" id="{{ id }}-hint">{{ hint or "Coordinated Universal Time. Leave empty for no end date." }}</span>
+  <span class="hint" id="{{ id }}-hint">{{ hint or "Time in UTC. Leave empty for no end date." }}</span>
 </div>
 {%- endmacro %}

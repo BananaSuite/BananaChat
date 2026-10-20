@@ -116,11 +116,16 @@ def _int_arg(name: str) -> int | None:
 
 def _disposition(filename: str, fallback: str) -> str:
     """``attachment`` with an ASCII filename and the RFC 5987 UTF-8 form for other scripts."""
-    clean = " ".join(re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]+', " ", filename).split()).strip(" .")[:120] or fallback
-    ascii_name = unicodedata.normalize("NFKD", clean).encode("ascii", "ignore").decode("ascii")
-    ascii_name = re.sub(r"[^A-Za-z0-9._ -]+", "", ascii_name).strip(" .") or fallback
-    if "." in clean and not ascii_name.endswith(clean.rsplit(".", 1)[1]):
-        ascii_name = f"{ascii_name}.{clean.rsplit('.', 1)[1]}"
+    clean = " ".join(re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]+', " ", filename).split()).strip(" .") or fallback
+    match = re.search(r"\.[A-Za-z0-9]{1,16}$", clean)
+    extension = match.group() if match else ""
+    stem = clean[:len(clean) - len(extension)][:120 - len(extension)].rstrip(" .")
+    clean = stem + extension
+    ascii_name = unicodedata.normalize("NFKD", stem).encode("ascii", "ignore").decode("ascii")
+    ascii_name = " ".join(re.sub(r"[^A-Za-z0-9._ -]+", "", ascii_name).split()).strip(" .")
+    ascii_name = ascii_name + extension if ascii_name else fallback
+    if extension and not ascii_name.endswith(extension):
+        ascii_name += extension
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(clean, safe='')}"
 
 
@@ -134,19 +139,21 @@ def _export(session):
 
     def generate():
         yield f"# {title}\n\n_{_t('chat.export_note', site=site, date=db.now()[:16] + ' UTC')}_\n\n"
-        for row in chats.iter_messages(session_id):
-            who = you if row["role"] == "user" else (row["model_name"] or assistant)
-            yield f"---\n\n### {who} · {row['created_at'][:16]} UTC\n\n"
-            # Only answers carry a reasoning block; a user's message is exported as typed.
-            reasoning, answer = attachments.split_reasoning(row["content"]) if row["role"] == "assistant" \
-                else ("", row["content"])
-            if reasoning:
-                quoted = "\n".join("> " + line for line in reasoning.splitlines())
-                yield f"> **{reasoning_label}**\n>\n{quoted}\n\n"
-            yield answer.rstrip() + "\n\n"
-            names = [item["filename"] for item in chats.attachments_for([row["id"]]).get(row["id"], [])]
-            if names:
-                yield f"_{_t('chat.export_attachments', names=', '.join(names))}_\n\n"
+        for rows in chats.iter_message_batches(session_id):
+            files = chats.attachments_for(row["id"] for row in rows)
+            for row in rows:
+                who = you if row["role"] == "user" else (row["model_name"] or assistant)
+                yield f"---\n\n### {who} · {row['created_at'][:16]} UTC\n\n"
+                # Only answers carry a reasoning block; a user's message is exported as typed.
+                reasoning, answer = attachments.split_reasoning(row["content"]) if row["role"] == "assistant" \
+                    else ("", row["content"])
+                if reasoning:
+                    quoted = "\n".join("> " + line for line in reasoning.splitlines())
+                    yield f"> **{reasoning_label}**\n>\n{quoted}\n\n"
+                yield answer.rstrip() + "\n\n"
+                names = [item["filename"] for item in files.get(row["id"], [])]
+                if names:
+                    yield f"_{_t('chat.export_attachments', names=', '.join(names))}_\n\n"
 
     filename = f"{title}.md"
     return Response(stream_with_context(generate()), mimetype="text/markdown", headers={

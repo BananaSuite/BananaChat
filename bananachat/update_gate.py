@@ -53,7 +53,11 @@ small { color: var(--muted); }
   <hr>
   <h1 lang="it">Torniamo subito</h1>
   <p lang="it">Il server &egrave; in aggiornamento. Di solito richiede pochi minuti; la pagina si ricarica da sola.</p>
-  <small>Your chats and settings are safe. &middot; Le tue chat e impostazioni sono al sicuro.</small>
+  <hr>
+  <h1 lang="de">Wir sind gleich wieder da</h1>
+  <p lang="de">Der Server wird gerade aktualisiert. Das dauert meist nur wenige Minuten; die Seite l&auml;dt sich von selbst neu.</p>
+  <small>Your chats and settings are safe. &middot; <span lang="it">Le tue chat e impostazioni sono al sicuro.</span>
+    &middot; <span lang="de">Deine Chats und Einstellungen sind sicher.</span></small>
 </main>
 </body>
 </html>

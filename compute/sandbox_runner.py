@@ -1,38 +1,13 @@
-"""Sandbox runner: disposable, locked-down containers for BananaChat agents (runs on the cluster).
+"""Sandbox runner: disposable, locked-down containers for BananaChat cloud sessions (runs on the compute server).
 
-Run from the repository root with ``python -m compute.sandbox_runner``; it uses
-only the standard library, like the inference gateway. It is the only
-BananaChat component that talks to the container engine, and every limit is
-enforced here, so a compromised web server cannot loosen them. The operator
-guide and threat model are in ``docs/agents.md``.
+Run from the repository root with ``python -m compute.sandbox_runner``. It uses only the standard library, and
+importing it has no side effects. It is the only component that talks to the container engine, and it enforces
+every limit itself, so a compromised web server cannot loosen them.
 
-Environment (all optional except the token file):
+Nothing user-controlled reaches a shell on the host: the engine gets argument lists, identifiers are generated
+here or matched against strict patterns, and file operations run inside the container with fixed scripts.
 
-* ``BC_SANDBOX_HOST`` / ``BC_SANDBOX_PORT`` - listen address (127.0.0.1:11436);
-* ``BC_SANDBOX_TOKEN_FILE`` - the bearer token, a private (0600) regular file
-  holding at least 32 characters; created with a random token if missing;
-* ``BC_SANDBOX_ENGINE`` (``podman`` or ``docker``), ``BC_SANDBOX_ENGINE_BINARY``
-  (absolute path), ``BC_SANDBOX_RUNTIME`` (OCI runtime such as ``runsc``);
-* ``BC_SANDBOX_IMAGES`` - comma-separated image allowlist (pulled by the
-  operator; the runner never pulls);
-* ``BC_SANDBOX_NETWORK`` - ``none`` (default) or ``bridge``;
-* ``BC_SANDBOX_MAX`` (4 sandboxes), ``BC_SANDBOX_MAX_EXECS`` (8 engine
-  operations at once), ``BC_SANDBOX_MEMORY_MB`` (1024), ``BC_SANDBOX_CPUS``
-  (1.0), ``BC_SANDBOX_PIDS`` (256), ``BC_SANDBOX_WORKSPACE_MB`` (512),
-  ``BC_SANDBOX_EXEC_TIMEOUT`` (300 s), ``BC_SANDBOX_IDLE_TTL`` (1800 s),
-  ``BC_SANDBOX_MAX_AGE`` (21600 s), ``BC_SANDBOX_OUTPUT_KB`` (64 per stream);
-* ``BC_SANDBOX_ALLOW_ROOTFUL`` - ``1`` to accept a rootful engine;
-* ``BC_SANDBOX_INSTANCE`` - name of this runner, stored as a container label
-  so several runners (or a test suite) on one host never reap each other's
-  sandboxes; ``BC_SANDBOX_MAX_CONNECTIONS`` (32);
-* ``BC_SANDBOX_TRUSTED_PEERS`` (loopback: the local proxy or SSH tunnel) and
-  ``BC_SANDBOX_MAX_CONNECTIONS_PER_PEER`` (4 connections per other address).
-
-Nothing user-controlled ever reaches a shell on the host: the engine is always
-started with an argument list, identifiers are generated here or validated
-against strict patterns, and file operations run *inside* the container with
-fixed scripts that receive paths as positional arguments. Importing this module
-has no side effects.
+Settings, the operator guide and the threat model: docs/agents.md.
 """
 
 from __future__ import annotations

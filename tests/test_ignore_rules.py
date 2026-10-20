@@ -1,10 +1,4 @@
-"""The ignore rules have to stop a secret from being swept up by `git add .`.
-
-Nobody commits a private key on purpose. It happens when a key is generated
-in a working copy while testing something and a later `git add .` picks it up.
-These checks assert the rules that make that impossible, so that editing
-.gitignore carelessly fails here rather than in a published repository.
-"""
+""".gitignore keeps keys, certificates, archives and local data out of `git add .`."""
 
 import subprocess
 from pathlib import Path

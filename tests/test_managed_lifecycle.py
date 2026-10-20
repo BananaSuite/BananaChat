@@ -920,7 +920,7 @@ def test_an_openpgp_signature_does_not_satisfy_the_allowed_signers_file(tmp_path
     """
     # GPG's agent uses Unix sockets under its home, whose pathname is limited
     # to about 100 bytes. A long pytest --basetemp must not prevent this real
-    # signature regression from creating its disposable key.
+    # signature test from creating its disposable key.
     temporary = tempfile.TemporaryDirectory(prefix='banana-gpg-')
     request.addfinalizer(temporary.cleanup)
     home = Path(temporary.name)

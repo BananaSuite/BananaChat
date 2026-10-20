@@ -22,7 +22,7 @@
   <div class="grid grid-2">
     <section class="settings-section" aria-labelledby="runner-title">
       <div class="section-header">
-        <h2 id="runner-title">{{ icon("server") }}Sandbox runner</h2>
+        <h2 id="runner-title">Sandbox runner</h2>
         <a class="btn btn-sm" href="{{ url_for('admin.agents', refresh=1) }}">{{ icon("refresh") }}<span>Check now</span></a>
       </div>
       {% if not runner_configured %}
@@ -32,18 +32,18 @@
       {% else %}
       <dl class="details">
         <dt>Status</dt><dd><span class="badge badge-success">{{ icon("check") }}Reachable</span></dd>
-        <dt>Engine</dt><dd>{{ health.engine or "—" }}{% if health.rootless is sameas true %} <span class="badge badge-success">rootless</span>{% elif health.rootless is sameas false %} <span class="badge badge-danger">rootful</span>{% endif %}</dd>
+        <dt>Engine</dt><dd>{{ health.engine or "—" }}{% if health.rootless is sameas true %} <span class="badge badge-success">Rootless</span>{% elif health.rootless is sameas false %} <span class="badge badge-danger">Rootful</span>{% endif %}</dd>
         <dt>Runtime</dt><dd>{{ health.runtime or "default" }}</dd>
-        <dt>Network</dt><dd>{% if health.network in (None, "", "none") %}<span class="badge badge-success">none</span>{% else %}<span class="badge badge-danger">{{ health.network }}</span>{% endif %}</dd>
+        <dt>Network</dt><dd>{% if health.network in (None, "", "none") %}<span class="badge badge-success">None</span>{% else %}<span class="badge badge-danger">{{ health.network }}</span>{% endif %}</dd>
         <dt>Sandboxes</dt><dd>{{ health.sandboxes if health.sandboxes is not none else "—" }} of {{ health.max if health.max is not none else "—" }}</dd>
         <dt>Images</dt><dd class="break-anywhere mono small">{{ (health.images or []) | join(", ") or "—" }}</dd>
-        <dt>Git in the image</dt><dd>{% if image.git is sameas true %}<span class="badge badge-success">{{ icon("check") }}available</span>{% elif image.git is sameas false %}<span class="badge badge-warning">missing</span> <span class="small muted">imports work, no patch export</span>{% else %}<span class="badge">not checked</span>{% endif %}</dd>
+        <dt>Git in the image</dt><dd>{% if image.git is sameas true %}<span class="badge badge-success">{{ icon("check") }}Available</span>{% elif image.git is sameas false %}<span class="badge badge-warning">Missing</span> <span class="small muted">imports work, no patch export</span>{% else %}<span class="badge">Not checked</span>{% endif %}</dd>
       </dl>
       {% endif %}
     </section>
 
     <section class="settings-section {{ 'settings-section-danger' if active else '' }}" aria-labelledby="kill-title">
-      <div class="section-header"><h2 id="kill-title">{{ icon("terminal") }}Active sessions</h2></div>
+      <div class="section-header"><h2 id="kill-title">Active sessions</h2></div>
       <p class="stat-value">{{ active }}</p>
       <p class="muted">Queued, running and paused sessions. Stop all interrupts their commands and tells each owner that an administrator stopped the session.</p>
       <form method="post" action="{{ url_for('admin.agents_stop_all') }}" data-confirm="Stop every active cloud session now?" data-confirm-label="Stop all" data-confirm-danger>
@@ -54,7 +54,7 @@
   </div>
 
   <section class="settings-section" id="settings" aria-labelledby="settings-title">
-    <h2 id="settings-title">{{ icon("settings") }}Settings</h2>
+    <h2 id="settings-title">Settings</h2>
     <form method="post" action="{{ url_for('admin.agents_settings') }}" class="stack">
       {{ csrf() }}
       <input type="hidden" name="access_mode_present" value="1">
@@ -88,13 +88,13 @@
         {% endfor %}
       </div>
       <p class="hint mb-0">Every model call counts against the owner's <strong>Cloud sessions</strong> token limits in Limits. A session stops when its owner runs out.</p>
-      <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("check") }}<span>Save settings</span></button></div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
     </form>
   </section>
 
   <section class="settings-section" id="git" aria-labelledby="git-title">
     <div class="section-header">
-      <h2 id="git-title">{{ icon("code") }}Git repositories</h2>
+      <h2 id="git-title">Git repositories</h2>
       <form method="post" action="{{ url_for('admin.agents_image_check') }}">
         {{ csrf() }}
         <button type="submit" class="btn btn-sm"{% if not runner_configured %} disabled{% endif %}>{{ icon("refresh") }}<span>Check the image for Git</span></button>
@@ -128,13 +128,13 @@
         </div>
         {% endfor %}
       </div>
-      <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("check") }}<span>Save Git settings</span></button></div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save Git settings</button></div>
     </form>
   </section>
 
   <section class="settings-section" id="models" aria-labelledby="models-title">
     <div class="section-header">
-      <h2 id="models-title">{{ icon("layers") }}Models</h2>
+      <h2 id="models-title">Models</h2>
       <form method="post" action="{{ url_for('admin.agents_models_refresh') }}">
         {{ csrf() }}
         <button type="submit" class="btn btn-sm">{{ icon("refresh") }}<span>Check tool support</span></button>
@@ -153,7 +153,7 @@
           {% for item in models %}{% set row = item.row %}
           <tr{% if not item.text %} class="row-muted"{% endif %}>
             <td class="cell-full"><strong>{{ row.display_name }}</strong><br><span class="small faint mono">{{ row.ollama_name }}</span></td>
-            <td data-label="Detected:">{% if item.caps is none %}<span class="badge">not checked</span>{% elif item.caps.supports_tools %}<span class="badge badge-success">tools</span>{% else %}<span class="badge">no tools</span>{% endif %}</td>
+            <td data-label="Detected:">{% if item.caps is none %}<span class="badge">Not checked</span>{% elif item.caps.supports_tools %}<span class="badge badge-success">Tools</span>{% else %}<span class="badge">No tools</span>{% endif %}</td>
             <td class="cell-full" data-label="Use for sessions:">
               <label class="visually-hidden" for="override-{{ row.id }}">Use {{ row.display_name }} for sessions</label>
               <select id="override-{{ row.id }}" name="override_{{ row.id }}">
@@ -162,24 +162,24 @@
                 <option value="deny"{% if item.override == "deny" %} selected{% endif %}>Never</option>
               </select>
             </td>
-            <td data-label="Result:">{% if item.usable %}<span class="badge badge-success">{{ icon("check") }}usable</span>{% elif not item.text %}<span class="badge">unavailable</span>{% else %}<span class="badge">not used</span>{% endif %}</td>
+            <td data-label="Result:">{% if item.usable %}<span class="badge badge-success">{{ icon("check") }}Usable</span>{% elif not item.text %}<span class="badge">Unavailable</span>{% else %}<span class="badge">Not used</span>{% endif %}</td>
           </tr>
           {% endfor %}
           </tbody>
         </table>
       </div>
-      <div class="form-actions section-body"><button type="submit" class="btn btn-primary">{{ icon("check") }}<span>Save model choices</span></button></div>
+      <div class="form-actions section-body"><button type="submit" class="btn btn-primary">Save model choices</button></div>
     </form>
     {% endif %}
   </section>
 
   <section class="settings-section" id="tasks" aria-labelledby="tasks-title">
     <div class="section-header">
-      <h2 id="tasks-title">{{ icon("file") }}All sessions</h2>
-      <nav class="row" aria-label="Filter by status">
-        <a class="btn btn-sm{% if not status_filter %} btn-primary{% endif %}" href="{{ url_for('admin.agents', _anchor='tasks') }}">All</a>
+      <h2 id="tasks-title">All sessions</h2>
+      <nav class="tabs tabs-compact" aria-label="Filter by status">
+        <a href="{{ url_for('admin.agents', _anchor='tasks') }}"{% if not status_filter %} aria-current="page"{% endif %}>All</a>
         {% for value in statuses %}
-        <a class="btn btn-sm{% if status_filter == value %} btn-primary{% endif %}" href="{{ url_for('admin.agents', status=value, _anchor='tasks') }}">{{ value | replace("_", " ") }}</a>
+        <a href="{{ url_for('admin.agents', status=value, _anchor='tasks') }}"{% if status_filter == value %} aria-current="page"{% endif %}>{{ value | replace("_", " ") | capitalize }}</a>
         {% endfor %}
       </nav>
     </div>
@@ -192,9 +192,9 @@
         <tbody>
         {% for item in tasks %}{% set row = item.row %}{% set shown = "interrupted" if item.stale else row.status %}
         <tr>
-          <td class="cell-wide cell-full"><a href="{{ url_for('admin.agents_task', task_id=row.id) }}">{{ row.title or "Untitled session" }}</a>{% if row.swarm %} <span class="badge badge-info">parallel agents</span>{% endif %}</td>
+          <td class="cell-wide cell-full"><a href="{{ url_for('admin.agents_task', task_id=row.id) }}">{{ row.title or "Untitled session" }}</a>{% if row.swarm %} <span class="badge badge-info">Parallel agents</span>{% endif %}</td>
           <td data-label="User:">{% if row.username %}<a href="{{ url_for('admin.user_detail', user_id=row.user_id) }}">{{ row.username }}</a>{% else %}<span class="faint">deleted</span>{% endif %}</td>
-          <td><span class="badge {{ status_badges.get(shown, '') }}">{{ shown | replace("_", " ") }}</span></td>
+          <td><span class="badge {{ status_badges.get(shown, '') }}">{{ shown | replace("_", " ") | capitalize }}</span></td>
           <td class="mono small" data-label="Model:">{{ row.model_name }}</td>
           <td class="text-right" data-label="Steps:">{{ row.steps_used | number }}</td>
           <td class="text-right" data-label="Tokens:">{{ (row.tokens_in + row.tokens_out) | number }}</td>

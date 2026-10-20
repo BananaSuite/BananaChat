@@ -1,59 +1,18 @@
-"""The limit system: effective limits, request rates, per-model limits, 5-hour windows, dynamic adjustment,
-tiers and reasoning-effort tiers.
+"""Limit decisions in tokens: request rates, 5-hour and weekly windows, per-model limits, dynamic adjustment,
+tiers, grants and reasoning effort. Storage is in :mod:`bananachat.db.limits`.
 
-Every amount is in **tokens** (prompt + completion). Each pool (``api``,
-``chat``, ``agent``) has a policy (:mod:`bananachat.db.limits`) with three
-limits:
+* :func:`effective` (a pool: ``api``, ``chat`` or ``agent``) and :func:`model_limits` - the limits that apply to
+  one account, each number with its reasons.
+* :func:`admit` - the admission check for one request: pool tokens, the model's lock and tokens, then one request
+  from the model's rate. Returns an ``Admission``; its :class:`Refusal` says why when it is not allowed.
+* :func:`check_rate` - the pool's request rate, checked where requests arrive.
+* :func:`resolve_effort` - the reasoning level for a request; raises :class:`EffortLocked` above the account's
+  ceiling (:func:`effort_ceiling`).
+* :func:`usable_fallbacks` and :func:`quota_fallback` - which other models a request may use.
 
-* **rate** - one or more rules, ``N requests per second | minute | hour |
-  day`` with a burst; each is a token bucket per account (every API key, the
-  playground, chat and agents of one account share their pool's buckets) and
-  all must pass. Never raised automatically; ``dynamic`` may only lower it
-  while demand is high.
-* **window** - tokens per **5-hour window**. A window opens at the first counted request when none
-  is open for that account and pool, lasts 5 hours, and resets when it ends.
-* **weekly** - tokens per rolling week (7 days from the first counted request
-  after the previous weekly window ended); off by default. When used up,
-  requests wait for the week to end.
-
-Every model has a policy too: a **weight** (usage counts ``tokens × weight``
-against pool limits), whether it **counts toward the pool** limits (on by
-default for local models, off by default for other providers), and optional
-model-specific limits (rate rules, 5-hour and weekly tokens, counted in raw
-tokens across every service) with the same windows. A request passes the
-pool limits (unless the model does not count toward them) **and** the model's
-limits; :func:`admit` checks both. Normal and no-history chats consume token
-limits only when the administrator enables their provider class (local off,
-cloud on by default); access, request rates and effort still apply.
-
-:func:`effective` (pool) and :func:`model_limits` compute what applies to one
-account, in this order:
-
-1. base - the account's custom limit, else the policy, times the tier
-   multiplier when the limit's ``auto_tiers`` option is on;
-2. dynamic multiplier (``dynamic`` on, account not exempt) - site demand
-   (queue use and the number of people using the site) times the account's
-   usage pattern, clamped to 0.5-2.0 in 5 % steps; model limits scale the
-   deviation by the model's ``sensitivity`` (heavy models react more); custom
-   limits are a floor and are never reduced;
-3. model limits only: the provider's remaining capacity (:func:`register_capacity_provider`);
-4. pool limits only: the music-program bonus;
-5. grants (for the pool, or for the model) - any ``unlimited`` grant wins,
-   then multipliers (multiplied together), then extras (added);
-6. administrators are never limited.
-
-Reasoning effort (``off < low < medium < high < extra < max``): a model's supported
-levels come from the catalog (:func:`supported_efforts`); each account may use
-levels up to its ceiling (:func:`effort_ceiling`): its own level for the model
-or for all models, else the model's default, else the site default (medium).
-Levels above are unlocked by an administrator, an approved request, or
-automatically after sustained use (:func:`auto_unlock_effort`).
-
-Background jobs (run by one process): ``limits-demand`` samples the
-inference queue and the number of active people every minute, ``limits-peak-hours``
-finds the site's busiest hours, ``limits-tiers`` promotes accounts (up only)
-when any policy has ``auto_tiers`` on and unlocks reasoning effort, and
-``limits-buckets`` forgets idle request buckets.
+Wrap several decisions in :func:`snapshot` to read each setting once. Background jobs: ``limits-demand``,
+``limits-peak-hours``, ``limits-tiers`` and ``limits-buckets``. The order in which limits are combined and the
+stored tables: docs/architecture.md, section Limits.
 """
 
 from __future__ import annotations
@@ -73,7 +32,7 @@ from bananachat.db import credits
 from bananachat.db import limits as store
 from bananachat.db import settings as site_settings
 from bananachat.db import users
-from bananachat.i18n import translate
+from bananachat.i18n import DECIMAL_COMMA, translate
 from bananachat.services import background
 
 DYNAMIC_MIN, DYNAMIC_MAX, DYNAMIC_STEP = 0.5, 2.0, 0.05
@@ -642,7 +601,9 @@ def dynamic_for(user_id: str, now: datetime | None = None) -> Dynamic:
     return Dynamic(multiplier, round(demand, 3), round(personal, 3), tuple(reasons), people)
 
 
-# ----- provider capacity (hook) ----------------------------------------------------------
+# ----- provider capacity -----------------------------------------------------------------
+# No built-in provider registers a report. The hook is for providers whose
+# allowance is shared by every user, so its limits can shrink as it runs out.
 
 @dataclass(frozen=True)
 class Capacity:
@@ -658,11 +619,9 @@ _capacity_providers: dict[str, Callable] = {}
 def register_capacity_provider(provider: str, report: Callable) -> None:
     """Let a provider (``ai_models.provider``) report its remaining capacity: ``report(model) -> Capacity | None``.
 
-    While a provider reports less than half of its 5-hour or weekly allowance
-    left, the limits of its models shrink in proportion (to zero when nothing
-    is left), so a shared upstream allowance is spread over everyone. The
-    default is no provider: nothing changes. Reports are asked for on each
-    admission, so they should be cheap (cached by the provider).
+    While less than half of its 5-hour or weekly allowance is left, the limits
+    of its models shrink in proportion, down to zero when nothing is left.
+    ``report`` runs on every admission, so it should return a cached value.
     """
     _capacity_providers[provider] = report
 
@@ -1034,9 +993,9 @@ UNIT_ORDER = tuple(store.UNITS)
 
 
 def _short(value: float, lang: str = "en") -> str:
-    """At most three significant digits, never in exponent form (decimal comma in Italian)."""
+    """At most three significant digits, never in exponent form (decimal comma in Italian and German)."""
     text = f"{value:.0f}" if value >= 100 else f"{value:.3g}"
-    return text.replace(".", ",") if lang == "it" else text
+    return text.replace(".", ",") if lang in DECIMAL_COMMA else text
 
 
 def rule_text(lang: str, rule) -> str:
@@ -1906,6 +1865,20 @@ def apply_model_preset(model_id: int, preset: str, *, updated_by: str | None = N
         from bananachat.services import external_providers
 
         policy.update(external_providers.preset_limits(preset))
+    elif model["backend"] in ("claude", "codex"):
+        from bananachat.services import subscription_pool
+
+        provider = model["backend"]
+        family = model["family"] or subscription_pool.family_of(provider, model["ollama_name"])
+        strict = subscription_pool.strict_policy(provider, model["ollama_name"], family=family)
+        if preset != strict["preset"]:
+            family = subscription_pool.PRESET_FAMILIES[provider][preset]
+            strict = subscription_pool.strict_policy(provider, model["ollama_name"], family=family)
+        # Presets replace budget fields, keeping administrator switches.
+        strict.pop("auto_tiers")
+        strict["counts_toward_pool"] = current["counts_toward_pool"] \
+            if current["counts_toward_pool"] is not None else False
+        policy.update(strict)
     return store.set_model_policy(model_id, policy, updated_by)
 
 

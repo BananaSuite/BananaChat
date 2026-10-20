@@ -1,6 +1,6 @@
 """The usage ledger, image reservations and quota requests.
 
-Every amount is in **tokens** (prompt + completion). Usage is recorded per
+Every amount is in tokens (prompt + completion). Usage is recorded per
 request type and counted per *pool*:
 
 * ``api`` - API, playground and image generation;

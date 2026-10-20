@@ -1,5 +1,3 @@
-# SPDX-FileCopyrightText: 2026 Luca Zani and all contributors
-# SPDX-License-Identifier: AGPL-3.0-only
 """BananaChat: a self-hosted chat application for Ollama.
 
 The package is importable without its web dependencies so that stdlib-only
@@ -7,7 +5,7 @@ tools (the compute proxy, the lifecycle manager) can share constants with it.
 """
 
 PRODUCT_NAME = "BananaChat"
-__version__ = "1.7.0"
+__version__ = "1.7.2"
 
 
 def create_app(*args, **kwargs):

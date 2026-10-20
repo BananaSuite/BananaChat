@@ -19,7 +19,7 @@ Additive only, and safe to run again.
 * ``site_settings``: the community options (on by default) and the quota
   fallbacks between local and cloud models (on by default).
 * ``claude_accounts.cooldown_until``: a subscription account the Claude site
-  reported as out of quota is skipped until then.
+  reported as out of quota is skipped until then (removed by v21).
 """
 
 import re

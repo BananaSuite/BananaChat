@@ -15,7 +15,10 @@
       {% endfor %}
     </nav>
   </div>
-  <p class="muted small mt-1">Approving applies the change at once: a custom limit for the account (never lower than what it has), a grant for a temporary increase that ends by itself, or the requested reasoning effort level (and every level below it). You can decide any request at any time, also while the community is voting on it; tokens people pledged to it are then given back. A request whose community voting closed keeps waiting here until you decide or its author cancels it.</p>
+  <details class="admin-help mt-2">
+    <summary>{{ icon("chevron-down") }}<span>How approving works</span></summary>
+    <p class="muted small mb-0">Approving applies the change at once: a custom limit for the account (never lower than what it has), a grant for a temporary increase that ends by itself, or the requested reasoning effort level (and every level below it). You can decide any request at any time, also while the community is voting on it; tokens people pledged to it are then given back. A request whose community voting closed keeps waiting here until you decide or its author cancels it.</p>
+  </details>
   {% if requests %}
   <div class="grid grid-2 mt-1">
     {% for item in requests %}
@@ -40,7 +43,7 @@
         {{ csrf() }}
         <label for="quota-msg-{{ req.id }}" class="label">Message to {{ req.username }} (optional)</label>
         <textarea id="quota-msg-{{ req.id }}" name="message" maxlength="1000" rows="2"></textarea>
-        <div class="form-actions form-actions-start">
+        <div class="form-actions">
           {% if req.duration_type == "permanent" %}<button type="submit" name="decision" value="approve" class="btn btn-primary">Approve</button>{% endif %}
           <button type="submit" name="decision" value="deny" class="btn btn-danger">Deny</button>
         </div>

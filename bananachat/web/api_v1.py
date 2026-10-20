@@ -22,7 +22,7 @@ from bananachat import db, security
 from bananachat.db import tokens, users
 from bananachat.services import inference, limits, status
 from bananachat.services.access import AccessContext, usable_models
-from bananachat.services.completions import CompletionError, CompletionRun, parse_chat_request
+from bananachat.services.completions import CompletionError, CompletionRun, body_limit, parse_chat_request
 from bananachat.services.images import ImageError, ImageJob
 
 bp = Blueprint("api_v1", __name__, url_prefix="/v1")
@@ -203,11 +203,11 @@ def get_model(model_id):
 # ----- chat completions -------------------------------------------------------------
 
 @bp.post("/chat/completions")
-@security.body_limit(BODY_LIMIT)
+@security.body_limit(body_limit)
 @authenticated
 @security.long_request
 def chat_completions():
-    blocked = status.guard(g.api_user, openai=True)  # maintenance or AI-server outage
+    blocked = status.guard(g.api_user, openai=True)  # maintenance or model-server outage
     if blocked is not None:
         return blocked
     run = None

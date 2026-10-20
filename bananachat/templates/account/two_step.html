@@ -35,7 +35,7 @@
     {% if state %}
     <section class="settings-section" aria-labelledby="two-step-status">
       <h2 id="two-step-status">{{ t("two_step.status_title") }} <span class="badge badge-success">{{ t("two_step.on") }}</span></h2>
-      <p class="mb-0">{{ t("two_step.on_since", when=(state.enabled_at | datetime)) }} {{ t("two_step.codes_left", count=state.codes_left) }}</p>
+      <p class="mb-0">{{ t_html("two_step.on_since", when=(state.enabled_at | local_time)) }} {{ t("two_step.codes_left", count=state.codes_left) }}</p>
       {% if not state.readable %}
       <div class="alert alert-warning mt-2">{{ icon("alert") }}<p>{{ t("two_step.unreadable") }}</p></div>
       {% endif %}

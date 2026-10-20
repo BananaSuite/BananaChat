@@ -3,7 +3,7 @@
 Settings are one JSON document (``agent_settings``), validated on write and
 again on read: unknown keys are dropped and out-of-range values are clamped,
 so a damaged row can never loosen a limit beyond its hard maximum. The feature
-is **off** until an administrator enables it, and swarms are off by default,
+is off until an administrator enables it, and swarms are off by default,
 as is starting tasks from a Git repository (``git_enabled``; ``git_hosts`` lists
 the allowed hosts, validated by :mod:`gitfetch`).
 
@@ -143,7 +143,7 @@ def enabled() -> bool:
 # ----- models ----------------------------------------------------------------------
 
 def supports_tools(model, caps: dict, overrides: dict) -> bool:
-    # Ollama and external API transports support tools.
+    # Ollama and external API transports support tools; the subscription CLIs run without them.
     if model["backend"] not in ("ollama", "external"):
         return False
     override = overrides.get(str(model["id"]))

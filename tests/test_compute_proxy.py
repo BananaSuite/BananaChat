@@ -186,6 +186,38 @@ def test_chunked_and_oversized_bodies_are_refused(proxy, backend):
     assert not backend.calls
 
 
+def _post_large(proxy, token, path="/api/chat", size=4 * 1024 * 1024):
+    connection = http.client.HTTPConnection("127.0.0.1", proxy.server_port, timeout=10)
+    try:
+        connection.request("POST", path, body=b" " * size,
+                           headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+    finally:
+        connection.close()
+
+
+def test_large_requests_that_are_refused_get_an_answer_not_a_reset(proxy, tmp_path):
+    """A chat with images is several MB; the web server must see the refusal rather than a broken connection."""
+    (tmp_path / "maintenance").write_text("updating")
+    status, body = _post_large(proxy, TOKEN)
+    assert status == 503 and "Maintenance" in body["error"]
+    status, _body = _post_large(proxy, "y" * 64)
+    assert status == 401
+    status, _body = _post_large(proxy, TOKEN, path="/api/unknown")
+    assert status == 404
+
+
+def test_the_busy_answer_survives_a_large_body(make_proxy):
+    proxy = make_proxy(max_connections=1)
+    assert proxy.slots.acquire(blocking=False)  # every slot is in use
+    try:
+        status, body = _post_large(proxy, TOKEN)
+        assert status == 503 and "busy" in body["error"]
+    finally:
+        proxy.slots.release()
+
+
 def test_excess_connections_get_a_json_503(make_proxy, backend):
     proxy = make_proxy(max_connections=1)
     backend.slow.set()
@@ -199,6 +231,42 @@ def test_excess_connections_get_a_json_503(make_proxy, backend):
     assert results == [200]
 
 
+def test_clients_without_the_token_cannot_take_the_places_of_authenticated_requests(make_proxy, backend,
+                                                                                   monkeypatch):
+    monkeypatch.setattr(inference_proxy, "DRAIN_SECONDS", 1.0)
+    monkeypatch.setattr(inference_proxy, "AUTH_FAILURES_PER_MINUTE", 6)
+    proxy = make_proxy(max_connections=2, max_pending=8)
+    sockets, stop = [], threading.Event()
+
+    def trickle(sock):
+        while not stop.wait(0.05):
+            try:
+                sock.sendall(b" ")
+            except OSError:
+                break
+
+    try:
+        for _ in range(7):
+            sock = socket.create_connection(("127.0.0.1", proxy.server_port), timeout=5)
+            sock.sendall(b"POST /api/chat HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer wrong\r\n"
+                         b"Content-Length: 30000000\r\n\r\n{")
+            threading.Thread(target=trickle, args=(sock,), daemon=True).start()
+            sockets.append(sock)
+            time.sleep(0.02)
+        # Once the address is throttled, further wrong tokens are answered without reading the body.
+        started = time.monotonic()
+        assert sockets[-1].recv(4096).startswith(b"HTTP/1.1 429")
+        assert time.monotonic() - started < 0.5
+        assert [call(proxy, "/api/version")[0] for _ in range(3)] == [200, 200, 200]
+        for sock in sockets[:-1]:
+            assert sock.recv(4096).startswith(b"HTTP/1.1 401")
+        assert time.monotonic() - started < 3
+    finally:
+        stop.set()
+        for sock in sockets:
+            sock.close()
+
+
 def test_idle_clients_are_disconnected(make_proxy):
     proxy = make_proxy(client_timeout=0.3)
     with socket.create_connection(("127.0.0.1", proxy.server_port), timeout=5) as sock:
@@ -210,7 +278,8 @@ def test_idle_clients_are_disconnected(make_proxy):
 
 @pytest.mark.parametrize("stage", ["headers", "body", "refusal"])
 def test_trickling_clients_cannot_hold_a_connection_forever(make_proxy, backend, stage):
-    proxy = make_proxy(max_connections=1, client_timeout=0.5, header_deadline=0.2, body_deadline=0.2)
+    proxy = make_proxy(max_connections=1, max_pending=1, client_timeout=0.5, header_deadline=0.2,
+                       body_deadline=0.2)
     held = None
     if stage == "refusal":
         held = socket.create_connection(("127.0.0.1", proxy.server_port), timeout=2)

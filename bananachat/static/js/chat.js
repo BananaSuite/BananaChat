@@ -5,7 +5,7 @@
 // answer keeps being generated and saved on the server when this page goes
 // away; if the stream breaks, the page polls /status until the run ends.
 import {
-  ApiError, api, boot, checkStatusSoon, confirmDialog, copyText, debounce, el, icon, onStatusChange, pageData,
+  ApiError, api, boot, checkStatusSoon, confirmDialog, copyText, debounce, decimal, el, formatDate, icon, onStatusChange, pageData,
   promptDialog, readEventStream, safeStorage, secretDialog, t, toast,
 } from "./core.js";
 import { initPersonas } from "./chat-personas.js";
@@ -66,7 +66,6 @@ const state = {
 
 const chatUrl = (id, action = "") => `${data.urls.root}/${encodeURIComponent(id)}${action ? `/${action}` : ""}`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const dateFormat = new Intl.DateTimeFormat(boot.lang === "it" ? "it-IT" : "en-GB", { dateStyle: "medium", timeStyle: "short" });
 
 function announce(text) {
   ui.announcer.textContent = "";
@@ -75,8 +74,8 @@ function announce(text) {
 
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${decimal(bytes / 1024)} KB`;
+  return `${decimal(bytes / 1024 / 1024)} MB`;
 }
 
 function setTitle(title) {
@@ -96,7 +95,7 @@ function metaText(message) {
     parts.push(message.model_name || t("chat_assistant"));
     if (message.tokens_out) parts.push(t("chat_tokens", { count: message.tokens_out }));
   }
-  if (message.created_at) parts.push(dateFormat.format(new Date(message.created_at)));
+  if (message.created_at) parts.push(formatDate(message.created_at));
   return parts.join(" · ");
 }
 
@@ -105,6 +104,8 @@ function iconButton(name, label, onclick, extra = {}) {
 }
 
 const canSpeak = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+// Reading aloud and dictation use the interface language.
+const speechLanguage = { it: "it-IT", de: "de-DE" }[boot.lang] ?? "en-US";
 let speakingButton = null;
 
 function stopSpeaking() {
@@ -124,7 +125,7 @@ function speak(button, content) {
   const text = speakableText(content);
   if (!text) return;
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = boot.lang === "it" ? "it-IT" : "en-US";
+  utterance.lang = speechLanguage;
   utterance.onend = utterance.onerror = () => { if (speakingButton === button) stopSpeaking(); };
   speakingButton = button;
   button.setAttribute("aria-pressed", "true");
@@ -414,7 +415,11 @@ class PendingAnswer {
     this.node.removeAttribute("aria-busy");
     this.status.remove();
     if (text) this.content.innerHTML = renderMessage(text, { labels });
-    else this.content.remove();
+    else {
+      // Nothing was written: "X is answering instead" would contradict the error below it.
+      this.content.remove();
+      this.notice.remove();
+    }
     const note = stateNote(stateName === "completed" ? "failed" : stateName, message);
     if (note) this.body.append(note);
     return this.node;
@@ -615,7 +620,7 @@ ui.stop.addEventListener("click", async () => {
   }
 });
 
-// Maintenance or an AI-server outage pauses sending; drafts stay possible.
+// Maintenance or a model-server outage pauses sending; drafts stay possible.
 onStatusChange(({ canSend }) => {
   state.canSend = canSend;
   ui.send.disabled = !canSend;
@@ -772,7 +777,7 @@ const { model: picker, effort: effortPicker } = initChatPickers({
       if (recognition) { recognition.stop(); return; }
       stopSpeaking();
       recognition = new Recognition();
-      recognition.lang = boot.lang === "it" ? "it-IT" : "en-US";
+      recognition.lang = speechLanguage;
       recognition.interimResults = true;
       recognition.continuous = false;
       const base = ui.input.value.trimEnd();

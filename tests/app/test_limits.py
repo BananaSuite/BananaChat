@@ -365,6 +365,58 @@ def test_tiers_are_validated_and_the_last_one_is_kept(app):
             store.delete_tier(store.list_tiers()[0]["id"])
 
 
+def test_tiers_and_the_personal_factor_count_only_services_with_token_limits(app, make_user):
+    """Chat has no token limit by default, so using it freely earns no higher tier or dynamic bonus."""
+    from bananachat.services import limits
+
+    user = make_user("chatty")
+    with app.app_context():
+        _policy("api", window={"auto_tiers": True, "dynamic": True})
+        _age(user["id"], 40)
+        now = datetime.now(timezone.utc)
+        for day in range(1, 8):
+            _charge(user["id"], 10_000, request_type="chat", at=now - timedelta(days=day, hours=1))
+        assert limits.promote() == []
+        progress = limits.tier_progress(user)
+        assert {item["key"]: item["have"] for item in progress["requirements"]}["tokens"] == 0
+        limits.forget_personal()
+        assert limits.effective(user, "api").dynamic.personal == 1.0  # no counted history: neutral
+        _policy("chat", window={"enabled": True})
+        limits.forget_personal()
+        assert limits.promote() == [("chatty", "Starter", "Regular")]
+        assert limits.effective(user, "api").dynamic.personal > 1.0
+
+
+@pytest.mark.parametrize("change", ["lock", "suspend"])
+def test_promotion_respects_an_administrator_change_made_after_the_candidates_were_read(
+        app, make_user, monkeypatch, change):
+    from bananachat import db
+    from bananachat.db import limits as store
+    from bananachat.services import limits
+
+    user = make_user("eager")
+    with app.app_context():
+        _policy("chat", window={"enabled": True, "auto_tiers": True})
+        _age(user["id"], 40)
+        now = datetime.now(timezone.utc)
+        for day in range(1, 8):
+            _charge(user["id"], 10_000, request_type="chat", at=now - timedelta(days=day, hours=1))
+        candidates = store.promotion_candidates
+
+        def read_then_changed(*args):
+            rows = candidates(*args)
+            if change == "lock":
+                store.update_user_settings(user["id"], None, tier_locked=1)
+            else:
+                db.execute("UPDATE users SET suspended=1, last_suspension_at=? WHERE id=?",
+                           (db.timestamp(now), user["id"]))
+            return rows
+
+        monkeypatch.setattr(store, "promotion_candidates", read_then_changed)
+        assert limits.promote() == []
+        assert limits.tier_progress(user)["index"] == 0
+
+
 # ----- dynamic adjustment ----------------------------------------------------------------------
 
 def test_dynamic_factors_are_deterministic():
@@ -572,6 +624,29 @@ def test_speed_sets_the_queue_lane_and_can_adjust_the_rate(app, make_user):
         assert store.user_settings(user["id"]).speed == "normal"
 
 
+def test_changing_speed_again_starts_from_the_normal_rate_not_the_last_adjustment(app, make_user):
+    """Each speed change applies to the normal rate: slowing down twice halves it once."""
+    from bananachat.db import limits as store
+    from bananachat.services import limits
+
+    user = make_user("yoyo")
+    with app.app_context():
+        def rate():
+            rule = limits.rate_limit(user, "api").rules[0]
+            return rule.requests, rule.per, rule.burst
+
+        policy = store.get_policy("api")
+        policy["rate"]["rules"] = [{"requests": 60, "per": "minute", "burst": 10}]
+        store.set_policy("api", policy, None)
+        limits.set_speed(user["id"], "slow", adjust_rate=True, updated_by=None)
+        limits.set_speed(user["id"], "slow", adjust_rate=True, updated_by=None)
+        assert rate() == (30, "minute", 5)
+        limits.set_speed(user["id"], "fast", adjust_rate=True, updated_by=None)
+        assert rate() == (120, "minute", 20)
+        limits.set_speed(user["id"], "slow", adjust_rate=True, updated_by=None)
+        assert rate() == (30, "minute", 5)
+
+
 # ----- quota requests --------------------------------------------------------------------------
 
 def test_5_hour_requests_are_approved_automatically_within_the_thresholds(app, make_user):
@@ -684,6 +759,129 @@ def test_the_account_page_offers_every_kind_of_request(app, make_user):
     html = response.get_data(as_text=True)
     assert "Ask for 1 to 720 hours." in html and "Too long</textarea>" in html
     assert '<option value="temporary" selected>' in html and 'name="hours" min="1" max="720" step="1" value="9999"' in html
+
+
+def _admin_id(app):
+    from bananachat.db import users
+
+    with app.app_context():
+        return users.get_by_username("admin")["id"]
+
+
+def test_automatic_approval_ignores_slow_tokens_while_they_are_switched_off(app, make_user):
+    """With slow tokens off, the account's unused slow allowance does not keep every request waiting."""
+    from bananachat.db import credits
+    from bananachat.db import settings as site_settings
+
+    user = make_user("sloane")
+    with app.app_context():
+        site_settings.update(slow_credits_enabled=0, quota_auto_approve_enabled=1,
+                             quota_auto_approve_max_tokens=100_000, quota_auto_approve_max_slow_tokens=0)
+        outcome = credits.submit_request(user["id"], 50_000, None, "More for my course", kind="window", pool="api")
+        assert outcome["status"] == "approved"
+        assert credits.get_quota(user["id"])[0] == 50_000
+
+
+def test_approving_a_request_never_switches_on_a_limit_the_service_no_longer_has(app, admin, make_user):
+    """A 5-hour request sent while chat had a 5-hour limit does not bring the limit back for this account once
+    the administrator switched it off for everyone."""
+    from bananachat.db import credits
+    from bananachat.db import limits as store
+    from bananachat.services import limits
+
+    user = make_user("stella")
+    admin_id = _admin_id(app)
+    with app.app_context():
+        policy = store.get_policy("chat")
+        policy["window"]["enabled"] = True
+        store.set_policy("chat", policy, None)
+        request_id = credits.submit_request(user["id"], 150_000, 0, "Long study sessions", kind="window",
+                                            pool="chat")["id"]
+        policy["window"]["enabled"] = False
+        store.set_policy("chat", policy, None)
+        with pytest.raises(ValueError):
+            credits.resolve_request(request_id, admin_id, True)
+    assert "now 100k tokens per 5 hours (not limited)" in admin.get("/admin/quotas/requests").get_data(as_text=True)
+    with app.app_context():
+        assert store.get_override(user["id"], "chat") is None
+        assert not limits.effective(user, "chat").window.limited
+        credits.resolve_request(request_id, admin_id, False, "No limit any more.")
+
+
+def test_a_higher_request_rate_cannot_be_asked_for_a_service_without_a_rate_limit(app, make_user):
+    """Approving one would switch a lower rate limit on for the account, so it is refused and not offered."""
+    from bananachat.db import credits
+    from bananachat.db import limits as store
+
+    user = make_user("rita")
+    with app.app_context():
+        policy = store.get_policy("api")
+        policy["rate"]["enabled"] = False
+        store.set_policy("api", policy, None)
+        with pytest.raises(credits.RequestError) as refused:
+            credits.submit_request(user["id"], reason="Faster batch jobs", kind="rate", pool="api", per="second",
+                                   requests=5)
+        assert refused.value.key == "quota_not_limited"
+    page = _signed_in(app, "rita").get("/account").get_data(as_text=True)
+    assert '"rate": ["chat"]' in page.replace("&#34;", '"')
+
+
+def test_temporary_extra_tokens_need_a_5_hour_limit(app, admin, make_user):
+    from bananachat.db import credits
+    from bananachat.db import limits as store
+
+    user = make_user("tempo")
+    with app.app_context():
+        with pytest.raises(credits.RequestError) as refused:
+            credits.submit_request(user["id"], 50_000, reason="Exam week coming", kind="temporary", pool="chat",
+                                   hours=24)
+        assert refused.value.key == "quota_temporary_no_window"
+        # Unlimited use for a while still makes sense there (it lifts the request rate too).
+        outcome = credits.submit_request(user["id"], reason="Exam week coming", kind="temporary", pool="chat",
+                                         hours=24, unlimited=True)
+        credits.resolve_request(outcome["id"], _admin_id(app), False)
+    page = _signed_in(app, "tempo").get("/account").get_data(as_text=True).replace("&#34;", '"')
+    assert '"extra_pools": ["api"]' in page
+    assert "only unlimited use can be requested" in page
+    # Administrators cannot create an extra-token grant that would do nothing either.
+    response = admin.post("/admin/quotas/grants", {
+        "target": "user", "username": "tempo", "pool": "chat", "scope": "window", "kind": "extra", "amount": "5k",
+        "duration": "24h", "reason": "Exam week"})
+    assert response.status_code == 400
+    with app.app_context():
+        assert store.list_grants("active", user_id=user["id"]) == []
+    assert "has no 5-hour limit" in response.get_data(as_text=True)
+
+
+def test_the_request_queue_costs_the_same_queries_for_one_or_many_requests(app, admin, make_user):
+    from bananachat import db
+    from bananachat.db import credits
+
+    def page_queries() -> int:
+        statements = []
+        db.conn().set_trace_callback(statements.append)
+        try:
+            assert admin.get("/admin/quotas/requests").status_code == 200
+        finally:
+            db.conn().set_trace_callback(None)
+        return len(statements)
+
+    def queries() -> int:
+        # Short per-process caches can refresh during any one load: count the fewest of three loads. A query per
+        # request would show in every load.
+        return min(page_queries() for _ in range(3))
+
+    with app.app_context():
+        first = make_user("queue0")
+        credits.submit_request(first["id"], 60_000, None, "Need more tokens", kind="window", pool="api")
+    queries()  # the first page of a sign-in also refreshes the session
+    one = queries()
+    with app.app_context():
+        for number in range(1, 6):
+            user = make_user(f"queue{number}")
+            credits.submit_request(user["id"], reason="Need a faster rate", kind="rate", pool="chat",
+                                   per="second", requests=2)
+    assert queries() == one
 
 
 # ----- administrator pages and actions ---------------------------------------------------------------
@@ -873,6 +1071,15 @@ def test_admins_resolve_every_kind_of_request(app, admin, make_user):
         row = db.one("SELECT status, admin_message, resolved_by FROM quota_requests WHERE id=?", (request_id,))
         assert (row["status"], row["admin_message"]) == ("approved", "Enjoy") and row["resolved_by"]
         assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='admin.quota_request_approve'") == 1
+
+
+def test_a_grant_starting_at_the_end_of_the_calendar_is_refused_on_the_form(app, admin, make_user):
+    make_user("gina")
+    response = admin.post("/admin/quotas/grants", {
+        "target": "user", "username": "gina", "pool": "api", "scope": "window", "kind": "extra", "amount": "5k",
+        "starts_at": "9999-12-31T23:00", "duration": "7d", "reason": "Late"})
+    assert response.status_code == 400
+    assert "out of range" in response.get_data(as_text=True)
 
 
 # ----- the account page --------------------------------------------------------------------------------

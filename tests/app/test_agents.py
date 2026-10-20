@@ -376,6 +376,17 @@ def test_step_budget_is_a_hard_limit(env, fake_ollama):
     assert row["steps_used"] == 3
 
 
+def test_a_one_step_budget_is_reported_in_the_singular(env, fake_ollama):
+    from bananachat.web.agents import render_text
+
+    set_settings(env.app, max_steps=1)
+    fake_ollama.tool_responder = lambda body: call("bash", command="make")
+    task_id = start_ok(env.browser)
+    row = wait_status(env.app, task_id, "out_of_budget")
+    assert "limit of 1 step." in render_text(row["error"], "en")
+    assert "limite di 1 passaggio." in render_text(row["error"], "it")
+
+
 def test_token_budget_and_bounded_model_retries(env, fake_ollama):
     set_settings(env.app, max_tokens=1000)
     fake_ollama.tool_responder = lambda body: {**call("bash", command="ls"), "prompt_tokens": 900,
@@ -391,6 +402,37 @@ def test_token_budget_and_bounded_model_retries(env, fake_ollama):
     assert error_key(env.app, row["error"]) == "agents.stop_model_failed"
     from bananachat.services.agents import loop
     assert len(fake_ollama.chat_bodies()) - before == loop.MODEL_RETRIES + 1
+
+
+@pytest.mark.parametrize("billable", [True, False])
+def test_a_failed_model_call_is_charged_when_the_provider_bills_it(env, fake_ollama, monkeypatch, billable):
+    from bananachat import db
+    from bananachat.services import inference
+    from bananachat.services.agents import loop
+
+    original = inference.generate
+    failures = [2]
+
+    def generate(request, cancel):
+        if not failures[0]:
+            yield from original(request, cancel)
+            return
+        failures[0] -= 1  # sent to an external provider and cut off before any output
+        yield inference.Finished("failed", request.model, prompt_tokens=3000, usage_estimated=True,
+                                 error="the connection was reset", billable=billable)
+
+    monkeypatch.setattr(loop.inference, "generate", generate)
+    fake_ollama.tool_script = [call("finish", summary="Done.")]
+    task_id = start_ok(env.browser)
+    row = wait_status(env.app, task_id, "finished")
+    with env.app.app_context():
+        ledger = db.query("SELECT tokens_in, tokens_out, usage_estimated FROM credit_ledger "
+                          "WHERE user_id=? AND request_type='agent' ORDER BY id", (env.user["id"],))
+        failed = [(item["tokens_in"], item["tokens_out"], item["usage_estimated"]) for item in ledger[:-1]]
+        metrics = db.scalar("SELECT COUNT(*) FROM request_metrics WHERE request_type='agent' AND status='failed'")
+    assert failed == ([(3000, 0, 1)] * 2 if billable else [])
+    assert metrics == (2 if billable else 0)
+    assert (row["tokens_in"] >= 6000) is billable and row["steps_used"] == 1
 
 
 def test_stop_kills_the_running_command_promptly(env, runner, fake_ollama):
@@ -486,8 +528,7 @@ def test_swarm_runs_bounded_sub_agents_that_cannot_delegate(env, fake_ollama):
             assert "delegate" not in names
             if messages[-1]["role"] == "tool":
                 return call("finish", summary="lane done")
-            # Hold each pair's actual HTTP requests until both lanes arrive.
-            # A fixed sleep only observed overlap when the scheduler was fast.
+            # Answer only once both lanes are inside a request at the same time.
             concurrent_lanes.wait(timeout=10)
             return call("delegate", tasks=[{"title": "deeper", "instructions": "recurse"}])
         assert "delegate" in names
@@ -777,6 +818,99 @@ def test_retention_keeps_a_task_resumed_after_it_was_listed(env, runner, monkeyp
     assert sandbox["id"] not in runner.deleted
 
 
+# ----- the model's request rate ------------------------------------------------------------------------
+
+def _model_rate(app, user, rule):
+    from bananachat.db import catalog
+    from bananachat.db import limits as limits_db
+
+    with app.app_context():
+        for model in catalog.list_models():
+            limits_db.set_model_override(user["id"], model["id"], None, rate_rules=[rule])
+
+
+def test_an_agent_start_refused_by_the_models_rate_is_in_the_readers_language(env, fake_ollama):
+    from bananachat.db import users
+    from bananachat.services import limits
+
+    with env.app.app_context():
+        users.save_preferences(env.user["id"], {**users.get_preferences(env.user["id"]), "interface_language": "it"})
+    rule = {"requests": 1, "per": "minute", "burst": 1}
+    _model_rate(env.app, env.user, rule)
+    fake_ollama.tool_delay = 5
+    start_ok(env.browser)
+    response = start(env.browser)
+    assert response.status_code == 429
+    message = response.get_json()["error"]["message"]
+    assert limits.rule_text("it", rule) in message and limits.rule_text("en", rule) not in message, message
+
+
+def test_every_agent_step_takes_a_request_from_the_models_rate_and_waits_for_it(env, fake_ollama, monkeypatch):
+    """Each step takes a request; when none is left the task waits instead of failing, then goes on."""
+    import itertools
+
+    from bananachat.services import limits
+    from bananachat.services.agents import loop
+
+    # The limiter's clock moves only while the task waits for the rate, so the steps are refused however fast or
+    # slow the machine is, and the gaps below are exact.
+    clock, lock = [time.time()], threading.Lock()
+    monkeypatch.setattr(limits, "time", types.SimpleNamespace(time=lambda: clock[0], monotonic=time.monotonic))
+    real_sleep = loop.TaskRun._sleep
+
+    def sleep(run, seconds):
+        with lock:
+            clock[0] += seconds
+        real_sleep(run, 0.01)
+
+    monkeypatch.setattr(loop.TaskRun, "_sleep", sleep)
+    _model_rate(env.app, env.user, {"requests": 1, "per": "second", "burst": 1})
+    moments = []
+    script = [call("write_file", path="a.txt", content="a"), call("write_file", path="b.txt", content="b"),
+              call("finish", summary="Done.")]
+
+    def responder(body):
+        moments.append(clock[0])
+        return script[min(len(moments), len(script)) - 1]
+
+    fake_ollama.tool_responder = responder
+    task_id = start_ok(env.browser)
+    row = wait_status(env.app, task_id, "finished", "failed", "out_of_budget", timeout=20)
+    assert row["status"] == "finished", row["error"]
+    assert len(moments) == 3
+    # The start took the first request; each later step waited for the next one (one per second).
+    assert all(later - earlier >= 1 for earlier, later in itertools.pairwise(moments)), moments
+    assert any("notice_model_rate" in step["content"] for step in steps(env.app, task_id) if step["kind"] == "notice")
+
+
+def test_stopping_an_agent_that_waits_for_the_models_rate_is_prompt(env, fake_ollama):
+    _model_rate(env.app, env.user, {"requests": 1, "per": "hour", "burst": 1})
+    fake_ollama.tool_script = [call("write_file", path="a.txt", content="a"), call("finish", summary="Done.")]
+    task_id = start_ok(env.browser)
+    wait_for(lambda: any("notice_model_rate" in step["content"] for step in steps(env.app, task_id)), timeout=10,
+             message="the rate notice")
+    began = time.monotonic()
+    assert env.browser.fetch(f"/agents/{task_id}/stop", method="POST").status_code == 200
+    row = wait_status(env.app, task_id, "stopped", timeout=10)
+    assert time.monotonic() - began < 5 and row["status"] == "stopped"
+
+
+def test_a_step_that_waited_for_the_models_rate_checks_the_account_again(env, fake_ollama):
+    """An account suspended while a step waits for the rate ends the step without calling the model."""
+    from bananachat.db import users
+
+    _model_rate(env.app, env.user, {"requests": 1, "per": "hour", "burst": 1})
+    fake_ollama.tool_script = [call("write_file", path="a.txt", content="a"), call("finish", summary="Done.")]
+    task_id = start_ok(env.browser)
+    wait_for(lambda: any("notice_model_rate" in step["content"] for step in steps(env.app, task_id)), timeout=10,
+             message="the rate notice")
+    with env.app.app_context():
+        users.suspend(env.user["id"], None)
+    row = wait_status(env.app, task_id, "stopped", "failed", "out_of_budget", timeout=10)
+    assert row["status"] == "stopped" and "agents.stop_account" in row["error"], row["error"]
+    assert len([body for body in fake_ollama.chat_bodies() if body.get("tools")]) == 1
+
+
 # ----- pages ------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("language", ["en", "it"])
@@ -806,6 +940,21 @@ def test_pages_render_in_both_languages(env, fake_ollama, language):
     assert env.browser.get(f"/agents/{task_id}/events?after={'9' * 30}").status_code == 200
     listing = env.browser.get("/agents").get_data(as_text=True)
     assert ("Finished" if language == "en" else "Completata") in listing
+
+
+def test_limits_of_one_step_and_one_minute_read_in_the_singular(env, fake_ollama):
+    set_settings(env.app, max_steps=1, max_minutes=1)
+    fake_ollama.tool_script = [call("finish", summary="Done")]
+    task_id = start_ok(env.browser)
+    wait_status(env.app, task_id, "finished")
+    for language, hint, value in (("en", "Up to 1 step or 1 minute per run.", "1 step, 1 min"),
+                                  ("it", "Fino a 1 passaggio o 1 minuto per esecuzione.", "1 passaggio, 1 min")):
+        with env.browser.client.session_transaction() as session:
+            session["language"] = language
+        assert hint in env.browser.get("/agents").get_data(as_text=True)
+        assert value in env.browser.get(f"/agents/{task_id}").get_data(as_text=True)
+    set_settings(env.app, max_steps=40, max_minutes=20)
+    assert "Fino a 40 passaggi o 20 minuti per esecuzione." in env.browser.get("/agents").get_data(as_text=True)
 
 
 def test_i18n_catalog_has_identical_keys():
@@ -855,6 +1004,12 @@ def test_admin_settings_models_and_audit(env, fake_ollama):
     assert "admin.agents.settings" in actions and "admin.agents.models" in actions
     assert Browser(env.app).get("/admin/agents").status_code == 302  # signed out
     assert env.browser.get("/admin/agents").status_code == 403       # not an administrator
+
+
+def test_the_agents_settings_speak_of_tokens_and_limits_not_credits(app, admin):
+    page = admin.get("/admin/agents").get_data(as_text=True)
+    assert "credit" not in page.lower() and "(Quotas)" not in page
+    assert "token limits" in page and "Limits" in page
 
 
 def test_admin_kill_switch_and_task_log(agents_app, runner, fake_ollama):

@@ -12,13 +12,13 @@
 <a class="btn btn-primary" href="{{ url_for('admin.personality_featured_new') }}">{{ icon("plus") }}New featured personality</a>
 {% endcall %}
 
-<div class="alert alert-info mb-2">
-  {{ icon("sparkles") }}
-  <div>
-    <p><strong>Featured personalities</strong> are written here and shown to every user who may use personalities (the <em>custom personalities</em> access policy), read-only, with a “Copy to my personalities” action.{% if not featured_count %} None exist until you create one.{% endif %} Drafts stay hidden until you publish them.</p>
-    <p>Their instructions are layered below each model's system prompt, like users' own personalities. {{ featured_count }} of {{ max_featured }} featured personalities exist.</p>
+<details class="settings-section admin-help mb-2">
+  <summary>{{ icon("chevron-down") }}<span>How featured personalities work</span></summary>
+  <div class="stack-sm small muted">
+    <p class="mb-0"><strong>Featured personalities</strong> are written here and shown to every user who may use personalities (the <em>custom personalities</em> access policy), read-only, with a “Copy to my personalities” action.{% if not featured_count %} None exist until you create one.{% endif %} Drafts stay hidden until you publish them.</p>
+    <p class="mb-0">Their instructions are layered below each model's system prompt, like users' own personalities. {{ featured_count }} of {{ max_featured }} featured personalities exist.</p>
   </div>
-</div>
+</details>
 
 <nav class="tabs" aria-label="Filter personalities">
   {% for key, label in [("", "All"), ("user", "By users"), ("featured", "Featured"), ("shared", "Shared by link")] %}
@@ -72,7 +72,7 @@
           </div>
         </td>
         <td data-label="Owner:">
-          {% if featured %}<span class="badge badge-primary">{{ icon("sparkles") }}Featured</span><div class="small muted">by {{ row.username }}</div>
+          {% if featured %}<span class="badge badge-primary">Featured</span><div class="small muted">by {{ row.username }}</div>
           {% else %}<a href="{{ url_for('admin.user_detail', user_id=row.user_id) }}">{{ row.username }}</a>{% endif %}
           {% if row.share_token %}<div><span class="badge badge-info">{{ icon("share") }}Shared by link</span></div>{% endif %}
         </td>
@@ -115,7 +115,7 @@
               <form method="post" action="{{ url_for('admin.personality_disable', personality_id=row.id) }}" class="stack-sm">
                 {{ csrf() }}{{ keep() }}
                 <div class="field"><label for="reason-{{ row.id }}">{{ "Reason (kept for the record)" if featured else "Reason shown to the owner" }}</label><input type="text" id="reason-{{ row.id }}" name="reason" maxlength="500"></div>
-                {{ utc_input("until", "until-" ~ row.id, "Until (optional)", "UTC. Leave empty to disable until re-enabled.", min=min_datetime) }}
+                {{ utc_input("until", "until-" ~ row.id, "Until (optional)", "Time in UTC. Leave empty to disable until re-enabled.", min=min_datetime) }}
                 <button type="submit" class="btn btn-danger btn-sm">Disable</button>
               </form>
             </div>
@@ -134,8 +134,8 @@
 </div>
 {{ pagination(page, "admin.personalities", "Personality pages", q=search or None, kind=kind or None) }}
 {% elif kind == "featured" and not search %}
-{{ empty("sparkles", "No featured personalities yet", "Create one to offer every user a ready-made personality. Nothing is published until you choose to.") }}
+{{ empty("user", "No featured personalities yet", "Create one to offer every user a ready-made personality. Nothing is published until you choose to.") }}
 {% else %}
-{{ empty("sparkles", "No personalities found", "Try another search." if search else "Nothing matches this filter yet.") }}
+{{ empty("user", "No personalities found", "Try another search." if search else "Nothing matches this filter yet.") }}
 {% endif %}
 {% endblock %}

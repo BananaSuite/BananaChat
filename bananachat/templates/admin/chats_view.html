@@ -10,7 +10,7 @@
   <div>
     <h1>{{ "Untitled chat" if untitled else session.title }}</h1>
     <p>
-      {{ session.username }} · created {{ session.created_at | datetime }} · updated {{ session.updated_at | datetime }}
+      <span class="nowrap">{{ session.username }} ·</span> <span class="nowrap">created {{ session.created_at | datetime }} ·</span> <span class="nowrap">updated {{ session.updated_at | datetime }}</span>
       {% if session.deleted_at %}<span class="badge badge-danger">Deleted {{ session.deleted_at | datetime }}</span>{% endif %}
       {% if session.is_incognito %}<span class="badge badge-info">No history</span>{% endif %}
       {% if session.shared_token %}<span class="badge badge-primary">Shared</span>{% endif %}

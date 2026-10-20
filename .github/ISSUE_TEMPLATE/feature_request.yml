@@ -6,7 +6,6 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for suggesting an idea!
         Larger features (changes to the permission model or the OpenAI API)
         benefit from a short design discussion before code is written.
 
@@ -14,7 +13,7 @@ body:
     id: problem
     attributes:
       label: What problem does this solve?
-      description: Describe the user need or pain point first, before the proposed solution.
+      description: Describe the need first, before the proposed solution.
     validations:
       required: true
 
@@ -43,8 +42,11 @@ body:
         - Chat / sessions
         - API / tokens
         - Admin / users
-        - Model catalog / Ollama
-        - Credits / quotas
+        - Model catalogue / Ollama
+        - External providers
+        - Limits / quotas
+        - Agents / cloud sessions
+        - Deployment / updates
         - Documentation
         - i18n / localisation
         - Other

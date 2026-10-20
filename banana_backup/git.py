@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -143,20 +144,23 @@ class Git:
         if len(raw) > 1024 * 1024:
             raise ValueError("Too many backup branches. Review retention in the repository.")
         result = {}
-        for line in raw.decode().splitlines():
-            sha, ref = line.split("\t", 1)
+        # Branch names are bytes chosen by whoever can push: what is no snapshot is skipped, whatever its bytes.
+        for line in raw.split(b"\n"):
+            sha, _, ref = line.decode(errors="replace").partition("\t")
             if ref.startswith(prefix) and SNAPSHOT.fullmatch(ref[len(prefix):]) and SHA.fullmatch(sha):
                 result[ref[len(prefix):]] = sha
         return result
 
     def ref_sha(self, ref):
-        raw = self.run("ls-remote", "--heads", "--", self.url, ref).decode().strip()
-        if not raw:
-            return None
-        sha, name = raw.split("\t", 1)
-        if name != ref or not SHA.fullmatch(sha):
-            raise ValueError("Unexpected backup repository reference.")
-        return sha
+        raw = self.run("ls-remote", "--heads", "--", self.url, ref)
+        # Branches that only end in "/" + *ref* are listed too.
+        for line in raw.split(b"\n"):
+            sha, _, name = line.decode(errors="replace").partition("\t")
+            if name == ref:
+                if not SHA.fullmatch(sha):
+                    raise ValueError("Unexpected backup repository reference.")
+                return sha
+        return None
 
     def commit(self, paths):
         entries = []
@@ -216,6 +220,10 @@ class Git:
             if name == "index.json" and len(parts) == 3 and parts[:2] == ["100644", "blob"] and SHA.fullmatch(parts[2]):
                 return parts[2]
         raise ValueError("The backup branch has no index.")
+
+    def discard(self):
+        """Delete the objects fetched or written so far, freeing their space; the repository is not used again."""
+        shutil.rmtree(self.repository)
 
     def remove(self, ref, sha):
         self.run("push", "--porcelain", "--force-with-lease=" + ref + ":" + sha, "--", self.url, ":" + ref)

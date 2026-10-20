@@ -22,7 +22,7 @@
   </div>
   <div class="message-footer"><p class="message-meta">
     {%- if m.role == "assistant" %}{{ m.model_name or assistant_label }}{% if m.tokens_out %} · {{ t("js.chat_tokens", count=m.tokens_out) }}{% endif %}{% else %}{{ you_label }}{% endif %}
-    {%- if m.created_at %} · <time datetime="{{ m.created_at }}">{{ m.created_at | datetime }}</time>{% endif -%}
+    {%- if m.created_at %} · {{ m.created_at | local_time }}{% endif -%}
   </p></div>
 </article>
 {%- endmacro %}

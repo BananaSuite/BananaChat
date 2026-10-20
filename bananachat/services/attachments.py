@@ -104,6 +104,9 @@ def decoding_image(owner: str | None = None):
 def sanitize_filename(filename) -> str:
     name = os.path.basename(str(filename or "attachment").replace("\\", "/"))
     name = re.sub(r"[\x00-\x1f\x7f]", "", name).strip()
+    stem, extension = os.path.splitext(name)
+    if len(name) > 160 and len(extension) <= 16:
+        name = stem[:160 - len(extension)] + extension
     return name[:160] or "attachment"
 
 

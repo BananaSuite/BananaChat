@@ -128,3 +128,22 @@ def test_cleanup_ignores_unreadable_custom_rules(app, make_user):
         db.execute("UPDATE user_limit_overrides SET rate_rules='invalid json' WHERE user_id=?", (user["id"],))
         assert limits.check_rate(user, "api", now=START).allowed
         assert limits.forget_idle_buckets(now=START + DAY + 1) == 1
+
+
+def test_forgetting_idle_buckets_never_refills_a_slow_bucket_early(app, make_user):
+    """A bucket missing from the table counts as full, so one is forgotten only once it has refilled."""
+    from bananachat.db import limits as store
+    from bananachat.services import limits
+
+    user = make_user("tortoise")
+    with app.app_context():
+        # 86 a day with bursts of 100: more than a day to refill.
+        store.set_override(user["id"], "api", None, rate_rules=[{"requests": 86, "per": "day", "burst": 100}])
+        for _ in range(100):
+            assert limits.check_rate(user, "api", now=START).allowed
+        assert not limits.check_rate(user, "api", now=START).allowed
+        limits.forget_idle_buckets(now=START + 86_401)
+        decision = limits.check_rate(user, "api", now=START + 86_401)
+        assert decision.remaining == 85  # 86 refilled, one taken now; not a full bucket of 100
+        # Buckets that have certainly refilled are still forgotten.
+        assert limits.forget_idle_buckets(now=START + 86_401 + 200_000) == 1

@@ -279,6 +279,34 @@ def test_worker_failure_before_output_falls_back_to_the_local_server(pool_app, m
     assert text_of(events) == "Hello from the fake model." and events[-1].state == "completed"
 
 
+@pytest.mark.parametrize("ending", ["fail", "vanish"])
+def test_an_answer_is_complete_once_the_worker_sent_its_final_chunk(pool_app, make_user, monkeypatch, ending):
+    from bananachat.services import remote
+
+    # Short enough that a lost completion report is noticed quickly, long enough for a loaded machine to send
+    # the chunks first.
+    monkeypatch.setattr(remote, "lease_seconds", lambda config=None: 3.0)
+    _worker_id, token = register(pool_app)
+    worker = Worker(pool_app, token)
+    worker.heartbeat()
+
+    def work():
+        job = worker.poll().get_json()
+        worker.chunk(job["job_id"], 0, "The whole answer")
+        worker.chunk(job["job_id"], 1, "", done=True)
+        # The completion report is lost: the daemon reports that it lost contact, or the PC disappears.
+        if ending == "fail":
+            worker.fail(job["job_id"], {"error": "The worker lost contact with the server."})
+
+    thread, errors = run_in_thread(work)
+    events = generate(pool_app, make_user("fay"))
+    thread.join(10)
+    assert not errors, errors
+    finished = events[-1]
+    assert text_of(events) == "The whole answer"
+    assert finished.state == "completed" and finished.via_worker and finished.usage_estimated
+
+
 # ----- protocol details -------------------------------------------------------------------------
 
 def _claimed_job(app, token, job_id="b" * 32):
@@ -349,6 +377,24 @@ def test_poll_answers_204_and_caps_long_polls(pool_app, monkeypatch):
     started = time.monotonic()
     assert worker.poll().status_code == 204
     assert time.monotonic() - started < 2
+
+
+def test_a_worker_that_reported_no_models_is_given_no_jobs(pool_app, monkeypatch):
+    from bananachat.db import workers as store
+    from bananachat.services import remote
+
+    monkeypatch.setattr(remote, "LONG_POLL_SECONDS", 0.3)
+    _worker_id, token = register(pool_app)
+    worker = Worker(pool_app, token)
+    # A daemon whose Ollama has no models reports an empty inventory and polls without ?models=.
+    assert worker.heartbeat(models=()).status_code == 200
+    with pool_app.app_context():
+        store.insert_job("d" * 32, MODEL, json.dumps([{"role": "user", "content": "private"}]), None, 2, time.time())
+    assert worker.poll(models=()).status_code == 204
+    assert job_rows(pool_app)[0]["status"] == "pending" and job_rows(pool_app)[0]["worker_id"] is None
+    # Once it advertises the model it gets the job.
+    worker.heartbeat(models=(MODEL,))
+    assert worker.poll(models=()).get_json()["job_id"] == "d" * 32
 
 
 def test_authentication_and_disabled_workers(pool_app, admin):

@@ -162,7 +162,7 @@ prompt.addEventListener("keydown", (event) => {
   }
 });
 cancelButton.addEventListener("click", () => controller?.abort());
-// Maintenance or an AI-server outage pauses generation; the page follows the live status.
+// Maintenance or a model-server outage pauses generation; the page follows the live status.
 onStatusChange((state) => {
   canSend = state.canSend;
   if (!controller) generateButton.disabled = !canSend;

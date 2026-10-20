@@ -1,4 +1,4 @@
-"""Gemini models enrolled by 1.6 survive the upgrade to 1.7 (CP-1).
+"""Gemini models enrolled by 1.6 survive the upgrade to 1.7.
 
 1.6 enrolled Gemini's listed resource names (``models/gemini-…``) as they came; 1.7 lists the bare
 model ID. The upgrade (migration v23) calls the existing models by the bare ID, so the next listings
@@ -85,7 +85,7 @@ def test_the_admin_page_shows_old_gemini_models_as_enrolled(make_app, tmp_path):
 
 
 def test_a_provider_switched_to_the_gemini_preset_after_the_upgrade_keeps_its_1_6_models(make_app, tmp_path):
-    """Final verification of CP-1: a 1.6 Gemini provider reached through another host keeps the 'custom' preset at
+    """A 1.6 Gemini provider reached through another host keeps the 'custom' preset at
     the upgrade, so v23 does not rename its models. Choosing the Gemini preset later must not withdraw them and
     publish copies with default limits."""
     path = tmp_path / 'chat.db'

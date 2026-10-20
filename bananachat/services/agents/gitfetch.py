@@ -1,7 +1,7 @@
 """Public Git repositories as source archives: strict parsing and an SSRF-safe download.
 
 A person types a repository address (``https://github.com/owner/repo``) and
-optionally a branch, tag or commit. The address is **parsed, never fetched**:
+optionally a branch, tag or commit. The address is parsed, never fetched:
 :func:`parse` accepts only an allowlisted host and owner/repository/ref parts
 that match strict patterns, and :meth:`Source.archive` builds the provider's
 archive URL from those parts:
@@ -12,7 +12,7 @@ archive URL from those parts:
 
 :func:`download` fetches that archive over HTTPS only, with no credentials:
 
-* the host name is resolved once per hop and **every** address must be public
+* the host name is resolved once per hop and every address must be public
   (no private, loopback, link-local, multicast, reserved, shared or unspecified
   address, including IPv4 addresses embedded in IPv6); the connection goes to
   an address that was checked (no second resolution), and TLS is verified for

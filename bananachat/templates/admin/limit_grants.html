@@ -99,8 +99,8 @@
         <label class="check"><input type="radio" name="duration" value="{{ value }}"{% if value == (form.get("duration") if form else "24h") %} checked{% endif %}><span>{{ label }}</span></label>
         {% endfor %}
       </div>
-      {{ utc_input("ends_at", "grant-ends", "Ends (for “Until a date”)", "Coordinated Universal Time.", form.get("ends_at", "") if form else "", min_datetime) }}
-      {{ utc_input("starts_at", "grant-starts", "Starts (optional)", "Coordinated Universal Time. Leave empty to start now.", form.get("starts_at", "") if form else "", min_datetime) }}
+      {{ utc_input("ends_at", "grant-ends", "Ends (for “Until a date”)", "Time in UTC.", form.get("ends_at", "") if form else "", min_datetime) }}
+      {{ utc_input("starts_at", "grant-starts", "Starts (optional)", "Time in UTC. Leave empty to start now.", form.get("starts_at", "") if form else "", min_datetime) }}
     </fieldset>
     <div class="field grid-full">
       <label for="grant-reason">Reason</label>
@@ -113,7 +113,7 @@
 
 <section class="mt-3" aria-labelledby="active-title">
   <h2 id="active-title">Active <span class="badge badge-success">{{ active | length }}</span></h2>
-  {% if active %}{{ grant_table(active, "Active grants", true) }}{% else %}{{ empty("sparkles", "No active grants") }}{% endif %}
+  {% if active %}{{ grant_table(active, "Active grants", true) }}{% else %}{{ empty("chart", "No active grants") }}{% endif %}
 </section>
 <section class="mt-3" aria-labelledby="upcoming-title">
   <h2 id="upcoming-title">Upcoming <span class="badge badge-info">{{ upcoming | length }}</span></h2>

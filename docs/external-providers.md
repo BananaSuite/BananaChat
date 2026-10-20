@@ -22,7 +22,7 @@ are not used.
 
 ## Add a provider
 
-1. Open **Administration → Models → External APIs**.
+1. Open **Admin → Models → External APIs**.
 2. Under **Add a provider**, choose the **Service**. The preset fills in the
    API base URL, the API format, the header that carries the key and any
    suggested extra headers. Every value stays editable. Choose **Other
@@ -211,43 +211,13 @@ Limits and credits use the provider's own token counts:
 - When a provider sends no usage, BananaChat records an estimate and marks it
   as estimated.
 
-**Why stopped reasoning is estimated, not reserved.** OpenAI-compatible APIs
-report usage only at the end of a stream, so when an answer is stopped while
-the model reasons silently, nothing tells BananaChat how many tokens the
-provider generated. Reserving the output limit against the 5-hour window at
-admission, and releasing the unused part afterwards, was evaluated and not
-adopted:
+Charges for stopped answers are estimates, so for a strict spending cap set a
+limit at the provider too.
 
-- It would not make the charge more accurate. At a stop the unused part is
-  just as unknown, so the reservation would be settled either at the whole
-  output limit (often tens of thousands of tokens for a stop after a few
-  seconds, far more than the provider bills) or with the same estimate.
-- It would change who is admitted. Today a request is admitted while any
-  allowance remains and the finished answer is charged in full, so one answer
-  can end past the allowance, within the output limit and the deadline. With
-  reservations every request in flight would hold its whole output limit:
-  accounts near the end of their window would be refused even for short
-  answers, and an account's parallel API requests and sub-agents would refuse
-  each other.
-- It would add shared state to every check. Reservation rows would have to be
-  counted by every pool and model limit (with the model's weight and its own
-  windows) in every Gunicorn worker, created and settled for each attempt,
-  fallbacks included, and expired after a crashed process, which would hold
-  the account's tokens until then.
-
-The charge for a stop therefore stays a conservative estimate: the input
-count, what was produced, and 20 tokens per second of silent reasoning within
-the output limit, which is below what current providers generate. Exact
-numbers need a provider that reports usage for a cancelled answer. Where a
-strict monetary cap matters, set a spending limit at the provider too.
-
-Every user's BananaChat API keys share that account's API token budget and
-request-rate buckets. Hosted API models count towards standard service budgets
-by default, including the configured cloud-chat consumption policy.
-Administrators can change counting, limits, exemptions and reasoning access
-through the existing account and model controls. Token budgets are internal
-controls, not provider dollar balances; the prices shown on the provider page
-help you choose each model's usage weight.
+All of an account's BananaChat API keys share its API token allowance and
+request rates. Hosted models count towards the service limits like local ones;
+change that per model in Admin → Limits. Token limits are not money: use the
+prices on the provider page to choose each model's usage weight.
 
 Initial model presets use one five-hour token window and no weekly token window:
 
@@ -259,7 +229,7 @@ Initial model presets use one five-hour token window and no weekly token window:
 
 Opus/Fable/Mythos and pro reasoning families start with Heavy; Haiku starts
 with Light; other models start with Standard. Demand adjustment follows the
-existing site settings.
+site settings.
 
 ## Errors
 
@@ -287,8 +257,6 @@ log), with the key and anything that looks like a key removed.
 HMAC-SHA256) with a key derived from the instance secret (`BC_SECRET_KEY`, or
 `BC_INSTANCE_DIR/.secret_key`), and stored in private `0600` files under
 `BC_INSTANCE_DIR/.provider-keys` (directory `0700`) owned by the service user.
-Key files from older versions are encrypted the first time they are used, and
-the background model refresh encrypts the rest within 15 minutes of the update.
 The database holds opaque references only. Keys are never rendered into forms,
 returned by the API, written to the audit log or logged. If the instance secret
 changes, stored keys can no longer be decrypted: the connection test says so,
@@ -317,15 +285,4 @@ reports a local outage; automatic selection can choose a hosted model. Access
 rules and maintenance still apply. Hosted requests do not need memory for a
 local inference model and still use the site's concurrency and queue limits.
 
-## Verification limits
-
-The tests run every dialect against local fake HTTP servers: Anthropic
-(pagination, capabilities, thinking, cache usage, stop reasons, stream errors),
-OpenAI, OpenRouter (key check, reasoning, prices), Together (list-shaped model
-lists), Mistral (typed chunks), Groq (`x_groq` usage), xAI (reasoning tokens)
-and llama.cpp-style streams; error mapping, timeouts, encrypted keys, schema
-upgrades, administrator forms, chat messages in both languages, public API
-routing and accounting of interrupted answers. They use synthetic keys and
-responses and never touch the network. Actual provider authentication,
-model-specific parameters, billing and live traffic must be verified with your
-own credentials.
+Test a new provider with your own key before offering it to users.

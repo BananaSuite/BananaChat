@@ -8,12 +8,12 @@
 Flask==3.1.3
 Werkzeug==3.1.9
 gunicorn>=26.2.0,<27
-filelock>=3.13,<4
-Pillow>=12.3.0,<13
-pypdf>=6.0.0,<7
-# Encrypts external API provider keys at rest (the same release line as BananaWiki).
+filelock>=3.20.3,<4
+Pillow>=13.0.0,<14
+pypdf>=6.21.1,<7
+# Encrypts external API provider keys at rest.
 cryptography>=50.0.1,<51
-# QR codes for setting up two-step verification (pure Python; images through Pillow, as in BananaWiki).
+# QR codes for setting up two-step verification (pure Python; images through Pillow).
 qrcode>=8.2,<9
 # Optional but recommended: memory and CPU figures for admission control and metrics.
 psutil>=6.0.0,<8

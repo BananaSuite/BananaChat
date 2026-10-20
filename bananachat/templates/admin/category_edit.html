@@ -8,7 +8,7 @@
 <form method="post" action="{{ url_for('admin.category_edit', category_id=category.id) }}" class="settings-section stack">
   {{ csrf() }}
   {% include "admin/_category_fields.html" %}
-  <div class="form-actions">
+  <div class="form-actions form-actions-end">
     <a class="btn btn-ghost" href="{{ url_for('admin.categories') }}">Cancel</a>
     <button type="submit" class="btn btn-primary">Save category</button>
   </div>

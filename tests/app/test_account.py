@@ -161,6 +161,45 @@ def test_gdpr_export_contains_everything_but_secrets(app, make_user):
     assert "image_base64" not in json.dumps(chats)
 
 
+def test_chat_exports_read_many_chats_in_a_few_queries_and_keep_the_image_budget_order(app, make_user,
+                                                                                         monkeypatch):
+    from bananachat import db
+    from bananachat.services import exports
+
+    user = make_user("hal")
+    monkeypatch.setattr(exports, "INLINE_IMAGES_TOTAL_BYTES", 25)
+    with app.app_context():
+        with db.transaction():
+            for number in range(30):
+                stamp = f"2026-01-01T00:00:{number:02d}Z"
+                db.execute("INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) "
+                           "VALUES (?,?,?,?,?)", (f"chat{number:02d}", user["id"], f"Chat {number}", stamp, stamp))
+                for turn in range(2):
+                    message = db.execute(
+                        "INSERT INTO chat_messages (session_id, role, content, created_at) VALUES (?,?,?,?)",
+                        (f"chat{number:02d}", "user", f"message {number}.{turn}", stamp)).lastrowid
+                    db.execute(
+                        "INSERT INTO chat_attachments (id, message_id, kind, filename, media_type, size_bytes, "
+                        "sha256, image_data, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (f"att{number:02d}{turn}", message, "image", f"{number}-{turn}.png", "image/png", 10,
+                         "ab" * 32, b"0123456789", stamp))
+        statements = []
+        db.conn().set_trace_callback(statements.append)
+        try:
+            data = exports.gdpr_export(user["id"])
+        finally:
+            db.conn().set_trace_callback(None)
+    assert 1 <= sum("chat_attachments" in statement for statement in statements) <= 3, statements
+    assert [chat["title"] for chat in data["chats"]] == [f"Chat {number}" for number in range(30)]
+    for number, chat in enumerate(data["chats"]):
+        assert [message["content"] for message in chat["messages"]] == [f"message {number}.0", f"message {number}.1"]
+        assert [[item["filename"] for item in message["attachments"]] for message in chat["messages"]] == \
+            [[f"{number}-0.png"], [f"{number}-1.png"]]
+    included = [item["filename"] for chat in data["chats"] for message in chat["messages"]
+                for item in message["attachments"] if item["image_included"]]
+    assert included == ["0-0.png", "0-1.png"]
+
+
 def test_gdpr_export_lists_key_scopes_and_two_step_status_without_secrets(app, make_user):
     from datetime import timedelta
 
@@ -190,6 +229,26 @@ def test_gdpr_export_lists_key_scopes_and_two_step_status_without_secrets(app, m
     assert not any(code in text for code in codes)
     assert "two-step" in data["notes"]["secrets"]
 
+
+def test_the_data_export_contains_the_accounts_agent_tasks(app, make_user):
+    """Agent tasks hold the user's prompts, follow-ups and results, so the export includes them."""
+    from bananachat.db import agents
+    from bananachat.services import exports
+
+    user = make_user("fay")
+    other = make_user("gus")
+    with app.app_context():
+        for owner, task_id, prompt in ((user, "task-fay", "Write my CV"), (other, "task-gus", "Not fay's")):
+            agents.create(task_id, user_id=owner["id"], title=prompt, prompt=prompt, model_id=None,
+                          model_name="llama3.2:3b", swarm=False, owner_token="t", max_user=None, max_site=10)
+        agents.add_step("task-fay", None, kind="assistant", content="Here is a draft")
+        agents.add_message("task-fay", user["id"], "Make it shorter")
+        data = exports.gdpr_export(user["id"])
+    assert [task["prompt"] for task in data["agent_tasks"]] == ["Write my CV"]
+    task = data["agent_tasks"][0]
+    assert "owner_token" not in task and "sandbox_id" not in task
+    assert [step["content"] for step in task["steps"]] == ["Write my CV", "Here is a draft"]
+    assert [message["content"] for message in task["messages"]] == ["Make it shorter"]
 
 def test_chats_export_download(app, make_user):
     make_user("gus")
@@ -257,6 +316,29 @@ def test_quota_request_automatic_approval(app, make_user):
         assert credits.get_quota(user["id"]) == (80_000, 0)
         assert credits.user_requests(user["id"])[0]["status"] == "approved"
 
+
+def test_an_automatically_approved_quota_is_a_custom_quota(app, make_user, admin):
+    """New policy defaults do not undo a raise the site granted automatically."""
+    import re
+
+    from bananachat.db import credits, limits, settings
+
+    user = make_user("quinn")
+    with app.app_context():
+        settings.update(quota_auto_approve_enabled=1, quota_auto_approve_max_tokens=100_000,
+                        quota_auto_approve_max_slow_tokens=50_000)
+    _signed_in(app, "quinn").post("/account/quota-request",
+                                  {"tokens": "80k", "slow_tokens": "20k", "reason": "More experiments"})
+    with app.app_context():
+        assert credits.get_quota(user["id"]) == (80_000, 0)
+    with app.app_context():
+        policy = limits.get_policy("api")
+        policy["window"].update(tokens=10_000, slow_tokens=5000)
+        limits.set_policy("api", policy, None)
+        assert credits.get_quota(user["id"]) == (80_000, 0)
+    html = admin.get(f"/admin/users/{user['id']}").get_data(as_text=True)
+    # The "custom" badge marks the service (its name); the value follows under it.
+    assert re.search(r'<dt>API, playground and images <span class="badge">custom</span></dt>\s*<dd>80k tokens per 5 hours', html)
 
 def test_quota_request_must_raise(app, make_user):
     from bananachat.db import credits

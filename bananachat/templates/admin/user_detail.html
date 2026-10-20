@@ -81,7 +81,7 @@
     <p class="muted small">A suspended user is signed out immediately and cannot sign in or use API keys.</p>
     <form method="post" action="{{ url_for('admin.user_suspend', user_id=user.id) }}" class="stack" data-confirm="Suspend {{ user.username }} and sign them out everywhere?" data-confirm-danger>
       {{ csrf() }}
-      {{ utc_input("until", "suspend-until", "Suspended until (optional)", "Coordinated Universal Time. Leave empty to suspend until you lift it.", min=min_datetime) }}
+      {{ utc_input("until", "suspend-until", "Suspended until (optional)", "Time in UTC. Leave empty to suspend until you lift it.", min=min_datetime) }}
       {% if user.role == "admin" %}{{ reauth_field("suspend-reauth") }}{% endif %}
       <div class="form-actions"><button type="submit" class="btn btn-danger">Suspend</button></div>
     </form>
@@ -184,7 +184,7 @@
       <input type="text" id="confirm-username" name="confirm_username" required autocomplete="off" spellcheck="false">
     </div>
     {% if user.role == "admin" %}{{ reauth_field("delete-reauth") }}{% endif %}
-    <div class="form-actions form-actions-start"><button type="submit" class="btn btn-danger">{{ icon("trash") }}Delete account</button></div>
+    <div class="form-actions"><button type="submit" class="btn btn-danger">{{ icon("trash") }}Delete account</button></div>
   </form>
 </section>
 {% endif %}

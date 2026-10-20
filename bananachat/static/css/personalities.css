@@ -36,7 +36,7 @@
   font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--font);
 }
 .persona-avatar.is-letter { color: var(--persona, var(--primary)); font-family: var(--font); font-weight: 700; font-size: calc(var(--size) * .42); }
-.persona-avatar.xs { --size: 22px; border-radius: 7px; }
+.persona-avatar.xs { --size: 22px; border-radius: var(--radius); }
 .persona-avatar.sm { --size: 34px; }
 .persona-avatar.lg { --size: 60px; }
 .persona-avatar.xl { --size: 72px; border-radius: 26%; }
@@ -46,8 +46,8 @@
 .persona-page .section-head h2 { margin: 0; }
 /* Same size and weight as the <label> elements beside them (app.css .field > label, .label). */
 .persona-page .label { display: block; margin: 0; }
-.persona-page h2.label, .persona-page h3.label { color: var(--text-muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; margin-bottom: .5rem; }
-.breadcrumb { margin: 0 0 .75rem; font-size: .9rem; }
+.persona-page h2.label, .persona-page h3.label { color: var(--text-muted); font-size: var(--text-sm); font-weight: 600; margin-bottom: .5rem; }
+.breadcrumb { margin: 0 0 .75rem; font-size: var(--text-base); }
 .breadcrumb a { display: inline-flex; align-items: center; gap: .25rem; min-height: 1.5rem; color: var(--text-muted); text-decoration: none; }
 .breadcrumb a:hover { color: var(--text); }
 .breadcrumb svg { width: 16px; height: 16px; }
@@ -57,17 +57,17 @@
 .persona-default-text { flex: 1 1 280px; min-width: 0; }
 .persona-default-form { display: flex; gap: .5rem; align-items: center; flex: 1 1 320px; max-width: 460px; }
 .persona-default-form select { flex: 1 1 auto; min-width: 0; }
-.persona-import-panel { min-width: 300px; padding: .85rem; }
-.persona-import-panel .field label { font-size: .88rem; }
+.persona-import-panel { min-width: min(300px, calc(100vw - 2rem)); padding: .85rem; }
+.persona-import-panel .field label { font-size: var(--text-md); }
 .persona-import-panel input[type="file"] { max-width: 100%; }
 @media (max-width: 640px) {
   .persona-page .page-header .row-end { width: 100%; justify-content: flex-start; }
-  .persona-import-panel { left: 0; right: auto; min-width: min(300px, calc(100vw - 2rem)); }
+  .persona-import-panel { left: 0; right: auto; }
 }
 
 /* ----- cards ------------------------------------------------------------------------ */
 .persona-empty { text-align: left; padding: 1rem 0; }
-.persona-empty h3 { font-size: .95rem; }
+.persona-empty h3 { font-size: var(--text-base); }
 .persona-grid { display: grid; grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--border); }
 .persona-card {
   position: relative; display: flex; flex-direction: column; gap: .75rem; min-width: 0;
@@ -81,7 +81,7 @@
 .persona-card-content { display: flex; flex-direction: column; gap: .55rem; min-width: 0; }
 .persona-grid .persona-card-content > :not(.persona-head) { margin-left: calc(38px + .85rem); }
 .persona-grid .persona-footer { padding: 0; border: 0; margin: 0; align-items: flex-end; }
-.persona-grid .persona-footer > .hint { font-size: .78rem; }
+.persona-grid .persona-footer > .hint { font-size: var(--text-xs); }
 .persona-grid .chip { background: none; border: 0; border-radius: 0; padding: 0; }
 /* The separator ends the previous trait, so a wrapped line never starts with a dot. */
 .persona-grid .chip-list { gap: .2rem .35rem; }
@@ -94,7 +94,7 @@
 .persona-head:not(:has(.persona-description)) { align-items: center; }
 .persona-head:not(:has(.persona-description)) :is(h2, h3) { margin-block: 0; }
 .persona-head h2, .persona-head h3 { margin: .1rem 0 .15rem; font-size: 1rem; overflow-wrap: anywhere; }
-.persona-description { margin: 0; color: var(--text-muted); font-size: .9rem; overflow-wrap: anywhere; }
+.persona-description { margin: 0; color: var(--text-muted); font-size: var(--text-base); overflow-wrap: anywhere; }
 .persona-grid .persona-description { max-width: 62ch; }
 .persona-badges { display: flex; flex-wrap: wrap; gap: .3rem; }
 .persona-badges .badge svg { width: 12px; height: 12px; }
@@ -102,7 +102,7 @@
 .chip {
   display: inline-flex; align-items: center; gap: .3rem; padding: .15rem .55rem; border-radius: 999px; max-width: 100%;
   border: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 70%, var(--bg)); color: var(--text-muted);
-  font-size: .8rem; line-height: 1.45; overflow-wrap: anywhere;
+  font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere;
 }
 .chip-warning { border-color: color-mix(in srgb, var(--warning) 50%, var(--bg)); color: var(--warning); background: var(--warning-bg); }
 .chip-link { text-decoration: none; color: var(--text); }
@@ -113,16 +113,16 @@
 :is(.persona-instructions, .persona-avatar-options) > summary::-webkit-details-marker { display: none; }
 :is(.persona-instructions, .persona-avatar-options) > summary svg { width: 14px; height: 14px; flex: none; transition: transform var(--speed); }
 :is(.persona-instructions, .persona-avatar-options)[open] > summary svg { transform: rotate(180deg); }
-.persona-instructions > summary { cursor: pointer; color: var(--text-muted); font-size: .88rem; width: fit-content; }
+.persona-instructions > summary { cursor: pointer; color: var(--text-muted); font-size: var(--text-md); width: fit-content; }
 .persona-instructions > summary:hover, .persona-avatar-options > summary:hover { color: var(--text); }
 .persona-instructions[open] > summary { margin-bottom: .5rem; }
 .persona-card .instructions, .persona-page .instructions {
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14em; overflow: auto; margin: 0; padding: .65rem .8rem;
-  border-radius: var(--radius-sm); background: var(--hover); font-family: var(--font); font-size: .88rem; line-height: 1.5;
+  border-radius: var(--radius-sm); background: var(--hover); font-family: var(--font); font-size: var(--text-md); line-height: 1.5;
 }
 .persona-page .instructions.is-open { max-height: 26em; }
 .share-row { display: flex; gap: .5rem; align-items: center; }
-.share-row input { font-family: var(--mono); font-size: .8rem; min-height: var(--control-compact); padding: .3rem .6rem; }
+.share-row input { font-family: var(--mono); font-size: var(--text-sm); min-height: var(--control-compact); padding: .3rem .6rem; }
 .persona-footer { display: flex; flex-direction: column; gap: .6rem; margin-top: auto; padding-top: .75rem; border-top: 1px solid var(--border); }
 .persona-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .persona-actions .menu { margin-left: auto; }
@@ -137,13 +137,13 @@
   transition: background var(--speed);
 }
 .template-card:hover { background: var(--hover); color: var(--text); }
-.template-card strong { display: block; font-size: .93rem; }
-.template-card .grow > span { display: block; color: var(--text-muted); font-size: .84rem; line-height: 1.4; }
+.template-card strong { display: block; font-size: var(--text-base); }
+.template-card .grow > span { display: block; color: var(--text-muted); font-size: var(--text-sm); line-height: 1.4; }
 .template-card > svg { width: 16px; height: 16px; margin-top: .6rem; color: var(--text-faint); }
 .template-card:hover > svg { color: var(--text); }
 .template-strip { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 .template-strip ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .4rem; }
-.template-strip .chip { font-size: .86rem; padding: .3rem .7rem; border-radius: var(--radius-sm); }
+.template-strip .chip { font-size: var(--text-md); padding: .3rem .7rem; border-radius: var(--radius-sm); }
 
 /* ----- editor ------------------------------------------------------------------------ */
 .persona-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); gap: 1.5rem; align-items: start; }
@@ -154,7 +154,7 @@
   font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--font); }
 .emoji-picks { display: flex; flex-wrap: wrap; gap: .3rem; }
 .persona-avatar-options:has(> .emoji-picks[hidden]) { display: none; }
-.persona-avatar-options > summary { width: fit-content; cursor: pointer; color: var(--text-muted); font-size: .88rem; }
+.persona-avatar-options > summary { width: fit-content; cursor: pointer; color: var(--text-muted); font-size: var(--text-md); }
 .persona-avatar-options[open] > summary { margin-bottom: .6rem; }
 .emoji-pick {
   display: inline-grid; place-items: center; width: var(--control-height); height: var(--control-height); padding: 0; border-radius: var(--radius-sm);
@@ -181,9 +181,6 @@
 /* One line that grows with the text, so a long starter or description is never cut off (personalities.js
    sizes it where field-sizing is not supported, and keeps it one paragraph). */
 .starter-input { min-height: var(--control-height); resize: none; overflow: hidden; field-sizing: content; }
-.persona-counter { align-self: flex-end; margin-top: -.15rem; font-size: .76rem; color: var(--text-faint); font-variant-numeric: tabular-nums; }
-.persona-counter.is-near { color: var(--warning); }
-.persona-counter.is-over { color: var(--danger); font-weight: 600; }
 .persona-form .segmented { align-self: flex-start; }
 .persona-form .segmented label { padding: .4rem .85rem; }
 
@@ -197,19 +194,19 @@
 .persona-preview-chat .persona-avatar.xl { --size: 56px; border-radius: var(--radius-lg); }
 .persona-intro { display: flex; flex-direction: column; align-items: center; text-align: center; gap: .4rem; }
 .persona-intro-name { margin: .25rem 0 0; font-weight: 650; font-size: 1.1rem; overflow-wrap: anywhere; }
-.persona-greeting { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); font-size: .92rem; max-width: 34rem; }
+.persona-greeting { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); font-size: var(--text-base); max-width: 34rem; }
 .persona-greeting:empty { display: none; }
 .persona-starters { list-style: none; margin: .4rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; width: 100%; text-align: left; }
 .persona-starters:empty { display: none; }
 .persona-starters li {
   padding: .45rem .7rem; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface);
-  font-size: .85rem; overflow-wrap: anywhere;
+  font-size: var(--text-md); overflow-wrap: anywhere;
 }
 .persona-intro-preview { display: flex; flex-direction: column; gap: .5rem; }
 .persona-intro-preview .persona-starters { margin: 0; }
 /* Starters on the shared page are a plain list (nothing to press here), not text fields or buttons. */
 .persona-starter-chips { gap: .3rem; }
-.persona-starter-chips li { display: flex; align-items: flex-start; gap: .5rem; padding: 0; border: 0; border-radius: 0; background: none; font-size: .9rem; cursor: default; }
+.persona-starter-chips li { display: flex; align-items: flex-start; gap: .5rem; padding: 0; border: 0; border-radius: 0; background: none; font-size: var(--text-base); cursor: default; }
 .persona-starter-chips svg { width: 15px; height: 15px; flex: none; margin-top: .2rem; color: var(--persona, var(--text-muted)); }
 
 @media (max-width: 900px) {
@@ -244,27 +241,27 @@
   display: inline-flex; align-items: center; gap: .4rem; min-width: 0; max-width: 16rem; padding: .2rem .6rem .2rem .25rem;
   border-radius: 999px; border: 1px solid color-mix(in srgb, var(--persona, var(--primary)) 45%, var(--bg));
   background: color-mix(in srgb, var(--persona, var(--primary)) 10%, transparent); color: var(--text);
-  font: 500 .85rem/1.3 var(--font); cursor: pointer; flex: 0 1 auto;
+  font: 500 var(--text-md)/1.3 var(--font); cursor: pointer; flex: 0 1 auto;
 }
 .persona-chip:hover { background: color-mix(in srgb, var(--persona, var(--primary)) 18%, transparent); }
 .persona-chip .truncate { min-width: 0; }
 .persona-picker { position: relative; min-width: 0; }
 .persona-button { max-width: 16em; min-width: 0; gap: .35rem; padding-left: .45rem; }
-.persona-button .persona-avatar { --size: 22px; border-radius: 7px; }
+.persona-button .persona-avatar { --size: 22px; border-radius: var(--radius); }
 .persona-button > svg { width: .9375rem; height: .9375rem; }
 .persona-button.is-set { color: var(--text); }
 .persona-popover { width: min(400px, calc(100vw - 1.5rem)); }
-.persona-group-label { padding: .5rem .6rem .2rem; font-size: .74rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--text-faint); list-style: none; }
+.persona-group-label { padding: .5rem .6rem .2rem; font-size: var(--text-xs); font-weight: 600; color: var(--text-faint); list-style: none; }
 .persona-option { flex-direction: row !important; align-items: flex-start; gap: .6rem !important; }
-.persona-option .persona-avatar { --size: 30px; border-radius: 9px; margin-top: .1rem; }
+.persona-option .persona-avatar { --size: 30px; border-radius: var(--radius-lg); margin-top: .1rem; }
 .persona-option-text { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
 .persona-option-text .model-option-description { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.persona-popover-footer { display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .5rem .35rem 0; margin-top: .35rem; border-top: 1px solid var(--border); font-size: .85rem; }
+.persona-popover-footer { display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .5rem .35rem 0; margin-top: .35rem; border-top: 1px solid var(--border); font-size: var(--text-md); }
 .chat-empty .persona-intro { margin: 0 auto; max-width: 36rem; }
 .chat-empty .persona-intro-name { font-size: 1.4rem; margin: .5rem 0 0; }
 .chat-empty .persona-greeting { font-size: 1rem; color: var(--text); }
-.chat-empty .persona-intro-description { margin: 0; color: var(--text-muted); font-size: .9rem; }
-.chat-empty .persona-note { margin: .35rem 0 0; font-size: .85rem; color: var(--warning); }
+.chat-empty .persona-intro-description { margin: 0; color: var(--text-muted); font-size: var(--text-base); }
+.chat-empty .persona-note { margin: .35rem 0 0; font-size: var(--text-md); color: var(--warning); }
 @media (max-width: 640px) {
   .persona-button { max-width: none; padding-inline: .45rem; }
   .persona-button .persona-button-label, .persona-button > svg:last-child { display: none; }
@@ -273,11 +270,11 @@
   .persona-picker { position: static; }
   .persona-popover { left: .5rem; right: .5rem; width: auto; }
 }
-.suggestion .suggestion-text { color: var(--text); font-size: .92rem; }
+.suggestion .suggestion-text { color: var(--text); font-size: var(--text-base); }
 
 /* ----- administrator list ------------------------------------------------------------------ */
 .admin-persona { display: flex; align-items: flex-start; gap: .65rem; min-width: 0; }
-.admin-persona .persona-avatar { --size: 32px; border-radius: 9px; }
+.admin-persona .persona-avatar { --size: 32px; border-radius: var(--radius-lg); }
 /* break-word (not anywhere) keeps the column's minimum width, so names wrap by word and the table scrolls. */
 .admin-persona strong { overflow-wrap: break-word; }
 /* The actions wrap in their own column instead of setting the row's width, so the name and the

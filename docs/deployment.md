@@ -2,7 +2,7 @@
 
 BananaChat uses one `banana` command for installation, updates, backup, migration, restoration, and uninstall. It remembers the server's role. After installation the command is available globally as `bananachat`.
 
-**Automatic repository updates are optional and off by default.** Enabling them authorises deployment of future changes from the selected branch, including changes that may remove features. Keep manual updates or choose a controlled fork/branch when you need a fixed feature set.
+**Automatic updates are optional and off by default.** Updates follow the highest signed release tag of the update source by default, or a branch you choose, and a new release may remove features. Keep manual updates, or follow a branch of your own fork, when you need a fixed feature set.
 
 ## Choose a layout
 
@@ -20,7 +20,7 @@ The web server keeps the chat data and the compute server the model files. Eithe
 
 Use Linux with systemd, Python 3.12+, Python venv support, Git, and local storage. Debian 13 and Ubuntu 24.04 are suitable starting points. Install Caddy through its official distribution for HTTPS. On `compute` and `single` hosts install Ollama and the GPU drivers through their official channels. The web server needs neither.
 
-Obtain a clean, reviewed Git checkout. Installation uses its exact local commit; automatic updates remain off. The default future source is `https://github.com/BananaSuite/BananaChat.git`, branch `main`.
+Install from a clean checkout of the newest release tag (`git checkout "$(git tag --list 'v*' --sort=-v:refname | head -n 1)"`). Installation uses that exact commit. Later updates come from `https://github.com/BananaSuite/BananaChat.git` and follow its release tags; see [update policy](#update-policy-and-private-repositories).
 
 ## Two servers (default)
 
@@ -29,6 +29,7 @@ Obtain a clean, reviewed Git checkout. Installation uses its exact local commit;
 ```sh
 git clone https://github.com/BananaSuite/BananaChat.git
 cd BananaChat
+git checkout "$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
 sudo ./banana install --mode compute --domain compute.example.org
 sudo bananachat proxy --install
 ```
@@ -52,6 +53,7 @@ The managed Ollama gets `OLLAMA_HOST` and `OLLAMA_MODELS` in `/opt/bananachat/co
 ```sh
 git clone https://github.com/BananaSuite/BananaChat.git
 cd BananaChat
+git checkout "$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
 sudo ./banana install --domain chat.example.org --pair
 sudo bananachat proxy --install
 ```
@@ -76,7 +78,7 @@ sudo bananachat backend connect         # paste a new pairing code (hidden)
 
 `backend connect` also accepts `CODE` (visible in the shell history and process list, like `--pair CODE`), `--pair-file FILE`, or `--url URL --token-file FILE` (add `--management-token-file FILE` when the compute server keeps model management for its own token; a pairing code carries both); `--url` next to a pairing code overrides its address (for an SSH tunnel on another port). It asks to confirm the address in a code like `install --pair` (`--yes` skips the question), tests the connection before changing anything, writes `app.env` and restarts the web service if it runs; if that restart fails its readiness checks, the previous connection is put back. `sudo bananachat status` shows the same summary, and the compute server's `status` shows its token fingerprint so the two can be compared.
 
-**Rotating the tokens.** On the compute server run `sudo bananachat compute rotate-token`: it writes new tokens (the gateway token and the model management token; a compute server installed before 1.7 gets its management token now), restarts the gateway (the old tokens stop working at once) and prints a new pairing code. On the web server run `sudo bananachat backend connect` and paste it; update the web server first, since a release before 1.7 ignores the management token and then cannot download or delete models. Doing it by hand works too: write new random values (`openssl rand -hex 32`) into the token files with mode 0600, restart the compute service, then on the web server run `backend connect --url https://compute.example.org --token-file FILE --management-token-file FILE` (or edit `BC_OLLAMA_API_KEY` and `BC_OLLAMA_MANAGEMENT_API_KEY` in its `app.env` and restart). The web server keeps its copies of the tokens in `app.env`, not in token files.
+**Rotating the tokens.** On the compute server run `sudo bananachat compute rotate-token`: it writes new tokens (the gateway token and the model management token, which it adds if the server has none yet), restarts the gateway (the old tokens stop working at once) and prints a new pairing code. On the web server run `sudo bananachat backend connect` and paste it; update the web server first, since a release before 1.7 ignores the management token and then cannot download or delete models. Doing it by hand works too: write new random values (`openssl rand -hex 32`) into the token files with mode 0600, restart the compute service, then on the web server run `backend connect --url https://compute.example.org --token-file FILE --management-token-file FILE` (or edit `BC_OLLAMA_API_KEY` and `BC_OLLAMA_MANAGEMENT_API_KEY` in its `app.env` and restart). The web server keeps its copies of the tokens in `app.env`, not in token files.
 
 ### Without a public name: SSH tunnel
 
@@ -84,18 +86,25 @@ Install the compute server without `--domain`; its pairing code then points at `
 
 The web server treats a tunnel like any remote compute server: it never checks its own memory, disk or GPU for inference, and it probes the compute server so an outage shows a banner instead of failing requests (see `BC_INFERENCE_LOCAL` in [configuration](configuration.md) for unusual setups).
 
-The two update timers are independent. For internal automatic rollout, keep web/compute API changes backward compatible and merge only reviewed, tested changes. An incompatible upgrade needs a documented order and manual updates during the transition. The updater does not provide a distributed transaction across two machines.
-
 ## One server
 
 ```sh
 git clone https://github.com/BananaSuite/BananaChat.git
 cd BananaChat
+git checkout "$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
 sudo ./banana install --mode single --domain chat.example.org
 sudo bananachat proxy --install
 ```
 
-Point DNS at this server and allow HTTPS ports 80/443. `proxy` prints a matching Caddyfile. `proxy --install` validates it before loading it, and preserves an unrelated existing proxy unless you explicitly select `--replace`. On a server with other sites, merge the printed block into the existing proxy configuration.
+Point DNS at this server and allow HTTPS ports 80/443. `proxy` prints a matching Caddyfile. `proxy --install` validates it before loading it, and preserves an unrelated existing proxy unless you explicitly select `--replace`. On a server with other sites, merge the printed block into the existing proxy configuration, global options included. `--email` sets the address Let's Encrypt writes to about certificates.
+
+### Behind Cloudflare
+
+`proxy` looks up the domain. When it resolves only to Cloudflare's addresses, the record is proxied (orange cloud): the Caddyfile then skips the TLS-ALPN challenge, which can never pass Cloudflare's proxy, and the command says so. Pass `--cloudflare` or `--no-cloudflare` to decide yourself, for example before DNS points at Cloudflare. The choice is not stored, so repeat it when you run `proxy` again.
+
+The site answers on port 80 as well as 443, which Let's Encrypt's HTTP-01 challenge needs. Cloudflare's "Always Use HTTPS" must be off, or a rule must skip `/.well-known/acme-challenge/`, or the first certificate cannot be issued. Wildcard and origin certificates are not supported here. Under SSL mode Flexible, a request Cloudflare already received over HTTPS is served rather than redirected back to itself.
+
+The visitor's address is taken from `CF-Connecting-IP` for requests that come from Cloudflare (Caddy 2.7 or newer; with an older Caddy every visitor appears with a Cloudflare address, and `proxy` warns). The idle timeout is 16 minutes, above the 15 minutes for which Cloudflare reuses an idle connection to the origin, so a reused connection is never one Caddy has just closed.
 
 The chat service and Ollama bind to loopback. Model files are stored under `/opt/bananachat/data/models`; download models in Admin → Models (or with the Ollama CLI) and enable them there. Add `--ollama-url http://127.0.0.1:11434` to use an Ollama that already runs on the machine instead, exactly as for a compute server. Create the first administrator with the setup token as described above.
 
@@ -109,9 +118,9 @@ sudo bananachat updates status
 sudo bananachat updates disable
 ```
 
-`source check` shows what an update would deploy, without deploying it. By default (installations made by 1.7 and later) updates follow **release tags**: the highest `vX.Y.Z` tag of the source, never work pushed after it; until the source has one, an update reports that there is nothing to update to. A source configured before 1.7 keeps following its branch until `source set --track tags`. Automatic checking uses a systemd timer with a small randomised delay. Disabling updates prevents the next update; an already applying transaction finishes safely. An intentionally stopped application is not restarted by the updater.
+`source check` shows what an update would deploy, without deploying it. Updates follow **release tags** by default: the highest `vX.Y.Z` tag of the source, never work pushed after it. Until the source has one, an update reports that there is nothing to update to. A source configured before 1.7 keeps following its branch until `source set --track tags`. Automatic checking uses a systemd timer with a small randomised delay. Disabling updates prevents the next update; an already applying transaction finishes safely. An intentionally stopped application is not restarted by the updater.
 
-An automatic update installs new code as root with nobody reviewing it, so `updates enable` requires signature checks (`--require-signatures`, now or configured before; see [below](#what-a-bad-commit-can-and-cannot-do)). `--allow-unsigned` turns automatic updates on without them anyway: then anyone who can push to the source can run code on your server, and `status` warns about it. Clearing the requirement while automatic updates are on (`source set --clear-signatures`) needs `--allow-unsigned` too. Automatic updates enabled before 1.7 keep running as they were.
+An automatic update installs new code as root with nobody reviewing it, so `updates enable` requires signature checks (`--require-signatures`, now or configured before; see [below](#what-a-bad-commit-can-and-cannot-do)). `--allow-unsigned` turns automatic updates on without them: then anyone who can push to the source can run code on your server, and `status` warns about it. Clearing the requirement while automatic updates are on (`source set --clear-signatures`) needs `--allow-unsigned` too.
 
 To follow a branch's latest commit instead (your own fork, for example), with an optional fallback:
 
@@ -137,59 +146,36 @@ sudo bananachat source set --repo git@forge.example.org:team/BananaChat.git --br
 sudo bananachat source check
 ```
 
-Obtain and verify the forge's SSH host key through a trusted channel first. Strict host checking is enforced. Repository credentials are stored as root-private files under `config/`, kept out of URLs and Git configuration, and passed only to the updater's Git process. They are separate from compute API credentials and BananaVibe bot credentials. Repeat `source set` with a new credential file to rotate access; `source set --clear-credentials` removes it. Changing hosts without a replacement credential disables authentication.
+Obtain and verify the forge's SSH host key through a trusted channel first. Strict host checking is enforced. Repository credentials are stored as root-private files under `config/`, kept out of URLs and Git configuration, and passed only to the updater's Git process. They are separate from the compute API credentials. Repeat `source set` with a new credential file to rotate access; `source set --clear-credentials` removes it. Changing hosts without a replacement credential disables authentication.
 
 Each release installs its Python dependencies from `requirements.lock`: every package, dependencies included, at the version and file hashes the release was tested with, wheels only (`pip install --require-hashes --only-binary=:all:`), so nothing is resolved anew on your server and no package build script runs there. A release without a lock (a rollback to an older one) installs its ranges, still wheels only.
 
 Each update prepares the new release, checks that there is disk space for its rollback package and for a rollback, stops the remembered services, creates a backup (model weights stay in place rather than being copied into it), switches source, and checks readiness before allowing traffic. Failed readiness restores the old code and data together. A failed revision is not retried, automatically or manually, until you correct the problem and run `update --retry-failed` (or publish a newer corrected commit). For each kind of package the tool creates by itself (`auto`, `before-update`, `before-restore`, `before-legacy-import`, `remote`), the newest three are retained by default; set `--keep-backups` on `updates enable` to change that policy. Packages you create with `backup`/`migrate` are never removed, and neither is the package needed for `rollback`. Prepared releases use the same retention count, always preserving the active and previous releases.
 
-## Updating from the previous release
+## Updating to a new release
 
-Read [UPGRADING.md](../UPGRADING.md) before updating from 1.6: it lists every change that needs a decision or an action. The update itself takes the normal path:
+Read [UPGRADING.md](../UPGRADING.md) before updating: it lists every change that needs a decision or an action. The update itself takes the normal path:
 
 ```sh
 sudo bananachat source check
 sudo bananachat update
 ```
 
-The previous release's updater prepares the new code, backs everything up, starts it and checks `/health` before letting users back in; if anything fails it restores the old code together with the old database. On first start the database is upgraded in place (schema version 25): accounts and content are kept, sign-ins stay valid, API tokens keep working, and a site still named "BananaAI" from the project's earlier name is renamed to BananaChat (custom names are kept). No configuration change is needed; new optional settings are listed in [configuration](configuration.md) and in the [changelog](../CHANGELOG.md). After updating, reload open browser tabs to load the current interface; versioned static asset URLs refresh scripts and styles together without requiring a hard refresh. The Claude subscription connector was removed: the upgrade retires the models it served (chat history keeps them) and drops its account pool, and leftover `BC_CLAUDE_*` settings are ignored with one startup warning; offer Anthropic models through an [external API provider](external-providers.md) instead. External API provider keys are encrypted at rest with the instance secret key the first time they are used after the update; keep `BC_SECRET_KEY` (or `.secret_key`) together with the instance directory in backups. Accounts can now turn on [two-step verification](two-step-verification.md); it stays off until someone chooses it, and administrators are asked to confirm their password again (at most every ten minutes) before exporting the database, resetting a password, changing a role or changing provider keys. Each account may now store at most `BC_CHAT_MAX_ACCOUNT_ATTACHMENT_MB` (1 GB by default) of chat attachments, counted as stored (a document counts the text extracted from it, measured for existing attachments during the upgrade), and new image attachments are stored at most `BC_CHAT_MAX_IMAGE_DIMENSION` (2048) pixels on their longest side; raise either setting before updating if your users need more.
+The installed updater prepares the new code, backs everything up, starts it and checks `/health` before letting users back in; if anything fails it restores the old code together with the old database. On first start the database is upgraded in place (the current release uses schema version 26). New optional settings are listed in [configuration](configuration.md) and in the [changelog](../CHANGELOG.md). After updating, reload open browser tabs. For a manual installation, take a complete backup before starting the new release and restore its matching code and database if you roll back.
 
-The five-hour token allowance combines the old regular amount and the slow
-amount when slow tokens were enabled; disabled sites keep the regular amount.
-Existing regular and slow usage count together without resetting windows or
-refilling tokens. Weekly limits and other customisation are preserved. The
-managed updater's backup keeps the original code and database together for
-rollback; for a manual installation, take a complete backup before starting
-the new release and restore its matching code and database if you roll back.
+Web and compute servers update independently, each with its own timer; if a release needs an order, UPGRADING.md says so.
 
-Update the compute server as well if you use a split deployment; either order works. Rotate the compute token (`compute rotate-token`, which also adds the separate model management token) only after the web server runs 1.7: an older web server ignores the management token and then cannot download or delete models.
-
-Two behaviours changed for split deployments. A web server that reaches its compute server through an SSH tunnel (`BC_OLLAMA_URL=http://127.0.0.1:…` with `BC_OLLAMA_API_KEY`) is now treated as remote: it no longer waits for its own free memory, and it probes the compute server so an outage shows a banner. And `BC_INFERENCE_OUTAGE_MODE=fallback` needs an explicit `BC_INFERENCE_FALLBACK_URL`; it no longer defaults to the web server's own port 11434, and without one the server logs a warning and pauses new answers during an outage instead.
+A web server that reaches its compute server through an SSH tunnel (a loopback `BC_OLLAMA_URL` with `BC_OLLAMA_API_KEY`) treats it as remote: it does not check its own memory and shows an outage banner when the compute server is unreachable. `BC_INFERENCE_OUTAGE_MODE=fallback` needs an explicit `BC_INFERENCE_FALLBACK_URL`; without one the server logs a warning and pauses new answers during an outage.
 
 ## What a bad commit can and cannot do
 
-The updater assumes the source repository can go wrong, whether through a
-mistake or through someone who should not have push access.
+The updater assumes the source repository can go wrong, whether through a mistake or through someone who should not have push access.
 
-A commit that deletes the application cannot take the deployment with it.
-Nothing is switched until a release has been prepared from the new revision,
-and a revision that is empty or missing the managed entry point is refused at
-that point, with the running version untouched. A revision that installs and
-starts but fails its readiness checks is rolled back to the previous code and
-its matching database. Either way the failed revision is recorded and never
-retried automatically. Chat history, settings and model recipes live outside the
-source tree, so no commit can delete them.
+A commit that deletes the application cannot take the deployment with it. Nothing is switched until a release has been prepared from the new revision, and a revision that is empty or missing the managed entry point is refused at that point, with the running version untouched. A revision that installs and starts but fails its readiness checks is rolled back to the previous code and its matching database. Either way the failed revision is recorded and never retried automatically. Chat history, settings and model recipes live outside the source tree, so no commit can delete them.
 
-Rewritten history is refused as well. An automatic update only moves forward
-from the installed revision, so a force-push that replaces history pauses
-updates instead of applying them, and switching to unrelated history takes a
-deliberate `update --allow-divergent` from a maintainer.
+Rewritten history is refused as well. An automatic update only moves forward from the installed revision, so a force-push that replaces history pauses updates instead of applying them, and switching to unrelated history takes a deliberate `update --allow-divergent` from a maintainer.
 
-What none of that catches is a well-formed commit that does exactly what it
-says and is also hostile: code that installs cleanly, passes readiness and
-then does something you did not want. If the repository you follow is
-compromised, the updater will deploy what it finds there. Against that, require
-signatures:
+Readiness checks do not catch a hostile commit that works. If the update source can be compromised, require signatures:
 
 ```sh
 sudo bananachat source set --require-signatures /root/allowed_signers
@@ -201,36 +187,19 @@ The file is an SSH allowed-signers file, one line per key you trust:
 you@example.org namespaces="git" ssh-ed25519 AAAAC3Nza...
 ```
 
-With it in place, a server that follows release tags deploys only an
-annotated tag (`git tag -s vX.Y.Z`) signed by a listed key for its own name.
-A signed commit under an unsigned or lightweight tag, or a signed tag object
-pushed under another name, releases nothing: anyone who can push tags could
-otherwise release any signed work in progress under a higher version. The
-highest release that verifies is deployed; higher tags that do not are
-skipped, listed in the update result (`skipped_releases`) and in a warning,
-so a stray tag never holds back a security release. Only the 20 highest tags
-are tried: anyone who can push tags can still hold updates back with 20 tags
-that do not verify (as by deleting the release tags), so let only
-maintainers create `v*` tags on the update source. A server that follows a
-branch needs every commit signed by a listed key. Anything else stops the
-update before anything is fetched into a release and leaves the running
-version alone. Sign releases with `git tag -s` (commits, for servers that
-follow a branch, with `git commit -S`) after setting `gpg.format=ssh` and
-`user.signingkey`. A restore accepts the same signatures: the commit's own,
-or a signed release tag of the update source naming it.
-`source set --clear-signatures` returns to unsigned updates.
+With it in place, updates deploy only signed code:
 
-This checks SSH signatures only. An OpenPGP-signed commit is refused, and
-the message says so. That is deliberate: Git picks its verifier from the
-signature itself, so an OpenPGP signature would be checked against whatever
-the server's GnuPG keyring happens to trust instead of against the file you
-configured. If you sign with OpenPGP today, move the signing key to SSH format
-for the server you want protected.
+- A server that follows release tags deploys only an annotated tag (`git tag -s vX.Y.Z`) signed by a listed key for its own name. A signed commit under an unsigned or lightweight tag does not count, and neither does a signed tag pushed under another name.
+- A server that follows a branch needs every commit signed by a listed key.
+- The highest release that verifies is deployed. Higher tags that do not verify are skipped and listed in the update result (`skipped_releases`) and in a warning.
+- Only the 20 highest tags are tried, so 20 tags that do not verify hold updates back. Let only maintainers create `v*` tags on the update source.
+- Anything else stops the update before anything is fetched into a release. The running version stays as it is.
 
-Keep the allowed-signers file on the server, owned by the operator and mode
-0600; the updater refuses to read it otherwise, and refuses to update rather
-than carrying on unverified if it goes missing. Signature checks protect the
-code only: a compromised token still lets someone read a private repository.
+To sign, set `gpg.format=ssh` and `user.signingkey`, then sign releases with `git tag -s` (and commits with `git commit -S` for servers that follow a branch). A restore accepts the same signatures: the commit's own, or a signed release tag of the update source that names it. `source set --clear-signatures` returns to unsigned updates.
+
+This checks SSH signatures only. An OpenPGP-signed commit is refused, and the message says so. That is deliberate: Git picks its verifier from the signature itself, so an OpenPGP signature would be checked against whatever the server's GnuPG keyring happens to trust instead of against the file you configured. If you sign with OpenPGP today, move the signing key to SSH format for the server you want protected.
+
+Keep the allowed-signers file on the server, owned by the operator and mode 0600; the updater refuses to read it otherwise, and refuses to update rather than carrying on unverified if it goes missing. Signature checks protect the code only: a compromised token still lets someone read a private repository.
 
 ## Backup, move, and restore
 
@@ -240,7 +209,7 @@ code only: a compromised token still lets someone read a private repository.
 sudo bananachat migrate --output /root/bananachat-migration.tar.gz
 ```
 
-`backup` and `migrate` create the same portable package. They briefly stop services for a consistent snapshot and return them to their prior running state. The package contains source, data, session/API keys, environment settings, private Git credentials, and managed model files. Allow enough disk space for these, especially on a compute host. Keep external ComfyUI data, GPU drivers, and any paths outside the managed root backed up separately.
+`backup` and `migrate` create the same portable package. They briefly stop services for a consistent snapshot and return them to their prior running state. The package contains source, data, session/API keys, environment settings, private Git credentials, and managed model files. Allow enough disk space for these, especially on a compute server. Keep external ComfyUI data, GPU drivers, and any paths outside the managed root backed up separately.
 
 Packages have mode `0600` but are **not encrypted**. Transfer them over SSH and store them privately off the server. For a final migration, prevent new writes on the old server after the final package, test the new server, then change routing/DNS. Do not leave two independently writable copies serving the same users.
 
@@ -254,9 +223,16 @@ sudo bananachat status
 sudo bananachat proxy
 ```
 
-This restores the saved mode, compute connection and exact bundled source without fetching the update repository. The bundled source runs with root privileges for maintenance, so a new server deploys it only once you confirm its revision with `--trust-source` (see [Restore or move servers](backups.md#restore-or-move-servers)) (`--mode`, `--pair`, `--backend-url` and `--skip-connection-check` are refused here; change the connection afterwards with `backend connect`). Installing Python dependencies still needs package-registry access. `single` and `compute` also need Ollama installed locally; add `--ollama-url http://127.0.0.1:11434` to restore onto an Ollama that already runs on the new machine instead of a managed one. Add `--domain new.example.org` when changing the public hostname, then configure the proxy and review integration URLs.
+This restores the saved mode, compute connection and exact bundled source without fetching the update repository. The bundled source runs with root privileges for maintenance, so a new server deploys it only once you confirm its revision with `--trust-source` (see [Restore or move servers](backups.md#restore-or-move-servers)). `--mode`, `--pair`, `--backend-url` and `--skip-connection-check` are refused here; change the connection afterwards with `backend connect`. Installing Python dependencies still needs package-registry access. `single` and `compute` also need Ollama installed locally; add `--ollama-url http://127.0.0.1:11434` to restore onto an Ollama that already runs on the new machine instead of a managed one. Add `--domain new.example.org` when changing the public hostname, then configure the proxy and review integration URLs.
 
-To restore after installing an empty matching mode, run `sudo bananachat restore PACKAGE`. It saves a `before-restore` package before replacement and keeps this server's Ollama choice: a managed Ollama stays managed and an existing one (`--ollama-url`) stays in use, whichever the package came from. Restore cannot convert `web`, `single`, and `compute` modes; use a separate root and a deliberate data/backend migration for a role change. Restore packages only from trusted operators: they include executable source and secrets. An installed server takes the code from a release it already prepared or from its own update source (signature-checked when signatures are required), and asks for `--trust-source REVISION` only when neither has the package's revision. A server whose update source requires signatures never deploys the package's own source, even with `--trust-source`: the refusal says how to allow it once. An installed server also keeps its own update source settings, repository credentials and allowed signers (the code it runs was checked against them); the result's `source_warning` says when the package's differ, and `source set` changes them. A new server takes the package's. If readiness checks fail, the previous data is put back.
+To restore after installing an empty matching mode, run `sudo bananachat restore PACKAGE`. It saves a `before-restore` package first and puts the previous data back if readiness checks fail. Restore packages only from trusted operators: they include executable source and secrets.
+
+- Ollama: the server keeps its own choice. A managed Ollama stays managed and an existing one (`--ollama-url`) stays in use, whichever the package came from.
+- Mode: restore cannot convert between `web`, `single` and `compute`. For a role change, use a separate root and migrate the data and backend deliberately.
+- Code on an installed server: it comes from a release the server already prepared or from its own update source (signature-checked when signatures are required). The server asks for `--trust-source REVISION` only when neither has the package's revision.
+- Code when signatures are required: the server never deploys the package's own source, even with `--trust-source`. The refusal says how to allow it once.
+- Update settings on an installed server: it keeps its own update source, repository credentials and allowed signers. The result's `source_warning` says when the package's differ, and `source set` changes them.
+- Update settings on a new server: it takes the package's.
 
 New packages include `config/repo.allowed_signers` when SSH signatures are required for updates. Packages made by earlier releases may omit it; after restoring one onto a new server, recover the operator's original allowed signers file and configure `source set --require-signatures FILE` before updating that installation. Signature verification fails closed while the trust file is missing.
 
@@ -266,9 +242,9 @@ New packages include `config/repo.allowed_signers` when SSH signatures are requi
 
 ## Older installations and optional components
 
-The old production shell entrypoints have been retired. Keep the old checkout and services available while exporting data and testing the new managed installation. Export the old chat database from Admin → Migration, then import it into the installed single/web service with `sudo bananachat restore --legacy-database /root/bananachat_export.tar.gz`. The command stops all managed processes, makes a rollback package and checks startup before reopening service. Browser imports have been retired because a live request cannot quiesce its peer processes. Also copy persistent session keys, uploaded files/audio, operator configuration, and other data omitted by that export separately into the managed data directory while services are stopped. For older audio stored in `app/static/audio`, move it into the managed `data/audio` directory. Preserve ownership and private permissions, restart, and verify before switching users. Old application exports are not the same format as `banana` installation packages.
+To move from an installation older than 1.6, keep the old checkout and services available while you test the new managed installation. Export the old chat database from Admin → Migration, then import it into the installed single or web server with `sudo bananachat restore --legacy-database /root/bananachat_export.tar.gz`. The command stops all managed processes, makes a rollback package and checks start-up before reopening. While services are stopped, copy persistent session keys, uploaded files, operator configuration and anything else the export omits into the managed data directory; audio from `app/static/audio` goes to `data/audio`. Preserve ownership and private permissions, restart, and check everything before switching users. Old application exports are not the same format as `banana` installation packages.
 
-Volunteer [worker PCs](workers.md) are configured separately. Dedicated inference servers use `--mode compute` (see [compute node](compute.md)). [ComfyUI](comfyui.md) and the optional checkpoint downloader keep their own data and credentials; configure and back them up separately.
+Volunteer [worker PCs](workers.md) are configured separately. Dedicated inference servers use `--mode compute` (see [compute server](compute.md)). [ComfyUI](comfyui.md) and the optional checkpoint downloader keep their own data and credentials; configure and back them up separately.
 
 ## Status and removal
 

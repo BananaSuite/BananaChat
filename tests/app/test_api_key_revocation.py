@@ -1,4 +1,4 @@
-"""API keys and the actions that secure an account (chat-auth-2fa-3).
+"""API keys and the actions that secure an account.
 
 Someone who briefly held a session may have created an API key, and ending sessions alone leaves it
 working. Like changing the password and signing out other devices, turning on two-step verification,

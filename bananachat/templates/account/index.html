@@ -23,7 +23,7 @@
 {% else %}
 {{ meter(t("account.weekly_tokens"), window.meter, id, t("account.week_left", left=(window.meter.left | tokens))) }}
 {% endif %}
-<p class="hint mb-0">{% if window.open %}{{ t_html("account." ~ period ~ ("_blocked" if window.blocked else "_resets"), time=(window.resets_at | time_html), left=(window.resets_at | time_left_html)) }}{% else %}{{ t("account." ~ period ~ "_not_started") }}{% endif %}</p>
+<p class="hint mb-0">{% if window.open %}{{ t_html("account." ~ period ~ ("_blocked" if window.blocked else "_resets"), time=(window.resets_at | local_time("auto")), left=(window.resets_at | time_left_html)) }}{% else %}{{ t("account." ~ period ~ "_not_started") }}{% endif %}</p>
 {%- endmacro %}
 {% block content %}
 <div class="page account-page">
@@ -56,8 +56,8 @@
         <dl class="account-profile-details">
           <div><dt>{{ t("auth.username") }}</dt><dd><strong>{{ user.username }}</strong></dd></div>
           <div><dt>{{ t("account.role") }}</dt><dd>{{ t("account.role_" ~ user.role) }}</dd></div>
-          <div><dt>{{ t("account.member_since") }}</dt><dd>{{ user.created_at | datetime_html }}</dd></div>
-          <div><dt>{{ t("account.last_sign_in") }}</dt><dd>{% if user.last_login_at %}{{ user.last_login_at | timeago }} <span class="faint small last-sign-in-time">({{ user.last_login_at | datetime_html }})</span>{% else %}{{ t("time.never") }}{% endif %}</dd></div>
+          <div><dt>{{ t("account.member_since") }}</dt><dd>{{ user.created_at | local_time }}</dd></div>
+          <div><dt>{{ t("account.last_sign_in") }}</dt><dd>{% if user.last_login_at %}{{ user.last_login_at | timeago }} <span class="faint small last-sign-in-time">({{ user.last_login_at | local_time }})</span>{% else %}{{ t("time.never") }}{% endif %}</dd></div>
         </dl>
       </section>
 
@@ -143,7 +143,7 @@
           <li class="list-item">
             <div class="grow">
               <strong>{{ grant.text }}</strong>{% if grant.everyone %} <span class="badge">{{ t("account.grant_everyone") }}</span>{% endif %}
-              <div class="hint">{% if grant.starts_at %}{{ t("account.grant_from", date=(grant.starts_at | datetime)) }} · {% endif %}{{ t("account.grant_until", date=(grant.ends_at | datetime)) if grant.ends_at else t("account.grant_forever") }}{% if grant.reason %} · {{ grant.reason }}{% endif %}</div>
+              <div class="hint">{% if grant.starts_at %}{{ t_html("account.grant_from", date=(grant.starts_at | local_time)) }} · {% endif %}{{ t_html("account.grant_until", date=(grant.ends_at | local_time)) if grant.ends_at else t("account.grant_forever") }}{% if grant.reason %} · {{ grant.reason }}{% endif %}</div>
             </div>
             {% if grant.starts_at %}<span class="badge badge-info">{{ t("account.grant_upcoming") }}</span>{% else %}<span class="badge badge-success">{{ t("account.grant_active") }}</span>{% endif %}
           </li>
@@ -157,7 +157,7 @@
         <p class="mb-1">{{ t("account.tier_next", name=tier.next.name) }}</p>
         <ul class="plain-list tier-requirements small" aria-labelledby="tier-title">
           {% for item in tier.requirements %}{% if item.need or item.key == "clean_days" %}
-          <li class="{{ 'is-met' if item.met else 'is-open' }}">{{ icon("check" if item.met else "chevron-right") }} {{ t("account.tier_req_" ~ item.key, need=((item.need | tokens) if item.key == "tokens" else item.need), have=((item.have | tokens) if item.key == "tokens" else item.have)) }}</li>
+          <li class="{{ 'is-met' if item.met else 'is-open' }}">{{ icon("check" if item.met else "chevron-right") }} {{ t("account.tier_req_" ~ item.key, need=((item.need | tokens) if item.key == "tokens" else item.need), have=((item.have | tokens) if item.key == "tokens" else item.have), count=item.need) }}</li>
           {% endif %}{% endfor %}
         </ul>
         <p class="hint mb-0">{{ t("account.tier_auto_hint") }}</p>
@@ -212,7 +212,7 @@
         </div>
         <p class="muted">{{ t("two_step.intro") }}</p>
         {% if two_step_state %}
-        <p>{{ t("two_step.on_since", when=(two_step_state.enabled_at | datetime)) }} {{ t("two_step.codes_left", count=two_step_state.codes_left) }}</p>
+        <p>{{ t_html("two_step.on_since", when=(two_step_state.enabled_at | local_time)) }} {{ t("two_step.codes_left", count=two_step_state.codes_left) }}</p>
         {% if not two_step_state.readable %}
         <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("two_step.unreadable") }}</p></div>
         {% endif %}
@@ -242,7 +242,7 @@
           <li class="list-item session-item">
             <div class="grow">
               <div><strong>{{ item.device }}</strong>{% if item.current %} <span class="badge badge-primary">{{ t("account.this_device") }}</span>{% endif %}</div>
-              <div class="hint">{{ t("account.session_details", ip=(item.ip or "—"), seen=(item.last_seen_at | timeago), started=(item.created_at | datetime)) }}</div>
+              <div class="hint">{{ t_html("account.session_details", ip=(item.ip or "—"), seen=(item.last_seen_at | timeago), started=(item.created_at | local_time)) }}</div>
             </div>
             {% if not item.current %}
             <form method="post" action="{{ url_for('account.revoke_session', id_hash=item.id) }}">
@@ -268,11 +268,11 @@
         <h2 id="quota-title">{{ t("account.quota") }}</h2>
         <p class="muted">{{ t("account.quota_intro") }}</p>
         {% if pending_quota %}
-        <div class="alert alert-info mb-2">{{ icon("info") }}<p>{{ t("account.quota_pending", summary=pending_summary, date=(pending_quota.created_at | datetime)) }}</p></div>
+        <div class="alert alert-info mb-2">{{ icon("info") }}<p>{{ t_html("account.quota_pending", summary=pending_summary, date=(pending_quota.created_at | local_time)) }}</p></div>
         {% if pending_consent %}
         <div class="stack mb-2" id="quota-consent">
           <p class="mb-0"><strong>{{ t("account.consent_title") }}</strong>
-            {% if pending_consent.open %}{{ t("account.consent_open", date=(pending_consent.until | datetime)) }}{% else %}{{ t("account.consent_closed") }}{% endif %}</p>
+            {% if pending_consent.open %}{{ t_html("account.consent_open", date=(pending_consent.until | local_time)) }}{% else %}{{ t("account.consent_closed") }}{% endif %}</p>
           <p class="hint mb-0">{{ t("account.consent_progress", supporters=pending_consent.supporters, min=pending_consent.min, objectors=pending_consent.objectors, percent=pending_consent.percent, approval=pending_consent.approval) }}{% if pending_consent.needed %} {{ t("account.consent_tokens", pledged=(pending_consent.pledged | compact), needed=(pending_consent.needed | tokens)) }}{% endif %}</p>
           {% if pending_consent.open %}<p class="hint mb-0"><a href="{{ url_for('community.index') }}">{{ t("account.consent_board") }}</a></p>{% endif %}
         </div>
@@ -389,7 +389,7 @@
           {% if community.enabled and community.kinds %}
           <div class="field">
             <label class="check"><input type="checkbox" name="community" value="1"{% if not is_draft or draft.prefill or draft.community == "1" %} checked{% endif %}><span>{{ t("account.quota_community") }}</span></label>
-            <span class="hint">{{ t("account.quota_community_hint", hours=community.hours, min=community.min_supporters) }}{% if community.kinds | length < 5 %} {{ t("account.quota_community_kinds", kinds=community_kinds_text) }}{% endif %}</span>
+            <span class="hint">{{ t("account.quota_community_hint", window=t("time.hours", count=community.hours), min=community.min_supporters, count=community.min_supporters) }}{% if community.kinds | length < 5 %} {{ t("account.quota_community_kinds", kinds=community_kinds_text) }}{% endif %}</span>
           </div>
           {% endif %}
           <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("account.quota_submit") }}</button></div>
@@ -410,7 +410,7 @@
             <tbody>
               {% for item in quota_history %}
               <tr>
-                <td class="nowrap cell-full">{{ item.row.created_at | datetime }}</td>
+                <td class="nowrap cell-full">{{ item.row.created_at | local_time }}</td>
                 <td class="cell-full" data-label="{{ t('account.requested') }}">{{ item.summary }}</td>
                 <td data-label="{{ t('common.status') }}">{{ status_badge(item.row.status) }}{% if item.row.resolution_source == "automatic" %} <span class="hint">{{ t("account.automatic") }}</span>{% elif item.row.resolution_source == "community" %} <span class="hint">{{ t("account.by_community") }}</span>{% endif %}</td>
                 <td class="cell-full" data-label="{{ t('account.reply') }}">{% if item.row.admin_message %}{{ item.row.admin_message }}{% else %}<span class="table-only">—</span>{% endif %}</td>
@@ -487,7 +487,7 @@
             <tbody>
               {% for item in access_history %}
               <tr>
-                <td class="nowrap cell-full">{{ item.row.created_at | datetime }}</td>
+                <td class="nowrap cell-full">{{ item.row.created_at | local_time }}</td>
                 <td class="cell-full" data-label="{{ t('account.access_resource') }}">{{ item.label }} <span class="faint small">{{ item.kind }}</span></td>
                 <td data-label="{{ t('common.status') }}">{{ status_badge(item.row.status) }}</td>
                 <td class="cell-full" data-label="{{ t('account.reply') }}">{% if item.row.admin_message %}{{ item.row.admin_message }}{% else %}<span class="table-only">—</span>{% endif %}</td>

@@ -62,9 +62,11 @@ def _reason_texts(reasons) -> list[str]:
 
 
 def _models():
-    """Catalog models that limits apply to (text and image models, local or through an external API), in catalog
-    order. External models have policies too (their presets fill them), and their pages link here."""
-    return [model for model in catalog.list_models() if model["backend"] in ("ollama", "comfyui", "external")]
+    """Catalog models that limits apply to (text and image models, local, through an external API or a subscription
+    pool), in catalog order. External and subscription models have policies too (their presets fill them), and
+    their pages link here."""
+    return [model for model in catalog.list_models()
+            if model["backend"] in ("ollama", "comfyui", "external", "claude", "codex")]
 
 
 def _model_or_404(model_id: int):

@@ -100,6 +100,22 @@ def _complete(app, raw, **body):
     return app.test_client().post("/v1/chat/completions", json=payload, headers={"Authorization": f"Bearer {raw}"})
 
 
+def _reasoning(model_id, levels='["low", "medium", "high"]'):
+    from bananachat import db
+
+    _ensure_column("ai_models", "reasoning_levels", "TEXT")
+    db.execute("UPDATE ai_models SET is_reasoning=1, reasoning_levels=? WHERE id=?", (levels, model_id))
+    return db.one("SELECT * FROM ai_models WHERE id=?", (model_id,))
+
+
+def _legacy_user(connection, user_id: str, username: str) -> None:
+    """Another account in the legacy fixture database, copied from its user."""
+    connection.execute("CREATE TEMP TABLE copy AS SELECT * FROM users WHERE id='4lttj861'")
+    connection.execute("UPDATE copy SET id=?, username=?", (user_id, username))
+    connection.execute("INSERT INTO users SELECT * FROM copy")
+    connection.execute("DROP TABLE copy")
+
+
 # ----- formatting ----------------------------------------------------------------------------------
 
 def test_token_amounts_are_friendly_in_english_and_italian():
@@ -108,6 +124,7 @@ def test_token_amounts_are_friendly_in_english_and_italian():
     assert [compact(value, "en") for value in (850, 45_250, 150_000, 1_200_000, 2_000_000_000)] == \
         ["850", "45.2k", "150k", "1.2M", "2B"]
     assert compact(45_250, "it") == "45,2k" and compact(1_500_000, "it") == "1,5M"
+    assert compact(45_250, "de") == "45,2k" and compact(1_500_000, "de") == "1,5M"
     assert tokens_text(1, "en") == "1 token" and tokens_text(30_000, "en") == "30k tokens"
     assert tokens_text(30_000, "it") == "30k token"
     for text, value in (("30000", 30_000), ("30,000", 30_000), ("30 000", 30_000), ("30.000", 30_000),
@@ -208,6 +225,34 @@ def test_version_9_converts_a_database_of_this_release_forward(tmp_path):
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
+def test_quotas_raised_by_automatic_approval_survive_the_upgrade_from_credits(tmp_path, make_app):
+    """The credit system approved requests automatically with ``updated_by=NULL``; those raises are kept."""
+    from bananachat.db import credits, limits
+
+    instance = legacy_instance(tmp_path)
+    connection = sqlite3.connect(instance / "bananachat.db")
+    _legacy_user(connection, "bob00001", "bob")
+    _legacy_user(connection, "carol001", "carol")
+    connection.execute("INSERT INTO user_quota (user_id, daily_credits, daily_slow_credits, updated_at, updated_by) "
+                       "VALUES ('bob00001', 60, 20, '2026-09-28T18:30:00+00:00', NULL)")
+    connection.execute("INSERT INTO quota_requests (user_id, new_credits, new_slow_credits, reason, status, "
+                       "resolution_source, created_at, resolved_at) VALUES ('bob00001', 60, 20, 'More please', "
+                       "'approved', 'automatic', '2026-09-28T18:30:00+00:00', '2026-09-28T18:30:00+00:00')")
+    # A row created on first use with the site default and never raised: not a custom quota.
+    connection.execute("INSERT INTO user_quota (user_id, daily_credits, daily_slow_credits, updated_by) "
+                       "VALUES ('carol001', 30, 15, NULL)")
+    connection.commit()
+    connection.close()
+
+    app = make_app(setup=False, INSTANCE_DIR=str(instance))
+    with app.app_context():
+        override = limits.get_override("bob00001", "api")
+        assert override is not None and override.window_tokens == 80_000
+        assert credits.get_quota("bob00001") == (80_000, 0)
+        assert limits.get_override("carol001", "api") is None
+        assert limits.get_override("4lttj861", "api").window_tokens == 50_000
+
+
 # ----- policies and request-rate rules -------------------------------------------------------------
 
 def test_policies_validate_rules_and_token_amounts(app):
@@ -290,6 +335,20 @@ def test_api_responses_describe_the_5_hour_token_window(app, make_user):
     assert after.headers["x-ratelimit-reset-tokens"].startswith(("4h59m", "5h0m"))
 
 
+def test_a_process_that_read_the_clock_earlier_never_moves_a_bucket_back_in_time(app):
+    """Processes read the clock before waiting for the write lock; a later writer never stores an older time, so
+    no interval is refilled twice."""
+    from bananachat.db import limits as store
+
+    with app.app_context():
+        bucket = [("api:someone:1/second/1", 1.0, 1)]
+        assert store.take_tokens(bucket, 100.0)[0]           # the bucket is empty now
+        assert store.take_tokens(bucket, 101.0)[0]           # process B: refilled after one second
+        assert not store.take_tokens(bucket, 100.5)[0]       # process A, clock read before B committed
+        # Half a second after B's request only half a request has come back.
+        assert not store.take_tokens(bucket, 101.5)[0]
+
+
 # ----- 5-hour and weekly windows ------------------------------------------------------------------
 
 def test_the_5_hour_window_opens_at_the_first_request_and_resets_when_it_ends(app, make_user):
@@ -355,6 +414,23 @@ def test_resets_close_the_windows_and_keep_the_ledger(app, admin, make_user):
         current = limits.effective(user, "api")
         assert current.window.used == 0 and current.weekly.used == 0
         assert db.scalar("SELECT COUNT(*) FROM credit_ledger WHERE user_id=?", (user["id"],)) == 2
+
+
+def test_the_request_that_opens_a_window_counts_in_it_across_a_second_boundary(app, make_user, monkeypatch):
+    """The ledger row and the window start share one clock read."""
+    from bananachat import db
+    from bananachat.db import credits
+    from bananachat.services import limits
+
+    models = _models(app)
+    user = make_user("edge")
+    with app.app_context():
+        _policy("api", window={"tokens": 10_000, "slow_tokens": 0})
+        real_now = db.now
+        monkeypatch.setattr(db, "now", lambda offset=None: real_now((offset or timedelta()) - timedelta(seconds=1)))
+        credits.charge(user["id"], 4000, 0, request_type="api", model_id=models["llama3.2:3b"]["id"])
+        monkeypatch.setattr(db, "now", real_now)
+        assert limits.effective(user, "api").window.used == 4000
 
 
 # ----- model weights and model limits ------------------------------------------------------------
@@ -502,6 +578,52 @@ def test_presets_fill_a_model_and_the_catalog_preset_is_the_default(app):
         from bananachat import db
         db.execute("UPDATE ai_models SET limit_preset='heavy' WHERE id=?", (small["id"],))
         assert store.get_model_policy(catalog.get(small["id"]))["weight"] == 3
+
+
+def test_a_models_rate_refusal_names_the_rate_in_the_readers_language(app, make_user):
+    from bananachat.services import limits
+
+    models = _models(app)
+    user = make_user("rita")
+    with app.app_context():
+        _model_policy(models["qwen3:4b"], enabled=True, rate_rules=[{"requests": 1, "per": "minute"}])
+        assert limits.admit(user, "chat", models["qwen3:4b"]).allowed
+        refusal = limits.admit(user, "chat", models["qwen3:4b"]).refusal
+    assert "1 richiesta al minuto" in refusal.message("it") and "per minute" not in refusal.message("it")
+    assert "1 request per minute" in refusal.message("en")
+
+
+def test_auto_moves_to_a_model_outside_a_used_up_service(app, make_user, fake_ollama):
+    """With the service's tokens used up, ``auto`` picks a model that does not count toward them."""
+    from bananachat.db import catalog, credits, settings
+
+    models = _models(app)
+    user = make_user("otis")
+    raw = _api_key(app, user["id"])
+    with app.app_context():
+        settings.update(chat_local_token_consumption=1)
+        catalog.update(models["llama3.2:3b"]["id"], sort_order=0)
+        catalog.update(models["qwen3:4b"]["id"], sort_order=1)
+        _model_policy(models["qwen3:4b"], counts_toward_pool=False)
+        _policy("api", window={"tokens": 1000, "slow_tokens": 0})
+        _policy("chat", window={"enabled": True, "tokens": 1000, "slow_tokens": 0})
+        for pool in ("api", "chat"):
+            credits.charge(user["id"], 1000, 0, request_type=pool, model_id=models["llama3.2:3b"]["id"])
+    answered = _complete(app, raw, model="auto")
+    assert answered.status_code == 200 and answered.json["model"] == "qwen3:4b"
+    assert _complete(app, raw, model="llama3.2:3b").status_code == 429
+    browser = _signed_in(app, "otis")
+    session_id = new_chat(browser)
+    response = send(browser, session_id, model="auto")
+    assert response.status_code == 200, response.get_data(as_text=True)
+    wait_idle(app, session_id)
+    assert [body for path, body in fake_ollama.requests if path == "/api/chat"][-1]["model"] == "qwen3:4b"
+    # In chat, a model chosen by name whose tokens are used up falls back to a usable one (limits.quota_fallback)
+    # and says so; the API keeps named models strict (the 429 above).
+    response = send(browser, session_id, model="llama3.2:3b")
+    assert response.status_code == 200, response.get_data(as_text=True)
+    wait_idle(app, session_id)
+    assert [body for path, body in fake_ollama.requests if path == "/api/chat"][-1]["model"] == "qwen3:4b"
 
 
 # ----- reasoning effort ---------------------------------------------------------------------------
@@ -698,6 +820,48 @@ def test_agents_use_at_most_the_unlocked_effort(app, make_user):
         assert inference.think_for(named, level) == "low"
 
 
+def test_a_fallback_never_thinks_above_the_level_the_account_may_use(app, make_user, fake_ollama):
+    """A request to a model that does not reason carries no ``think``; a reasoning fallback would otherwise think
+    at its own default (medium), above the Low a heavy model allows until it is unlocked."""
+    from bananachat.db import catalog
+
+    models = _models(app)
+    user = make_user("fifi")
+    raw = _api_key(app, user["id"])
+    with app.app_context():
+        catalog.update(models["llama3.2:3b"]["id"], sort_order=0)
+        catalog.update(models["qwen3:4b"]["id"], sort_order=1)
+        heavy = _reasoning(models["qwen3:4b"]["id"])
+        _model_policy(heavy, effort_default="low")
+    fake_ollama.fail_models = {"llama3.2:3b"}
+    _complete(app, raw, model="auto")
+    heavy_bodies = [body for path, body in fake_ollama.requests
+                    if path == "/api/chat" and body.get("model") == "qwen3:4b"]
+    assert all(body.get("think") in ("low", False) for body in heavy_bodies), heavy_bodies
+
+
+def test_an_unlock_for_every_model_also_lifts_models_unlocked_one_at_a_time(app, admin, make_user):
+    """An automatic unlock for one model does not cap that model below a later unlock for every model; only an
+    administrator's level for a model is a lock."""
+    from bananachat.db import credits
+    from bananachat.db import limits as store
+    from bananachat.services import limits
+
+    models = _models(app)
+    user = make_user("uma")
+    with app.app_context():
+        model = _reasoning(models["qwen3:4b"]["id"], '["low", "medium", "high", "max"]')
+        store.set_effort_level(user["id"], model["id"], "high", source="automatic")
+        outcome = credits.submit_request(user["id"], kind="effort", level="max", reason="Hard proofs, please")
+        credits.resolve_request(outcome["id"], None, True)
+        assert limits.effort_ceiling(user, model) == "max"
+        # An administrator's level for one model still locks it below the level for every model.
+        store.set_effort_level(user["id"], model["id"], "low", source="admin")
+        assert limits.effort_ceiling(user, model) == "low"
+        with pytest.raises(limits.EffortLocked):
+            limits.resolve_effort(user, model, "medium")
+
+
 # ----- dynamic limits and provider capacity --------------------------------------------------------
 
 def test_the_number_of_people_online_moves_demand_and_heavy_models_react_more(app, make_user):
@@ -803,6 +967,64 @@ def test_tiers_multiply_tokens_and_promote_on_tokens(app, make_user):
         assert db.scalar("SELECT min_credits_30d FROM limit_tiers WHERE id=?", (tiers[1]["id"],)) == 5
 
 
+def test_an_unlimited_grant_for_every_service_also_lifts_model_limits(app, make_user):
+    """A grant for one service, or a multiplier, leaves a model's own limits (counted across services) alone."""
+    from bananachat import db
+    from bananachat.db import credits
+    from bananachat.db import limits as store
+    from bananachat.services import limits
+
+    models = _models(app)
+    big = models["qwen3:4b"]
+    user = make_user("ulla")
+    with app.app_context():
+        _model_policy(big, enabled=True, window_tokens=1000, rate_rules=[{"requests": 1, "per": "hour"}])
+        credits.charge(user["id"], 1000, 0, request_type="api", model_id=big["id"])
+        assert limits.admit(user, "api", big).refusal.key == "model_window"
+        for pool, kind in (("api", "unlimited"), (None, "multiplier")):
+            store.create_grant(created_by=None, user_id=user["id"], pool=pool, scope=None, kind=kind,
+                               amount=2 if kind == "multiplier" else 0, starts_at=db.now(), ends_at=None, reason="")
+        assert limits.model_limits(user, big).window.tokens == 1000
+        assert not limits.admit(user, "api", big).allowed
+        store.create_grant(created_by=None, user_id=user["id"], pool=None, scope=None, kind="unlimited", amount=0,
+                           starts_at=db.now(), ends_at=None, reason="Conference demo")
+        current = limits.model_limits(user, big)
+        assert not current.window.limited and not current.rate.limited
+        assert limits.admit(user, "api", big).allowed and limits.admit(user, "chat", big).allowed
+
+
+def test_an_automatically_approved_amount_never_holds_an_account_below_its_tier(app, admin, make_user):
+    """An automatically approved amount is a floor under the tier, so later promotions still apply; an amount
+    an administrator typed stays exact."""
+    from bananachat.db import credits
+    from bananachat.db import limits as store
+    from bananachat.db import settings as site_settings
+    from bananachat.services import limits
+
+    user = make_user("tia")
+    with app.app_context():
+        _policy("api", window={"tokens": 30_000, "slow_tokens": 0, "auto_tiers": True})
+        site_settings.update(quota_auto_approve_enabled=1, quota_auto_approve_max_tokens=50_000)
+        assert credits.submit_request(user["id"], 40_000, None, "A bigger project", kind="window",
+                                      pool="api")["status"] == "approved"
+        assert limits.effective(user, "api").window.tokens == 40_000
+        regular = store.list_tiers()[1]  # ×2
+        store.update_user_settings(user["id"], None, tier_id=regular["id"])
+        assert limits.effective(user, "api").window.tokens == 60_000
+        assert limits.base_limits(user["id"], "api")["window_tokens"] == 60_000
+    page = admin.get(f"/admin/users/{user['id']}/limits").get_data(as_text=True)
+    assert "Approved automatically, so never below the tier's amount: tokens per 5 hours." in page
+    # Saving the account's form unchanged keeps the amount automatic ...
+    form = {"pool": "api", "window_tokens": "40k", "window_slow_tokens": "", "weekly_tokens": ""}
+    assert admin.post(f"/admin/users/{user['id']}/limits/custom", form).status_code == 302
+    with app.app_context():
+        assert limits.effective(user, "api").window.tokens == 60_000
+    # ... an amount the administrator types is exact, even below the tier.
+    assert admin.post(f"/admin/users/{user['id']}/limits/custom", {**form, "window_tokens": "20k"}).status_code == 302
+    with app.app_context():
+        assert limits.effective(user, "api").window.tokens == 20_000
+
+
 # ----- admission cost ------------------------------------------------------------------------------
 
 def test_admission_is_a_handful_of_queries(app, make_user):
@@ -824,6 +1046,78 @@ def test_admission_is_a_handful_of_queries(app, make_user):
             db.conn().set_trace_callback(None)
         selects = [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
         assert len(selects) <= 20, selects
+
+
+LIMIT_TABLES = ("limit_policy", "model_limit_policy", "user_limits", "user_limit_overrides", "user_model_limits",
+                "limit_grants", "limit_windows", "credit_ledger", "image_credit_reservations", "rate_buckets",
+                "user_effort_levels", "limit_tiers", "runtime_state")
+
+
+def _limit_selects(app, action):
+    """Run *action* and return the SELECT statements on limit tables, in every thread's connection."""
+    import re
+
+    from bananachat import db
+
+    statements = []
+    original = db.conn
+    traced = set()
+
+    def traced_conn():
+        connection = original()
+        if id(connection) not in traced:
+            traced.add(id(connection))
+            connection.set_trace_callback(statements.append)
+        return connection
+
+    db.conn = traced_conn
+    try:
+        result = action()
+    finally:
+        db.conn = original
+        with app.app_context():
+            original().set_trace_callback(None)
+    pattern = re.compile(r"\b(FROM|JOIN)\s+(" + "|".join(LIMIT_TABLES) + r")\b")
+    return result, [text for text in statements if text.lstrip().upper().startswith("SELECT") and pattern.search(text)]
+
+
+def test_one_api_completion_reads_each_limit_setting_once(app, make_user, fake_ollama):
+    """One API completion with ``auto`` and a fallback reads policies, grants, windows and settings once."""
+    from bananachat.db import catalog
+
+    models = _models(app)
+    user = make_user("perf")
+    raw = _api_key(app, user["id"])
+    with app.app_context():
+        catalog.update(models["llama3.2:3b"]["id"], sort_order=0)
+        catalog.update(models["qwen3:4b"]["id"], sort_order=1)
+        _policy("api", window={"tokens": 50_000, "dynamic": True}, weekly={"enabled": True, "tokens": 200_000})
+        _model_policy(models["qwen3:4b"], enabled=True, window_tokens=10_000,
+                      rate_rules=[{"requests": 5, "per": "minute"}])
+    assert _complete(app, raw, model="auto").status_code == 200  # warm the per-process caches
+    response, selects = _limit_selects(app, lambda: _complete(app, raw, model="auto"))
+    assert response.status_code == 200 and response.json["model"] == "llama3.2:3b"
+    assert len(selects) <= 40, "\n".join(selects)
+
+
+def test_a_charge_never_runs_the_30_day_usage_query_under_the_write_lock(app, make_user):
+    """Admission computes the account's dynamic factor and the charge reuses it."""
+    from bananachat.db import credits
+    from bananachat.services import limits
+
+    models = _models(app)
+    user = make_user("lock")
+    with app.app_context():
+        _policy("api", window={"tokens": 50_000, "dynamic": True})
+        limits.forget_personal()
+        _result, selects = _limit_selects(app, lambda: credits.charge(user["id"], 100, 0, request_type="api",
+                                                                      model_id=models["llama3.2:3b"]["id"]))
+        assert not [text for text in selects if "GROUP BY day, hour" in text]
+        assert limits.admit(user, "api", models["llama3.2:3b"]).allowed  # admission computes it ...
+        _result, selects = _limit_selects(app, lambda: credits.charge(user["id"], 100, 0, request_type="api",
+                                                                      model_id=models["llama3.2:3b"]["id"]))
+        assert not [text for text in selects if "GROUP BY day, hour" in text]  # ... and the charge reuses it
+        assert limits.effective(user, "api").window.used == 200
 
 
 # ----- pages -------------------------------------------------------------------------------------
@@ -1039,3 +1333,96 @@ def test_effort_requests_cost_the_same_queries_for_one_or_many(app, admin, make_
             credits.submit_request(user["id"], kind="effort", model_id=None if number % 2 else models["qwen3:4b"]["id"],
                                    level="high", reason="Harder problems")
     assert queries() == one
+
+
+def test_the_grant_form_keeps_what_was_typed_and_never_defaults_to_everyone(app, admin, make_user):
+    """The form never starts on "Everyone", "Unlimited" and "Every service", where one click would lift every
+    limit of every account."""
+    from bananachat.db import limits as store
+
+    make_user("gina")
+    page = admin.get("/admin/quotas/grants").get_data(as_text=True)
+    assert 'name="target" value="everyone" checked' not in page and 'name="target" value="user" checked' not in page
+    assert admin.post("/admin/quotas/grants", {"kind": "unlimited", "duration": "24h"}).status_code != 302
+    with app.app_context():
+        assert store.list_grants("active") == []
+    typed = {"target": "user", "username": "gina", "kind": "extra", "amount": "lots", "pool": "api",
+             "scope": "window", "duration": "7d", "reason": "Exam week for the whole class"}
+    response = admin.post("/admin/quotas/grants", typed)
+    page = response.get_data(as_text=True)
+    assert response.status_code == 400 and "Extra tokens: write a number of tokens" in page
+    assert 'value="gina"' in page and ">Exam week for the whole class</textarea>" in page and 'value="lots"' in page
+    assert 'value="extra" selected' in page and 'value="api" selected' in page and 'value="window" selected' in page
+    assert 'name="target" value="user" checked' in page and 'name="duration" value="7d" checked' in page
+
+
+def test_changing_one_models_limits_for_an_account_keeps_its_other_settings(app, admin, make_user):
+    """A model with custom limits has its own filled-in form, so changing one setting keeps the lock and the
+    other limits."""
+    import re
+
+    from bananachat.db import limits as store
+
+    models = _models(app)
+    big = models["qwen3:4b"]
+    user = make_user("lou")
+    with app.app_context():
+        store.set_model_override(user["id"], big["id"], None, locked=True, window_tokens=40_000)
+    page = admin.get(f"/admin/users/{user['id']}/limits").get_data(as_text=True)
+    own = page.split(f'id="model-form-{big["id"]}"', 1)[1].split("</form>", 1)[0]
+    assert 'name="locked" value="1" checked' in own and 'value="40k"' in own
+    # The form for other models does not offer one that has its own form.
+    generic = page.split('id="model-override-model"', 1)[1].split("</select>", 1)[0]
+    assert f'value="{big["id"]}"' not in generic and f'value="{models["llama3.2:3b"]["id"]}"' in generic
+    # Sending the filled-in form back with a weekly limit added keeps the lock and the 5-hour limit.
+    fields = {}
+    for tag in re.findall(r"<input[^>]*>", own):
+        name, value = re.search(r'name="(\w+)"', tag), re.search(r'value="([^"]*)"', tag)
+        if name and value and (' type="checkbox"' not in tag or " checked" in tag):
+            fields[name.group(1)] = value.group(1)
+    fields.update(weekly_tokens="100k", locked="1")
+    fields.pop("csrf_token", None)
+    assert admin.post(f"/admin/users/{user['id']}/limits/model", fields).status_code == 302
+    with app.app_context():
+        override = store.get_model_override(user["id"], big["id"])
+        assert (override.locked, override.window_tokens, override.weekly_tokens) == (True, 40_000, 100_000)
+
+
+def test_refused_limit_forms_come_back_as_typed(app, admin, make_user):
+    import re
+
+    models = _models(app)
+    user = make_user("fern")
+    big, small = models["qwen3:4b"], models["llama3.2:3b"]
+
+    def refused(url, fields, *expected):
+        response = admin.post(url, fields)
+        page = response.get_data(as_text=True)
+        assert response.status_code == 400, (url, response.status_code)
+        for text in expected:
+            assert re.search(text, page), (url, text)
+        return page
+
+    refused("/admin/quotas/policy/api",
+            {"rate_enabled": "1", "rule_requests_0": "7", "rule_per_0": "hour", "rule_burst_0": "3",
+             "window_enabled": "1", "window_tokens": "50kk", "window_slow_tokens": "5k", "weekly_tokens": "900k",
+             "weekly_enabled": "1"},
+            'value="50kk"', 'value="900k"', r'name="rule_requests_0"[^>]*value="7"', r'<option value="hour" selected>',
+            r'name="weekly_enabled" value="1" checked')
+    refused("/admin/quotas", {"quota_auto_approve_enabled": "1", "quota_auto_approve_max_tokens": "lots"},
+            'value="lots"', r'name="quota_auto_approve_enabled" value="1" checked')
+    page = refused(f"/admin/quotas/models/{big['id']}",
+                   {"action": "save", "weight": "3", "sensitivity": "2", "enabled": "1", "window_tokens": "abc",
+                    "weekly_tokens": "1M", "counts_toward_pool": "no", "rule_requests_0": "6", "rule_per_0": "minute"},
+                   'value="abc"', 'value="1M"', r'<option value="no" selected>')
+    assert f'id="model-{big["id"]}" open' in page
+    refused(f"/admin/users/{user['id']}/limits/custom", {"pool": "chat", "window_tokens": "12q", "weekly_tokens": "300k"},
+            'value="12q"', 'value="300k"', r'id="pool-chat"')
+    refused(f"/admin/users/{user['id']}/limits/model",
+            {"model_id": str(small["id"]), "window_tokens": "zz", "locked": "1"},
+            'value="zz"', rf'<option value="{small["id"]}" selected>', r'name="locked" value="1" checked')
+    refused("/admin/quotas/effort",
+            {"effort_gating_enabled": "1", "effort_default_level": "low", "effort_auto_active_days": "40",
+             "effort_auto_tokens": "3M", "effort_auto_period_days": "30", "effort_auto_clean_days": "90",
+             "effort_auto_ceiling": "max"},
+            'value="3M"', 'value="40"', r'<option value="low" selected>', r'<option value="max" selected>')

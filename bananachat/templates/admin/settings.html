@@ -28,12 +28,14 @@
 
 {{ header("Site settings", "Sign-up, announcements and the site's appearance.") }}
 
-<nav class="admin-section-nav" aria-label="Site settings sections">
-  <a href="#general">General</a>
-  <a href="#sign-in">Sign-in security</a>
-  <a href="#notices">Maintenance and announcements</a>
-  <a href="#palette-dark">Dark palette</a>
-  <a href="#palette-light">Light palette</a>
+<nav class="admin-toc" aria-label="Site settings sections">
+  <div class="section-nav" data-section-nav>
+    <a href="#general">General</a>
+    <a href="#sign-in">Sign-in security</a>
+    <a href="#notices">Maintenance and announcements</a>
+    <a href="#palette-dark">Dark palette</a>
+    <a href="#palette-light">Light palette</a>
+  </div>
 </nav>
 
 <form method="post" action="{{ url_for('admin.settings_save') }}" class="section-stack" id="settings-form">
@@ -100,7 +102,7 @@
         <fieldset class="admin-fieldset stack-sm">
           <legend>Model-server status</legend>
           <input type="hidden" name="worker_offline_warning_present" value="1">
-          {{ toggle("worker_offline_warning_enabled", "Show the model-server offline warning", s.worker_offline_warning_enabled, "Show a notice when local model workers are offline. Users can hide it for 24 hours. This only hides the notice; model availability is still checked.") }}
+          {{ toggle("worker_offline_warning_enabled", "Show the model-server offline warning", s.worker_offline_warning_enabled, "Show a notice when the model server is unreachable. Users can hide it for 24 hours; hiding it does not change which models answer.") }}
         </fieldset>
         <fieldset class="admin-fieldset stack-sm">
           <legend>Announcement banner</legend>

@@ -1,7 +1,8 @@
-"""Total budgets, cancellation and read gaps must cover real response sockets."""
+"""Deadlines, cancellation and read gaps on upstream requests, tested against real sockets."""
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -140,3 +141,17 @@ def test_nested_deadlines_have_independent_ownership():
     finally:
         supervisor.clear_deadline(first)
         supervisor.clear_deadline(second)
+
+
+def test_a_failing_cancel_callback_is_logged_and_the_others_still_run(caplog):
+    token, ran = CancelToken(), []
+
+    def broken():
+        raise RuntimeError("callback bug")
+
+    token.on_cancel(broken)
+    token.on_cancel(lambda: ran.append(True))
+    with caplog.at_level(logging.WARNING, logger="bananachat.upstream"):
+        token.cancel("stopped")
+    assert ran == [True] and token.reason == "stopped"
+    assert any("callback bug" in (record.exc_text or "") or record.exc_info for record in caplog.records)

@@ -10,7 +10,7 @@
 .customize-options-heading h2 { margin-bottom: .35rem; }
 .customize-options-heading p { margin-bottom: .5rem; }
 .customize-extra { border-bottom: 1px solid var(--border); }
-.customize-extra > summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: var(--touch-target); padding: .85rem 0; font-size: .9375rem; font-weight: 550; list-style: none; cursor: pointer; }
+.customize-extra > summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: var(--touch-target); padding: .85rem 0; font-size: var(--text-base); font-weight: 550; list-style: none; cursor: pointer; }
 .customize-extra > summary::-webkit-details-marker { display: none; }
 .customize-extra > summary:hover { color: var(--primary); }
 .customize-extra > summary svg { width: 16px; height: 16px; color: var(--text-muted); flex: none; }
@@ -19,10 +19,9 @@
 .preference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.5rem; align-items: start; }
 .preference-grid > * { min-width: 0; }
 .preference-grid .field { width: 100%; }
-.customize-layout .form-actions { justify-content: flex-start; }
 .choice-group { border: 0; padding: 0; display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; min-width: 0; }
-.choice-group legend { padding: 0; margin-bottom: .35rem; font-weight: 500; font-size: .875rem; }
-.choice-group .hint { order: 2; margin: .15rem 0 0; font-size: .8125rem; }
+.choice-group legend { padding: 0; margin-bottom: .35rem; font-weight: 500; font-size: var(--text-md); }
+.choice-group .hint { order: 2; margin: .15rem 0 0; font-size: var(--text-sm); }
 /* Options in an even grid: rows wrap without leaving one option alone at a different width. */
 .choice-group .segmented { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.5rem), 1fr)); align-self: stretch; }
 .choice-group .segmented label { display: flex; align-items: center; justify-content: center; text-align: center; }
@@ -42,26 +41,26 @@
 .preset {
   display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem; min-height: var(--control-height); padding: .6rem .55rem;
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text);
-  font: inherit; font-size: .8125rem; cursor: pointer; text-align: left; min-width: 0;
+  font: inherit; font-size: var(--text-sm); cursor: pointer; text-align: left; min-width: 0;
 }
 .preset > span:last-child { overflow-wrap: anywhere; }
 .preset:hover { background: var(--hover); }
 .preset[aria-pressed="true"] { border-color: var(--primary); }
 .preset-swatches { display: flex; gap: 2px; flex: none; }
-.swatch { width: 12px; height: 16px; border-radius: 3px; border: 1px solid var(--border-strong); background: var(--hover); }
+.swatch { width: 12px; height: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--hover); }
 
 .colour-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 1.5rem; }
 .colour-field { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .65rem 0; border-bottom: 1px solid var(--border); min-width: 0; }
 .colour-copy { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
-.colour-field label { font-weight: 500; font-size: .875rem; }
+.colour-field label { font-weight: 500; font-size: var(--text-md); }
 .colour-field .row { gap: .25rem; flex-wrap: nowrap; flex: none; }
-.colour-state { font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: .75rem; overflow-wrap: anywhere; }
+.colour-state { font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 
 .background-preview { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; max-width: 360px; }
 .background-preview img { display: block; width: 100%; height: 180px; object-fit: cover; }
 .customize-page label[for="background-file"]:has(+ input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-.save-status { color: var(--text-muted); font-size: .9rem; min-height: 1.4em; }
+.save-status { color: var(--text-muted); font-size: var(--text-base); min-height: 1.4em; }
 .save-status:empty { display: none; }
 .save-status.is-saved { color: var(--success); }
 .save-status.is-error { color: var(--danger); }

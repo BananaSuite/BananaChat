@@ -1,18 +1,12 @@
 # Remote workers
 
-A *worker* is a volunteer computer — typically someone's gaming PC — that runs
+A *worker* is a volunteer computer, typically someone's gaming PC, that runs
 the BananaChat worker daemon (`worker/` in this repository) and answers text
 requests with its own Ollama. Workers connect out to the server, so they need
 no open ports and work behind home routers.
 
 Workers are off by default. They add capacity; they never replace the
 server's own Ollama, which answers whenever no worker does.
-
-Administrators can hide model-server offline notices in **Site settings →
-Maintenance and announcements → Model-server status**. Users can also hide a
-notice for 24 hours in their browser. These controls affect presentation only:
-offline models stay unavailable and health reporting stays accurate. External
-API models do not use the volunteer worker pool.
 
 ## Privacy: read this first
 
@@ -31,10 +25,7 @@ What the server does to limit exposure:
   failed, stopped or timed out); relayed pieces of the answer are deleted as
   soon as they are delivered; the job record itself (model name, timings,
   token counts) is deleted after an hour.
-- No-history chats are excluded from volunteer workers. The chat service marks
-  them as `chat_incognito`; the inference core forwards that request type, and
-  `services.remote.should_route()` rejects it. This restriction does not change
-  administrator audit access or the processing terms of a configured cloud model.
+- No-history chats and cloud session steps never go to workers.
 
 ## Turning workers on
 
@@ -96,26 +87,29 @@ model)`. A request goes to the worker pool only when:
 
 1. `BC_WORKERS_ENABLED` is on;
 2. the requester is not an administrator;
-3. an online worker — fresh heartbeat, not disabled, not gaming, not running
-   another job — advertises the model (`name` and `name:latest` count as the
+3. the model is an Ollama model (hosted API models never go to workers), no
+   reasoning is requested, and the request is not from a no-history chat or a
+   cloud session;
+4. an online worker (fresh heartbeat, not disabled, not gaming, not running
+   another job) advertises the model (`name` and `name:latest` count as the
    same), and there are more such idle workers than jobs already waiting for
    that model;
-4. no worker failed to pick up that model in the last minute;
-5. no failure of the requester's jobs counted against a worker in the last
+5. no worker failed to pick up that model in the last minute;
+6. no failure of the requester's jobs counted against a worker in the last
    30 minutes, and a worker on which one of its jobs failed in that time does
    not count as idle for it (see below).
 
 The request keeps its place in the server's queue while a worker handles it.
 If no worker claims the job within `BC_WORKER_CLAIM_TIMEOUT` seconds, or the
 worker fails, disconnects or loses its lease before producing any text, the
-job is withdrawn and the **local Ollama answers the same model** instead —
+job is withdrawn and the **local Ollama answers the same model** instead;
 users see a slower answer, not an error. Once text has been delivered, a
 worker failure ends the answer with an error, exactly like a local failure.
 Stop requests reach the worker on its next chunk (and through its heartbeat).
 
 When the owner starts gaming before the first words, the worker hands the job
-back (`fail` with `requeue`) and another worker — or, after the claim timeout,
-the local server — takes it. Older daemons that silently keep a job while
+back (`fail` with `requeue`) and another worker (or, after the claim timeout,
+the local server) takes it. Older daemons that silently keep a job while
 gaming have it taken back when their heartbeat reports `busy`/`gaming`. A job
 is never offered again to the worker that handed it back, and goes back to the
 pool at most three times; without any text, the pool has

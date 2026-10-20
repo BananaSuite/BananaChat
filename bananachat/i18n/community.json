@@ -3,10 +3,22 @@
   "community.title": "Community",
   "community.subtitle": "Back other people's quota requests with part of your own quota.",
   "community.rules_title": "How it works",
-  "community.rules": "A request is approved automatically when at least {min} people support it and at least {approval}% of the votes are in favour, within {hours} hours of being sent. Administrators can decide at any time; after voting closes the request waits for them.",
-  "community.rules_tokens": "For more tokens, supporters together must pledge {coverage}% of the increase from their own limit in the same service or model. The increase and the pledged tokens last {boost} hours (a temporary request lasts its own hours). You can pledge at most {share}% of your limit at a time.",
-  "community.rules_votes_only": "Votes alone decide; supporters may still pledge tokens. An approved increase lasts {boost} hours (a temporary request lasts its own hours). You can pledge at most {share}% of your limit at a time.",
-  "community.rules_after": "To vote, your account must be at least {days} days old and not suspended. You can change or withdraw your vote while voting is open.",
+  "community.rules": {
+   "one": "A request is approved automatically when at least {min} person supports it and at least {approval}% of the votes are in favour, within {window} of being sent. Administrators can decide at any time; after voting closes the request waits for them.",
+   "other": "A request is approved automatically when at least {min} people support it and at least {approval}% of the votes are in favour, within {window} of being sent. Administrators can decide at any time; after voting closes the request waits for them."
+  },
+  "community.rules_tokens": {
+   "one": "For more tokens, supporters together must pledge {coverage}% of the increase from their own limit in the same service or model. The increase and the pledged tokens last {boost} hour (a temporary request lasts its own hours). You can pledge at most {share}% of your limit at a time.",
+   "other": "For more tokens, supporters together must pledge {coverage}% of the increase from their own limit in the same service or model. The increase and the pledged tokens last {boost} hours (a temporary request lasts its own hours). You can pledge at most {share}% of your limit at a time."
+  },
+  "community.rules_votes_only": {
+   "one": "Votes alone decide; supporters may still pledge tokens. An approved increase lasts {boost} hour (a temporary request lasts its own hours). You can pledge at most {share}% of your limit at a time.",
+   "other": "Votes alone decide; supporters may still pledge tokens. An approved increase lasts {boost} hours (a temporary request lasts its own hours). You can pledge at most {share}% of your limit at a time."
+  },
+  "community.rules_after": {
+   "one": "To vote, your account must be at least {days} day old and not suspended. You can change or withdraw your vote while voting is open.",
+   "other": "To vote, your account must be at least {days} days old and not suspended. You can change or withdraw your vote while voting is open."
+  },
   "community.disabled": "The administrators switched community consent off.",
   "community.empty": "No requests are waiting for the community right now.",
   "community.closes": "Voting closes {date}",
@@ -23,7 +35,10 @@
   "community.cannot_own": "This is your own request.",
   "community.cannot_admin": "Administrators approve or deny requests from the administration pages.",
   "community.cannot_suspended": "Suspended accounts cannot vote.",
-  "community.cannot_too_new": "Accounts can vote once they are {days} days old.",
+  "community.cannot_too_new": {
+   "one": "Accounts can vote once they are {days} day old.",
+   "other": "Accounts can vote once they are {days} days old."
+  },
   "community.renounce_label": "Tokens to pledge {period}",
   "community.renounce_hint": "Up to {max}. They are taken off your own limit only if the request is approved.",
   "community.renounce_none": "You have no limit to pledge from here; you can still support it.",
@@ -47,10 +62,22 @@
   "community.title": "Community",
   "community.subtitle": "Sostieni le richieste di quota di altre persone con parte della tua quota.",
   "community.rules_title": "Come funziona",
-  "community.rules": "Una richiesta viene approvata automaticamente quando almeno {min} persone la sostengono e almeno il {approval}% dei voti è a favore, entro {hours} ore dall'invio. Gli amministratori possono decidere in qualsiasi momento; chiusa la votazione, la richiesta attende loro.",
-  "community.rules_tokens": "Per più token, i sostenitori insieme devono cedere il {coverage}% dell'aumento dal proprio limite nello stesso servizio o modello. L'aumento e i token ceduti durano {boost} ore (una richiesta temporanea dura le sue ore). Puoi cedere al massimo il {share}% del tuo limite alla volta.",
-  "community.rules_votes_only": "Decidono solo i voti; i sostenitori possono comunque cedere token. Un aumento approvato dura {boost} ore (una richiesta temporanea dura le sue ore). Puoi cedere al massimo il {share}% del tuo limite alla volta.",
-  "community.rules_after": "Per votare il tuo account deve avere almeno {days} giorni e non essere sospeso. Puoi cambiare o ritirare il voto finché la votazione è aperta.",
+  "community.rules": {
+   "one": "Una richiesta viene approvata automaticamente quando almeno {min} persona la sostiene e almeno il {approval}% dei voti è a favore, entro {window} dall'invio. Gli amministratori possono decidere in qualsiasi momento; chiusa la votazione, la richiesta attende loro.",
+   "other": "Una richiesta viene approvata automaticamente quando almeno {min} persone la sostengono e almeno il {approval}% dei voti è a favore, entro {window} dall'invio. Gli amministratori possono decidere in qualsiasi momento; chiusa la votazione, la richiesta attende loro."
+  },
+  "community.rules_tokens": {
+   "one": "Per più token, i sostenitori insieme devono cedere il {coverage}% dell'aumento dal proprio limite nello stesso servizio o modello. L'aumento e i token ceduti durano {boost} ora (una richiesta temporanea dura le sue ore). Puoi cedere al massimo il {share}% del tuo limite alla volta.",
+   "other": "Per più token, i sostenitori insieme devono cedere il {coverage}% dell'aumento dal proprio limite nello stesso servizio o modello. L'aumento e i token ceduti durano {boost} ore (una richiesta temporanea dura le sue ore). Puoi cedere al massimo il {share}% del tuo limite alla volta."
+  },
+  "community.rules_votes_only": {
+   "one": "Decidono solo i voti; i sostenitori possono comunque cedere token. Un aumento approvato dura {boost} ora (una richiesta temporanea dura le sue ore). Puoi cedere al massimo il {share}% del tuo limite alla volta.",
+   "other": "Decidono solo i voti; i sostenitori possono comunque cedere token. Un aumento approvato dura {boost} ore (una richiesta temporanea dura le sue ore). Puoi cedere al massimo il {share}% del tuo limite alla volta."
+  },
+  "community.rules_after": {
+   "one": "Per votare il tuo account deve avere almeno {days} giorno e non essere sospeso. Puoi cambiare o ritirare il voto finché la votazione è aperta.",
+   "other": "Per votare il tuo account deve avere almeno {days} giorni e non essere sospeso. Puoi cambiare o ritirare il voto finché la votazione è aperta."
+  },
   "community.disabled": "Gli amministratori hanno disattivato il consenso della community.",
   "community.empty": "Al momento nessuna richiesta attende la community.",
   "community.closes": "La votazione si chiude il {date}",
@@ -67,7 +94,10 @@
   "community.cannot_own": "Questa è la tua richiesta.",
   "community.cannot_admin": "Gli amministratori approvano o rifiutano le richieste dalle pagine di amministrazione.",
   "community.cannot_suspended": "Gli account sospesi non possono votare.",
-  "community.cannot_too_new": "Gli account possono votare dopo {days} giorni.",
+  "community.cannot_too_new": {
+   "one": "Gli account possono votare dopo {days} giorno.",
+   "other": "Gli account possono votare dopo {days} giorni."
+  },
   "community.renounce_label": "Token da cedere {period}",
   "community.renounce_hint": "Fino a {max}. Vengono tolti dal tuo limite solo se la richiesta è approvata.",
   "community.renounce_none": "Qui non hai un limite da cui cedere; puoi comunque sostenerla.",
@@ -86,5 +116,64 @@
   "community.vote_approved": "Grazie! Con il tuo voto la richiesta ha raggiunto il consenso ed è stata applicata.",
   "community.vote_saved": "Voto salvato.",
   "community.vote_withdrawn": "Voto ritirato."
+ },
+ "de": {
+  "community.title": "Community",
+  "community.subtitle": "Unterstütze die Kontingentanfragen anderer mit einem Teil deines eigenen Kontingents.",
+  "community.rules_title": "So funktioniert es",
+  "community.rules": {
+   "one": "Eine Anfrage wird automatisch genehmigt, wenn sie innerhalb von {window} nach dem Absenden von mindestens {min} Person unterstützt wird und mindestens {approval} % der Stimmen dafür sind. Administratoren können jederzeit entscheiden; nach Ende der Abstimmung wartet die Anfrage auf sie.",
+   "other": "Eine Anfrage wird automatisch genehmigt, wenn sie innerhalb von {window} nach dem Absenden von mindestens {min} Personen unterstützt wird und mindestens {approval} % der Stimmen dafür sind. Administratoren können jederzeit entscheiden; nach Ende der Abstimmung wartet die Anfrage auf sie."
+  },
+  "community.rules_tokens": {
+   "one": "Für mehr Tokens müssen die Unterstützer gemeinsam {coverage} % der Erhöhung aus ihrem eigenen Limit für denselben Dienst oder dasselbe Modell beisteuern. Die Erhöhung und die beigesteuerten Tokens gelten {boost} Stunde (eine befristete Anfrage gilt für ihre eigene Dauer). Du kannst jeweils höchstens {share} % deines Limits beisteuern.",
+   "other": "Für mehr Tokens müssen die Unterstützer gemeinsam {coverage} % der Erhöhung aus ihrem eigenen Limit für denselben Dienst oder dasselbe Modell beisteuern. Die Erhöhung und die beigesteuerten Tokens gelten {boost} Stunden (eine befristete Anfrage gilt für ihre eigene Dauer). Du kannst jeweils höchstens {share} % deines Limits beisteuern."
+  },
+  "community.rules_votes_only": {
+   "one": "Es entscheiden allein die Stimmen; Unterstützer können trotzdem Tokens beisteuern. Eine genehmigte Erhöhung gilt {boost} Stunde (eine befristete Anfrage gilt für ihre eigene Dauer). Du kannst jeweils höchstens {share} % deines Limits beisteuern.",
+   "other": "Es entscheiden allein die Stimmen; Unterstützer können trotzdem Tokens beisteuern. Eine genehmigte Erhöhung gilt {boost} Stunden (eine befristete Anfrage gilt für ihre eigene Dauer). Du kannst jeweils höchstens {share} % deines Limits beisteuern."
+  },
+  "community.rules_after": {
+   "one": "Um abzustimmen, muss dein Konto mindestens {days} Tag alt und nicht gesperrt sein. Solange die Abstimmung läuft, kannst du deine Stimme ändern oder zurückziehen.",
+   "other": "Um abzustimmen, muss dein Konto mindestens {days} Tage alt und nicht gesperrt sein. Solange die Abstimmung läuft, kannst du deine Stimme ändern oder zurückziehen."
+  },
+  "community.disabled": "Die Administratoren haben die Zustimmung durch die Community ausgeschaltet.",
+  "community.empty": "Gerade wartet keine Anfrage auf die Community.",
+  "community.closes": "Abstimmung endet am {date}",
+  "community.asked_by": "Angefragt von {user} am {date}",
+  "community.stat_supporters": "Unterstützer: {supporters} von {min} benötigten",
+  "community.stat_objections": "Einwände: {objectors}",
+  "community.stat_favour": "Dafür: {percent} % ({approval} % nötig)",
+  "community.stat_tokens": "Beigesteuerte Tokens: {pledged} von {needed}",
+  "community.coverage": "Beigesteuerte Tokens",
+  "community.you_support": "Du unterstützt sie und steuerst {tokens} bei.",
+  "community.you_support_no_tokens": "Du unterstützt sie.",
+  "community.you_object": "Du hast einen Einwand erhoben.",
+  "community.cannot_closed": "Die Abstimmung ist beendet.",
+  "community.cannot_own": "Das ist deine eigene Anfrage.",
+  "community.cannot_admin": "Administratoren genehmigen oder lehnen Anfragen in der Verwaltung ab.",
+  "community.cannot_suspended": "Gesperrte Konten können nicht abstimmen.",
+  "community.cannot_too_new": {
+   "one": "Konten können abstimmen, sobald sie {days} Tag alt sind.",
+   "other": "Konten können abstimmen, sobald sie {days} Tage alt sind."
+  },
+  "community.renounce_label": "Beizusteuernde Tokens {period}",
+  "community.renounce_hint": "Bis zu {max}. Die Tokens werden nur von deinem Limit abgezogen, wenn die Anfrage genehmigt wird.",
+  "community.renounce_none": "Hier hast du kein Limit, aus dem du beisteuern kannst; unterstützen kannst du trotzdem.",
+  "community.support": "Unterstützen",
+  "community.object": "Einwand erheben",
+  "community.withdraw": "Meine Stimme zurückziehen",
+  "community.vote_tokens": "Gib eine Anzahl Tokens ein, z. B. 5k.",
+  "community.vote_failed": "Deine Stimme konnte nicht gespeichert werden.",
+  "community.vote_missing": "Diese Anfrage gibt es nicht.",
+  "community.vote_closed": "Die Abstimmung über diese Anfrage ist beendet.",
+  "community.vote_own": "Über deine eigene Anfrage kannst du nicht abstimmen.",
+  "community.vote_admin": "Administratoren entscheiden über Anfragen in der Verwaltung.",
+  "community.vote_suspended": "Gesperrte Konten können nicht abstimmen.",
+  "community.vote_too_new": "Dein Konto ist zu neu, um abzustimmen.",
+  "community.vote_too_many": "Für diese Anfrage kannst du höchstens {max} beisteuern.",
+  "community.vote_approved": "Danke! Mit deiner Stimme hat die Anfrage die nötige Zustimmung erreicht und wurde umgesetzt.",
+  "community.vote_saved": "Deine Stimme wurde gespeichert.",
+  "community.vote_withdrawn": "Deine Stimme wurde zurückgezogen."
  }
 }

@@ -147,6 +147,12 @@ def test_pages_are_translated(app, dev):
         assert 'lang="it"' in html and not untranslated
 
 
+def test_the_developer_pages_speak_of_limits_not_credits():
+    from bananachat.i18n import translate
+
+    for key in ("developer.tokens_text", "developer.playground_intro"):
+        assert "credit" not in translate("en", key).lower() and "credit" not in translate("it", key).lower()
+
 def test_usage_history(app, dev):
     token = dev.post_json("/developer/tokens", {"name": "script"}).json
     call(app, "POST", "/v1/chat/completions", token["token"],
@@ -206,6 +212,21 @@ def test_playground_errors_are_json_before_streaming(app, dev):
     assert response.status_code == 429 and response.headers["Retry-After"]
 
 
+def test_playground_limit_refusals_are_in_the_readers_language(app, dev):
+    from bananachat.db import catalog, users
+    from bananachat.db import limits as limits_db
+    from bananachat.i18n import translate
+
+    with app.app_context():
+        users.save_preferences(dev.user["id"], {**users.get_preferences(dev.user["id"]), "interface_language": "it"})
+        model = catalog.get_by_name("llama3.2:3b")
+        limits_db.set_model_override(dev.user["id"], model["id"], None, locked=True)
+        name = model["display_name"]
+    response = dev.post_json("/developer/playground/send",
+                             {"model": "llama3.2:3b", "messages": [{"role": "user", "content": "Ciao"}]})
+    assert response.status_code == 403
+    assert response.json["error"]["message"] == translate("it", "account.refusal_model_locked", model=name)
+
 def test_playground_reports_backend_failures_in_the_stream(app, dev, fake_ollama):
     fake_ollama.reply = "one two three"
     fake_ollama.fail_models = {"llama3.2:3b", "qwen3:4b"}
@@ -216,15 +237,10 @@ def test_playground_reports_backend_failures_in_the_stream(app, dev, fake_ollama
 
 def test_playground_words_provider_failures_in_the_readers_language():
     """The API answers provider failures in English for clients; the playground translates them, like the chat."""
-    from pathlib import Path
-
     from bananachat.i18n import catalogs
     from bananachat.services import completions
 
-    source = (Path(__file__).resolve().parents[2] / "bananachat/static/js/playground.js").read_text()
-    block = re.search(r"const PROVIDER_ERRORS = \{(.*?)\};", source, re.DOTALL)
-    assert block, "playground.js maps API error codes to its own messages"
-    mapping = dict(re.findall(r"(\w+): \"(developer_error_\w+)\"", block.group(1)))
+    mapping, source = _playground_error_texts()
     api_codes = {code for _status, code, *_ in completions.PROVIDER_ERRORS.values()
                  if code.startswith("provider_") or code == "model_not_found"}
     assert api_codes | {"provider_misconfigured"} <= set(mapping), sorted(api_codes - set(mapping))
@@ -233,7 +249,30 @@ def test_playground_words_provider_failures_in_the_readers_language():
         english, italian = table["en"].get("js." + key), table["it"].get("js." + key)
         assert english and italian and english != italian, key
     # Both the JSON answer before streaming and the stream's error event go through the translation.
-    assert source.count("providerMessage(") >= 3
+    assert source.count("errorText(") >= 3
+
+
+def test_playground_words_server_failures_in_the_readers_language():
+    """Queue, interruption and model-server failures are English API texts too (some with a raw backend detail)."""
+    from bananachat.i18n import catalogs
+
+    mapping, _source = _playground_error_texts()
+    codes = {"upstream_error", "backend_unavailable", "busy", "queue_full", "queue_timeout", "too_many_requests",
+             "server_restarting", "interrupted", "cancelled", "account_suspended"}
+    assert codes <= set(mapping), sorted(codes - set(mapping))
+    table = catalogs()
+    for code in codes:
+        key = "js." + mapping[code]
+        assert table["en"].get(key) and table["it"].get(key) and table["en"][key] != table["it"][key], key
+
+
+def _playground_error_texts() -> tuple[dict[str, str], str]:
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "bananachat/static/js/playground.js").read_text()
+    block = re.search(r"const ERROR_TEXTS = \{(.*?)\};", source, re.DOTALL)
+    assert block, "playground.js maps API error codes to its own messages"
+    return dict(re.findall(r"(\w+): \"(developer_error_\w+)\"", block.group(1))), source
 
 
 def test_playground_requires_csrf(app, dev):

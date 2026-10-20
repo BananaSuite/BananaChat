@@ -172,7 +172,7 @@ def test_failed_remote_verification_does_not_prune(store, tmp_path, monkeypatch)
     source = package(tmp_path)
     first = store.upload(source)
     second = store.upload(source)
-    monkeypatch.setattr(store, "_download", lambda *_: (_ for _ in ()).throw(ValueError("fixture verification failure")))
+    monkeypatch.setattr(store, "_download", lambda *_, **__: (_ for _ in ()).throw(ValueError("fixture verification failure")))
     with pytest.raises(ValueError, match="fixture verification"):
         store.upload(source)
     assert {first["snapshot"], second["snapshot"]} <= {item["snapshot"] for item in store.list()}
@@ -321,7 +321,7 @@ def backup_arguments(*argv):
 
 
 def test_only_a_restore_that_deploys_takes_allow_unpinned():
-    """The operator's explicit choice for a 1.7 or later release without its dependency locks (OPS2-09), as on
+    """The operator's explicit choice for a 1.7 or later release without its dependency locks, as on
     restore and update; downloading, verifying and an agent's restore into a directory deploy nothing."""
     import argparse
     from banana_backup import cli
@@ -415,3 +415,112 @@ def test_append_only_series_never_delete_snapshots(store, remote, tmp_path):
     assert result["removed"] == [identifiers[0]] and not result["warnings"]
     assert [item["snapshot"] for item in store.list()] == identifiers[:0:-1]
     assert "fixture-delete-token" not in (store.root / "repo.token").read_text()
+
+
+def test_upload_checks_its_staging_space_before_anything_is_pushed(store, tmp_path, monkeypatch):
+    """Verification is sized by the snapshot, not the series limit, so a run that pushed also prunes."""
+    path = store.root / "repository.json"
+    write_json(path, {**json.loads(path.read_text()), "max_mib": 512})
+    free = {"bytes": 100 * 1024 * 1024}
+    monkeypatch.setattr(storage.shutil, "disk_usage", lambda _: type("Usage", (), {"free": free["bytes"]})())
+    with pytest.raises(ValueError, match="Not enough free space"):
+        store.upload(package(tmp_path))
+    assert store.list() == []
+    free["bytes"] = 1024 * 1024 * 1024
+    identifiers = [store.upload(package(tmp_path, bytes([number])))["snapshot"] for number in range(3)]
+    assert [item["snapshot"] for item in store.list()] == identifiers[:0:-1]
+
+
+def test_an_upload_whose_staging_space_ran_out_pushes_nothing(store, tmp_path, monkeypatch):
+    """Free space is checked again right before the push, with what the upload holds by then."""
+    first = store.upload(package(tmp_path))["snapshot"]
+    free = [100 * 1024 * 1024, 1024 * 1024 * 1024]
+    monkeypatch.setattr(storage.shutil, "disk_usage",
+                        lambda _: type("Usage", (), {"free": free.pop() if len(free) > 1 else free[0]})())
+    with pytest.raises(ValueError, match="Not enough free space"):
+        store.upload(package(tmp_path, b"second"))
+    assert [item["snapshot"] for item in store.list()] == [first]
+
+
+def test_an_upload_verifies_without_keeping_its_own_copies(store, tmp_path, monkeypatch):
+    decrypt, download = crypto.decrypt, Store._download
+
+    def verifying(self, git, *args, **kwargs):
+        names = {path.name for path in self.root.rglob("*")}
+        assert "sealed.age" not in names and not any(name.startswith("part-") for name in names)
+        return download(self, git, *args, **kwargs)
+
+    def decrypting(ciphertext, *args):
+        assert not (Path(ciphertext).parent / "git").exists()
+        return decrypt(ciphertext, *args)
+
+    monkeypatch.setattr(Store, "_download", verifying)
+    monkeypatch.setattr(crypto, "decrypt", decrypting)
+    assert store.upload(package(tmp_path))["verified"]
+
+
+def test_working_directories_of_a_killed_operation_are_removed(store, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_bytes(b"not ours")
+    for name in ("transfer-abc", "verify-def", "restore-ghi"):
+        (store.root / name).mkdir()
+        (store.root / name / "package.tar.gz").write_bytes(b"decrypted package")
+    (store.root / "transfer-link").symlink_to(outside)
+    store.list()
+    left = sorted(path.name for path in store.root.iterdir() if path.name.startswith(("transfer-", "verify-", "restore-")))
+    assert left == ["transfer-link"]
+    assert (outside / "keep").read_bytes() == b"not ours"
+    assert store.identity.exists() and (store.root / "repository.json").exists()
+
+
+def test_a_restore_holds_the_backup_lock_until_it_is_done_with_the_package(store, tmp_path):
+    identifier = store.upload(package(tmp_path))["snapshot"]
+    seen = []
+
+    def restore_package(path, options):
+        with pytest.raises(RuntimeError, match="Another backup operation"):
+            store.list()
+        seen.append(Path(path).read_bytes())
+        return {"outcome": "complete", "package": str(path)}
+
+    cli, args = backup_arguments("restore", identifier)
+    result = cli.handle(args, store, create_package=None, restore_package=restore_package)
+    assert seen == [package(tmp_path).read_bytes()]
+    assert not Path(result["package"]).exists()
+    assert store.list()
+
+
+def test_branches_named_with_any_bytes_break_nothing(store, remote, tmp_path):
+    """Whoever can push chooses branch names: not UTF-8, or merely ending like the series identity."""
+    first = store.upload(package(tmp_path))
+    prefix = store.prefix(store.settings())
+    command(remote, "update-ref", prefix.encode() + b"x\xff", first["commit"])
+    command(remote, "update-ref", prefix.encode() + first["snapshot"].encode() + "\u2028x".encode(), first["commit"])
+    command(remote, "update-ref", "refs/heads/elsewhere/" + prefix[len("refs/heads/"):] + "identity", first["commit"])
+    second = store.upload(package(tmp_path, b"second"))
+    assert [item["snapshot"] for item in store.list()] == [second["snapshot"], first["snapshot"]]
+    assert store.verify(first["snapshot"])["authenticated"] is True
+    assert store.prune()["removed"] == []
+
+
+def test_configure_keeps_the_stored_recovery_key_unless_told_to_replace_it(store, tmp_path):
+    identifier = store.upload(package(tmp_path))["snapshot"]
+    original = store.identity.read_bytes()
+    settings = {"repo": "https://forge.example/owner/backups.git", "forge": "forgejo", "name": "wiki-production",
+                "token_file": store.token, "max_mib": 1, "keep": 3}
+    assert store.configure(**settings)["repository"]["keep"] == 3
+    assert store.identity.read_bytes() == original
+    crypto.keygen(tmp_path / "new.agekey")
+    with pytest.raises(ValueError, match="--replace-key"):
+        store.configure(**settings, key_file=tmp_path / "new.agekey")
+    assert store.identity.read_bytes() == original
+    assert store.verify(identifier)["authenticated"] is True
+    cli, args = backup_arguments("configure", "--repo", settings["repo"], "--forge", "forgejo", "--name", "other",
+                                 "--token-file", str(store.token), "--key-file", str(tmp_path / "new.agekey"),
+                                 "--replace-key")
+    cli.handle(args, store, create_package=None, restore_package=None)
+    assert store.identity.read_bytes() == (tmp_path / "new.agekey").read_bytes()
+    fresh = Store(tmp_path / "new-server", store.product)
+    with pytest.raises(ValueError, match="--key-file"):
+        fresh.configure(**settings)

@@ -12,7 +12,7 @@ import pytest
 
 from tests.app.fixtures import Browser
 from tests.app.test_chat import setup_models
-from tests.app.test_review2_chat import _chromium
+from tests.app.browser_helpers import chromium_executable
 
 MODEL = "warning-test-model"
 DAY_MS = 24 * 60 * 60 * 1000
@@ -25,7 +25,7 @@ def chromium():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as playwright:
         try:
-            browser = playwright.chromium.launch(executable_path=_chromium())
+            browser = playwright.chromium.launch(executable_path=chromium_executable())
         except Exception as error:  # noqa: BLE001 - optional browser dependency
             pytest.skip(f"Chromium is not available: {error}")
         yield browser

@@ -47,14 +47,14 @@ function row(worker) {
   if (worker.platform) nameCell.append(el("br"), el("span", { class: "small muted", text: worker.platform }));
 
   const statusCell = el("td", {}, badge(capitalize(worker.status), STATUS_CLASS[worker.status]));
-  if (worker.working) statusCell.append(" ", badge("running a job", "badge-primary"));
-  if (worker.paused) statusCell.append(" ", badge("paused after failures", "badge-warning"));
+  if (worker.working) statusCell.append(" ", badge("Running a job", "badge-primary"));
+  if (worker.paused) statusCell.append(" ", badge("Paused after failures", "badge-warning"));
 
   const activityCell = el("td", { dataset: { label: "Activity:" } },
     worker.activity ? badge(capitalize(worker.activity), ACTIVITY_CLASS[worker.activity]) : el("span", { class: "faint", text: "—" }));
 
   const gpuCell = el("td", { dataset: { label: "GPU:" }, text: worker.gpu_name || "—" });
-  if (worker.gpu_util !== null && worker.gpu_util !== undefined) gpuCell.append(el("br"), el("span", { class: "small muted", text: `${worker.gpu_util}% busy` }));
+  if (worker.gpu_util !== null && worker.gpu_util !== undefined && ["online", "busy"].includes(worker.status)) gpuCell.append(el("br"), el("span", { class: "small muted", text: `${worker.gpu_util}% busy` }));
 
   const modelsCell = el("td", { dataset: { label: "Models:" } });
   if (worker.models && worker.models.length) {

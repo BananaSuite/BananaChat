@@ -65,7 +65,7 @@
         <td data-label="Status:">
           {% if row.suspended and (not row.suspended_until or row.suspended_until > now) %}
           <span class="badge badge-danger">Suspended{% if row.suspended_until %} until {{ row.suspended_until | datetime }}{% endif %}</span>
-          {% else %}<span class="badge badge-success">Active</span>{% endif %}
+          {% else %}Active{% endif %}
         </td>
         <td class="nowrap col-optional">
           {% if row.role == "admin" %}<span class="muted">Unlimited</span>
@@ -76,7 +76,7 @@
         <td class="nowrap" data-label="Two-step:">
           {% if row.two_step %}<span class="badge badge-success">On</span>
           {% elif row.role == "admin" and two_step_required %}<span class="badge badge-warning">Off, required</span>
-          {% else %}<span class="badge">Off</span>{% endif %}
+          {% else %}<span class="muted">Off</span>{% endif %}
         </td>
         <td class="nowrap col-optional">{{ when(row.last_login_at) }}</td>
         <td class="nowrap col-optional col-lg">{{ row.created_at | datetime(true) }}</td>

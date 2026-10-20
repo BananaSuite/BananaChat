@@ -76,6 +76,9 @@ def test_non_admins_get_403_on_every_admin_url(app, make_user):
             assert json_response.status_code == 403, (method, endpoint)
             assert json_response.get_json()["error"]["code"] == "forbidden"
     assert checked > 40
+    italian = browser.fetch("/admin/users", headers={"Accept-Language": "it"})
+    assert italian.status_code == 403
+    assert italian.json["error"]["message"] == "È necessario l'accesso da amministratore."
 
 
 def test_anonymous_visitors_are_sent_to_sign_in(app):

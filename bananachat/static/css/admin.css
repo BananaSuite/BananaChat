@@ -4,7 +4,7 @@
    current page does not wrap. */
 .admin-nav { position: sticky; top: var(--topbar-height); align-self: start; height: calc(100vh - var(--topbar-height)); overflow-y: auto;
   display: flex; flex-direction: column; gap: 2px; padding: .85rem .5rem 1.25rem; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 40%, var(--surface)); }
-.admin-nav a { display: flex; align-items: center; gap: .5rem; min-height: 36px; padding: .4rem .55rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: .86rem; }
+.admin-nav a { display: flex; align-items: center; gap: .5rem; min-height: 36px; padding: .4rem .55rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: var(--text-md); }
 .admin-nav a:hover { background: var(--hover); color: var(--text); }
 .admin-nav a[aria-current="page"] { background: var(--active); color: var(--text); font-weight: 600; box-shadow: inset 2px 0 0 var(--primary); }
 .admin-nav a[aria-current="page"] svg { color: var(--primary); }
@@ -14,13 +14,11 @@
 .admin-nav-desktop a > span { display: inline-grid; }
 .admin-nav-desktop a > span::after { content: attr(data-label); height: 0; overflow: hidden; visibility: hidden; font-weight: 600; user-select: none; }
 .admin-nav-group { display: flex; flex-direction: column; gap: 2px; margin-top: .8rem; }
-.admin-nav-label { padding: 0 .55rem .3rem; color: var(--text-muted); font-size: .7rem; font-weight: 600; letter-spacing: .02em; }
+.admin-nav-label { padding: 0 .55rem .3rem; color: var(--text-muted); font-size: var(--text-xs); font-weight: 600; letter-spacing: .02em; }
 .admin-nav-mobile { display: none; }
 .admin-main { padding: 1.75rem clamp(1rem, 3vw, 2.5rem) 4rem; min-width: 0; width: 100%; max-width: var(--content-width); margin-inline: auto; }
 .admin-main [id] { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
-.admin-section-nav { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin-bottom: 1.5rem; padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
-.admin-section-nav a { display: inline-flex; align-items: center; min-height: var(--control-compact); color: var(--text-muted); font-size: .875rem; text-decoration: none; }
-.admin-section-nav a:hover { color: var(--text); text-decoration: underline; text-underline-offset: .25em; }
+.admin-toc { margin-bottom: 1.5rem; padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
 .admin-options { border-top: 1px solid var(--border); padding-top: 1rem; }
 .admin-page .site-footer { display: none; }
 /* The page's last section does not end with a rule above nothing. */
@@ -39,7 +37,7 @@
   .admin-shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; align-content: start; }
   .admin-nav-desktop { display: none; }
   .admin-nav-mobile { display: block; min-width: 0; border-bottom: 1px solid var(--border); }
-  .admin-nav-mobile > summary { display: flex; align-items: center; gap: .6rem; min-height: 48px; padding: .65rem 1rem; list-style: none; cursor: pointer; font-size: .88rem; }
+  .admin-nav-mobile > summary { display: flex; align-items: center; gap: .6rem; min-height: 48px; padding: .65rem 1rem; list-style: none; cursor: pointer; font-size: var(--text-md); }
   .admin-nav-mobile > summary::-webkit-details-marker { display: none; }
   .admin-nav-mobile > summary > svg { width: 17px; height: 17px; flex: none; }
   .admin-nav-mobile > summary > svg:last-child { margin-left: auto; }
@@ -56,7 +54,7 @@
 .admin-header h1 { display: flex; align-items: center; gap: .5rem; }
 .admin-main h2 { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .admin-main h2 svg { width: 20px; height: 20px; }
-.breadcrumb { margin: 0 0 .75rem; font-size: .9rem; }
+.breadcrumb { margin: 0 0 .75rem; font-size: var(--text-base); }
 .breadcrumb a { display: inline-flex; align-items: center; gap: .25rem; min-height: 1.5rem; color: var(--text-muted); text-decoration: none; }
 .breadcrumb a:hover { color: var(--text); }
 .breadcrumb svg { width: 16px; height: 16px; }
@@ -67,7 +65,6 @@
 .field-inline { flex-direction: row; align-items: center; gap: .6rem; }
 .field-inline select { width: auto; min-width: 220px; }
 .field-narrow { max-width: 360px; }
-.form-actions-start { justify-content: flex-start; }
 .block { display: block; }
 .section-body { margin: 0 0 1rem; }
 .section-footer { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
@@ -104,7 +101,6 @@
 .effort-model[open] > summary { margin-bottom: .75rem; }
 
 @media (pointer: coarse) {
-  .admin-section-nav a { min-height: var(--touch-target); }
   :is(.admin-disclosure, .admin-help, .inline-details) > summary { min-height: var(--touch-target); }
 }
 
@@ -114,7 +110,7 @@
 .disclosure[open] { flex-basis: 100%; }
 .disclosure[open] > summary { margin-left: auto; }
 /* inline-details: a small disclosure with the chevron of the API and personality pages, not the native triangle. */
-.inline-details > summary { display: flex; align-items: center; gap: .35rem; width: fit-content; list-style: none; cursor: pointer; color: var(--text-muted); font-size: .85rem; }
+.inline-details > summary { display: flex; align-items: center; gap: .35rem; width: fit-content; list-style: none; cursor: pointer; color: var(--text-muted); font-size: var(--text-md); }
 .inline-details > summary::-webkit-details-marker { display: none; }
 .inline-details > summary svg { width: 14px; height: 14px; flex: none; transition: transform var(--speed); }
 .inline-details > summary:hover { color: var(--text); }
@@ -157,8 +153,8 @@
 .table .actions > * + * { margin-left: .35rem; }
 .table .actions .menu { display: inline-block; vertical-align: middle; }
 .table .actions .menu-panel { text-align: left; }
-.menu-form { min-width: 280px; padding: .75rem; }
-.menu-form .field label { font-size: .85rem; }
+.menu-form { min-width: min(280px, calc(100vw - 2rem)); padding: .75rem; }
+.menu-form .field label { font-size: var(--text-md); }
 .order-cell { width: 1%; }
 .order-buttons { display: flex; flex-direction: column; gap: 2px; }
 .order-buttons .icon-btn:disabled { opacity: .3; cursor: default; }
@@ -201,7 +197,7 @@ fieldset .check + .check { margin-top: .5rem; }
   .provider-model-table td.model-cell { flex: 1 1 calc(100% - 4rem); min-width: 0; overflow-wrap: anywhere; }
 }
 .invite-weak-hint { min-width: 14rem; max-width: 28rem; }
-.invite-code { font-size: .95rem; letter-spacing: .04em; white-space: nowrap; }
+.invite-code { font-size: var(--text-base); letter-spacing: .04em; white-space: nowrap; }
 /* Tablets and small laptops (below 1280px the sidebar leaves the page column less than about 980px):
    row actions stack and long codes break at their hyphens, so no column is pushed out of the table's box. */
 @media (max-width: 1279px) {
@@ -247,6 +243,7 @@ fieldset .check + .check { margin-top: .5rem; }
 .quote { margin: 0 0 .5rem; padding: .5rem .75rem; border-left: 3px solid var(--border-strong); background: var(--hover); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; }
 .tabs-compact { margin-bottom: .75rem; border-bottom: 0; }
 .tabs-compact a { padding: .4rem .7rem; }
+.section-header > .tabs-compact { margin-bottom: 0; }
 
 /* ----- settings: palettes --------------------------------------------------- */
 .palette-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 300px); gap: 1.25rem; align-items: start; }
@@ -270,7 +267,7 @@ fieldset .check + .check { margin-top: .5rem; }
 .chart-label { fill: var(--text-muted); font-size: 11px; font-family: var(--font); }
 .chart figcaption { margin-top: .5rem; }
 .bar-chart { height: 200px; }
-.chart-ticks { display: flex; justify-content: space-between; gap: 1rem; margin-top: .35rem; color: var(--text-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.chart-ticks { display: flex; justify-content: space-between; gap: 1rem; margin-top: .35rem; color: var(--text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 /* Two breakdowns side by side only when each has room; the share bar is left to the wide model table. */
 .metrics-pair { grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); }
 .metrics-pair .meter-col { display: none; }
@@ -283,13 +280,13 @@ fieldset .check + .check { margin-top: .5rem; }
 
 /* ----- logs and commands ---------------------------------------------------- */
 .log-view { max-height: 70vh; overflow: auto; padding: 1rem; margin: 0; border: 1px solid var(--border); border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bg) 60%, #000); font-size: .8rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+  background: color-mix(in srgb, var(--bg) 60%, #000); font-size: var(--text-sm); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 :root[data-theme="light"] .log-view { background: color-mix(in srgb, var(--bg) 92%, #000); }
 .command-list { margin: 0; display: flex; flex-direction: column; gap: .35rem; }
-.command-list dt { font-weight: 550; font-size: .92rem; }
+.command-list dt { font-weight: 550; font-size: var(--text-base); }
 .command-list dd { margin: 0 0 .5rem; }
 /* Facts about a model: quiet labels above their values. */
-.model-facts dt { color: var(--text-muted); font-size: .85rem; font-weight: 500; }
+.model-facts dt { color: var(--text-muted); font-size: var(--text-md); font-weight: 500; }
 /* Commands wrap instead of hiding their end behind a scrollbar nobody sees. */
 .command-list pre, .settings-section pre { margin: 0; padding: .6rem .8rem; border-radius: var(--radius-sm); background: var(--hover); white-space: pre-wrap; overflow-wrap: anywhere; }
 .settings-section p > code { white-space: nowrap; }
@@ -321,8 +318,8 @@ fieldset .check + .check { margin-top: .5rem; }
 
 /* The model id is shortened to the column's width instead of setting it (long external ids). */
 .catalog-table .catalog-name .cell-wide { max-width: 0; min-width: 100%; }
-/* Below 1280px the Server column gives way; its badges follow the model's name instead. */
-.catalog-server-inline { display: none; }
+/* Below 1280px the Server column gives way; the server follows the model's name instead, like the id. */
+.catalog-server-inline { display: none; align-items: center; color: var(--text-muted); font-size: var(--text-sm); }
 @media (max-width: 1279px) {
   .catalog-table .catalog-server { display: none; }
   .catalog-server-inline { display: flex; }
@@ -351,7 +348,7 @@ fieldset .check + .check { margin-top: .5rem; }
 .status-card.status-outage { border-color: color-mix(in srgb, var(--danger) 55%, var(--bg)); }
 .status-card .plain-list li { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .notice-preview { display: flex; flex-direction: column; gap: .3rem; }
-.notice-preview .alert { font-size: .9rem; }
+.notice-preview .alert { font-size: var(--text-base); }
 .notice-preview p { margin: 0; overflow-wrap: anywhere; }
 
 /* ----- models: lifecycle cards and the download queue ------------------------ */
@@ -402,10 +399,10 @@ fieldset .check + .check { margin-top: .5rem; }
 .rule-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; }
 .rule-row input { width: 6rem; }
 .rule-row select { width: auto; min-width: 6.5rem; }
-.rule-word { color: var(--text-muted); font-size: .88rem; }
+.rule-word { color: var(--text-muted); font-size: var(--text-md); }
 .rule-burst { display: inline-flex; align-items: center; gap: .4rem .5rem; white-space: nowrap; }
 .rule-list .rule-row + .rule-row { padding-top: .45rem; border-top: 1px dashed var(--border); }
-.limit-summary { margin: 0; color: var(--text-muted); font-size: .9rem; overflow-wrap: anywhere; }
+.limit-summary { margin: 0; color: var(--text-muted); font-size: var(--text-base); overflow-wrap: anywhere; }
 /* The chevron stays at the top right, outside the wrapping name, badges and summary. */
 .model-card > summary { position: relative; cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .75rem; padding-right: 2rem; }
 .model-card > summary::-webkit-details-marker { display: none; }

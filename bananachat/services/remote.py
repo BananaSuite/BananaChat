@@ -1,96 +1,17 @@
 """Routing text generation to volunteer worker PCs (``BC_WORKERS_ENABLED``).
 
-Interface used by ``services.inference``:
+``services.inference`` calls:
 
-* ``should_route(user, model) -> bool`` - whether this request should go to a
-  remote worker instead of the local Ollama server.
-* ``stream(model_name, messages, options, *, cancel, priority, first_token_timeout,
-  total_timeout) -> Iterator[ollama.Chunk]`` - run the job on a worker and
-  yield chunks exactly like ``ollama.chat_stream`` (the last one has
-  ``done=True`` with token counts). Raises ``upstream.Cancelled`` when
-  *cancel* fires and ``upstream.UpstreamError`` when the job fails after the
-  worker produced output (the caller then reports a partial answer) or when
-  the local server also fails.
+* ``should_route(user, model, *, request_type=None, think=None)`` - whether this request goes to a worker
+  instead of the local Ollama server.
+* ``stream(model_name, messages, options, *, cancel, priority, first_token_timeout, total_timeout)`` - run
+  the job on a worker and yield chunks like ``ollama.chat_stream``. When no worker answers before producing
+  text, the local server answers instead. Raises ``upstream.Cancelled`` when *cancel* fires and
+  ``upstream.UpstreamError`` when the job fails after text was relayed or the local server also fails.
 
-Routing policy
---------------
-A request goes to the pool only when all of these hold:
+``web.worker_api`` calls the worker side: ``heartbeat``, ``poll``, ``submit_chunk``, ``complete`` and ``fail``.
 
-* ``BC_WORKERS_ENABLED`` is on;
-* the requester is not an administrator (administrators always use the local
-  server: their requests stay on hardware the operator controls and keep
-  working while the pool misbehaves);
-* the request is not a no-history chat or an agent step, when the caller
-  says so with ``request_type`` (see ``NO_REMOTE_REQUEST_TYPES``);
-* an online worker (fresh heartbeat, not disabled, not gaming, no job running)
-  advertises the model (``name`` and ``name:latest`` are the same model), and
-  there are more such idle workers than jobs already waiting for that model;
-* no worker failed to pick up this model during the last ``COOLDOWN_SECONDS``;
-* no failure of the account's jobs was held against a worker during the last
-  :data:`USER_FAULT_SECONDS`, and an idle worker is left on which none of its
-  jobs failed in that time (see below).
-
-Misbehaving workers
--------------------
-A worker that breaks the protocol or abandons a job it was answering is
-paused: it is offered no job and no request is routed to it for
-:data:`PAUSE_SECONDS`, doubling with each further failure up to
-:data:`PAUSE_MAX_SECONDS`; a completed job clears the record. A worker whose
-job times out (no first chunk within ``BC_FIRST_TOKEN_TIMEOUT`` of claiming
-it, or silent past its lease; not when it last spoke before this server started,
-as it could not reach the server meanwhile) or that reports a failure is
-paused the same way, because the request may be at fault too:
-
-* a failure that follows from the request is held against the request, not the
-  worker: input its model cannot read, a request its Ollama refused (HTTP 4xx)
-  and memory the request needs that the worker's hardware does not have (a
-  large ``num_ctx`` or context);
-* each account holds at most one worker responsible per
-  :data:`USER_FAULT_SECONDS`: a further failure of its jobs in that time is
-  held against the request;
-* after a failure of one of its jobs was held against a worker, the account is
-  answered by the local server for :data:`USER_FAULT_SECONDS`; after one held
-  against the request, it is not sent to that worker again in that time;
-* the worker reports why a job failed, so the reason is not taken on trust
-  forever: a worker on which the jobs of :data:`REQUEST_FAULT_ACCOUNTS`
-  different accounts failed for their requests' sake within
-  :data:`USER_FAULT_SECONDS`, with no answered job in between, cannot serve
-  what it advertises (or lies about it) and is paused like any failing worker.
-
-So one account's requests cannot pause every worker, and a worker that fails
-every job cannot take the accounts it failed off the other workers. A job a worker
-hands back (``requeue``, gaming, a restart) is never offered to that worker
-again and goes back to the pool at most :data:`MAX_REQUEUES` times. An
-administrator enabling a disabled worker clears its pause. Without
-output, the pool has ``BC_WORKER_CLAIM_TIMEOUT`` + ``BC_FIRST_TOKEN_TIMEOUT``
-seconds in all before the local server answers instead; when that time runs
-out, the worker holding the job is held responsible only if it held the job for
-``BC_FIRST_TOKEN_TIMEOUT`` itself (not when it took over a job another worker
-handed back late).
-
-The job never reaching a worker is not an error for the user: when no worker
-claims it within ``BC_WORKER_CLAIM_TIMEOUT`` seconds (or a worker fails, or its
-lease expires, before it produced any text) the job is withdrawn and
-``stream()`` answers with the local Ollama server for the same model, inside
-the queue slot the caller already holds. Once text was relayed a failure is
-final, like with the local server.
-
-Privacy
--------
-Worker operators can read the prompts sent to their machine. Jobs whose
-payload exceeds ``MAX_JOB_BYTES`` run locally. The prompt of a job is deleted
-from the database the moment the job ends, relayed chunks are deleted as they
-are read, and the ``worker-jobs`` background job removes finished jobs after
-an hour.
-
-Worker protocol (``web.worker_api``)
-------------------------------------
-Leases: the first chunk of a claimed job may take ``BC_FIRST_TOKEN_TIMEOUT``
-(cold model load); a job whose worker was silent (no chunk and no heartbeat)
-for ``max(60, 2 × BC_INFERENCE_READ_TIMEOUT)`` seconds is timed out. Chunks are
-accepted strictly in order and exactly once, within ``BC_CHAT_MAX_RESPONSE_KB``.
-Once the final chunk arrived the answer is complete: if the worker then fails
-or vanishes before reporting its usage, the usage is estimated instead.
+Routing policy, pausing of failing workers, privacy and the protocol: docs/workers.md.
 """
 
 from __future__ import annotations
@@ -368,7 +289,7 @@ def should_route(user, model, *, request_type: str | None = None, think=None, co
     if not config.workers_enabled or model is None:
         return False
     if _field(model, "backend") not in (None, "ollama"):
-        return False  # worker PCs run Ollama models only (never external API providers)
+        return False  # worker PCs run Ollama models only (never external API providers or subscription pools)
     if think:
         # Worker jobs carry no reasoning setting and the daemon relays only the
         # answer, so a request that asks for reasoning stays on this server.

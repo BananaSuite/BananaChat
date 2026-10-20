@@ -32,9 +32,9 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .sidebar-new .btn-icon svg { color: var(--text-muted); }
 .sidebar-search { position: relative; }
 .sidebar-search svg { position: absolute; left: .65rem; top: 50%; width: 1rem; height: 1rem; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
-.sidebar-search input { padding-left: 2.1rem; min-height: var(--control-compact); font-size: .8125rem; background: var(--bg); border-color: var(--border); }
+.sidebar-search input { padding-left: 2.1rem; min-height: var(--control-compact); font-size: var(--text-sm); background: var(--bg); border-color: var(--border); }
 .sidebar-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: .25rem .5rem .75rem; }
-.sidebar-label { margin: 0; padding: .25rem .6rem .5rem; font-size: .75rem; font-weight: 500; color: var(--text-faint); }
+.sidebar-label { margin: 0; padding: .25rem .6rem .5rem; font-size: var(--text-xs); font-weight: 500; color: var(--text-faint); }
 .session-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .session-item { display: flex; align-items: center; gap: 2px; border-radius: var(--radius-sm); }
 .session-item:hover, .session-item:focus-within { background: var(--hover); }
@@ -42,17 +42,17 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .session-item.is-current .session-link { font-weight: 500; }
 .session-link {
   flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: .1rem;
-  padding: .55rem .65rem; color: var(--text); text-decoration: none; font-size: .875rem; border-radius: var(--radius-sm);
+  padding: .55rem .65rem; color: var(--text); text-decoration: none; font-size: var(--text-md); border-radius: var(--radius-sm);
 }
 .session-link:hover { color: var(--text); }
 .session-item.is-no-history .session-link { flex-direction: row; align-items: center; gap: .45rem; }
 .session-link svg { width: 1rem; height: 1rem; flex: none; }
-.session-snippet { font-size: .78rem; color: var(--text-muted); }
+.session-snippet { font-size: var(--text-xs); color: var(--text-muted); }
 .session-menu-button { width: 30px; height: 30px; flex: none; opacity: 0; }
 .session-item:hover .session-menu-button, .session-item:focus-within .session-menu-button,
 .session-item.is-current .session-menu-button, .session-menu-button[aria-expanded="true"] { opacity: 1; }
 @media (hover: none) { .session-menu-button { opacity: 1; } }
-.sidebar-empty { color: var(--text-muted); font-size: .88rem; padding: .75rem .6rem; margin: 0; }
+.sidebar-empty { color: var(--text-muted); font-size: var(--text-md); padding: .75rem .6rem; margin: 0; }
 #sidebar-more { margin-top: .5rem; }
 
 /* ----- conversation column ------------------------------------------------------ */
@@ -62,12 +62,12 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-.chat-title { margin: 0; font-size: .875rem; font-weight: 550; min-width: 0; }
+.chat-title { margin: 0; font-size: var(--text-md); font-weight: 550; min-width: 0; }
 .chat-header .badge svg { width: .8125rem; height: .8125rem; }
 .chat-header-actions { margin-left: auto; display: flex; align-items: center; gap: .25rem; flex: none; }
 .chat-header .chat-badge { flex: none; }
 .no-history-notice {
-  display: flex; align-items: flex-start; gap: .6rem; padding: .6rem 1rem; font-size: .88rem;
+  display: flex; align-items: flex-start; gap: .6rem; padding: .6rem 1rem; font-size: var(--text-md);
   background: var(--info-bg); border-bottom: 1px solid color-mix(in srgb, var(--info) 35%, var(--bg));
 }
 .no-history-notice svg { width: 18px; height: 18px; flex: none; margin-top: .15rem; color: var(--info); }
@@ -90,7 +90,7 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 [data-markdown]:not(.is-rendered) { white-space: pre-wrap; }
 .message-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .15rem .75rem; margin-top: .35rem; min-width: 0; }
-.message-meta { margin: 0; font-size: .75rem; color: var(--text-muted); overflow-wrap: anywhere; }
+.message-meta { margin: 0; font-size: var(--text-xs); color: var(--text-muted); overflow-wrap: anywhere; }
 .message-actions { display: flex; gap: 2px; margin-left: auto; opacity: 0; transition: opacity var(--speed); }
 /* Under a user bubble the time lines up with the bubble's edge; the actions sit to its left. */
 .message-user .message-footer { flex-direction: row-reverse; }
@@ -101,7 +101,7 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .message-actions .icon-btn { width: 32px; height: 32px; }
 .message-actions svg { width: 16px; height: 16px; }
 .icon-btn[aria-pressed="true"], .icon-btn.is-active { color: var(--primary); background: var(--active); }
-.message-state, .message-notice, .message-status { display: flex; align-items: flex-start; gap: .45rem; margin: .6rem 0 0; font-size: .86rem; color: var(--text-muted); }
+.message-state, .message-notice, .message-status { display: flex; align-items: flex-start; gap: .45rem; margin: .6rem 0 0; font-size: var(--text-md); color: var(--text-muted); }
 .message-notice { margin: 0 0 .6rem; padding: .45rem .7rem; border-radius: var(--radius-sm); background: var(--info-bg); color: var(--text); }
 .message-state svg, .message-notice svg { width: 16px; height: 16px; flex: none; margin-top: .1rem; }
 .message-state.state-failed, .message-state.state-interrupted { color: var(--warning); }
@@ -121,19 +121,19 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .attachment-image img { display: block; max-width: 100%; max-height: 240px; border-radius: var(--radius); border: 1px solid var(--border); }
 .file-chip {
   display: inline-flex; align-items: center; gap: .4rem; max-width: 100%; min-width: 0;
-  padding: .2rem .35rem .2rem .6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: .8125rem;
+  padding: .2rem .35rem .2rem .6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: var(--text-sm);
 }
-.file-chip-kind { font-size: .68rem; font-weight: 700; letter-spacing: .03em; color: var(--primary); flex: none; }
+.file-chip-kind { font-size: var(--text-xs); font-weight: 700; letter-spacing: .03em; color: var(--primary); flex: none; }
 .file-chip-link { display: inline-flex; align-items: center; min-height: 1.5rem; color: inherit; min-width: 0; }
 .file-chip .icon-btn { width: 26px; height: 26px; flex: none; }
 .file-chip .icon-btn svg { width: 14px; height: 14px; }
 
 /* Reasoning (a leading <think> block), collapsed by default. */
 .reasoning { margin: 0 0 .9em; border-left: 3px solid var(--border-strong); padding: .1rem 0 .1rem .8rem; }
-.reasoning summary { cursor: pointer; color: var(--text-muted); font-size: .88rem; font-weight: 550; }
+.reasoning summary { cursor: pointer; color: var(--text-muted); font-size: var(--text-md); font-weight: 550; }
 .reasoning summary:hover { color: var(--text); }
 .reasoning.is-live summary { font-style: italic; }
-.reasoning-body { margin-top: .5rem; color: var(--text-muted); font-size: .92rem; }
+.reasoning-body { margin-top: .5rem; color: var(--text-muted); font-size: var(--text-base); }
 
 /* Markdown extras (base prose styles live in app.css). */
 .prose .table-scroll { overflow-x: auto; margin: 0 0 1em; }
@@ -143,7 +143,7 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .prose .align-right { text-align: right; }
 .prose del { color: var(--text-muted); }
 .code-block .code-actions { display: flex; gap: .15rem; }
-.code-block .code-actions .btn { min-height: 26px; padding: .1rem .5rem; font-size: .78rem; font-family: var(--font); }
+.code-block .code-actions .btn { min-height: 26px; padding: .1rem .5rem; font-size: var(--text-xs); font-family: var(--font); }
 /* TeX is shown as written (no math renderer): monospace, backslashes kept. */
 .prose code.math { white-space: pre-wrap; }
 /* Task items ("- [x] done"): the box takes the bullet's place. */
@@ -154,15 +154,15 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .chat-empty { text-align: center; padding: clamp(2rem, 10vh, 5rem) 0 1.5rem; }
 .chat-welcome { max-width: 32rem; margin: 0 auto; }
 .chat-empty h2 { font-size: 1.4rem; font-weight: 550; letter-spacing: calc(var(--letter-spacing) - .025em); }
-.chat-welcome p { margin: .5rem 0 0; font-size: .9375rem; }
+.chat-welcome p { margin: .5rem 0 0; font-size: var(--text-base); }
 .suggestions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: .6rem; margin-top: 1.5rem; text-align: left; }
 .suggestion {
   display: flex; flex-direction: column; gap: .2rem; padding: .75rem .9rem; border: 1px solid var(--border);
   border-radius: var(--radius); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer;
 }
 .suggestion:hover { background: var(--hover); border-color: var(--border-strong); }
-.suggestion strong { font-size: .92rem; }
-.suggestion span { font-size: .85rem; color: var(--text-muted); }
+.suggestion strong { font-size: var(--text-base); }
+.suggestion span { font-size: var(--text-md); color: var(--text-muted); }
 
 /* ----- composer ------------------------------------------------------------ */
 .composer-area { position: relative; padding: 0 1rem calc(.6rem + env(safe-area-inset-bottom)); }
@@ -183,24 +183,29 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .file-chips { list-style: none; display: flex; flex-wrap: wrap; gap: .35rem; margin: 0; padding: .15rem .25rem 0; }
 .composer-toolbar { display: flex; align-items: flex-end; gap: .625rem; }
 .composer-toolbar > .voice-button { margin: 0 -.3rem 4px 0; }
-.composer-tools { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .2rem; flex: 1 1 auto; min-width: 0; }
+/* A size container: the toolbar's own width (sidebar, reading width, large text) decides what fits. */
+.composer-tools { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .2rem; flex: 1 1 auto; min-width: 0; container-type: inline-size; }
 .composer-secondary { display: flex; align-items: center; gap: .2rem; margin-left: auto; }
 /* The pickers are flex boxes, so their buttons centre the same way under any line-spacing preference
    (in a line box the tall strut would lift buttons without a text baseline). */
 .composer-tools > .model-picker { display: flex; align-items: center; }
-/* With the reasoning and personality pickers there is no room for the Attach and Options labels
+/* With the reasoning and personality pickers a narrow toolbar has no room for the Attach and Options labels
    beside them: icons only (the buttons keep their names), so the toolbar stays on one row. */
-.composer-tools:has(> #effort-picker:not([hidden])):has(> #persona-picker) .composer-action-label { display: none; }
+@container (max-width: 44rem) {
+  .composer-tools:has(> #effort-picker:not([hidden])):has(> #persona-picker) .composer-action-label { display: none; }
+}
 @media (min-width: 641px) {
-  .composer-tools:has(> #effort-picker:not([hidden])):has(> #persona-picker) .composer-action { padding-inline: .45rem; }
+  @container (max-width: 44rem) {
+    .composer-tools:has(> #effort-picker:not([hidden])):has(> #persona-picker) .composer-action { padding-inline: .45rem; }
+  }
 }
 .send-button { min-height: var(--control-height); padding: .4rem .7rem; border-radius: var(--radius); flex: none; }
 .composer-action { gap: .35rem; }
 .picker-label { color: var(--text-muted); }
 .stop-button { min-height: var(--control-height); border-radius: var(--radius); flex: none; }
-.composer-paused { display: flex; align-items: center; gap: .4rem; margin: .4rem 0 0; font-size: .85rem; color: var(--warning); text-align: center; justify-content: center; }
+.composer-paused { display: flex; align-items: center; gap: .4rem; margin: .4rem 0 0; font-size: var(--text-md); color: var(--warning); text-align: center; justify-content: center; }
 .composer-paused:empty { display: none; }
-.composer-hint { margin: .45rem 0 0; font-size: .75rem; color: var(--text-faint); text-align: center; }
+.composer-hint { margin: .45rem 0 0; font-size: var(--text-xs); color: var(--text-faint); text-align: center; }
 /* While sending is paused the keyboard hint describes nothing that works. */
 .composer-paused:not(:empty) + .composer-hint { display: none; }
 .scroll-bottom { position: absolute; left: 50%; top: -2.9rem; transform: translateX(-50%); z-index: 5; border-radius: 999px; box-shadow: var(--shadow); }
@@ -229,23 +234,23 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .model-option[aria-selected="true"] { background: var(--active); }
 .model-option-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .model-option-heading > svg, .effort-option > svg { width: 16px; height: 16px; flex: none; color: var(--primary); }
-.model-option-name { font-weight: 600; font-size: .92rem; }
-.model-option-description { font-size: .8rem; color: var(--text-muted); }
-.model-metadata { display: flex; flex-wrap: wrap; gap: .2rem 0; color: var(--text-muted); font-size: .75rem; }
+.model-option-name { font-weight: 600; font-size: var(--text-base); }
+.model-option-description { font-size: var(--text-sm); color: var(--text-muted); text-wrap: pretty; }
+.model-metadata { display: flex; flex-wrap: wrap; gap: .2rem 0; color: var(--text-muted); font-size: var(--text-xs); }
 .model-metadata > span + span::before { content: "\00b7"; margin-inline: .45em; color: var(--text-faint); }
 .model-cost { color: var(--warning); }
-.model-empty { padding: .6rem; color: var(--text-muted); font-size: .88rem; }
+.model-empty { padding: .6rem; color: var(--text-muted); font-size: var(--text-md); }
 
 /* Reasoning effort: the model's levels; locked choices lead to a request. */
 .effort-button { max-width: 210px; }
 .effort-popover { width: min(300px, calc(100vw - 2rem)); }
 .effort-popover .model-list { margin-top: .25rem; }
 .effort-popover .model-list:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
-.effort-popover-title { margin: .15rem .4rem 0; font-size: .875rem; font-weight: 600; color: var(--text); }
-.effort-popover-hint { margin: .45rem .4rem .1rem; font-size: .78rem; }
+.effort-popover-title { margin: .15rem .4rem 0; font-size: var(--text-md); font-weight: 600; color: var(--text); }
+.effort-popover-hint { margin: .45rem .4rem .1rem; font-size: var(--text-xs); }
 .effort-option { flex-direction: row; align-items: center; justify-content: space-between; gap: .75rem; }
 .effort-option.is-locked .model-option-name { color: var(--text-muted); font-weight: 500; }
-.effort-lock { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; color: var(--primary); }
+.effort-lock { display: inline-flex; align-items: center; gap: .3rem; font-size: var(--text-sm); color: var(--primary); }
 .effort-lock svg { width: 14px; height: 14px; }
 
 /* ----- menus and overlays ---------------------------------------------------- */
@@ -255,7 +260,7 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 }
 .popup-menu button {
   display: flex; align-items: center; gap: .6rem; width: 100%; padding: .55rem .7rem; border: 0; border-radius: var(--radius-sm);
-  background: none; color: var(--text); font: inherit; font-size: .93rem; text-align: left; cursor: pointer;
+  background: none; color: var(--text); font: inherit; font-size: var(--text-base); text-align: left; cursor: pointer;
 }
 .popup-menu button:hover, .popup-menu button:focus { background: var(--hover); }
 .popup-menu button.danger { color: var(--danger); }
@@ -295,14 +300,20 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
   .composer-action { min-width: var(--control-compact); padding-inline: .35rem; }
   .composer-action-label { display: none; }
   .send-button { width: var(--control-height); height: var(--control-height); padding: 0; }
+  /* Stop takes Send's square while an answer streams, so the toolbar keeps its row; the label stays its name. */
+  .stop-button { width: var(--control-height); height: var(--control-height); padding: 0; }
+  .stop-button > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .composer-hint { display: none; }
   .composer-toolbar { gap: .35rem; }
   /* The model name takes the room the row has (up to its full width) and is shortened only when the
      icons need the space; it counts as 6rem when the row decides whether to wrap. */
   #model-picker { flex: 1 1 6rem; min-width: 6rem; max-width: max-content; }
-  /* Large text leaves no room for a readable name beside the icons: the name gets the first row. */
-  .composer-tools { container-type: inline-size; }
   #model-picker > .model-button { max-width: 100%; }
+  /* The reasoning picker adds one more icon: the model name may shorten further, without its chevron
+     (like the other pickers here), before the row wraps. */
+  .composer-tools:has(> #effort-picker:not([hidden])) > #model-picker { flex-basis: 4.5rem; min-width: 4.5rem; }
+  .composer-tools:has(> #effort-picker:not([hidden])) #model-button { padding-inline: .4rem; }
+  .composer-tools:has(> #effort-picker:not([hidden])) #model-button > svg:last-child { display: none; }
   .chat-header-button { padding-inline: .5rem; }
   .chat-action-label { display: none; }
   .chat-badge-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -316,7 +327,7 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
   .chat-header { padding: .35rem .5rem; }
   .chat-header .persona-chip { display: none; }
   .chat-empty { padding-top: clamp(1.5rem, 7vh, 3rem); }
-  .no-history-notice { padding: .5rem .75rem; font-size: .84rem; }
+  .no-history-notice { padding: .5rem .75rem; font-size: var(--text-sm); }
   .message-user { max-width: 94%; }
   /* A wide Markdown table keeps readable columns and scrolls, instead of squeezing every column
      to its narrowest (one word per line, very tall rows). */
@@ -326,11 +337,17 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
      which the composer repeats ("Sending paused"); the title and the administrator's note remain. */
   body.chat-page .status-banner { padding-block: .45rem; }
   body.chat-page .status-banner.is-blocking .status-text { display: none; }
-  body.chat-page .status-banner :is(.status-text, .status-note) { font-size: .8125rem; }
+  body.chat-page .status-banner :is(.status-text, .status-note) { font-size: var(--text-sm); }
 }
 
+/* Large text or a narrow phone leaves no room for a readable name beside the icons: the name gets the first row. */
 @container (max-width: 13rem) {
   #model-picker { flex-basis: 100%; max-width: none; }
+}
+@media (max-width: 640px) {
+  @container (max-width: 16rem) {
+    .composer-tools:has(> #effort-picker:not([hidden])) > #model-picker { flex-basis: 100%; max-width: none; }
+  }
 }
 
 @media (pointer: coarse) {

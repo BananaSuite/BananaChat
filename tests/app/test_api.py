@@ -215,6 +215,13 @@ def test_unknown_paths_and_methods_use_the_api_envelope(app, token):
     assert_error(call(app, "GET", "/v1/chat/completions", token), 405, "invalid_request_error")
 
 
+def test_a_supported_method_on_a_path_with_a_trailing_slash_is_not_found(app, token):
+    assert_error(call(app, "GET", "/v1/models/", token), 404, "invalid_request_error", "unknown_endpoint")
+    assert_error(call(app, "POST", "/v1/chat/completions/", token, {}), 404, "invalid_request_error")
+    response = call(app, "DELETE", "/v1/models", token)
+    assert_error(response, 405, "invalid_request_error", "method_not_allowed")
+    assert response.headers["Allow"] == "GET"
+
 def test_bodies_are_parsed_strictly(app, token):
     response = call(app, "POST", "/v1/chat/completions", token, data="hello", content_type="text/plain")
     assert_error(response, 415, "invalid_request_error", "unsupported_media_type")
@@ -227,8 +234,31 @@ def test_bodies_are_parsed_strictly(app, token):
 
 
 def test_oversized_bodies_are_refused_with_the_envelope(app, token):
-    body = {"model": "auto", "messages": [{"role": "user", "content": "x" * (5 * 1024 * 1024)}]}
+    from bananachat.services.completions import body_limit
+
+    body = {"model": "auto", "messages": [{"role": "user", "content": "x" * body_limit(app.config["BC"])}]}
     assert_error(call(app, "POST", "/v1/chat/completions", token, body), 413, "invalid_request_error")
+
+
+def test_oversized_chunked_bodies_are_refused_as_too_large_not_invalid(app, token):
+    import io
+
+    from bananachat.services.completions import body_limit
+
+    body = json.dumps({"model": "auto", "messages": [{"role": "user", "content": "x" * body_limit(app.config["BC"])}]})
+    response = app.test_client().post(
+        "/v1/chat/completions", input_stream=io.BytesIO(body.encode()),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                 "Transfer-Encoding": "chunked"},
+        environ_overrides={"wsgi.input_terminated": True})
+    assert_error(response, 413, "invalid_request_error", "too_large")
+    small = json.dumps({"model": "auto", "messages": [{"role": "user", "content": "Hi"}]}).encode()
+    response = app.test_client().post(
+        "/v1/chat/completions", input_stream=io.BytesIO(small),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                 "Transfer-Encoding": "chunked"},
+        environ_overrides={"wsgi.input_terminated": True})
+    assert response.status_code == 200
 
 
 def test_maintenance_pauses_generation_but_not_the_api(app, user, token):
@@ -246,6 +276,17 @@ def test_maintenance_pauses_generation_but_not_the_api(app, user, token):
     assert ledger(app, user) == []
     assert chat(app, token_for(app, admin)).status_code == 200  # administrators can still test
 
+
+def test_maintenance_refusals_use_the_full_openai_error_envelope(app, token):
+    from bananachat.db import settings
+
+    with app.app_context():
+        settings.update(maintenance_mode=1)
+    response = app.test_client().post("/v1/chat/completions", headers={"Authorization": f"Bearer {token}"},
+                                      json={"model": "auto", "messages": [{"role": "user", "content": "hi"}]})
+    assert response.status_code == 503
+    assert response.json == {"error": {"message": response.json["error"]["message"], "type": "server_error",
+                                       "param": None, "code": "maintenance"}}
 
 def test_outage_pauses_generation(make_app, fake_ollama, make_user):
     from bananachat.services import health
@@ -410,6 +451,29 @@ def test_images_need_a_vision_model_and_are_forwarded(app, user, token, fake_oll
     assert sent["content"] == "What is this?" and sent["images"] == [PNG_URL.split(",", 1)[1]]
 
 
+def test_an_image_up_to_the_image_size_limit_fits_in_the_request_body(app, token, fake_ollama):
+    import io
+    import random
+
+    from PIL import Image
+
+    from bananachat.db import catalog
+
+    side = 1100
+    buffer = io.BytesIO()
+    Image.frombytes("RGB", (side, side), random.Random(7).randbytes(side * side * 3)).save(buffer, format="PNG")
+    image = buffer.getvalue()
+    assert 3 * 1024 * 1024 < len(image) <= app.config["BC"].chat_max_image_bytes
+    with app.app_context():
+        catalog.update(catalog.get_by_name("qwen3:4b")["id"], supports_vision=1)
+    url = "data:image/png;base64," + base64.b64encode(image).decode()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "What is this?"},
+                                             {"type": "image_url", "image_url": {"url": url}}]}]
+    response = chat(app, token, messages=messages)
+    assert response.status_code == 200, response.get_data(as_text=True)[:300]
+    assert fake_ollama.chat_bodies()[-1]["messages"][-1]["images"] == [url.split(",", 1)[1]]
+
+
 @pytest.mark.parametrize("url, code", [
     ("https://example.com/cat.png", "unsupported_image"),
     ("data:image/gif;base64,R0lGODlh", "unsupported_image"),
@@ -548,3 +612,36 @@ def test_a_fallback_model_gets_its_own_system_prompt_and_options(app, token, fak
     assert fallback["messages"][0] == {"role": "system", "content": f"You are {fallback['model']}."}
     assert fallback["options"]["temperature"] == (0.3 if fallback["model"] == "llama3.2:3b" else 0.9)
     assert fallback["options"]["stop"] == ["END"]
+
+
+def test_request_metrics_durations_include_the_queue_wait(make_app):
+    """request_metrics.duration_ms is the total time with the queue wait included, as for chat and images."""
+    import threading
+    import time
+
+    from bananachat import db
+
+    app = make_app(MAX_CONCURRENT=1)
+    roll_out(app)
+    with app.test_request_context():
+        from bananachat import security
+        from bananachat.db import users
+        user = users.get(users.create("wren", security.hash_password("wren-password")))
+    token = token_for(app, user)
+    with app.app_context():
+        # Another request holds the only slot for a moment.
+        db.execute("INSERT INTO inference_queue (req_id, priority, status, owner_pid, enqueued_at, started_at, "
+                   "heartbeat_at, owner_key) VALUES ('busy', 0, 'running', 1, ?, ?, ?, 'other')",
+                   (time.time(), time.time(), time.time()))
+
+    def release():
+        time.sleep(0.8)
+        with app.app_context():
+            db.execute("DELETE FROM inference_queue WHERE req_id='busy'")
+
+    threading.Thread(target=release).start()
+    assert chat(app, token).status_code == 200
+    with app.app_context():
+        row = db.one("SELECT duration_ms, queue_wait_ms FROM request_metrics WHERE request_type='api'")
+    assert row["queue_wait_ms"] >= 500
+    assert row["duration_ms"] >= row["queue_wait_ms"]

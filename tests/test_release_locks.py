@@ -1,4 +1,4 @@
-"""A release from 1.7 on that lacks its hash-pinned dependency locks is refused, unless the operator allows it (OPS2-09).
+"""A release from 1.7 on that lacks its hash-pinned dependency locks is refused, unless the operator allows it.
 
 Without the locks the installer resolves every dependency anew from PyPI,
 newest in range, with no hash check: how releases from before 1.7 (a
@@ -90,8 +90,8 @@ def test_a_remote_snapshot_of_such_a_release_is_restored_only_with_allow_unpinne
     assert manager.update(allow_unpinned=True)["revision"] == broken
     snapshot = manager.backup()
     # The remote series hands back that package (encryption and Git: test_git_backups.py).
-    monkeypatch.setattr(Store, "download", lambda _store, _identifier, output, **_options: (
-        shutil.copyfile(snapshot, output), {"verified": True, "authenticated": True})[1])
+    monkeypatch.setattr(Store, "_fetch", lambda _store, _identifier, output, **_options: (
+        shutil.copyfile(snapshot, output), {"verified": True, "authenticated": True, "package": str(output)})[1])
     monkeypatch.setattr(Store, "set_schedule", lambda _store, enabled, interval=None: {"enabled": bool(enabled),
                                                                                        "interval_minutes": 1440})
     services = Services()
@@ -116,7 +116,7 @@ def test_a_remote_snapshot_of_such_a_release_is_restored_only_with_allow_unpinne
                                   'from typing import Final\n__version__: Final = "1.7.1"\n'])
 def test_an_annotated_version_counts_like_a_plain_one(tmp_path, line):
     """``__version__: str = "1.7.1"`` is a 1.7 release too: read as no version, a release missing its locks
-    would install from its ranges like one from before 1.7 (the verifier's OPS2-09 note)."""
+    would install from its ranges like one from before 1.7."""
     from banana_ops.manager import check_dependency_locks, declared_version
 
     (tmp_path / "bananachat").mkdir()

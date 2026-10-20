@@ -768,7 +768,7 @@ def test_admin_git_settings_image_check_and_audit(env, runner):
     admin = Browser(env.app)
     admin.login("admin", "admin-password")
     page = admin.get("/admin/agents").get_data(as_text=True)
-    assert "Git repositories" in page and "not checked" in page and 'name="git_hosts"' in page
+    assert "Git repositories" in page and "Not checked" in page and 'name="git_hosts"' in page
     form = {"git_enabled": "1", "git_hosts": "github.com\ngitlab:git.example.org\n", "git_max_mb": "20",
             "git_imports_per_hour": "3"}
     assert admin.post("/admin/agents/git", form).status_code == 302

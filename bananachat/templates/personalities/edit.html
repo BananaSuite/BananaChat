@@ -138,7 +138,7 @@
 
       <label class="check"><input type="checkbox" name="enabled" value="1"{% if values.enabled %} checked{% endif %}><span>{{ t("personality.enabled_label") }}<small>{{ t("personality.enabled_hint") }}</small></span></label>
 
-      <div class="form-actions">
+      <div class="form-actions form-actions-end">
         <a class="btn btn-ghost" href="{{ url_for('personalities.index') }}">{{ t("common.cancel") }}</a>
         <button type="submit" class="btn btn-primary">{{ t("common.save") if row else t("personality.create") }}</button>
       </div>

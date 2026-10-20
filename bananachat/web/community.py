@@ -47,12 +47,14 @@ def _item(row, user, options, mine: dict) -> dict:
 
 
 def _suggested(consent, scope) -> int:
-    """An even share of what is still missing (at least one supporter's worth)."""
+    """An even share of what is still missing (at least one supporter's worth), rounded up to whole
+    thousands (2k rather than 1667, written the same way in every language)."""
     if not scope or consent.needed <= consent.pledged:
         return 0
     missing = consent.needed - consent.pledged
     left = max(1, consent.min_supporters - consent.supporters)
-    return -(-missing // left)
+    share = -(-missing // left)
+    return share if share < 1000 else -(-share // 1000) * 1000
 
 
 @bp.get("/community", endpoint="index")

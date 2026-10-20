@@ -84,6 +84,21 @@ def test_language_preference_switches_the_interface(app, make_user):
     assert 'lang="en"' in browser.get("/customize").get_data(as_text=True)
 
 
+def test_choosing_the_default_language_again_follows_the_browser(app, make_user):
+    make_user("sofia")
+    browser = _signed_in(app, "sofia")
+    browser.post_json("/api/preferences", {"interface_language": "it"})
+    assert '<html lang="it"' in browser.get("/customize", headers={"Accept-Language": "en"}).get_data(as_text=True)
+    response = browser.post_json("/api/preferences", {"interface_language": "default"})
+    assert response.get_json()["reload"] is True
+    assert '<html lang="en"' in browser.get("/customize", headers={"Accept-Language": "en"}).get_data(as_text=True)
+
+    browser.post_json("/api/preferences", {"interface_language": "de"})
+    assert '<html lang="de"' in browser.get("/customize", headers={"Accept-Language": "en"}).get_data(as_text=True)
+    browser.post_json("/api/preferences/reset", {})
+    assert '<html lang="en"' in browser.get("/customize", headers={"Accept-Language": "en"}).get_data(as_text=True)
+
+
 @pytest.mark.parametrize(("theme", "primary", "foreground"), [
     ("light", "#e6be32", "#000000"),
     ("dark", "#112244", "#ffffff"),
@@ -195,6 +210,21 @@ def test_reset_restores_defaults_and_deletes_the_background(app, make_user):
     with app.app_context():
         assert users.get_preferences(user["id"]) == users.PREFERENCE_DEFAULTS
     assert not (app.config["BC"].background_upload_dir / name).exists()
+
+
+@pytest.mark.parametrize(("language", "message"), [
+    ("it", "Troppe richieste. Attendi un momento e riprova."),
+    ("en", "Too many requests. Please wait a moment and try again."),
+])
+def test_rate_limited_requests_answer_in_the_interface_language(app, make_user, language, message):
+    make_user("ugo")
+    browser = _signed_in(app, "ugo")
+    headers = {"Accept-Language": language}
+    for _ in range(20):
+        assert browser.post_json("/api/preferences/reset", {}, headers=headers).status_code == 200
+    limited = browser.post_json("/api/preferences/reset", {}, headers=headers)
+    assert limited.status_code == 429 and limited.headers["Retry-After"]
+    assert limited.get_json()["error"] == {"message": message, "code": "rate_limited"}
 
 
 def test_orphaned_backgrounds_are_purged(app, make_user):

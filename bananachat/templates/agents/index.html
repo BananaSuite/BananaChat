@@ -69,7 +69,7 @@
             <input type="file" id="task-files" name="files" multiple class="visually-hidden" aria-describedby="task-files-hint">
           </div>
         </div>
-        {#- Below both fields, across the form: in the files column it was squeezed into four short lines. -#}
+        {#- Spans the form below both fields. -#}
         <span class="hint agents-files-hint" id="task-files-hint">{{ t("agents.files_hint", size=max_upload_mb) }}</span>
         {% if settings.git_enabled %}
         <details class="agents-repo" id="task-repo">
@@ -94,7 +94,7 @@
           <span>{{ t("agents.swarm_label") }}<small class="hint agents-switch-hint">{{ t("agents.swarm_hint", count=settings.max_subagents) }}</small></span>
         </label>
         {% endif %}
-        <p class="hint mb-0">{{ t("agents.limits_hint", steps=settings.max_steps, minutes=settings.max_minutes) }}</p>
+        <p class="hint mb-0">{{ t("agents.limits_hint", steps=t("agents.limits_steps", count=settings.max_steps), minutes=t("agents.limits_minutes", count=settings.max_minutes)) }}</p>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary" id="new-task-submit" data-send{% if blocked %} disabled{% endif %}>{{ icon("play") }}{{ t("agents.start") }}</button>
         </div>

@@ -17,8 +17,8 @@ from bananachat import PRODUCT_NAME, db, security, totp
 from bananachat.db import access as access_db
 from bananachat.db import catalog, credits, tokens, users
 from bananachat.db import limits as limits_db
-from bananachat.formatting import parse_amount, tokens_text
-from bananachat.i18n import translate
+from bananachat.formatting import local_time, parse_amount, tokens_text
+from bananachat.i18n import DECIMAL_COMMA, translate, translate_html
 from bananachat.services import community, exports, limits, two_step
 from bananachat.services.access import AccessContext, is_image_model, is_text_model
 
@@ -116,7 +116,7 @@ def model_summary(user) -> list[dict]:
             continue
         weight = f"{policy['weight']:g}"
         entry = {"name": model["display_name"], "id": model["ollama_name"], "weight": policy["weight"],
-                 "weight_text": weight.replace(".", ",") if g.lang == "it" else weight,
+                 "weight_text": weight.replace(".", ",") if g.lang in DECIMAL_COMMA else weight,
                  "counted": counted, "locked": bool(override and override.locked), "rate": None, "window": None,
                  "weekly": None, "effort": effort, "reasons": []}
         if own_limits:
@@ -424,12 +424,13 @@ def _consent_view(row) -> dict:
             "until": row["community_until"], "closed": bool(row["community_closed_at"])}
 
 
-def pledge_summary(row) -> str:
-    """"12k tokens per 5 hours of Chat for alice, until …" for one renounced amount."""
+def pledge_summary(row):
+    """"12k tokens per 5 hours of Chat for alice, until …" for one renounced amount (page markup)."""
     what = row["model_name"] if row["model_id"] is not None else _t(f"account.pool_{row['pool'] or 'api'}")
     key = "account.pledge_active" if row["starts_at"] else "account.pledge_promised"
-    return _t(key, tokens=_amount(row["tokens"]), period=_t(f"account.pledge_scope_{row['scope'] or 'window'}"),
-              target=what, user=row["username"], until=(row["ends_at"] or "")[:16])
+    return translate_html(g.lang, key, tokens=_amount(row["tokens"]),
+                          period=_t(f"account.pledge_scope_{row['scope'] or 'window'}"), target=what,
+                          user=row["username"], until=local_time(row["ends_at"]))
 
 
 def _request_tokens(row, name: str, legacy: str):

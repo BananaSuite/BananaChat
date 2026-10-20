@@ -9,7 +9,7 @@ import secrets
 import sqlite3
 from datetime import timedelta
 
-from flask import Flask, g, render_template, request, session
+from flask import Flask, Request, g, render_template, request, session
 from flask.json.provider import DefaultJSONProvider
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -63,6 +63,21 @@ class _RequestJSONProvider(DefaultJSONProvider):
         return result
 
 
+class _Request(Request):
+    """Refuse a body sent without Content-Length (chunked) once it reaches the view's limit.
+
+    Werkzeug cuts such a body at the limit without an error, so a view would see
+    the start of the body and report it as invalid instead of too large.
+    """
+
+    def get_data(self, cache=True, as_text=False, parse_form_data=False):
+        data = super().get_data(cache=cache, parse_form_data=parse_form_data)
+        limit = self.max_content_length
+        if self.content_length is None and limit is not None and len(data) >= limit:
+            raise RequestEntityTooLarge()
+        return data.decode(errors="replace") if as_text else data
+
+
 def create_app(config: Config | None = None, *, testing: bool = False) -> Flask:
     config = config or load_config()
     configure_logging(config)
@@ -78,6 +93,7 @@ def create_app(config: Config | None = None, *, testing: bool = False) -> Flask:
         response.headers["Cache-Control"] = "no-cache, max-age=0"
         response.headers.pop("Expires", None)
         return response
+    app.request_class = _Request
     app.json_provider_class = _RequestJSONProvider
     app.json = app.json_provider_class(app)
     app.config.update(
@@ -113,6 +129,9 @@ def create_app(config: Config | None = None, *, testing: bool = False) -> Flask:
     from bananachat.services import housekeeping  # noqa: F401  (registers core background jobs)
     from bananachat.services import limits  # noqa: F401  (registers the limit jobs)
     from bananachat.services import community  # noqa: F401  (registers the community-consent job)
+    from bananachat.services import subscription_extension, subscription_pool
+    subscription_extension.configure(app)
+    subscription_pool.ensure_registered()
     register_blueprints(app)
     # Never hand a connection opened here to forked worker processes.
     db.close_thread_connection()
@@ -250,6 +269,7 @@ def _install_template_helpers(app: Flask) -> None:
         datetime=formatting.datetime_text,
         datetime_html=formatting.datetime_html,
         time_html=formatting.time_html,
+        local_time=formatting.local_time,
         pretty_json=formatting.pretty_json,
         break_points=formatting.break_points,
         number=formatting.number,

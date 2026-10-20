@@ -42,6 +42,8 @@ ALWAYS = {
     "admin.external_provider_add": "decides where users' prompts, and an API key, are sent",
     "admin.external_provider_save": "decides where users' prompts, and an API key, are sent",
     "admin.external_provider_remove": "deletes the stored API key with the provider",
+    "admin.claude_account_add": "adds a subscription that answers users' prompts",
+    "admin.codex_account_add": "adds a subscription that answers users' prompts",
 }
 # Confirmed in one case: endpoint -> when.
 WHEN = {
@@ -52,6 +54,8 @@ WHEN = {
     "admin.user_unsuspend": "when the account is an administrator",
     "admin.user_delete": "when the account is an administrator",
     "admin.settings_save": "when the administrator requirement changes or sign-up opens to everyone",
+    "admin.claude_account_save": "when the account's profile changes or the account is removed",
+    "admin.codex_account_save": "when the account's profile changes or the account is removed",
 }
 # Not confirmed: why -> endpoints. Each is audited and within what any administrator session can do anyway.
 EXEMPT = {
@@ -88,10 +92,13 @@ EXEMPT = {
         "admin.category_create", "admin.category_edit", "admin.category_delete", "admin.category_move",
     ),
     # Enabling a worker again sends prompts to a token issued (and confirmed) at registration; a worker
-    # that cannot be trusted any more is removed, which ends its token.
-    "Uses a provider connection or worker token that was confirmed when it was saved or issued": (
+    # that cannot be trusted any more is removed, which ends its token. Subscription checks, model lists
+    # and quota refreshes use the profile bound (and confirmed) when the account was added or changed.
+    "Uses a provider connection, subscription account or worker token that was confirmed when it was saved or issued": (
         "admin.external_provider_test", "admin.external_provider_check", "admin.external_provider_enroll",
-        "admin.external_provider_enroll_many", "admin.workers_state",
+        "admin.external_provider_enroll_many", "admin.workers_state", "admin.claude_account_check",
+        "admin.claude_sync", "admin.claude_discover", "admin.claude_refresh", "admin.codex_account_check",
+        "admin.codex_sync", "admin.codex_discover", "admin.codex_refresh",
     ),
     "Site content, appearance and features": (
         "admin.settings_palette_reset", "admin.database_check", "admin.personality_create",

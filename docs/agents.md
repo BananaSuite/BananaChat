@@ -1,43 +1,40 @@
 # Cloud sessions
 
-Agents let a model work on a task in a disposable Linux container: it runs
-commands, reads and writes files in `/workspace` and finishes with a summary.
-Administrators turn the feature on; it is off by default. In **Admin → Cloud
-sessions**, choose **Administrators only**, **Everyone signed in**, or
-**Custom access lists**. Fresh installations select administrators only when enabled.
-Existing explicitly configured installations keep their previous Agents capability policy
-through the access-list mode until an administrator changes it. An invalid
-stored audience disables the feature rather than granting broader access.
+Cloud sessions let a model work on a task in a disposable Linux container:
+it runs commands, reads and writes files in `/workspace` and finishes with a
+summary. They need an Ollama or external API model with tool support, and the
+sandbox runner set up on the compute server. Provider credentials stay on the
+web server and are never copied into workspaces.
 
-Sessions use the existing `/agents` routes and retain their history. Model
-policies, five-hour token budgets, optional weekly limits and per-model rates
-remain independent of the audience. Cloud sessions require an Ollama or
-external API model with tool support. Configure the sandbox runner on the compute host before enabling
-sessions. Provider credentials stay on the web server and are not copied into
-workspaces.
+The feature is off by default. In **Admin → Cloud sessions**, choose who can
+start sessions: **Administrators only**, **Everyone signed in**, or **Custom
+access lists** (the Cloud sessions lists in **Admin → Permissions**). Model
+access and token limits apply in every mode. If the stored choice is invalid,
+nobody can start sessions.
 
 ```text
-browser ──> web server (BananaChat)                              cluster (compute host)
+browser ──> web server (BananaChat)                              compute server
             agent loop: model calls + tool calls ──HTTPS + token──> sandbox runner ──> Podman / Docker
                                                                      (compute/sandbox_runner.py)
 ```
 
 The model never runs anything on the web server. Every tool call becomes a
 request to the **sandbox runner**, a small standard-library program on the
-cluster that is the only component allowed to talk to the container engine.
-All sandbox limits are enforced by the runner, so a compromised web server
-cannot loosen them.
+compute server that is the only component allowed to talk to the container
+engine. All sandbox limits are enforced by the runner, so a compromised web
+server cannot loosen them.
 
 This page has three parts:
 
 1. [Runner API](#runner-api): the HTTP contract between the web server and the runner.
-2. [Operator guide](#operator-guide-the-sandbox-runner): installing and running the runner on the cluster.
+2. [Operator guide](#operator-guide-the-sandbox-runner): installing and running the runner on the compute server.
 3. [Threat model](#threat-model): what is protected and what is not.
 
-Using agents and the admin settings are described in
-[Using agents](#using-agents) and [Administering agents](#administering-agents);
-starting tasks from a public Git repository and downloading the changes as a
-patch in [Git repositories](#git-repositories).
+Using sessions and the admin settings are described in
+[Using cloud sessions](#using-cloud-sessions) and
+[Administering cloud sessions](#administering-cloud-sessions); starting tasks
+from a public Git repository and downloading the changes as a patch in
+[Git repositories](#git-repositories).
 
 ## Runner API
 
@@ -46,26 +43,6 @@ JSON over HTTP. Every `/v1/` request needs `Authorization: Bearer <token>`
 `{"error": {"code": "...", "message": "..."}}`. Unknown JSON fields are
 ignored; wrong types are a 400. Request bodies need a `Content-Length`
 (chunked bodies get 411). Every response closes its connection.
-
-**Differences from the original spec** (all additive or clarifications; the
-web client in `bananachat/services/agents/runner.py` already follows them):
-
-- `GET /v1/sandboxes` answers `{"sandboxes": [...]}` (not a bare list) and
-  accepts `?session=<id>` as a filter; items also carry `expires_at`, `busy`
-  and `limits`.
-- New: `GET /v1/sandboxes/{id}` (one sandbox) and
-  `POST /v1/sandboxes/{id}/interrupt` (kill the running command but keep the
-  workspace).
-- `exec` also returns `interrupted` and `sandbox_removed`; a timed-out
-  command reports `exit_code` 124.
-- Directory listings use the types `file`, `dir`, `symlink` and `other`, and
-  the listing itself has `"type": "dir"`; files have `"type": "file"` and
-  always an `encoding`. A file larger than 1 MB returns its first 1 MB with
-  `"truncated": true` instead of an error.
-- `PUT .../archive` accepts `?path=` (the target directory, default
-  `/workspace`) and answers `{"path", "files", "directories", "skipped", "size"}`.
-- Limits above the runner's caps are lowered to the caps (the response shows
-  the limits actually applied); limits below the minimum are a 400.
 
 ### Endpoints
 
@@ -79,6 +56,8 @@ web client in `bananachat/services/agents/runner.py` already follows them):
   201 `{"id", "session", "image", "limits", "created_at", "expires_at"}`.
   400 `invalid_session`, `image_not_allowed` (not in `BC_SANDBOX_IMAGES`),
   `invalid_limits`; 429 `capacity` when `BC_SANDBOX_MAX` sandboxes exist.
+  Limits above the runner's caps are lowered to the caps (`limits` in the
+  answer shows what applies); limits below the minimum are a 400.
   `id` is 32 lowercase hex characters.
 
 `GET /v1/sandboxes[?session=...]`
@@ -115,7 +94,7 @@ web client in `bananachat/services/agents/runner.py` already follows them):
 `GET /v1/sandboxes/{id}/files?path=/workspace/x`
 : A file: `{"path", "type": "file", "size", "content", "encoding": "utf-8"|"base64", "truncated"}`
   (at most 1 MB of content). A directory: `{"path", "type": "dir", "entries": [{"name", "type", "size"}], "truncated"}`
-  (at most 1000 entries). 400 `invalid_path`, 403 `outside_workspace` (a
+  (at most 1000 entries; entry types are `file`, `dir`, `symlink` and `other`). 400 `invalid_path`, 403 `outside_workspace` (a
   symlink leads out of `/workspace`), 404 `not_found`, 400 `not_regular`
   (FIFOs, devices).
 
@@ -130,7 +109,8 @@ web client in `bananachat/services/agents/runner.py` already follows them):
 
 `PUT /v1/sandboxes/{id}/archive[?path=/workspace/dir]`
 : A `.tar.gz`, `.tar` or `.zip` body of at most 50 MB (415 for anything else),
-  extracted into `path` (created when missing). See [archive uploads](#archive-uploads).
+  extracted into `path` (created when missing). Answer:
+  `{"path", "files", "directories", "skipped", "size"}`. See [archive uploads](#archive-uploads).
   The web server uses `path` for repository imports (a scratch folder the
   import script then moves into place).
 
@@ -147,7 +127,7 @@ unknown routes and methods, 411/413 for bodies, 502 `engine_error`, 504
 The runner is `compute/sandbox_runner.py`, started as
 `python3 -m compute.sandbox_runner` from a checkout of the `compute/` folder.
 It needs Python 3.12 or later and nothing but the standard library. It runs on
-the cluster (never on the web server), listens on `127.0.0.1:11436` and is
+the compute server (never on the web server), listens on `127.0.0.1:11436` and is
 exposed to the web server through HTTPS (Caddy) or an SSH tunnel, like the
 [compute gateway](compute.md).
 
@@ -155,7 +135,7 @@ exposed to the web server through HTTPS (Caddy) or an SSH tunnel, like the
 
 The runner **refuses to start** with a rootful engine (rootful Docker, or
 Podman run as root) unless `BC_SANDBOX_ALLOW_ROOTFUL=1` is set: with a rootful
-engine a container escape is root on the cluster. In order of preference:
+engine a container escape is root on the compute server. In order of preference:
 
 1. **Rootless Podman** (`BC_SANDBOX_ENGINE=podman`, the default). Containers
    run inside the runner account's user namespace: an escape lands in an
@@ -182,7 +162,8 @@ no-new-privileges, user) was not applied, on Docker and Podman alike.
 
 The runner **never pulls**: every image in `BC_SANDBOX_IMAGES` must already be
 present (the runner refuses to start otherwise), so a request can never make
-the cluster download anything. Pin images by digest if you can
+the compute server download anything, and a registry outage or a moved tag
+cannot change what sandboxes run. Pin images by digest if you can
 (`registry/name@sha256:...`). The default is
 `mirror.gcr.io/library/python:3.12-slim`:
 
@@ -206,7 +187,7 @@ The repository ships the recommended image: `mirror.gcr.io/library/python:3.12-s
 plus Git, a C toolchain (`build-essential`), Node.js and npm, ripgrep, jq,
 `patch`, `zip`/`unzip` and a few small utilities, with a system Git identity
 ("BananaChat agent") and user 1000. It is about **1.1 GB**. Build it on the
-compute host, as the account that runs the engine (the runner account for
+compute server, as the account that runs the engine (the runner account for
 rootless Podman):
 
 ```sh
@@ -218,17 +199,10 @@ Put it **first** in `BC_SANDBOX_IMAGES` (the first image is the one every
 task uses) and restart the runner. **Git in the image** is what makes patch
 export possible (see [Git repositories](#git-repositories)): without it,
 repositories are still imported but people cannot download their changes as a
-`.patch`; Admin → Agents says which case applies. Nothing in the image needs
+`.patch`; Admin → Cloud sessions says which case applies. Nothing in the image needs
 root or network at run time; sandboxes still run read-only, as uid 1000, with no
 network. To change the tools, edit the Dockerfile, build a new tag
 (`bananachat-agent:2`), allow it and restart: tags let you roll back.
-
-Why the runner never pulls: images are the only code the runner starts, so they
-are chosen and updated by you, ahead of time. A request can never make the
-compute host download anything, a registry outage or rate limit cannot break
-running agents, and a moved tag cannot silently change what sandboxes run.
-
-The first image in the list is the default.
 
 ### Configuration
 
@@ -262,7 +236,7 @@ raise them. Size the host for `BC_SANDBOX_MAX` × `BC_SANDBOX_MEMORY_MB` of
 memory and `BC_SANDBOX_MAX` × `BC_SANDBOX_CPUS` CPUs on top of Ollama.
 
 > **Network warning.** `BC_SANDBOX_NETWORK=bridge` lets model-written code
-> reach the internet and whatever the cluster can reach: your LAN, other
+> reach the internet and whatever the compute server can reach: your LAN, other
 > services on the host, cloud metadata endpoints (`169.254.169.254`), Ollama if
 > it listens beyond loopback. It enables data exfiltration and attacks on third
 > parties from your address. The runner logs a `SECURITY` warning at every
@@ -360,9 +334,10 @@ LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 # If containers start from a shell as bcsandbox but not under this unit, remove the
-# hardening lines above one at a time; distributions differ. Rootless Podman creates user namespaces and uses the setuid helpers newuidmap/newgidmap,
-# so NoNewPrivileges, CapabilityBoundingSet=, RestrictNamespaces, PrivateUsers and
-# @mount-restricting system call filters must stay off for this unit.
+# hardening lines above one at a time; distributions differ. Rootless Podman creates
+# user namespaces and uses the setuid helpers newuidmap/newgidmap, so NoNewPrivileges,
+# CapabilityBoundingSet=, RestrictNamespaces, PrivateUsers and @mount-restricting
+# system call filters must stay off for this unit.
 
 [Install]
 WantedBy=multi-user.target
@@ -424,7 +399,7 @@ allow that. Archive downloads, on the other hand, must be read at 1 MB/s on
 average (after 15 s) and never stall for 10 s, or the runner drops them; the
 web server fetches the whole archive before passing it to the browser.
 Alternatively, an SSH tunnel from the web server:
-`ssh -N -L 127.0.0.1:11436:127.0.0.1:11436 tunnel@cluster` (run it as a
+`ssh -N -L 127.0.0.1:11436:127.0.0.1:11436 tunnel@compute` (run it as a
 systemd service with `Restart=always`) and `BC_AGENTS_RUNNER_URL=http://127.0.0.1:11436`.
 Or, on a private network between the two machines (a LAN, WireGuard,
 Tailscale), plain HTTP to the runner's address: set `BC_SANDBOX_HOST` to that
@@ -502,30 +477,36 @@ may be compromised.
 
 ### Assets
 
-The cluster host (and Ollama on it), the network the cluster can reach, other
+The compute server (and Ollama on it), the network it can reach, other
 users' sandboxes, the runner token, and the availability of the service.
 
 ### Controls
 
-| Threat | Control | Proved by |
-| --- | --- | --- |
-| Escape to the host via container flags | Argument lists only (never a host shell); `--cap-drop ALL`, `no-new-privileges`, default seccomp, no `--privileged`, no host mounts, no devices, `--user 1000:1000`; inspection after start refuses containers where the engine ignored a flag | `test_every_sandbox_gets_every_hardening_flag`, `test_verification_rejects_an_engine_that_ignores_flags`, `test_non_root_without_capabilities_and_read_only_root` (docker) |
-| Kernel exploit from inside | Rootless engine required unless explicitly allowed; gVisor recommended | `test_rootful_engine_is_refused_unless_explicitly_allowed` |
-| Injection into engine commands | IDs generated by the runner (hex); session, image, runtime, instance matched with full-string patterns; images only from the allowlist; commands and paths passed as separate arguments to fixed scripts inside the container | `test_commands_reach_the_container_as_one_argument_never_through_a_host_shell`, `test_engine_passes_arguments_verbatim_without_a_shell`, `test_create_validates_session_image_and_limits`, `test_configuration_defaults_and_validation` |
-| Network abuse (exfiltration, LAN, metadata) | `--network none` by default, loud warning otherwise | `test_there_is_no_network` (docker) |
-| Tampering with the image | Read-only root; writable only `/workspace` (tmpfs, size-capped, uid 1000) and `/tmp` (tmpfs, 64 MB, noexec) | `test_non_root_without_capabilities_and_read_only_root`, `test_the_workspace_size_is_capped` (docker) |
-| Path traversal / symlinks | Paths normalised under `/workspace` before anything runs; resolved again inside the container one component at a time with `O_NOFOLLOW` (python3 images; `readlink -m` otherwise) so symlinks cannot lead out, even swapped in mid-operation; FIFOs and devices refused | `test_paths_outside_the_workspace_or_malformed_are_refused`, `test_query_strings_are_strict`, `test_files_stay_inside_the_workspace` (docker), `test_the_python_file_helper_resolves_inside_the_workspace_only`, `test_swapped_symlinks_never_lead_out_of_the_workspace` (docker) |
-| Memory, CPU, process exhaustion, fork bombs | `--memory` = `--memory-swap`, `--cpus`, `--pids-limit`, `nofile` and `core` ulimits, `--oom-score-adj 500`; engine must enforce limits or the runner refuses to start; kill-all uses only shell builtins, and a sandbox that cannot be cleaned is removed | `test_memory_limit_kills_the_hog_but_not_the_sandbox`, `test_pids_limit_and_fork_bombs` (docker), `test_engines_that_cannot_enforce_limits_are_refused`, `test_a_command_that_cannot_be_killed_takes_its_sandbox_with_it` |
-| Runaway commands and detached processes | Exec timeout (capped) kills every process except the idle main one, including `setsid`/`nohup` children | `test_timeouts_kill_the_command_and_everything_it_started` (docker), `test_timeouts_are_capped_and_stop_the_command` |
-| Huge output | Per-stream cap with a marker; floods stopped at 16 MB | `test_output_is_truncated_and_floods_are_stopped` (docker), `test_output_is_capped_with_a_marker`, `test_engine_timeouts_output_caps_and_stdin` |
-| Zip/gzip bombs, malicious archives | See [archive uploads](#archive-uploads) | `test_gzip_bombs_stop_at_the_workspace_size`, `test_zip_bombs_are_refused_from_their_declared_sizes`, `test_oversized_metadata_headers_are_refused_before_being_read`, `test_archive_traversal_and_bad_names_are_refused`, `test_archives_are_rewritten_with_only_safe_entries`, `test_bad_archives_never_reach_the_container`, `test_archive_round_trip` (docker) |
-| Too many sandboxes or operations | `BC_SANDBOX_MAX` (429), one command per sandbox (409), `BC_SANDBOX_MAX_EXECS` (503), two large transfers at once, idle and age reaper | `test_capacity_is_enforced`, `test_one_command_per_sandbox_and_a_global_cap`, `test_capacity_and_the_reaper` (docker), `test_reaper_removes_idle_expired_and_unknown_containers` |
-| Orphaned containers | Label per instance; reconcile on start and in the reaper; removal on shutdown | `test_start_up_removes_leftover_sandboxes_of_this_instance_only`, `test_shutdown_removes_every_sandbox`, the docker `runner` fixture |
-| Unauthenticated use, token guessing | Bearer token (≥ 32 chars, generated 256-bit, file must be 0600 and not a symlink), constant-time comparison, per-address limit on failures | `test_every_api_route_needs_the_token`, `test_repeated_bad_tokens_are_rate_limited_but_the_real_token_still_works`, `test_token_file_is_created_private_and_checked` |
-| Slow or abusive HTTP clients | Socket timeouts, 10 s to send headers, 5 min per authenticated request (exec: its timeout + 90 s), body limits, no chunked bodies, bounded connections with JSON 503, a few connections per untrusted address and a reserve for trusted ones, archive downloads dropped when the reader stalls | `test_slow_clients_are_disconnected`, `test_bodies_are_limited_and_validated`, `test_excess_connections_get_a_json_503`, `test_one_untrusted_peer_cannot_take_every_connection`, `test_trusted_peers_are_not_capped_per_address_and_keep_a_reserve`, `test_stalled_archive_downloads_release_their_slot` |
-| Engine not pulling surprise images | The runner never pulls; images must be present at start | `test_images_are_never_pulled_and_runtime_must_exist` |
-| SSRF through repository imports (web server) | See [Git repositories: safety](#import-safety): archive URLs built from validated parts for allowlisted hosts, every resolved address must be public, connection to the checked address, TLS verified, redirects re-checked (3 at most), timeouts and a size cap while streaming | `tests/app/test_agents_git.py`: `test_repository_addresses_are_parsed_strictly`, `test_only_public_addresses_are_accepted`, `test_private_addresses_from_dns_are_refused_before_connecting`, `test_download_connects_to_the_checked_address_over_verified_tls`, `test_redirects_only_to_allowed_hosts_and_each_hop_is_checked`, `test_the_size_cap_is_enforced_while_streaming`, `test_timeouts_and_stop_end_the_download`, `test_the_proxy_is_only_used_when_the_operator_opts_in` |
-| Repository content running outside a sandbox, or Git running what the agent configured | The web server never runs `git` or unpacks archives; import and export scripts run in the sandbox; export uses a fresh Git directory (objects borrowed read-only), a temporary index and no system/global configuration | `test_import_and_patch_export_end_to_end` (docker, agent image), `test_scripts_and_their_answers_are_strict` |
+| Threat | Control |
+| --- | --- |
+| Escape to the host via container flags | Argument lists only (never a host shell); `--cap-drop ALL`, `no-new-privileges`, default seccomp, no `--privileged`, no host mounts, no devices, `--user 1000:1000`; inspection after start refuses containers where the engine ignored a flag |
+| Kernel exploit from inside | Rootless engine required unless explicitly allowed; gVisor recommended |
+| Injection into engine commands | IDs generated by the runner (hex); session, image, runtime, instance matched with full-string patterns; images only from the allowlist; commands and paths passed as separate arguments to fixed scripts inside the container |
+| Network abuse (exfiltration, LAN, metadata) | `--network none` by default, loud warning otherwise |
+| Tampering with the image | Read-only root; writable only `/workspace` (tmpfs, size-capped, uid 1000) and `/tmp` (tmpfs, 64 MB, noexec) |
+| Path traversal / symlinks | Paths normalised under `/workspace` before anything runs; resolved again inside the container one component at a time with `O_NOFOLLOW` (python3 images; `readlink -m` otherwise) so symlinks cannot lead out, even swapped in mid-operation; FIFOs and devices refused |
+| Memory, CPU, process exhaustion, fork bombs | `--memory` = `--memory-swap`, `--cpus`, `--pids-limit`, `nofile` and `core` ulimits, `--oom-score-adj 500`; engine must enforce limits or the runner refuses to start; kill-all uses only shell builtins, and a sandbox that cannot be cleaned is removed |
+| Runaway commands and detached processes | Exec timeout (capped) kills every process except the idle main one, including `setsid`/`nohup` children |
+| Huge output | Per-stream cap with a marker; floods stopped at 16 MB |
+| Zip/gzip bombs, malicious archives | See [archive uploads](#archive-uploads) |
+| Too many sandboxes or operations | `BC_SANDBOX_MAX` (429), one command per sandbox (409), `BC_SANDBOX_MAX_EXECS` (503), two large transfers at once, idle and age reaper |
+| Orphaned containers | Label per instance; reconcile on start and in the reaper; removal on shutdown |
+| Unauthenticated use, token guessing | Bearer token (≥ 32 chars, generated 256-bit, file must be 0600 and not a symlink), constant-time comparison, per-address limit on failures |
+| Slow or abusive HTTP clients | Socket timeouts, 10 s to send headers, 5 min per authenticated request (exec: its timeout + 90 s), body limits, no chunked bodies, bounded connections with JSON 503, a few connections per untrusted address and a reserve for trusted ones, archive downloads dropped when the reader stalls |
+| Engine not pulling surprise images | The runner never pulls; images must be present at start |
+| SSRF through repository imports (web server) | See [Git repositories: safety](#import-safety): archive URLs built from validated parts for allowlisted hosts, every resolved address must be public, connection to the checked address, TLS verified, redirects re-checked (3 at most), timeouts and a size cap while streaming |
+| Repository content running outside a sandbox, or Git running what the agent configured | The web server never runs `git` or unpacks archives; import and export scripts run in the sandbox; export uses a fresh Git directory (objects borrowed read-only), a temporary index and no system/global configuration |
+
+The runner's controls are tested in `tests/test_sandbox_runner.py` (fake
+engine), `tests/test_sandbox_runner_docker.py` (real engine) and
+`tests/test_sandbox_runner_isolation.py` (both). Repository imports
+and exports are tested in `tests/app/test_agents_git.py` and
+`tests/app/test_agents_git_docker.py`.
 
 ### What is not protected
 
@@ -574,14 +555,12 @@ BC_SANDBOX_TEST_ENGINE=podman BC_SANDBOX_REQUIRE_DOCKER=1 python -m pytest -q te
 and verify with a quick agent task and `journalctl` before opening it to
 users.
 
-## Using agents
+## Using cloud sessions
 
-**Cloud sessions** (top bar) appears when an administrator has enabled the
-feature and you belong to the selected audience. Administrators-only mode
-restricts sessions to admins; everyone mode permits active signed-in accounts.
-Access-list mode uses the *Agents* capability in **Admin → Access**, including
-existing access requests and individual grants. Model access and usage limits
-still apply in every mode.
+**Cloud sessions** appears in the top bar when an administrator has turned it
+on for you: for administrators only, for everyone signed in, or for the people
+on the Cloud sessions list in **Admin → Permissions**. Model access and usage
+limits apply in every mode.
 
 ### Starting a task
 
@@ -591,9 +570,9 @@ allows it, the task can start from a public Git repository
 ([Git repositories](#git-repositories)). You can add files or a
 `.zip`/`.tar.gz` archive (up to `BC_AGENTS_MAX_UPLOAD_MB`, default 20 MB in
 total): they are copied into `/workspace` of the task's sandbox, and archives
-are extracted there, never on the web server. When swarms are enabled,
-**Agent swarm** lets the agent split the work among sub-agents that run in
-parallel.
+are extracted there, never on the web server. When an administrator allows
+it, **Allow parallel agents** lets the agent split the work among sub-agents
+that run in parallel.
 
 Only models that can call tools are offered. New tasks are refused while the
 site is in maintenance or no accessible model is available, when you already have
@@ -605,13 +584,13 @@ as many running tasks as allowed, when all sandboxes are busy, or when your
 The task page shows a live timeline (it survives reloads and lost
 connections): your messages, the agent's messages and reasoning, and every
 tool call. Open a tool call to see its exact arguments and the output that was
-given back to the model (long output is shortened to about 8 KB). For a swarm,
+given back to the model (long output is shortened to about 8 KB). With parallel agents,
 each sub-agent has a lane with its status, its steps and its report.
 
 The agent's tools are `bash` (a shell command), `read_file`, `write_file`,
 `edit_file` (replace one exact, unique piece of text), `list_files`,
-`search` (grep) and `finish` (the final summary); the main agent of a swarm
-also has `delegate`. Every call is checked before anything runs: unknown
+`search` (grep) and `finish` (the final summary); the main agent of a parallel
+run also has `delegate`. Every call is checked before anything runs: unknown
 tools or arguments, wrong types, arguments nested more than 32 levels deep and
 paths outside `/workspace` are refused and the agent is told why.
 
@@ -636,7 +615,7 @@ paths outside `/workspace` are refused and the agent is told why.
 | --- | --- |
 | Queued | Starting, or waiting for a free sandbox. |
 | Running | The agent is working. |
-| Paused | Maintenance or an AI-server outage: the task waits and continues by itself (at most one hour; paused time does not count against the time limit). |
+| Paused | Maintenance or a model-server outage: the task waits and continues by itself (at most one hour; paused time does not count against the time limit). |
 | Finished | The agent called `finish`; its summary is shown. |
 | Limit reached | A hard limit was hit: steps, tokens or minutes per run, your agent tokens, or the model's own limits. Send a message to continue. |
 | Stopped | You or an administrator stopped it. |
@@ -661,7 +640,7 @@ On `/agents`, open **Start from a Git repository**, paste the address
 (`https://github.com/owner/repo`, `https://gitlab.com/group/sub/project`,
 `https://codeberg.org/owner/repo`; `.git` at the end is fine) and optionally a
 branch, tag or commit (empty means the default branch). Only allowed hosts work
-(Admin → Agents → *Git repositories*), only public repositories (no
+(Admin → Cloud sessions → *Git repositories*), only public repositories (no
 credentials are ever used), and only as large as the site's limit (50 MB of
 compressed archive by default). Imports count against *Imports per user per
 hour*; they cost no tokens (only model calls do).
@@ -709,20 +688,19 @@ plain diff, not a mail series). It is computed in the sandbox:
   and checks against the size and SHA-256 the script printed; at most 20 MB
   (larger changes: download the workspace).
 
-It counts as the person's one download at a time, needs the *Agents* access,
-and is served as an attachment (`text/x-diff`, `nosniff`, sandboxing CSP): it is
-text the agent wrote, so review it before applying. The workspace archive
-download is unchanged.
+It counts as the person's one download at a time, needs access to cloud
+sessions, and is served as an attachment (`text/x-diff`, `nosniff`, sandboxing
+CSP): it is text the agent wrote, so review it before applying.
 
 ### Git settings
 
-Admin → Agents → *Git repositories*:
+Admin → Cloud sessions → *Git repositories*:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| Allow starting tasks from a Git repository | off | Off: the form field is hidden and imports are refused (also for tasks created before it was turned off). |
+| Allow starting sessions from a Git repository | off | Off: the form field is hidden and imports are refused (also for tasks created before it was turned off). |
 | Allowed hosts | `github.com`, `gitlab.com`, `codeberg.org` | One per line. Self-hosted servers need their kind: `gitlab:git.example.org` or `gitea:git.example.org` (Gitea and Forgejo). GitHub downloads come from `codeload.github.com`. At most 20. |
-| Largest repository archive | 50 MB (1–50) | The compressed archive; the runner accepts at most 50 MB. The extracted size is bounded by the sandbox's workspace size. |
+| Largest repository archive (MB) | 50 (1–50) | The compressed archive; the runner accepts at most 50 MB. The extracted size is bounded by the sandbox's workspace size. |
 | Imports per user per hour | 10 (1–100) | Applies to everyone, administrators included. |
 
 **Check the image for Git** starts a short-lived sandbox, runs `git --version`
@@ -772,7 +750,7 @@ proxy cannot be used to reach internal addresses either (the web server must
 therefore be able to resolve public names). IPv6-only networks that rely on
 DNS64/NAT64 are not supported for imports.
 
-## Administering agents
+## Administering cloud sessions
 
 **Admin → Cloud sessions** (English only). Every change is recorded in the audit log
 (`admin.agents.*`).
@@ -780,7 +758,7 @@ DNS64/NAT64 are not supported for imports.
 - **Sandbox runner**: the runner's `/healthz` (engine, rootless, runtime,
   network, sandboxes in use and the limit, images). The page warns in red
   when sandboxes have network access or the engine runs as root.
-- **Running tasks** and **Stop all running tasks**: the kill switch. Every
+- **Active sessions** and **Stop all sessions**: the kill switch. Every
   queued, running or paused task stops within a second or two, whichever
   process runs it; commands are killed and owners see that an administrator
   stopped the task. Turning the feature off also stops running tasks, at
@@ -793,19 +771,19 @@ DNS64/NAT64 are not supported for imports.
   | Setting | Default | Meaning |
   | --- | --- | --- |
   | Enable cloud sessions | off | Off: nobody can start sessions or send follow-ups; running work stops at its next safe point; history stays readable. |
-  | Who can start sessions | Administrators only | Admins only, everyone signed in, or the existing Agents access lists. Previously configured sites retain access-list mode. |
-  | Enable agent swarms | off | Allows the *Agent swarm* option. |
-  | Steps per run | 40 (1–200) | Model calls per run, all agents of a swarm together (each call reserves its step first, so parallel sub-agents cannot exceed it). |
+  | Who can start sessions | Administrators only | Administrators only, everyone signed in, or the Cloud sessions lists in Permissions. |
+  | Allow parallel agents | off | Offers **Allow parallel agents** when starting a session. |
+  | Steps per run | 40 (1–200) | Model calls per run, all parallel agents together (each call reserves its step first, so parallel sub-agents cannot exceed it). |
   | Minutes per run | 20 (1–240) | Wall time per run; checked before every tool call, and no command may run past it. |
   | Tokens per run | 300,000 | Prompt and answer tokens per run. |
-  | Running tasks per user | 1 (1–10) | Administrators are limited by the site limit only. |
-  | Running tasks on the site | 4 (1–64) | Also capped by the runner's `BC_SANDBOX_MAX`. |
-  | Command timeout | 120 s | Longest single command (the runner's `BC_SANDBOX_EXEC_TIMEOUT` caps it too). |
-  | Keep workspace | 30 min (0–1440) | How long a sandbox survives after a run, for downloads and follow-ups (the runner's idle TTL and max age still apply). |
+  | Running sessions per user | 1 (1–10) | Administrators are limited by the site limit only. |
+  | Running sessions on the site | 4 (1–64) | Also capped by the runner's `BC_SANDBOX_MAX`. |
+  | Command timeout (seconds) | 120 | Longest single command (the runner's `BC_SANDBOX_EXEC_TIMEOUT` caps it too). |
+  | Keep workspace (minutes) | 30 (0–1440) | How long a sandbox survives after a run, for downloads and follow-ups (the runner's idle TTL and max age still apply). |
   | Starts per user per hour | 10 | New tasks and follow-ups that start a run (including a message queued during a run that restarts the task when it ends). |
-  | Keep tasks | 30 days | Ended tasks and their logs are deleted afterwards (their sandboxes too). |
-  | Sub-agents per swarm run | 4 (1–8) | Sub-agents cannot start sub-agents. |
-  | Sub-agents at the same time | 2 (1–4) | |
+  | Keep sessions (days) | 30 | Ended tasks and their logs are deleted afterwards (their sandboxes too). |
+  | Agents per parallel run | 4 (1–8) | Sub-agents cannot start sub-agents. |
+  | Agents at the same time | 2 (1–4) | |
 
   Values outside the ranges are refused, and values read from the database
   are clamped again, so no stored value can exceed the hard maximums.
@@ -818,13 +796,13 @@ DNS64/NAT64 are not supported for imports.
   log (prompt, every model message and reasoning, tool call, arguments and
   result, tokens and timings). Administrators can stop or delete any task.
 
-**Access-list mode**: Admin → Access → *Agents*. The capability starts as
+**Custom access lists**: Admin → Permissions → *Cloud sessions*. The list starts as
 *Only people on the allowlist* with access requests enabled; approve requests
 there or add people to the allowlist (optionally until a date).
 
-**Tokens and rates**: every model call is charged to the **agent** pool
-(Admin → Limits; tokens × the model's weight) and to the model's own limits,
-checked before a task starts and before every step; a task stops with *Limit
+**Tokens and rates**: every model call is charged to the **agent** pool (the
+*Cloud sessions* service in Admin → Limits; tokens × the model's weight) and to
+the model's own limits, checked before a task starts and before every step; a task stops with *Limit
 reached* when the owner runs out. Task starts also obey the agent pool's
 request-rate rules, the model's own rate and *Starts per user per hour*.
 Agents think at the reasoning effort the owner may use (medium, or less when
@@ -842,11 +820,10 @@ Agent model calls go through the normal inference queue with the lowest
 priority (people waiting for a chat answer go first) and are never sent to
 volunteer worker PCs.
 
-Account status, the session audience, model access and token limits are checked
-again after queue waits and on each provider attempt. Revoking access or
-disabling sessions stops subsequent model and tool work. Fresh checks do not
-charge the same model request rate twice. Tightened run budgets apply to active
-sessions; raising a setting does not expand a run's original allowance.
+Access and limits are checked again after each queue wait and before each
+model call, so revoking access stops a running session at its next step.
+Lowering a run limit applies to running sessions; raising one applies to new
+runs.
 
 ### How the web server runs tasks
 
@@ -856,8 +833,8 @@ process supervisor, like chat runs). Stop requests are a database flag, so any
 process (or the kill switch) can stop any task. If a process dies, its tasks'
 leases expire after 60 seconds and a background job marks them
 *Interrupted*; nothing the dead process might still write is accepted. A
-background job deletes sandboxes whose keep-time ended, and deletes runner
-sandboxes belonging to our tasks that we no longer track. When a sandbox
+background job deletes sandboxes whose keep-time ended, and removes runner
+sandboxes of this instance that no task references. When a sandbox
 disappears during a run (runner restart, TTL), the agent is told that the
 workspace was reset and a new, empty sandbox is created (at most twice per
 run). Model and runner errors are retried at most three times with backoff;

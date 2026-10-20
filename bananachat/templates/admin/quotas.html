@@ -33,7 +33,7 @@
     </div>
     {{ toggle("chat_local_token_consumption", "Apply token limits to local chats", s.chat_local_token_consumption, "Off by default. Includes models on your compute servers.") }}
     {{ toggle("chat_cloud_token_consumption", "Apply token limits to cloud chats", s.chat_cloud_token_consumption, "On by default. Models excluded from service tokens remain excluded.") }}
-    <p class="hint mb-0">Applies to regular and no-history chats from now on. Request rates, permissions and provider capacity still apply.</p>
+    <p class="hint mb-0">Applies to regular and no-history chats from now on. Request rates and permissions still apply.</p>
     <div class="form-actions"><button type="submit" class="btn btn-primary">Save chat settings</button></div>
   </form>
 

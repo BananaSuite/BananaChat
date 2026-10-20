@@ -14,7 +14,7 @@ LiteLLM, curl…) work without changes.
 The web interface has a matching developer area at **/developer** (the
 **API** link in the navigation): API key management, the account's token limits, quick-start
 snippets, the usage history (`/developer/usage`) and a playground
-(`/developer/playground`). The addresses of the previous release (`/api`,
+(`/developer/playground`). The older addresses (`/api`,
 `/api/usage`, `/api/playground`) redirect there permanently.
 
 ---
@@ -75,7 +75,10 @@ Use your site's address followed by `/v1`, for example
   administrator per service, and per account for custom limits). All API keys of
   an account, and the playground, share it. Administrators are exempt. See
   [rate-limit headers](#rate-limit-headers).
-* **Body size:** 4 MB per request; larger bodies get 413.
+* **Body size:** 4 MB per request, plus room for the request's images
+  (base64): up to `BC_CHAT_MAX_REQUEST_MB` (default 8 MB) of images in total
+  for chat completions. Larger bodies get 413, also when they are sent
+  without `Content-Length`.
 * **Messages:** at most 100 per request and at most `BC_CHAT_MAX_CONTEXT_CHARS`
   characters of text in total (default 300,000).
 * **Images in messages:** at most `BC_CHAT_MAX_CONTEXT_IMAGES` per request
@@ -131,10 +134,9 @@ allowance**, counted in tokens (prompt plus completion).
 * **5-hour window:** a window opens with the account's first counted request
   and lasts 5 hours; when it ends, the single allowance is full again.
   When it is spent, further counted requests are refused until the reset or
-  an approved increase. There is no separate slow-token allowance or
-  spillover. Normal accounts run at API priority (behind administrators and
-  sped-up accounts, ahead of chat messages); an administrator can still set
-  an account's queue priority to slow independently of token consumption.
+  an approved increase. Normal accounts run at API priority (behind
+  administrators and sped-up accounts, ahead of chat messages); an
+  administrator can set an account's queue priority to slow.
 * **Weekly tokens** (only when the site enables them) count everything used in
   the account's rolling week, which starts with the first request after the
   previous week ended and lasts 7 days. When they run out, requests are
@@ -145,14 +147,7 @@ allowance**, counted in tokens (prompt plus completion).
   limits count the model's tokens in every service (API, chat and agents).
 * The numbers can grow with the account's tier, a dynamic adjustment to demand,
   the music-programme bonus and grants from an administrator; the developer page
-  shows the current figures and why. Fixed music bonuses can be configured
-  independently for five-hour and weekly allowances. Administrators are not
-  limited.
-
-Upgrades combine previous regular and slow allocations when slow tokens were
-enabled; otherwise the regular allocation is kept. Historical usage from
-both allocations counts towards the single allowance without resetting its
-window. Header names and quota error codes remain the same.
+  shows the current figures and why. Administrators are not limited.
 
 A request is refused before it starts when no tokens remain, and again when it
 leaves the queue if the tokens ran out (or the account was suspended, or the
@@ -181,14 +176,14 @@ entries as estimates. A request to an external API that is interrupted after
 it was sent is charged at least its input; any other request that fails
 before producing any text is charged only for an input count the server
 reported. See [external providers](external-providers.md#token-usage-limits-and-credits)
-for why a stopped answer is estimated rather than reserved in advance. Every
+for how external models are charged. Every
 request is listed in the usage history with its key and the tokens it counted.
 
 ---
 
 ## Service status
 
-Maintenance mode and outages of the AI server never take the API down:
+Maintenance mode and model-server outages pause only new answers:
 `GET /v1/models` keeps working and so does token management. Only **starting
 new generations** is refused, with status 503 and `Retry-After: 60`:
 
@@ -198,7 +193,7 @@ new generations** is refused, with status 503 and `Retry-After: 60`:
 ```
 
 `code` is `maintenance` (an administrator switched on maintenance mode; the
-administrator's message is appended) or `outage` (the AI server is
+administrator's message is appended) or `outage` (the model server is
 unreachable). Administrators' API keys keep working during maintenance so they
 can test.
 
@@ -209,7 +204,7 @@ while the application runs:
 {"status": "ok", "accepting_requests": true, "database": "ok", "checked_at": 1790000000}
 ```
 
-`status` is `ok`, `degraded` (a fallback AI server is in use), `maintenance`,
+`status` is `ok`, `degraded` (a fallback model server is in use), `maintenance`,
 `outage` or `updating`; `accepting_requests` tells whether new generations can
 start.
 
@@ -233,12 +228,13 @@ curl https://chat.example.com/v1/models -H "Authorization: Bearer $BANANACHAT_AP
 ```
 
 The list always starts with `auto` and then contains every model the token's
-owner may use on the API: rolled out by an administrator, available on its
+owner may use on the API: published by an administrator, available on its
 backend, and allowed by every access policy that applies (uncensored models,
 image generation, categories scoped to the API or to both surfaces, and the
 model's own policy). Image models (ids starting with `comfyui:`) appear only
-when image generation is enabled. `created` is when the model was added to the
-catalogue (Unix time).
+when image generation is enabled. Models from external API providers have IDs
+like `external:1:gpt-4.1` and are called like any other model. `created` is
+when the model was added to the catalogue (Unix time).
 
 `GET /v1/models/{id}` returns one of these objects, or 404 (`model_not_found`)
 when the model does not exist or is not available to you.
@@ -359,10 +355,10 @@ stops the generation; the text produced so far is charged (see [Token limits](#t
 ### Reasoning effort
 
 Reasoning models take effort levels, lowest first: `off`, `low`, `medium`,
-`high`, `max` - as many as each model supports (a model that can only switch
-thinking on or off counts “on” as `medium`). `reasoning_effort` maps to them:
-`none` → off (the lowest level for models that always think), `minimal` →
-low, and `low`, `medium`, `high`, `max` as named; a model without a level
+`high`, `extra`, `max` - as many as each model supports (a model that can only
+switch thinking on or off counts “on” as `medium`). `reasoning_effort` maps to
+them: `none` → off (the lowest level for models that always think), `minimal`
+→ low, `xhigh` → extra, and `low`, `medium`, `high`, `extra`, `max` as named; a model without a level
 uses the nearest lower one it has. Without `reasoning_effort` the request runs
 at `medium`, or at the highest level the account may use if that is lower.
 
@@ -396,6 +392,7 @@ locked ones marked and a link to request them.
 | The answer stalled and another server process already charged what it produced (in a stream, sent as an error event) | 503 (`Retry-After: 5`) | `interrupted` |
 | The server is decoding other images: each account's images are checked one at a time, and a request waits only a few seconds | 503 (`Retry-After: 10`) | `busy` |
 | A hosted model's provider is rate limiting or overloaded | 503 (`Retry-After` from the provider, at most 300) | `provider_rate_limited`, `provider_overloaded` |
+| No subscription account in the model's pool has allowance left under its caps | 503 (`Retry-After: 30`) | `provider_capacity_unavailable` |
 | A hosted model's provider has a server error or cannot be reached | 503 (`Retry-After: 30`) | `provider_unavailable` |
 | A hosted model's provider refused the request (too long, unsupported content) | 400 | `provider_rejected_request` |
 | A hosted model's provider refused the server's key, permissions or credit | 502 | `provider_misconfigured` |
@@ -467,8 +464,8 @@ charge.
 ## Errors
 
 Every error under `/v1` - including unknown paths (404), wrong methods (405,
-with an `Allow` header), bodies over 4 MB (413) and unexpected server errors -
-uses the OpenAI envelope:
+with an `Allow` header), bodies over the size limit (413) and unexpected server
+errors - uses the OpenAI envelope:
 
 ```json
 {"error": {"message": "Human-readable description", "type": "invalid_request_error",
@@ -548,12 +545,3 @@ same validation, model choice, queue and token limits as the API (charged as
 `playground` requests, sharing the account's request rate), offers only the
 reasoning levels the account may use, and can show each
 conversation as the equivalent `curl` request.
-
-## Hosted API models
-
-Administrators may publish hosted models from external API providers alongside
-Ollama models. Obtain their provider-scoped IDs from `/v1/models`, for example
-`external:1:gpt-model-id`, and use them in ordinary `/v1/chat/completions` requests.
-Your BananaChat API key is unchanged; all of your keys still share your account's
-API quotas. Hosted-provider credentials stay on the server. See
-[provider configuration](external-providers.md) for supported formats and capabilities.

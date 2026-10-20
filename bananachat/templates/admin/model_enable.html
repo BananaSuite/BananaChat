@@ -78,7 +78,7 @@
     </fieldset>
   </section>
 
-  <div class="form-actions">
+  <div class="form-actions form-actions-end">
     <a class="btn btn-ghost" href="{{ url_for('admin.models') }}">Cancel</a>
     <button type="submit" class="btn btn-primary"{% if model.enrollment == "ignored" %} disabled{% endif %}>{{ icon("check") }}Enable and publish</button>
   </div>

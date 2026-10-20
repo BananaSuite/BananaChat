@@ -11,8 +11,8 @@ never runs ``git`` or anything from the repository.
   when the image has ``git``, creates a repository with one commit
   ("Imported owner/repo@ref") so the agent's changes can be diffed later.
 * :func:`export_command` computes ``git diff --binary <initial commit>`` of the
-  working tree (untracked files included, ignored ones not) **without touching
-  the agent's repository**: it uses a fresh Git directory in a scratch folder
+  working tree (untracked files included, ignored ones not) without touching
+  the agent's repository: it uses a fresh Git directory in a scratch folder
   that borrows the repository's objects read-only (``objects/info/alternates``),
   a temporary index, and no global or system configuration, so nothing the
   agent wrote into ``.git/config``, ``~/.gitconfig``, hooks or attributes can

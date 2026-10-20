@@ -9,10 +9,10 @@
       <form method="post" action="{{ url_for('chat.new') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="incognito" value="1">
-        <button type="submit" class="btn btn-icon" aria-label="{{ t('chat.new_no_history') }}" aria-describedby="no-history-hint" title="{{ t('chat.new_no_history') }}: {{ t('chat.no_history_short', hours=no_history_hours) }}">{{ icon("eye-off") }}</button>
+        <button type="submit" class="btn btn-icon" aria-label="{{ t('chat.new_no_history') }}" aria-describedby="no-history-hint" title="{{ t('chat.new_no_history') }}: {{ t('chat.no_history_short', hours=no_history_hours, count=no_history_hours) }}">{{ icon("eye-off") }}</button>
       </form>
     </div>
-    <p class="visually-hidden" id="no-history-hint">{{ t("chat.no_history_short", hours=no_history_hours) }}</p>
+    <p class="visually-hidden" id="no-history-hint">{{ t("chat.no_history_short", hours=no_history_hours, count=no_history_hours) }}</p>
     <div class="sidebar-search">
       <label class="visually-hidden" for="chat-search">{{ t("chat.search_label") }}</label>
       {{ icon("search") }}

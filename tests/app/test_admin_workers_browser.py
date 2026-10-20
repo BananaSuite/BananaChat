@@ -7,7 +7,7 @@ import threading
 import pytest
 
 from tests.app.fixtures import Browser
-from tests.app.test_review2_chat import _chromium
+from tests.app.browser_helpers import chromium_executable
 from tests.app.test_two_step import ADMIN_PASSWORD, _stale
 
 
@@ -24,7 +24,7 @@ def admin_page(app, client):
     try:
         with sync_api.sync_playwright() as playwright:
             try:
-                browser = playwright.chromium.launch(executable_path=_chromium())
+                browser = playwright.chromium.launch(executable_path=chromium_executable())
             except Exception as error:  # noqa: BLE001 - optional browser dependency
                 pytest.skip(f"Chromium is not available: {error}")
             context = browser.new_context(viewport={"width": 1280, "height": 900})
@@ -46,8 +46,8 @@ def admin_page(app, client):
 
 
 def test_the_confirmation_field_appears_when_the_window_runs_out_while_the_page_is_open(app, admin_page):
-    """Final verification of chat-auth-2fa-1: the page was loaded within the ten minutes, so it has no field; the
-    refusal must offer one instead of asking to reload."""
+    """A page loaded within the ten minutes has no confirmation field; when the window runs out, the refusal
+    offers one instead of asking to reload."""
     from bananachat import db
 
     page = admin_page

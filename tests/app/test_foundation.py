@@ -14,7 +14,7 @@ LEGACY_TOKEN = "bc-emci_AwPxusYFfYl15DHrI1GlcsgJeSOMkBJJYYYfmZLXDv4tuqhqg"
 
 
 def legacy_instance(tmp_path):
-    """An instance directory holding a database written by the previous release."""
+    """An instance directory holding a database written by the code from before the rewrite."""
     instance = tmp_path / "legacy"
     instance.mkdir()
     database = instance / "bananachat.db"
@@ -33,7 +33,7 @@ def test_invalid_values_fall_back_with_warnings(tmp_path):
     config = load_config({"BC_INSTANCE_DIR": str(tmp_path), "BC_SECRET_KEY": "x" * 40, "BC_PORT": "eighty",
                           "BC_PROXY_MODE": "off", "BC_HTTP_THREADS": "500", "BC_IMAGE_BACKEND": "magic"})
     assert config.port == 8000
-    assert config.proxy_mode is False  # "off" used to switch proxy mode on
+    assert config.proxy_mode is False  # "off" is false
     assert config.http_threads == 64
     assert config.image_backend == "disabled"
     assert len(config.warnings) == 3
@@ -60,6 +60,19 @@ def test_fresh_database_is_at_the_latest_version(app):
         assert db.scalar("PRAGMA application_id") == db.APPLICATION_ID
         assert db.scalar("PRAGMA foreign_keys") == 1
 
+
+def test_foreign_keys_of_the_limit_tables_are_indexed(app):
+    from bananachat import db
+
+    with app.app_context():
+        for table, column in (("user_limits", "updated_by"), ("user_limit_overrides", "updated_by"),
+                              ("quota_requests", "grant_id"), ("quota_requests", "model_id"),
+                              ("limit_grants", "model_id"), ("user_model_limits", "model_id"),
+                              ("user_effort_levels", "model_id"), ("user_effort_levels", "updated_by"),
+                              ("model_limit_policy", "updated_by")):
+            first_columns = [db.query(f"PRAGMA index_info('{index['name']}')")[0]["name"]
+                             for index in db.query(f"PRAGMA index_list('{table}')")]
+            assert column in first_columns, (table, column)
 
 def test_previous_release_database_upgrades_in_place(tmp_path, make_app):
     from bananachat import db
@@ -423,7 +436,7 @@ def test_update_page_while_the_lifecycle_tool_works(tmp_path):
     assert call("/login") == ("200 OK", b"app")
     marker.write_text("updating")
     status, body = call("/login")
-    assert status.startswith("503") and b"right back" in body and b"Torniamo subito" in body
+    assert status.startswith("503") and b"right back" in body and b"Torniamo subito" in body and b"gleich wieder da" in body
     assert call("/status")[0] == "200 OK"
     assert call("/health") == ("200 OK", b"app")
     assert b'"updating"' in call("/v1/models")[1]
@@ -432,7 +445,8 @@ def test_update_page_while_the_lifecycle_tool_works(tmp_path):
 def test_language_negotiation_and_switch(app):
     client = app.test_client()
     assert 'lang="en"' in client.get("/login", headers={"Accept-Language": "en-GB,en;q=0.9"}).get_data(as_text=True)
-    assert 'lang="it"' in client.get("/login", headers={"Accept-Language": "de"}).get_data(as_text=True)
+    assert 'lang="de"' in client.get("/login", headers={"Accept-Language": "de-AT,de;q=0.9,en;q=0.5"}).get_data(as_text=True)
+    assert 'lang="it"' in client.get("/login", headers={"Accept-Language": "fr"}).get_data(as_text=True)
     client.get("/language/en")
     assert 'lang="en"' in client.get("/login").get_data(as_text=True)
 
@@ -440,8 +454,12 @@ def test_language_negotiation_and_switch(app):
 def test_translation_catalogs_are_complete():
     from bananachat.i18n import catalogs
 
+    from bananachat.config import SUPPORTED_LANGUAGES
+
     tables = catalogs()
-    assert set(tables["en"]) == set(tables["it"])
+    assert set(tables) == set(SUPPORTED_LANGUAGES)
+    for language in SUPPORTED_LANGUAGES:
+        assert set(tables[language]) == set(tables["en"]), language
     for language in tables:
         for key, text in tables[language].items():
             assert text, f"{language}:{key} is empty"
@@ -493,6 +511,37 @@ def test_generation_falls_back_before_any_output(app, fake_ollama):
     assert [event.model["ollama_name"] for event in started] == ["llama3.2:3b", "qwen3:4b"]
     assert started[1].notice
     assert isinstance(events[-1], Finished) and events[-1].state == "completed"
+
+
+@pytest.mark.parametrize("change", [
+    "UPDATE ai_models SET failing_at=datetime('now') WHERE ollama_name='qwen3:4b'",
+    "UPDATE ai_models SET is_rolled_out=0 WHERE ollama_name='qwen3:4b'",
+    "UPDATE ai_models SET backend_available=0, missing_at=datetime('now') WHERE ollama_name='qwen3:4b'",
+    "DELETE FROM ai_models WHERE ollama_name='qwen3:4b'",
+])
+def test_a_fallback_that_became_unusable_while_queued_is_skipped(app, make_user, fake_ollama, change):
+    """Fallbacks are chosen with the request; one that is failing, disabled, missing or gone by the time the first
+    model fails is not tried."""
+    from bananachat import db
+    from bananachat.db import catalog, users
+    from bananachat.services import inference
+    from bananachat.services.upstream import CancelToken
+    from tests.app.test_chat import setup_models
+
+    setup_models(app)
+    make_user("alice")
+    fake_ollama.fail_models = {"llama3.2:3b"}
+    with app.app_context():
+        request = inference.TextRequest(user=users.get_by_username("alice"), model=catalog.get_by_name("llama3.2:3b"),
+                                        fallbacks=[catalog.get_by_name("qwen3:4b")],
+                                        messages=[{"role": "user", "content": "Hi"}])
+        with db.transaction():
+            db.execute(change)  # meanwhile, in the catalog
+        events = list(inference.generate(request, CancelToken()))
+    started = [event.model["ollama_name"] for event in events if isinstance(event, inference.Started)]
+    assert started == ["llama3.2:3b"]
+    assert isinstance(events[-1], inference.Finished) and events[-1].state == "failed"
+    assert [body["model"] for body in fake_ollama.chat_bodies()] == ["llama3.2:3b"]
 
 
 def test_usage_is_estimated_when_the_backend_reports_none(app, fake_ollama):

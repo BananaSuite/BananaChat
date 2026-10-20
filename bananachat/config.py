@@ -16,6 +16,7 @@ import ipaddress
 import logging
 import math
 import os
+import re
 import secrets
 import stat
 import tempfile
@@ -25,7 +26,7 @@ from urllib.parse import urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE_URL = "https://github.com/BananaSuite/BananaChat"
-SUPPORTED_LANGUAGES = ("it", "en")
+SUPPORTED_LANGUAGES = ("it", "en", "de")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 # What the deprecated BC_*_ALLOW_INSECURE_TAILSCALE flags add to the insecure networks.
@@ -212,6 +213,12 @@ class Config:
     inference_fallback_api_key: str = ""
     workers_enabled: bool = False
     worker_claim_timeout: int = 20
+    # Operator-installed subscription adapters; unset keeps that provider disconnected.
+    claude_extension: str = ""
+    claude_code_config: str = ""
+    codex_extension: str = ""
+    codex_cli_config: str = ""
+    subscription_probe_interval: int = 120
 
     # Retention
     no_history_ttl_hours: int = 24
@@ -221,7 +228,8 @@ class Config:
     # Image generation
     image_backend: str = "disabled"
     image_generation_rpm: int = 6
-    image_credits_per_generation: float = 5.0  # the previous release's setting; image_tokens_per_generation is used
+    # Deprecated: credits from before 1.6. Times 1,000, it gives the default of image_tokens_per_generation.
+    image_credits_per_generation: float = 5.0
     image_tokens_per_generation: int = 5000
     comfyui_url: str = "http://127.0.0.1:8188"
     comfyui_timeout: float = 30.0
@@ -348,8 +356,17 @@ def _fallback_url(r: _Reader, primary: str, mode: str) -> str:
             value = ""
     if mode == "fallback" and not value:
         r.warnings.append("BC_INFERENCE_OUTAGE_MODE=fallback needs BC_INFERENCE_FALLBACK_URL; "
-                          "using shutdown (new answers pause while the AI server is unreachable).")
+                          "using shutdown (new answers pause while the model server is unreachable).")
     return value
+
+
+def _extension(r: _Reader, name: str, label: str) -> str:
+    """An installed adapter module's dotted name; empty, leaving that provider disconnected, when invalid."""
+    module = r.text(name)
+    if module and not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", module, flags=re.ASCII):
+        r.warnings.append(f"{name} must be an installed Python module name; {label} is disabled.")
+        return ""
+    return module
 
 
 def _bearer_token(r: _Reader, name: str, url: str) -> str:
@@ -460,14 +477,6 @@ def load_config(environ=None, *, load_secret=True) -> Config:
     checkpoint_agent_tailscale = r.flag("BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE", False)
     agents_runner_tailscale = r.flag("BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE", False)
 
-    # The Claude subscription connector was removed; old settings are ignored.
-    removed = sorted(name for name in env if name.startswith("BC_CLAUDE_") and r.text(name))
-    if removed:
-        r.warnings.append(f"The Claude subscription connector was removed; {', '.join(removed)} "
-                          f"{'is' if len(removed) == 1 else 'are'} ignored. Remove "
-                          f"{'it' if len(removed) == 1 else 'them'} from the configuration and use an external "
-                          "API provider for Anthropic models.")
-
     config = Config(
         host=r.text("BC_HOST", "127.0.0.1") or "127.0.0.1",
         port=r.integer("BC_PORT", 8000, 1, 65535),
@@ -541,13 +550,18 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         inference_fallback_api_key=_bearer_token(r, "BC_INFERENCE_FALLBACK_API_KEY", fallback_url) if fallback_url else "",
         workers_enabled=r.flag("BC_WORKERS_ENABLED", False),
         worker_claim_timeout=r.integer("BC_WORKER_CLAIM_TIMEOUT", 20, 2, 600),
+        claude_extension=_extension(r, "BC_CLAUDE_EXTENSION", "Claude"),
+        claude_code_config=r.text("BC_CLAUDE_CODE_CONFIG"),
+        codex_extension=_extension(r, "BC_CODEX_EXTENSION", "Codex"),
+        codex_cli_config=r.text("BC_CODEX_CLI_CONFIG"),
+        subscription_probe_interval=r.integer("BC_SUBSCRIPTION_PROBE_INTERVAL", 120, 15, 3600),
         no_history_ttl_hours=r.integer("BC_NO_HISTORY_TTL_HOURS", 24, 1, 24 * 365),
         deleted_chat_retention_days=r.integer("BC_DELETED_CHAT_RETENTION_DAYS", 30, 0, 36500),
         metrics_retention_days=r.integer("BC_METRICS_RETENTION_DAYS", 30, 1, 36500),
         image_backend=r.choice("BC_IMAGE_BACKEND", "disabled", ("disabled", "comfyui")),
         image_generation_rpm=r.integer("BC_IMAGE_GENERATION_RPM", 6, 0, 10000),
         image_credits_per_generation=image_credits,
-        # Tokens charged per image; the previous release's setting in credits (1 credit = 1,000 tokens) is the default.
+        # Tokens charged per image; defaults to the deprecated credit setting (1 credit = 1,000 tokens).
         image_tokens_per_generation=r.integer("BC_IMAGE_TOKENS_PER_GENERATION", int(round(image_credits * 1000)), 0,
                                               100_000_000),
         comfyui_url=_backend_url(r, "BC_COMFYUI_URL", "http://127.0.0.1:8188"),

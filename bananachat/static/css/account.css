@@ -4,24 +4,23 @@
 .account-toc a[href="#delete"]:hover { color: var(--danger); }
 .account-sections { width: 100%; }
 .account-sections > section { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
-.account-sections > section > p.muted { max-width: 68ch; font-size: .875rem; text-wrap: pretty; }
+.account-sections > section > p.muted { max-width: 68ch; font-size: var(--text-md); text-wrap: pretty; }
 .account-profile-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 1rem 1.5rem; margin: 0; }
 .account-profile-details > div { min-width: 0; }
-.account-profile-details dt { color: var(--text-muted); font-size: .8125rem; margin-bottom: .2rem; }
-.account-profile-details dd { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
-.account-profile-details dd .faint { font-size: .8125rem; }
+.account-profile-details dt { color: var(--text-muted); font-size: var(--text-sm); margin-bottom: .2rem; }
+.account-profile-details dd { margin: 0; font-size: var(--text-base); overflow-wrap: anywhere; }
+.account-profile-details dd .faint { font-size: var(--text-sm); }
 /* The exact time sits on its own line and breaks only between the date and the time (large text, phones). */
 .account-profile-details .last-sign-in-time { display: block; }
-.account-sections .form-actions { justify-content: flex-start; }
 .quota-form > fieldset { border: 0; border-radius: 0; padding: 0; }
 .usage-pools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
 .usage-pools-expanded { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .plain-list { list-style: none; margin: 0; padding: 0; }
 .usage-pool { min-width: 0; padding-block: .25rem; }
 .usage-pool + .usage-pool { padding-inline-start: 1.25rem; border-inline-start: 1px solid var(--border); }
-.usage-pool h3 { margin-bottom: .25rem; font-size: .9rem; }
+.usage-pool h3 { margin-bottom: .25rem; font-size: var(--text-base); }
 .usage-meter { display: flex; flex-direction: column; gap: .3rem; }
-.usage-meter .row-between { gap: .25rem .75rem; font-size: .875rem; }
+.usage-meter .row-between { gap: .25rem .75rem; font-size: var(--text-md); }
 /* A value that wraps under its label stays at the right, like the values that fit beside it. */
 .usage-meter .row-between > :last-child { margin-inline-start: auto; text-align: end; }
 /* In a narrow column every meter puts its value under its label, so meters stacked in one card match
@@ -32,7 +31,7 @@
   .usage-meter .row-between > :last-child { margin-inline-start: 0; text-align: start; }
 }
 .limit-reasons { display: flex; flex-wrap: wrap; gap: .25rem .75rem; color: var(--text-muted); }
-.limit-reasons li::before { content: "• "; color: var(--text-faint); }
+.limit-reasons li + li::before { content: "· "; color: var(--text-faint); }
 .tier-requirements { display: flex; flex-direction: column; gap: .25rem; margin-bottom: .5rem; }
 .tier-requirements li { display: flex; align-items: center; gap: .4rem; }
 .tier-requirements svg { width: 15px; height: 15px; flex: none; }
@@ -44,8 +43,6 @@
 .session-actions .btn { max-width: 100%; white-space: normal; }
 .session-item .grow { overflow-wrap: anywhere; }
 .session-item .grow > div:first-child { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; }
-.char-counter { font-size: .8rem; color: var(--text-faint); text-align: right; }
-.char-counter.is-over { color: var(--danger); }
 
 @media (max-width: 900px) {
   .usage-pools-expanded { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
@@ -64,10 +61,13 @@
   #access .list-item .grow { width: 100%; }
 }
 .model-limits > li { display: flex; flex-direction: column; gap: .45rem; padding: .8rem 0; }
+.model-limits > li:last-child { padding-bottom: 0; }
+/* As wide as a service column above, so all usage bars on the page have one length. */
+.model-limits .usage-meter { max-width: 32rem; }
 .model-limits .badge svg, .model-limits p > svg { width: .875rem; height: .875rem; vertical-align: -.125rem; }
 
 /* Two-step verification (account/two_step.html, account/two_step_codes.html). */
-.account-back { margin: 0 0 .75rem; font-size: .9rem; }
+.account-back { margin: 0 0 .75rem; font-size: var(--text-base); }
 .account-back a { display: inline-flex; align-items: center; gap: .25rem; min-height: 1.5rem; color: var(--text-muted); text-decoration: none; }
 .account-back a:hover { color: var(--text); text-decoration: underline; }
 .account-back svg { width: 16px; height: 16px; }
@@ -80,6 +80,6 @@
 .two-step-steps p { margin: 0; }
 /* Dark modules on white whatever the theme, with a quiet zone, as scanners expect. */
 .two-step-qr { width: 200px; height: 200px; padding: 8px; border-radius: var(--radius-sm); background: #fff; image-rendering: pixelated; }
-.two-step-key { font-size: .95rem; letter-spacing: .04em; overflow-wrap: anywhere; user-select: all; }
+.two-step-key { font-size: var(--text-base); letter-spacing: .04em; overflow-wrap: anywhere; user-select: all; }
 .two-step-codes { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: .5rem 1.5rem; margin: 0; padding: 0; list-style: none; font-size: 1rem; }
 .two-step-codes li { user-select: all; }

@@ -1,28 +1,25 @@
 BananaChat
 Copyright (c) 2026 Luca Zani and contributors.
 
-Originally started by Luca Zani (OverloadedTech) on 9 July 2026.
 Contributors retain copyright in their respective contributions.
 
-First recorded project commit: 3b79b7595c6ed1c1f2a2e2f065635adfe47a5a86
-Author and committer timestamp: 2026-07-09T17:01:12+02:00
+Started by Luca Zani (OverloadedTech) on 9 July 2026.
+First recorded commit: 3b79b7595c6ed1c1f2a2e2f065635adfe47a5a86
+(2026-07-09T17:01:12+02:00).
+BananaChat began as BananaAI inside BananaWiki and was rewritten as a separate
+application for the open-source release. BananaWiki's history starts with
+1a7c1e99847a5145429b4033293a497a118d85fc (2026-02-20T01:16:43+01:00).
+The development history before the public release is not published; this
+repository starts from a clean export of the source.
 
-BananaChat began as BananaAI and was rebuilt from BananaWiki. Its inherited
-repository history starts with 1a7c1e99847a5145429b4033293a497a118d85fc at
-2026-02-20T01:16:43+01:00. The date above records the first
-BananaChat-specific application commit.
-
-These dates come from the private development history, which is not
-published because it contains credentials, access tokens and details of the
-servers BananaChat ran on. The public repository starts from a single commit,
-a clean export of the source.
-
-Licensed under the GNU Affero General Public License, version 3.
-See LICENSE. Third-party components retain their respective licenses and notices.
+Licensed under the GNU Affero General Public License, version 3 only
+(AGPL-3.0-only). See LICENSE. Third-party components keep their own licences
+and notices, listed below.
 
 The inline icons in bananachat/templates/partials/icons.html include SVG paths
-from Feather v4.29.2 and local adaptations. The Feather-derived portions
-retain their MIT license. Upstream source: https://github.com/feathericons/feather/tree/v4.29.2
+from Feather v4.29.2 and local adaptations. The Feather-derived portions keep
+their MIT licence. Upstream source:
+https://github.com/feathericons/feather/tree/v4.29.2
 The original copyright and permission notice follows:
 
 The MIT License (MIT)

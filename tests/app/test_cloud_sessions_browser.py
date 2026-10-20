@@ -15,7 +15,7 @@ from tests.app.test_agents import (  # noqa: F401 - shared runner and cleanup fi
     add_user, agents_app, call, fast_loop, runner, set_settings, token_file, wait_status,
 )
 from tests.app.test_agents_git import DEMO, git_runner, net, tls_files  # noqa: F401 - TLS fixtures
-from tests.app.test_review2_chat import _chromium
+from tests.app.browser_helpers import chromium_executable
 
 
 @pytest.fixture(scope="module")
@@ -23,7 +23,7 @@ def chromium():
     api = pytest.importorskip("playwright.sync_api")
     with api.sync_playwright() as playwright:
         try:
-            browser = playwright.chromium.launch(executable_path=_chromium())
+            browser = playwright.chromium.launch(executable_path=chromium_executable())
         except Exception as error:  # noqa: BLE001 - browser is an optional test dependency
             pytest.skip(f"Chromium is unavailable: {error}")
         yield browser
@@ -141,6 +141,22 @@ def test_cloud_start_upload_preview_download_follow_up_and_revocation(cloud_brow
     assert page.locator("#follow-up").is_hidden()
     assert page.locator("#archive-link").is_visible()  # Existing owned work remains readable.
     _layout(page)
+
+
+def test_a_session_refused_for_maintenance_says_so_in_the_readers_language(cloud_browser):
+    """The 503 refusal is worded in English for API clients; the page shows its own translated notice."""
+    from bananachat.db import settings
+    from bananachat.i18n import translate
+
+    set_settings(cloud_browser.app, enabled=True, access_mode="everyone")
+    page = cloud_browser.open_page(language="it")
+    with cloud_browser.app.app_context():
+        settings.update(maintenance_mode=1)
+    page.locator("#task-prompt").fill("Prepara le note di rilascio.")
+    page.locator("#new-task-submit").click()
+    toast = page.wait_for_selector(".toast", timeout=10000)
+    assert toast.text_content().startswith(translate("it", "js.status_paused"))
+    assert page.url.endswith("/agents")
 
 
 def test_cloud_defaults_and_admin_audience_save_use_real_controls(cloud_browser):

@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-"""Upgrade a real installation of the previous release to this release and check what people would notice.
+"""Upgrade a real installation of a previous release to this release and check what people would notice.
 
-1. Checks out the previous release (``--from``, default: the
-   last commit before the rewrite) in a temporary Git worktree and runs it under Gunicorn with an
-   imitation Ollama server.
-2. Uses it through its own pages in Chromium: completes setup with the old
-   site name "BananaAI", rolls out the models, creates a user who chats,
-   shares the chat, creates an API token and a personality and chooses
-   Italian and the light theme.
+For each release a server can upgrade from (``--from``, repeatable; default:
+every release in ``PREVIOUS_RELEASES``):
+
+1. Checks it out in a temporary Git worktree and runs it under Gunicorn with
+   an imitation Ollama server.
+2. Uses it through its own pages in Chromium: completes setup, rolls out the
+   models, creates a user who chats, shares the chat, creates an API token
+   and a personality and chooses Italian and the light theme. The code from
+   before the rewrite (``PRE_REWRITE``) is set up with its site name
+   "BananaAI", which the upgrade replaces.
 3. Starts this release on the same data directory and checks that sign-in
    cookies, chats, preferences, the share link, the API token and the
    administration pages still work, that "BananaAI" is gone and that the
    database passes SQLite's integrity check.
 
-Usage: ``python scripts/check_upgrade.py`` (needs the full Git history,
-``playwright`` and Chromium; set ``BC_CHROMIUM`` to use a specific browser).
-The previous release gets its own virtual environment, installed from its
-``requirements.txt`` unless ``--old-python`` names an interpreter that
-already has them.
+Usage: ``python scripts/check_upgrade.py [--from REVISION ...]`` (needs the
+revisions it checks out, ``playwright`` and Chromium; set ``BC_CHROMIUM`` to use a
+specific browser). Each previous release gets its own virtual environment,
+installed from its ``requirements.txt`` unless ``--old-python`` names an
+interpreter that already has them.
 """
 
 from __future__ import annotations
@@ -37,10 +40,17 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-PREVIOUS_RELEASE = "4eac06bcc69f24ac51129a9710324d7398cf9ab1"
+# The releases a server can upgrade from, checked by default.
+PREVIOUS_RELEASES = {
+    "1.7.0": "b9c521a9e91b96aab5688290005eee77f9961cd4",
+    "1.6": "164420ea6b09f703365d9587ca7b4d55c5b32a60",
+}
+# The last commit before the rewrite, without the bananachat package.
+PRE_REWRITE = "4eac06bcc69f24ac51129a9710324d7398cf9ab1"
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -100,8 +110,74 @@ def old_release(work: Path, revision: str, old_python: str | None) -> tuple[Path
     return code, python
 
 
-def use_previous_release(playwright, base: str, instance: Path, state: dict, work: Path) -> None:
+def use_previous_release(playwright, code: Path, base: str, instance: Path, state: dict, work: Path) -> None:
     """Set up and use the previous release through its pages."""
+    if (code / "bananachat").is_dir():
+        use_packaged_release(playwright, base, instance, state, work)
+    else:
+        use_pre_rewrite_release(playwright, base, instance, state, work)
+
+
+def use_packaged_release(playwright, base: str, instance: Path, state: dict, work: Path) -> None:
+    """The steps for 1.6 and later, which keep their site name "BananaChat"."""
+    def csrf(page):
+        return page.evaluate("JSON.parse(document.getElementById('bc-boot').textContent).csrf")
+
+    def post_form(page, path, data, headers=None):
+        return page.request.post(base + path, form={**data, "csrf_token": csrf(page)}, headers=headers)
+
+    def json_post(page, path, data):
+        return page.request.post(base + path, data=json.dumps(data),
+                                 headers={"X-CSRF-Token": csrf(page), "Content-Type": "application/json"})
+
+    key = (instance / ".secret_key").read_text().strip()
+    setup_token = hmac.new(key.encode(), b"initial-admin-setup", hashlib.sha256).hexdigest()
+    browser = playwright.chromium.launch(executable_path=chromium_path())
+    context = browser.new_context(viewport={"width": 1280, "height": 860})
+    admin = context.new_page()
+    admin.goto(base + "/setup")
+    admin.fill("#setup_token", setup_token)
+    admin.fill("#username", "admin")
+    admin.fill("#password", "admin-password-1")
+    admin.fill("#confirm_password", "admin-password-1")
+    admin.click("button[type=submit]")
+    admin.wait_for_load_state("networkidle")
+    admin.goto(base + "/admin/models")
+    post_form(admin, "/admin/models/sync", {})
+    admin.goto(base + "/admin/models")
+    for action in sorted(set(re.findall(r'action="(/admin/models/\d+/rollout)"', admin.content()))):
+        post_form(admin, action, {"enabled": "1"})
+    post_form(admin, "/admin/users/create", {"username": "alice", "password": "alice-password-1",
+                                             "confirm_password": "alice-password-1", "role": "user"})
+    context.storage_state(path=str(work / "admin-cookies.json"))
+
+    context = browser.new_context(viewport={"width": 1280, "height": 860})
+    alice = context.new_page()
+    alice.goto(base + "/login")
+    alice.fill("#username", "alice")
+    alice.fill("#password", "alice-password-1")
+    alice.click("button[type=submit]")
+    alice.wait_for_load_state("networkidle")
+    alice.goto(base + "/chat")
+    alice.fill("#chat-input", "Hi, this chat was written before the upgrade")
+    alice.click("#send-button")
+    alice.wait_for_selector("text=Hello from the previous release.", timeout=30000)
+    alice.wait_for_selector("#send-button:not([hidden])", timeout=30000)
+    state["session_id"] = alice.url.rstrip("/").rsplit("/", 1)[1]
+    state["share_path"] = urlsplit(json_post(alice, f"/chat/{state['session_id']}/share", {}).json()["url"]).path
+    alice.goto(base + "/developer")
+    created = post_form(alice, "/developer/tokens", {"name": "laptop"}, headers={"Accept": "application/json"})
+    state["api_token"] = created.json()["token"]
+    alice.goto(base + "/personalities")
+    post_form(alice, "/personalities", {"name": "Pirate", "instructions": "Talk like a pirate, always.",
+                                        "enabled": "1"})
+    json_post(alice, "/api/preferences", {"theme_mode": "light", "interface_language": "it"})
+    context.storage_state(path=str(work / "alice-cookies.json"))
+    browser.close()
+
+
+def use_pre_rewrite_release(playwright, base: str, instance: Path, state: dict, work: Path) -> None:
+    """The steps for the code from before the rewrite (``PRE_REWRITE``), set up as "BananaAI"."""
     def csrf(page):
         return page.get_attribute('meta[name="csrf-token"]', "content")
 
@@ -239,31 +315,22 @@ def check_this_release(playwright, base: str, state: dict, work: Path) -> list[s
     return problems
 
 
-def run() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--from", dest="revision", default=PREVIOUS_RELEASE, help="the release to upgrade from")
-    parser.add_argument("--old-python", help="an interpreter that already has the previous release's requirements")
-    parser.add_argument("--keep", action="store_true", help="keep the temporary directory for inspection")
-    options = parser.parse_args()
-
+def check_upgrade_from(revision: str, options, fake) -> list[str]:
+    """Upgrade from *revision* in a temporary directory; return what went wrong."""
     from playwright.sync_api import sync_playwright
-
-    from tests.app.fake_ollama import FakeOllama
 
     work = Path(tempfile.mkdtemp(prefix="bananachat-upgrade-"))
     instance = work / "data"
-    fake = FakeOllama().start()
-    fake.chunk_delay = 0.01
     state: dict = {}
     problems: list[str] = []
     try:
-        code, old_python = old_release(work, options.revision, options.old_python)
-        print(f"Using {options.revision[:12]} under Gunicorn")
+        code, old_python = old_release(work, revision, options.old_python)
+        print(f"Using {revision[:12]} under Gunicorn")
         fake.reply = "Hello from the previous release."
         server, base, output = start(old_python, code, instance, fake.url, work / "previous.log")
         try:
             with sync_playwright() as playwright:
-                use_previous_release(playwright, base, instance, state, work)
+                use_previous_release(playwright, code, base, instance, state, work)
         finally:
             stop(server, output)
 
@@ -283,13 +350,33 @@ def run() -> int:
         if integrity != "ok":
             problems.append(f"SQLite integrity check: {integrity}")
     finally:
-        fake.stop()
         subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(work / "previous")],
                        capture_output=True)
         if options.keep:
             print(f"Kept {work}")
         else:
             shutil.rmtree(work, ignore_errors=True)
+    return problems
+
+
+def run() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--from", dest="revisions", action="append", metavar="REVISION",
+                        help="a release to upgrade from (repeatable; default: " + ", ".join(PREVIOUS_RELEASES) + ")")
+    parser.add_argument("--old-python", help="an interpreter that already has the previous releases' requirements")
+    parser.add_argument("--keep", action="store_true", help="keep the temporary directories for inspection")
+    options = parser.parse_args()
+
+    from tests.app.fake_ollama import FakeOllama
+
+    fake = FakeOllama().start()
+    fake.chunk_delay = 0.01
+    problems: list[str] = []
+    try:
+        for revision in options.revisions or PREVIOUS_RELEASES.values():
+            problems += [f"from {revision[:12]}: {problem}" for problem in check_upgrade_from(revision, options, fake)]
+    finally:
+        fake.stop()
     if problems:
         print("Upgrade check failed:\n  " + "\n  ".join(problems))
         return 1

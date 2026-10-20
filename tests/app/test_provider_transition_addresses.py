@@ -30,7 +30,8 @@ def test_provider_refuses_transition_addresses(monkeypatch, allow_private, addre
         _addresses('provider.test.invalid', 443, allow_private)
 
 
-@pytest.mark.parametrize('address', ['10.20.30.40', '::ffff:10.20.30.40', 'fd12:3456:789a::40'])
+@pytest.mark.parametrize('address', ['10.20.30.40', '::ffff:10.20.30.40', 'fd12:3456:789a::40', '127.0.0.1',
+                                     '::1'])
 def test_direct_trusted_private_provider_addresses_still_work(monkeypatch, address):
     result = dns_result(address)
     monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw: [result])

@@ -7,39 +7,14 @@
 * :class:`Delta` - a piece of the answer (``thinking=True`` for reasoning);
 * :class:`Finished` - always last: state ``completed``, ``stopped`` or ``failed``.
 
-Requests with ``tools`` (the agents) pass Ollama function definitions; the
-model's tool calls arrive in ``Finished.tool_calls`` (unvalidated: the caller
-checks them). Such requests always run on the local/compute Ollama server,
-never on volunteer worker PCs.
+Queue problems are raised before any event: ``queue.QueueFull``, ``queue.QueueTimeout`` and
+``upstream.Cancelled`` (cancelled while waiting). Requests with ``tools`` (cloud sessions) get the model's tool
+calls, unvalidated, in ``Finished.tool_calls`` and never run on worker PCs.
 
-It handles admission (``services.queue``), the generation deadline,
-routing to a remote worker or the local Ollama server, falling back to the
-next candidate model when one fails before producing any output, the
-response size limit and token accounting (estimated when the backend reports
-none). Callers persist results and charge credits.
-
-An answer that does not complete (stopped, the client left, cut at the size
-limit or the deadline, failed) is charged by :func:`interrupted_usage`: the
-provider's own counts where it sent them before the end, else estimates of
-the prompt (images included) and of what was produced. A completed answer
-whose backend reported no usage is estimated the same way. External API models
-that reason without streaming their reasoning (OpenAI's reasoning models; a
-summary for Claude) are also charged for the time they worked before their
-first output, at the conservative :data:`HIDDEN_REASONING_TOKENS_PER_SECOND`
-and within the output limit, unless the provider counted the output itself,
-and an interrupted external request is charged
-for its prompt even when nothing was produced (``Finished.billable``): the
-provider bills both.
-
-A failed attempt counts toward marking its model failing
-(``services.model_lifecycle``) only when the failure is the model's: not when
-the server refused the request (4xx) or could not read what the user sent
-(an image, the input), and not for the fallback attempts of a request that
-already failed, which would fail anywhere. Otherwise one user could withdraw
-models from everyone.
-
-Queue problems are raised before any event: ``queue.QueueFull``,
-``queue.QueueTimeout`` and ``upstream.Cancelled`` (cancelled while waiting).
+Callers save the result and charge the usage. An answer that does not complete is charged by
+:func:`interrupted_usage`: the provider's counts when it sent them, else estimates of the prompt and of what was
+produced. ``Finished.billable`` marks an interrupted external or subscription request that costs allowance even
+without output. Queueing, fallbacks and failure attribution: docs/architecture.md, section Inference.
 """
 
 from __future__ import annotations
@@ -412,7 +387,7 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
         tried = model
         request.reported.clear()
         request.attempt.clear()
-        request.attempt["external"] = model["backend"] == "external"
+        request.attempt["external"] = model["backend"] in ("external", "claude", "codex")
         yield Started(model, via_worker, wait_ms, notice)
         produced = 0
         text_parts: list[str] = []
@@ -578,8 +553,16 @@ def _open_stream(request, model, via_worker, cancel, config):
         request.attempt["reasoning"] = bool(model["is_reasoning"]) and effort != "off"
         return external_providers.stream(model, request.messages, options=request.options, effort=effort,
                                          tools=request.tools, cancel=cancel)
+    if model["backend"] in ("claude", "codex"):
+        # Subscription models are served by the pooled accounts, never by Ollama or a worker PC.
+        from bananachat.services import subscription_pool
+
+        effort = _provider_effort(request, model)
+        request.attempt["reasoning"] = bool(model["is_reasoning"]) and effort != "off"
+        return subscription_pool.stream_chunks(model["backend"], name, request.messages, options=request.options,
+                                               think=request.think, effort=effort, cancel=cancel)
     if model["backend"] != "ollama":
-        # Only Ollama models reach a model server or a worker PC; a catalog row of a removed backend never does.
+        # Only Ollama models reach a model server or a worker PC; no other backend ever does.
         raise UpstreamError(f"The model '{model['ollama_name']}' is not available right now.")
     if via_worker:
         return remote.stream(name, request.messages, request.options, cancel=cancel, priority=request.priority,

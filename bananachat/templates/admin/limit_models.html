@@ -70,7 +70,7 @@
       <fieldset class="admin-fieldset stack">
         <legend>Model limits</legend>
         {{ toggle("enabled", "Enable model limits", policy.enabled, "Account overrides still apply when defaults are disabled.") }}
-        {{ toggle("tokens_enabled", "Apply token limits", policy.tokens_enabled, "Off skips model token limits, including account overrides. Service limits and provider capacity still apply.") }}
+        {{ toggle("tokens_enabled", "Apply token limits", policy.tokens_enabled, "Off skips model token limits, including account overrides. Service limits still apply.") }}
         {{ toggle("rate_enabled", "Apply request-rate limits", policy.rate_enabled, "Off skips model rate rules, including account overrides. Service rates still apply.") }}
         {{ rules_editor(policy.rate_rules, prefix ~ "-rules", units, rule_rows, "Request rate") }}
         <div class="form-grid">

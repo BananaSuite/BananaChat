@@ -113,7 +113,7 @@
           {% if item.moderation.blocked %}
           <div class="alert alert-error">
             {{ icon("alert") }}
-            <p>{% if item.moderation.until %}{{ t("personality.moderated_until", date=(item.moderation.until | datetime)) }}{% else %}{{ t("personality.moderated") }}{% endif %}
+            <p>{% if item.moderation.until %}{{ t_html("personality.moderated_until", date=(item.moderation.until | local_time)) }}{% else %}{{ t("personality.moderated") }}{% endif %}
             {% if item.moderation.reason %}<br>{{ t("personality.moderation_reason", reason=item.moderation.reason) }}{% endif %}</p>
           </div>
           {% endif %}

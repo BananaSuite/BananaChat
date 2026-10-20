@@ -1,12 +1,12 @@
 """Service installer and command-line checks for all three platforms.
 
 These exercise the artefacts the installer generates and the commands it
-issues, with the platform forced and the tools mocked. None of them claims a
-native trial on Windows or macOS; see the deployment notes for what still has
-to be confirmed on the machine itself.
+issues, with the platform forced and the tools mocked. They do not run on
+real Windows or macOS; worker/README.md says what to try by hand.
 """
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 
@@ -201,9 +201,10 @@ def test_linux_unit_points_at_this_checkout_and_rejects_injection(monkeypatch, t
     assert 'NoNewPrivileges=true' in unit
     assert 'WantedBy=default.target' in unit
 
-    monkeypatch.setattr(service.sys, 'executable', '/usr/bin/py"thon')
-    with pytest.raises(ValueError, match='control characters'):
-        service.install(system=False)
+    for executable in ('/usr/bin/py"thon', '/usr/bin/py\\thon', '/usr/bin/python '):
+        monkeypatch.setattr(service.sys, 'executable', executable)
+        with pytest.raises(ValueError, match='control characters'):
+            service.install(system=False)
 
 
 def test_the_settings_file_path_agrees_between_installer_and_worker(monkeypatch, tmp_path):
@@ -273,9 +274,25 @@ def test_linux_unit_stops_gracefully_and_settings_file_is_private_from_the_start
     service.install(system=False)
     unit = (tmp_path / '.config' / 'systemd' / 'user' / 'bananachat-worker.service').read_text()
     assert 'KillSignal=SIGTERM' in unit and 'TimeoutStopSec=' in unit
-    assert 'EnvironmentFile=-"' in unit
+    env_file = tmp_path / '.config' / 'bananachat-worker.env'
+    assert f'\nEnvironmentFile=-{env_file}\n' in unit
+    assert f'\nEnvironment="BC_WORKER_ENV_FILE={env_file}"\n' in unit
     assert created == [0o600]
-    assert 'BC_WORKER_TOKEN=paste-your-token-here' in (tmp_path / '.config' / 'bananachat-worker.env').read_text()
+    assert 'BC_WORKER_TOKEN=paste-your-token-here' in env_file.read_text()
+
+
+@pytest.mark.skipif(not shutil.which('systemd-analyze'), reason='needs systemd-analyze')
+def test_systemd_accepts_the_settings_file_of_the_linux_unit(monkeypatch, tmp_path):
+    run = subprocess.run
+    home = tmp_path / 'home of worker'
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setattr(service, '_OS', 'Linux')
+    monkeypatch.setattr(service.subprocess, 'run',
+                        lambda command, **kwargs: subprocess.CompletedProcess(command, 0))
+    service.install(system=False)
+    unit = home / '.config' / 'systemd' / 'user' / 'bananachat-worker.service'
+    result = run(['systemd-analyze', '--user', 'verify', str(unit)], capture_output=True, text=True, timeout=60)
+    assert 'Environment' not in result.stdout + result.stderr
 
 
 def test_command_line_runs_as_a_script_without_shadowing_modules(tmp_path):

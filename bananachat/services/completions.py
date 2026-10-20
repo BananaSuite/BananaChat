@@ -48,6 +48,8 @@ MAX_MESSAGES = 100
 MAX_STOP_SEQUENCES = 4
 MAX_STOP_CHARS = 200
 MAX_MODEL_NAME = 300
+# A request body may take this much for text and options, plus room for its images.
+BODY_TEXT_BYTES = 4 * 1024 * 1024
 IMAGE_SIGNATURES = {
     "image/png": lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
     "image/jpeg": lambda data: data.startswith(b"\xff\xd8\xff"),
@@ -146,6 +148,17 @@ def _integer(body: dict, name: str, low: int, high: int | None = None) -> int | 
         limit = f"between {low} and {high}" if high is not None else f"at least {low}"
         raise _bad(f"'{name}' must be an integer {limit}.", name)
     return value
+
+
+def body_limit(config) -> int:
+    """The largest request body: ``BODY_TEXT_BYTES`` plus the images a request may carry, base64-encoded.
+
+    The images of one request count together against ``BC_CHAT_MAX_REQUEST_MB``, as one upload on the chat
+    page does, and never more than ``MAX_CONTEXT_IMAGE_BYTES``.
+    """
+    images = min(config.chat_max_request_bytes, config.chat_max_context_images * config.chat_max_image_bytes,
+                 MAX_CONTEXT_IMAGE_BYTES)
+    return BODY_TEXT_BYTES + -(-images * 4 // 3)
 
 
 def _flag(body: dict, name: str) -> bool:
@@ -362,6 +375,15 @@ def refused(refusal: limits.Refusal, lang: str = "en") -> CompletionError:
     return CompletionError(refusal.message(lang), refusal.status, refusal.code, retry_after=refusal.retry_after)
 
 
+def _admission_error(admission: limits.Admission, model, lang: str) -> CompletionError:
+    """Keep a subscription pool's availability distinct from the account's own token allowance."""
+    if model["backend"] in ("claude", "codex") and admission.refusal.code == "insufficient_quota" and \
+            admission.model is not None and admission.model.capacity <= 0:
+        status, code, message, retry_after = PROVIDER_ERRORS["provider_capacity_unavailable"]
+        return CompletionError(message, status, code, retry_after=retry_after)
+    return refused(admission.refusal, lang)
+
+
 def effort_locked(error: limits.EffortLocked) -> CompletionError:
     return CompletionError(
         f"The reasoning effort '{error.requested}' is locked for {error.model_name or 'this model'}; the highest "
@@ -431,7 +453,7 @@ class CompletionRun:
             think = inference.think_for(model, self.effort)
             admission = limits.admit(user, "api", model)
             if not admission.allowed:
-                raise refused(admission.refusal, lang)
+                raise _admission_error(admission, model, lang)
             fallbacks = limits.usable_fallbacks(user, "api", selection.fallbacks, think=think, effort=self.effort)
         messages, options = self._for_model(model)
         self.model = model
@@ -480,7 +502,7 @@ class CompletionRun:
                 if self.refusal is None:
                     admission = limits.admit(user, "api", model, take_rate=self._admitted)
                     if not admission.allowed:
-                        self.refusal = refused(admission.refusal, self.lang)
+                        self.refusal = _admission_error(admission, model, self.lang)
         return self.refusal.message if self.refusal else None
 
     # iteration -------------------------------------------------------------

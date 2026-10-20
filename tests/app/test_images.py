@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from tests.app.conftest import Browser
-from tests.app.test_api import assert_error, call, events, ledger, token_for
+from tests.app.test_api import assert_error, call, chat, events, ledger, token_for
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x01" * 40
 CHECKPOINT = "sdxl_base.safetensors"
@@ -290,6 +290,24 @@ def test_expired_reservations_are_still_charged(image_app, artist, artist_token,
     assert len(rows) == 1 and rows[0]["credits_used"] == 5
 
 
+def test_abandoned_image_reservations_stop_counting_against_the_budget(app, make_user):
+    """A reservation left by a process that died before its refund expires even if no image follows."""
+    from datetime import timedelta
+
+    from bananachat import db
+    from bananachat.db import credits
+    from bananachat.services import background, images  # noqa: F401  (registers the job)
+
+    user = make_user("rory")
+    with app.app_context():
+        credits.reserve_image(user, 10_000, ttl_seconds=app.config["BC"].image_credit_reservation_ttl)
+        assert credits.usage_today(user["id"], "api")[0] == 10_000
+        stale = db.now(-timedelta(seconds=app.config["BC"].image_credit_reservation_ttl + 60))
+        db.execute("UPDATE image_credit_reservations SET created_at=?, updated_at=?", (stale, stale))
+        background.jobs()["image-reservations"].function(app)
+        assert credits.usage_today(user["id"], "api") == (0.0, 0.0)
+        assert db.scalar("SELECT COUNT(*) FROM image_credit_reservations") == 0
+
 def test_insufficient_credits_are_refused_before_generation(image_app, artist, artist_token, comfy):
     from bananachat.db import credits
 
@@ -358,6 +376,12 @@ def test_text_models_cannot_generate_images(image_app, artist_token):
     assert_error(generate(image_app, artist_token, model="llama3.2:3b"), 400, "invalid_request_error",
                  "model_not_suitable")
 
+
+def test_an_image_model_named_for_a_chat_completion_is_unsuitable_not_unavailable(image_app, artist_token):
+    """A 503 with Retry-After would make SDKs retry a request that can never work."""
+    response = chat(image_app, artist_token, model=MODEL_ID)
+    assert_error(response, 400, "invalid_request_error", "model_not_suitable")
+    assert response.json["error"]["param"] == "model" and "Retry-After" not in response.headers
 
 def test_images_disabled(app, make_user):
     token = token_for(app, make_user("nopics"))
@@ -446,6 +470,28 @@ def test_session_generation_reports_errors(image_app, artist, comfy):
     assert items[-1]["type"] == "error" and items[-1]["message"]
     assert reservations(image_app) == 0 and ledger(image_app, artist) == []
 
+
+def test_images_page_errors_are_in_the_readers_language(image_app, comfy):
+    """The Images page words its refusals in the reader's language; the API keeps English."""
+    from bananachat.db import credits, users
+    from bananachat.i18n import translate
+
+    artist = create_user(image_app, "artist")
+    with image_app.app_context():
+        users.save_preferences(artist["id"], {**users.get_preferences(artist["id"]), "interface_language": "it"})
+    browser = Browser(image_app)
+    browser.login("artist")
+    browser._ensure_csrf()
+    response = browser.post_json("/images/generate", {"prompt": "", "size": "512x512"})
+    assert response.json["error"]["message"] == translate("it", "images.error_prompt_required")
+    with image_app.app_context():
+        credits.set_quota(artist["id"], 4000, 0, None)
+    response = browser.post_json("/images/generate", {"prompt": "A cat", "size": "512x512"})
+    assert response.status_code == 429
+    message = response.json["error"]["message"]
+    assert message.startswith("Un'immagine costa 5k token ") and "tokens" not in message, message
+    api = generate(image_app, token_for(image_app, artist))
+    assert api.json["error"]["message"].startswith("An image costs")
 
 def test_abandoned_session_generation_is_refunded(image_app, artist, comfy):
     comfy.mode = "hang"

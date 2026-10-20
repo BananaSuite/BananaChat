@@ -7,7 +7,11 @@ the platform APIs themselves.
 
 import json
 import logging
+import os
+import platform
+import signal
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from worker import activity, config, daemon, transport
+from worker import activity, config, daemon, resources, transport
 from worker.client import ServerError
 
 IOREG_SAMPLE = """
@@ -172,7 +176,6 @@ def test_token_is_required():
 
 
 def test_managed_ollama_listens_on_the_configured_port():
-    """The old worker ignored non-default ports when it started ``ollama serve``."""
     assert settings(BC_OLLAMA_HOST="http://127.0.0.1:11500").ollama_listen_address == "127.0.0.1:11500"
     assert settings().ollama_listen_address == "127.0.0.1:11434"
     assert settings(BC_OLLAMA_HOST="http://[::1]:9000").ollama_listen_address == "[::1]:9000"
@@ -327,6 +330,60 @@ def test_gaming_before_the_first_token_hands_the_job_back():
     assert client.failed == [("", True)] and client.chunks == []
 
 
+class SlowHeaders(BaseHTTPRequestHandler):
+    """An Ollama that is still loading a model: no response headers for a while."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *_args):
+        pass
+
+    def do_POST(self):
+        import time
+
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        time.sleep(self.server.delay)
+        try:
+            payload = b'{"message":{"content":"late"},"done":true}\n'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        except OSError:
+            pass
+
+
+def test_gaming_while_ollama_loads_the_model_hands_the_job_back_at_once():
+    import time
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SlowHeaders)
+    server.daemon_threads = True
+    server.delay = 6.0
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        settings = config.from_environ({"BC_SERVER_URL": "https://chat.example.org", "BC_WORKER_TOKEN": "bcw_x",
+                                        "BC_OLLAMA_HOST": f"http://127.0.0.1:{server.server_port}"})
+        failed = []
+        client = SimpleNamespace(fail=lambda job_id, error, requeue=False: failed.append((error, requeue)),
+                                 chunk=lambda *args: True, complete=lambda *args: True,
+                                 heartbeat=lambda payload: {"ok": True, "job_stop": False})
+        ollama = daemon.LocalOllama(settings)
+        ollama.ensure_running = lambda: True
+        worker = daemon.Worker(settings, client=client, ollama=ollama,
+                               monitor=SimpleNamespace(state="idle", gpu=None, own_job=False),
+                               priority=SimpleNamespace(apply=lambda *args: None))
+        job = {"job_id": "e" * 32, "model": "llama3.2:3b", "messages": [{"role": "user", "content": "hi"}],
+               "options": None, "first_token_timeout": 60}
+        threading.Timer(0.5, worker._activity_changed, args=("gaming",)).start()
+        started = time.monotonic()
+        assert worker.run_job(job) == "deferred"
+        assert time.monotonic() - started < 3  # not when the cold load ends
+        assert failed == [("", True)]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_server_stop_ends_the_job_without_a_report():
     client = FakeClient(stop_after=1)
     worker = make_worker(client, FakeOllama(["a" * 5000, "b" * 5000, "c", ""]))
@@ -354,6 +411,19 @@ def test_ollama_failure_is_reported():
     assert client.failed == [("model 'llama3' not found", False)]
 
 
+def test_an_ollama_started_for_the_job_gets_the_current_priority():
+    class Starting(FakeOllama):
+        def ensure_running(self):
+            self.managed_pid = 4321
+            return True
+
+    applied = []
+    worker = make_worker(FakeClient(), Starting(["Hi", ""]), state="light")
+    worker.priority = SimpleNamespace(apply=lambda state, pid: applied.append((state, pid)))
+    assert worker.run_job(dict(JOB)) == "completed"
+    assert applied == [("light", 4321)]
+
+
 def test_heartbeat_payload_matches_the_protocol():
     client = FakeClient()
     worker = make_worker(client, FakeOllama([]), state="gaming")
@@ -373,3 +443,44 @@ def test_the_client_uses_the_worker_api(http_server):
         client.poll(["m"])  # the stub answers a non-job object
     path, auth = http_server.seen[-1]
     assert path == "/worker/v1/jobs/poll?models=m" and auth == "Bearer bcw_token"
+
+
+# ----- priority ----------------------------------------------------------------------------------------
+
+def test_ollama_is_lowered_again_while_the_level_stays(monkeypatch):
+    calls = []
+    monkeypatch.setattr(resources.Priority, "_posix", lambda self, level: None)
+    monkeypatch.setattr(resources.Priority, "_windows", staticmethod(lambda level: None))
+    monkeypatch.setattr(resources.Priority, "_other_process",
+                        staticmethod(lambda pid, level: calls.append((pid, level))))
+    priority = resources.Priority()
+    for state in ("light", "active", "idle"):
+        priority.apply(state, 7)
+    priority.apply("light")
+    assert calls == [(7, "below-normal"), (7, "below-normal"), (7, "normal")]
+
+
+@pytest.mark.skipif(platform.system() != "Linux", reason="Linux sets nice values per thread")
+def test_stepping_aside_lowers_every_thread_of_ollama_and_its_runners(monkeypatch):
+    psutil = pytest.importorskip("psutil")
+    monkeypatch.setattr(resources.Priority, "_posix", lambda self, level: None)  # leaves the test process alone
+    serve = subprocess.Popen(
+        [sys.executable, "-c",
+         "import subprocess, sys, threading, time\n"
+         "threading.Thread(target=time.sleep, args=(60,), daemon=True).start()\n"
+         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+         "print('ready', flush=True)\n"
+         "time.sleep(60)\n"],
+        stdout=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        assert serve.stdout.readline() == "ready\n"
+        resources.Priority().apply("light", serve.pid)
+        root = psutil.Process(serve.pid)
+        processes = [root, *root.children(recursive=True)]
+        threads = [thread.id for process in processes for thread in process.threads()]
+        assert len(processes) == 2 and len(threads) >= 3
+        assert {os.getpriority(os.PRIO_PROCESS, tid) for tid in threads} == {10}
+    finally:
+        os.killpg(serve.pid, signal.SIGKILL)
+        serve.wait()
+        serve.stdout.close()

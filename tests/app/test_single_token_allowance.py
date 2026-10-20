@@ -1,7 +1,6 @@
-"""Runtime regressions for retiring the second token allowance.
+"""One five-hour allowance: legacy slow ledger and reservation rows still count.
 
-Historical slow ledger/reservation rows still consume tokens. Account queue
-speed, weekly limits and the other administrator controls remain independent.
+Queue speed, weekly limits and the other administrator controls are independent of it.
 """
 
 from datetime import datetime, timedelta, timezone

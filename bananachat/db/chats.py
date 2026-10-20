@@ -267,8 +267,8 @@ def messages_after(session_id: str, after: int, *, limit: int = 50):
                     "WHERE m.session_id=? AND m.id>? ORDER BY m.id LIMIT ?", (session_id, after, limit))
 
 
-def iter_messages(session_id: str, *, batch: int = 200):
-    """All messages in order, read in batches; messages added meanwhile are not included."""
+def iter_message_batches(session_id: str, *, batch: int = 200):
+    """All messages in order as lists of up to *batch*; messages added meanwhile are not included."""
     last = db.scalar("SELECT MAX(id) FROM chat_messages WHERE session_id=?", (session_id,), 0)
     cursor = 0
     while cursor < last:
@@ -277,8 +277,14 @@ def iter_messages(session_id: str, *, batch: int = 200):
                         (session_id, cursor, last, batch))
         if not rows:
             return
-        yield from rows
+        yield rows
         cursor = rows[-1]["id"]
+
+
+def iter_messages(session_id: str, *, batch: int = 200):
+    """All messages in order, read in batches; messages added meanwhile are not included."""
+    for rows in iter_message_batches(session_id, batch=batch):
+        yield from rows
 
 
 def last_model_name(session_id: str) -> str | None:

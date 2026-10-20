@@ -516,3 +516,38 @@ def test_native_images_keep_base64_content_and_never_fetch_urls():
     assert openai[0]['content'][1]['image_url']['url'] == 'data:image/png;base64,' + data
     assert anthropic[0]['content'][1]['source']['data'] == data
     assert anthropic[0]['content'][1]['source']['media_type'] == 'image/png'
+
+
+@pytest.mark.parametrize('protocol', ['openai', 'anthropic'])
+def test_tool_calls_left_without_a_result_get_one_before_the_next_turn(protocol):
+    calls = [{'function': {'name': name, 'arguments': {}}} for name in ('bash', 'bash', 'read_file')]
+    history = [{'role': 'system', 'content': 'Be brief.'}, {'role': 'user', 'content': 'Do it'},
+               {'role': 'assistant', 'content': '', 'tool_calls': calls},
+               {'role': 'tool', 'tool_name': 'bash', 'content': 'out1'},
+               {'role': 'user', 'content': 'Please continue'},
+               {'role': 'assistant', 'content': '', 'tool_calls': calls[:1]}]
+    messages, _system = api._messages(history, protocol)
+    if protocol == 'openai':
+        ids = [call['id'] for call in messages[2]['tool_calls']]
+        assert [(item['tool_call_id'], item['content']) for item in messages[3:6]] == [
+            (ids[0], 'out1'), (ids[1], api.TOOL_NOT_RUN), (ids[2], api.TOOL_NOT_RUN)]
+        assert messages[6] == {'role': 'user', 'content': 'Please continue'}
+        assert messages[8] == {'role': 'tool', 'content': api.TOOL_NOT_RUN,
+                               'tool_call_id': messages[7]['tool_calls'][0]['id']}
+    else:
+        ids = [block['id'] for block in messages[1]['content']]
+        assert [(block['tool_use_id'], block['content']) for block in messages[2]['content']] == [
+            (ids[0], 'out1'), (ids[1], api.TOOL_NOT_RUN), (ids[2], api.TOOL_NOT_RUN)]
+        assert messages[3] == {'role': 'user', 'content': 'Please continue'}
+        assert messages[5]['content'][0]['tool_use_id'] == messages[4]['content'][0]['id']
+
+
+@pytest.mark.parametrize('protocol', ['openai', 'anthropic'])
+def test_a_tool_result_without_its_call_is_left_out(protocol):
+    history = [{'role': 'system', 'content': 'Be brief.'}, {'role': 'user', 'content': 'Do it'},
+               {'role': 'user', 'content': '[Earlier steps were removed to fit the context.]'},
+               {'role': 'tool', 'tool_name': 'bash', 'content': 'output of a step that was cut off'},
+               {'role': 'assistant', 'content': 'Done.'}]
+    messages, _system = api._messages(history, protocol)
+    assert 'cut off' not in json.dumps(messages)
+    assert messages[-1] == {'role': 'assistant', 'content': 'Done.'}

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Regenerate and verify the hash-pinned dependency locks that production installs use.
 
-``requirements.txt`` keeps compatible ranges, for development and for anyone
-installing the package as a library. Production installs (the managed
-updater's release environments and the Docker images) install
+``requirements.txt`` keeps compatible ranges for development. Production
+installs (the managed updater's release environments and CI) install
 ``requirements.lock`` instead: every package, dependencies included, at one
 exact version, accepted only with the SHA-256 of a file PyPI published for
 it, and only as a wheel::

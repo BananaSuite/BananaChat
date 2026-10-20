@@ -84,19 +84,9 @@ def password_problem(password: str, confirmation: str | None = None) -> str | No
 
 
 # ----- session cookie ---------------------------------------------------------
-# Secure session cookies are named "__Host-<name>": browsers accept them only
-# from this exact host over HTTPS, so a sibling subdomain (for example a hosted
-# wiki on another *.school.it name) cannot plant its own session in a visitor's
-# browser. Sessions signed in under the plain name before the switch move to the
-# prefixed name on their first visit within HOST_COOKIE_MIGRATION_SECONDS. The
-# server cannot tell its own old cookie from a copy planted by a sibling
-# subdomain, so a move needs the browser that signed in (users.move_session):
-# a copy in another browser ends that session, each session moves once under
-# a new token, so a saved copy is useless afterwards, and each account moves
-# one session per User-Agent. What remains for that day: someone who controls
-# a sibling subdomain and kept their own pre-switch cookie can sign one fresh
-# browser that sends the same User-Agent into their account. Only signing
-# everyone out at the switch (HOST_COOKIE_MIGRATION_SECONDS = 0) rules it out.
+# Secure session cookies are named "__Host-<name>", so a sibling subdomain cannot plant a session in a visitor's
+# browser. A session under the plain name moves to the prefixed one only from the browser that signed in
+# (users.move_session) and only within HOST_COOKIE_MIGRATION_SECONDS; UPGRADING.md explains what remains.
 
 HOST_COOKIE_PREFIX = "__Host-"
 HOST_COOKIE_SINCE_KEY = "security.host_cookie_since"
@@ -201,7 +191,7 @@ def load_current_user() -> None:
         # Cookies issued before server-side sessions: upgrade while the
         # account's session version matches. Check and create atomically so
         # revocation cannot occur between reading the version and upgrading.
-        # The previous release read a missing version as 0.
+        # Releases before 1.6 read a missing version as 0.
         version = session.get("session_version", 0)
         for key in ("user_id", "session_version"):
             session.pop(key, None)
@@ -276,12 +266,18 @@ def json_error(message: str, status: int = 400, code: str = "bad_request", **ext
     return response
 
 
+def _signed_out():
+    from bananachat.i18n import translate
+
+    return json_error(translate(error_language(), "errors.signed_out"), 401, "auth_required")
+
+
 def login_required(view):
     @functools.wraps(view)
     def wrapper(*args, **kwargs):
         if current_user() is None:
             if wants_json():
-                return json_error("Your session has ended. Sign in again.", 401, "auth_required")
+                return _signed_out()
             target = request.full_path if request.query_string else request.path
             return redirect(url_for("auth.login", next=target if target != "/" else None))
         return view(*args, **kwargs)
@@ -294,11 +290,13 @@ def admin_required(view):
         user = current_user()
         if user is None:
             if wants_json():
-                return json_error("Your session has ended. Sign in again.", 401, "auth_required")
+                return _signed_out()
             return redirect(url_for("auth.login", next=request.path))
         if user["role"] != "admin":
             if wants_json():
-                return json_error("Administrator access is required.", 403, "forbidden")
+                from bananachat.i18n import translate
+
+                return json_error(translate(error_language(), "errors.admin_required"), 403, "forbidden")
             abort(403)
         return view(*args, **kwargs)
     return wrapper
@@ -484,7 +482,9 @@ def rate_limit(bucket: str, limit: int, window: int, *, per_user: bool = False):
 
 def too_many_requests(retry_after: int = 60):
     if wants_json():
-        response = json_error("Too many requests. Please wait and try again.", 429, "rate_limited")
+        from bananachat.i18n import translate
+
+        response = json_error(translate(error_language(), "errors.rate_limited_text"), 429, "rate_limited")
     else:
         from flask import render_template
         response = current_app.make_response((render_template("errors/error.html", code=429), 429))

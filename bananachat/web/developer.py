@@ -26,11 +26,10 @@ from bananachat.formatting import tokens_text
 from bananachat.i18n import translate, translate_html
 from bananachat.services import inference, limits, status
 from bananachat.services.access import AccessContext, usable_models
-from bananachat.services.completions import CompletionError, CompletionRun, parse_chat_request
+from bananachat.services.completions import CompletionError, CompletionRun, body_limit, parse_chat_request
 
 bp = Blueprint("developer", __name__)
 
-BODY_LIMIT = 4 * 1024 * 1024
 HISTORY_LIMIT = 200
 
 
@@ -60,7 +59,7 @@ def credit_summary(user) -> dict:
 
     Bonus, tier, dynamic adjustment and grants are included (see ``services.limits.effective``).
     """
-    from bananachat.formatting import time_html, time_left
+    from bananachat.formatting import local_time, time_left
 
     current = limits.effective(user, "api")
     budget = current.budget()
@@ -89,7 +88,7 @@ def credit_summary(user) -> dict:
                 notes.append(reason.text(g.lang))
     window_note = ""
     if window.limited and not budget.unlimited:
-        window_note = translate_html(g.lang, "developer.window_resets", time=time_html(window.resets_at),
+        window_note = translate_html(g.lang, "developer.window_resets", time=local_time(window.resets_at, "auto"),
                                      left=time_left(window.resets_at)) if window.open else _t("developer.window_not_started")
     rate = current.rate
     return {"unlimited": budget.unlimited, "admin": current.admin, "meters": meters, "available": budget.available,
@@ -176,7 +175,7 @@ def playground():
                            paused=status.inference_block() is not None)
 
 
-# Addresses used by the previous release.
+# Addresses from releases before 1.6, kept so bookmarks keep working.
 @bp.get("/api")
 def legacy_index():
     return redirect(url_for("developer.index"), 301)
@@ -300,11 +299,11 @@ def _event(payload: dict) -> str:
 
 @bp.post("/developer/playground/send", endpoint="playground_send")
 @security.login_required
-@security.body_limit(BODY_LIMIT)
+@security.body_limit(body_limit)
 @security.long_request
 def playground_send():
     """Stream one playground answer as server-sent events (JSON body in the API's format)."""
-    blocked = status.guard()  # maintenance or AI-server outage: only new answers are refused
+    blocked = status.guard()  # maintenance or model-server outage: only new answers are refused
     if blocked is not None:
         return blocked
     user = g.user

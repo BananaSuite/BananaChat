@@ -1,9 +1,7 @@
-"""Every `from <our module> import name` must name something that exists.
+"""Every `from <module> import name` in the tree names something that exists.
 
-Python only resolves these at import time, so a name that was renamed or
-removed sits there quietly until the line that imports it happens to run. A
-function-local import inside a rarely taken branch can stay broken for a long
-time. Parsing the tree finds them all without importing anything.
+The tree is parsed, not imported, so imports inside rarely taken branches are
+checked too.
 """
 
 import ast

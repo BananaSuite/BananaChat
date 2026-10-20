@@ -3,7 +3,8 @@
 BananaWiki's scripts/make_icons.py draws them (python scripts/make_icons.py in
 the BananaWiki tree writes BananaChat's copies when this tree sits next to it).
 The favicon is 32x32, twice the 16x16 sprite; the home-screen icon is the
-banana on an opaque light square, which iOS rounds itself. The comparisons
+banana at ten times the sprite on a transparent square (iOS fills it with black
+and rounds the corners). The comparisons
 with BananaWiki's files are skipped when BananaWiki is not next to this tree
 (or at BANANAWIKI_SRC).
 """
@@ -31,15 +32,17 @@ def _blocks_are_whole(image: Image.Image, scale: int) -> bool:
 
 def test_the_favicon_is_a_32_pixel_banana_of_whole_sprite_pixels():
     image = Image.open(IMG / "favicon.png")
-    assert (image.format, image.size, image.mode) == ("PNG", (32, 32), "RGBA")
+    assert (image.format, image.size) == ("PNG", (32, 32))
     assert _blocks_are_whole(image, 2)
-    assert image.getpixel((0, 0))[3] == 0, "transparent around the banana"
+    assert image.convert("RGBA").getpixel((0, 0))[3] == 0, "transparent around the banana"
 
 
-def test_the_home_screen_icon_is_opaque_and_180_pixels():
+def test_the_home_screen_icon_is_a_180_pixel_banana_of_whole_sprite_pixels():
     image = Image.open(IMG / "apple-touch-icon.png").convert("RGBA")
     assert image.size == (180, 180)
-    assert {alpha for _count, (*_colour, alpha) in image.getcolors(180 * 180)} == {255}
+    assert image.getpixel((0, 0))[3] == 0, "transparent around the banana"
+    left, top, _right, _bottom = image.getbbox()
+    assert _blocks_are_whole(image.crop((left % 10, top % 10, 180, 180)), 10)
 
 
 @pytest.mark.parametrize("name", sorted(WIKI_ICONS))
@@ -66,7 +69,8 @@ def test_logos_are_twice_the_sprite_and_scaled_without_smoothing():
     templates = ROOT / "bananachat" / "templates"
     logos = [(path.name, tag) for path in sorted(templates.rglob("*.html"))
              for tag in re.findall(r"<img[^>]*img/favicon\.png[^>]*>", path.read_text(encoding="utf-8"))]
-    assert {name for name, _tag in logos} == {"topbar.html", "_layout.html"}
+    # The top bar shows the mascot instead (test_mascot); the sign-in pages keep the logo.
+    assert {name for name, _tag in logos} == {"_layout.html"}
     assert [tag for _name, tag in logos if 'width="32" height="32"' not in tag] == []
     css = (ROOT / "bananachat" / "static" / "css" / "app.css").read_text(encoding="utf-8")
     assert re.search(r"\.brand img \{ width: 32px; height: 32px; image-rendering: pixelated; \}", css)

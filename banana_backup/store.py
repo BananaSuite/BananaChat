@@ -56,6 +56,11 @@ def _next_snapshot(previous):
     return now.strftime("%Y%m%dT%H%M%S.%fZ") + "-" + secrets.token_hex(4)
 
 
+def _staging(size):
+    """The free space a download of *size* encrypted bytes needs: its ciphertext, decrypted copy and package."""
+    return size * 3 + 128 * 1024 * 1024
+
+
 class Store:
     def __init__(self, root, product):
         if product not in {"BananaWiki", "BananaChat", "BananaVibe"}:
@@ -84,19 +89,37 @@ class Store:
             raise ValueError("Invalid backup schedule.")
         return value
 
-    def configure(self, *, repo, forge, name, token_file, key_file, username="git", keep=7, max_mib=512,
-                  append_only=False):
-        """Select the series. *append_only* uploads never delete snapshots (see :meth:`prune`)."""
+    def configure(self, *, repo, forge, name, token_file, key_file=None, username="git", keep=7, max_mib=512,
+                  append_only=False, replace_key=False):
+        """Select the series. *append_only* uploads never delete snapshots (see :meth:`prune`).
+
+        Without *key_file* the recovery key this server holds stays. Another
+        key replaces it only with *replace_key*: the snapshots made with it
+        cannot be restored without it.
+        """
         config = {**location(repo, forge), "schema": 1, "product": self.product, "name": name,
                   "username": username, "keep": keep, "max_mib": max_mib, "append_only": bool(append_only)}
         if (not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", name) or not 2 <= keep <= 30
                 or not 1 <= max_mib <= 1024 or not re.fullmatch(r"[A-Za-z0-9_.@+-]{1,100}", username)):
             raise ValueError("Use a lowercase series name, 2–30 snapshots, and a size limit of 1–1024 MiB.")
+        if key_file is None:
+            if not self.identity.exists():
+                raise ValueError("Pass the recovery key with --key-file.")
+            key_file = self.identity
         public = crypto.recipient(key_file)
         token = private_bytes(token_file)
         key = private_bytes(key_file, 4096)
         check_private(config, token_file)
         with lock(self.root):
+            if self.identity.exists() and not replace_key:
+                try:
+                    stored = crypto.recipient(self.identity)
+                except (OSError, ValueError):
+                    stored = None
+                if stored != public:
+                    raise ValueError("This server holds another recovery key for its backups, and only that key "
+                                     "restores the snapshots made with it. Configure with that key (or without "
+                                     "--key-file to keep it), or save an offline copy of it and add --replace-key.")
             # Configure always opts out. A restored or repointed installation
             # must not start taking or pruning backups without another opt-in.
             write_json(self.root / "schedule.json", DEFAULT_SCHEDULE.copy())
@@ -163,9 +186,10 @@ class Store:
                 heads = git.heads(self.prefix(config))
             return [{"snapshot": name, "commit": heads[name]} for name in sorted(heads, key=_snapshot_order, reverse=True)]
 
-    def _download(self, git, config, identifier, sha, output, *, allow_unauthenticated=False, heads=None):
+    def _download(self, git, config, identifier, sha, output, *, allow_unauthenticated=False, heads=None, size=None):
+        """Fetch, check and decrypt a snapshot into *output*; *size* is its encrypted size, when known."""
         maximum = config["max_mib"] * 1024 * 1024
-        if shutil.disk_usage(git.work).free < maximum * 3 + 128 * 1024 * 1024:
+        if shutil.disk_usage(git.work).free < _staging(maximum if size is None else size):
             raise ValueError("Not enough staging space: reserve three times the configured backup limit plus 128 MiB.")
         entries = git.fetch(self.prefix(config) + identifier, sha)
         index = json.loads(git.run("cat-file", "blob", entries["index.json"][0]))
@@ -198,6 +222,7 @@ class Store:
                     actual = hashlib.sha256(check.read(entries[name][1])).hexdigest()
                 if actual != part.get("sha256"):
                     raise ValueError("An encrypted backup part failed its checksum.")
+        git.discard()
         metadata = crypto.decrypt(ciphertext, output, self.identity, expected, maximum)
         return {**metadata, "authenticated": authenticated}
 
@@ -257,28 +282,39 @@ class Store:
         since = self._authenticated_since(git, config, {name: sha for name, sha in heads.items() if name != identifier})
         if since is not None and _snapshot_time(identifier) >= _snapshot_time(since):
             raise ValueError(f"This snapshot is not authenticated, but this series' backups have been "
-                             f"authenticated since {since}, and this snapshot is not older than that: it was not "
-                             "made by them, but by someone else with write access to the backup repository. Do "
-                             "not restore it.")
+                             f"authenticated since {since}, and this snapshot is not older than that: someone else "
+                             "with write access to the backup repository made it, or a release from before "
+                             "authentication did after this server went back to it. Do not restore it unless you "
+                             "know it is the latter; the backup documentation explains how to recover such a "
+                             "snapshot by hand.")
+
+    def _fetch(self, identifier, output, *, allow_unauthenticated):
+        config = self.settings()
+        self.context(config, identifier)
+        with self.transport(config) as git:
+            heads = git.heads(self.prefix(config))
+            if identifier not in heads:
+                raise ValueError("The selected backup no longer exists. Use backups list.")
+            metadata = self._download(git, config, identifier, heads[identifier], output,
+                                      allow_unauthenticated=allow_unauthenticated, heads=heads)
+        return {**metadata, "package": str(Path(output).absolute()), "verified": True}
 
     def download(self, identifier, output, *, allow_unauthenticated=False):
         with lock(self.root):
-            config = self.settings()
-            self.context(config, identifier)
-            with self.transport(config) as git:
-                heads = git.heads(self.prefix(config))
-                if identifier not in heads:
-                    raise ValueError("The selected backup no longer exists. Use backups list.")
-                metadata = self._download(git, config, identifier, heads[identifier], output,
-                                          allow_unauthenticated=allow_unauthenticated, heads=heads)
-        return {**metadata, "package": str(Path(output).absolute()), "verified": True}
+            return self._fetch(identifier, output, allow_unauthenticated=allow_unauthenticated)
+
+    @contextmanager
+    def fetched(self, identifier, *, allow_unauthenticated=False):
+        """Download and check a snapshot into a working directory, holding the lock until the caller is done.
+
+        Yields the result of :meth:`download`; its ``package`` is removed afterwards.
+        """
+        with lock(self.root), tempfile.TemporaryDirectory(prefix="verify-", dir=self.root) as name:
+            yield self._fetch(identifier, Path(name) / "package.tar.gz", allow_unauthenticated=allow_unauthenticated)
 
     def verify(self, identifier, *, allow_unauthenticated=False):
-        directory(self.root)
-        with tempfile.TemporaryDirectory(prefix="verify-", dir=self.root) as name:
-            result = self.download(identifier, Path(name) / "package.tar.gz",
-                                   allow_unauthenticated=allow_unauthenticated)
-        result.pop("package")
+        with self.fetched(identifier, allow_unauthenticated=allow_unauthenticated) as result:
+            result.pop("package")
         return result
 
     def upload(self, package, *, automatic=False):
@@ -290,7 +326,10 @@ class Store:
             maximum = config["max_mib"] * 1024 * 1024
             if package.is_symlink() or not package.is_file() or not 0 < package.stat().st_size <= maximum:
                 raise ValueError("The backup exceeds the repository size limit or is not a regular package. Use local backup storage for larger installations.")
-            if shutil.disk_usage(self.root).free < package.stat().st_size * 4 + 128 * 1024 * 1024:
+            # Checked before anything is pushed: the upload keeps its committed
+            # objects (about the encrypted size) while it verifies.
+            encrypted = package.stat().st_size + OVERHEAD
+            if shutil.disk_usage(self.root).free < encrypted + _staging(encrypted):
                 raise ValueError("Not enough free space to encrypt and verify the backup.")
             with self.transport(config) as git:
                 self.ensure_identity(git, config)
@@ -309,18 +348,26 @@ class Store:
                         atomic_write(path, chunk)
                         paths.append(path)
                         parts.append({"name": path.name, "bytes": len(chunk), "sha256": digest(path)})
+                sealed.unlink()
                 index = git.work / "index.json"
                 write_json(index, crypto.authenticate({**context, "schema": 1, "parts": parts,
                                                        "authenticated_since": since}, self.identity))
                 sha = git.commit([*paths, index])
+                for path in paths:
+                    path.unlink()
                 if automatic and not self.schedule()["enabled"]:
                     return {"outcome": "disabled", "package": str(package)}
+                # Again with what this upload holds by now (snapshots read whole where the repository
+                # allows no partial fetches): a snapshot that cannot be verified is not pruned either.
+                size = sum(part["bytes"] for part in parts)
+                if shutil.disk_usage(self.root).free < _staging(size):
+                    raise ValueError("Not enough free space to encrypt and verify the backup.")
                 git.push(sha, self.prefix(config) + identifier)
                 # Use another bare repository: verification must actually fetch
                 # the uploaded objects instead of reusing the local originals.
                 with self.transport(config) as reader:
                     verified = reader.work / "package.tar.gz"
-                    downloaded = self._download(reader, config, identifier, sha, verified)
+                    downloaded = self._download(reader, config, identifier, sha, verified, size=size)
                     if downloaded["sha256"] != metadata["sha256"]:
                         raise ValueError("The uploaded backup did not match the local package.")
                 # An append-only series is pruned only by an explicit prune, so its

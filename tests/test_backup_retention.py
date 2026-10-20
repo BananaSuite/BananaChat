@@ -5,21 +5,22 @@ repository (the threat an append-only series exists for):
 
 * retention counts only authenticated snapshots, newest first, never deletes
   while fewer than ``keep`` of them would remain, and neither counts nor
-  deletes IDs dated in the future or that are no dates (OPS2-02);
-* no ID, however crafted, keeps uploads from working (OPS2-02);
+  deletes IDs dated in the future or that are no dates;
+* no ID, however crafted, keeps uploads from working;
 * ``--allow-unauthenticated`` never restores a snapshot dated at or after
   the series' first authenticated one (which every authenticated index
   records, so retention deleting it changes nothing), or dated in the
-  future (OPS2-06).
+  future.
 """
 
 from datetime import datetime, timedelta, timezone
 import json
+import subprocess
 
 import pytest
 
 from banana_backup.files import write_json
-from test_git_backups import forge, key, package, remote, store  # noqa: F401
+from test_git_backups import command, forge, key, package, remote, store  # noqa: F401
 
 
 def stamp(delta=timedelta(0)):
@@ -103,6 +104,25 @@ def test_an_unauthenticated_snapshot_newer_than_an_authenticated_one_is_never_re
     assert "it was made before" not in str(error.value)
 
 
+def test_a_snapshot_uploaded_after_going_back_to_an_earlier_release_is_refused_but_recoverable_by_hand(
+        store, remote, tmp_path):
+    """1.6 uploads unauthenticated snapshots: after a rollback to it, they are newer than authenticated ones."""
+    upload(store, tmp_path, 1)
+    identifier = forge(store, tmp_path, identifier=stamp(timedelta(seconds=1)) + "-16161616")
+    with pytest.raises(ValueError, match="went back to it") as error:
+        store.download(identifier, tmp_path / "refused.tar.gz", allow_unauthenticated=True)
+    assert "by hand" in str(error.value)
+    # As the backup documentation does it: the parts in order, decrypted, without the two header lines.
+    ref = store.prefix(store.settings()) + identifier
+    parts = sorted(name for name in command(remote, "ls-tree", "--name-only", ref).decode().split()
+                   if name.startswith("part-"))
+    ciphertext = b"".join(command(remote, "show", ref + ":" + name) for name in parts)
+    wrapped = subprocess.run(["age", "--decrypt", "--identity", str(store.identity)], input=ciphertext,
+                             capture_output=True, check=True).stdout
+    recovered = subprocess.run(["tail", "-n", "+3"], input=wrapped, capture_output=True, check=True).stdout
+    assert recovered == b"a package whose source.tar.gz and app.env a restore would deploy as root"
+
+
 def _between(first, second):
     """A snapshot ID dated between two others."""
     times = [datetime.strptime(name.split("Z-")[0], "%Y%m%dT%H%M%S.%f").replace(tzinfo=timezone.utc)
@@ -113,8 +133,8 @@ def _between(first, second):
 
 
 def test_an_unauthenticated_snapshot_dated_like_the_first_authenticated_one_is_never_restored(store, tmp_path):
-    # Second 1.7 audit (OPS2-06 follow-up): only snapshots dated strictly later than an
-    # authenticated one were refused, and a series' IDs only ever grow.
+    # A series' IDs only ever grow, so an unauthenticated ID equal to an authenticated
+    # one is refused as well as a later one.
     (first,) = upload(store, tmp_path, 1)
     same = forge(store, tmp_path, identifier=first.split("Z-")[0] + "Z-00000000")
     with pytest.raises(ValueError, match="authenticated since"):

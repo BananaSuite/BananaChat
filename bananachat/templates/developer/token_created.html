@@ -13,7 +13,7 @@
       <input type="text" id="new-token" readonly value="{{ token }}" class="mono">
       <button type="button" class="btn" data-copy="{{ token }}">{{ icon("copy") }}{{ t("common.copy") }}</button>
     </div>
-    <p class="hint mt-1">{{ t("developer.scope_" ~ (scope or "full")) }} · {% if expires_at %}{{ t("developer.expires_on", date=(expires_at | datetime(true))) }}{% else %}{{ t("developer.expires_never_long") }}{% endif %}</p>
+    <p class="hint mt-1">{{ t("developer.scope_" ~ (scope or "full")) }} · {% if expires_at %}{{ t_html("developer.expires_on", date=(expires_at | local_time("date"))) }}{% else %}{{ t("developer.expires_never_long") }}{% endif %}</p>
     <p class="hint mt-1">{{ t("developer.token_usage_hint", base=api_base) }}</p>
     <div class="form-actions"><a class="btn btn-primary" href="{{ url_for('developer.index') }}">{{ t("developer.token_done") }}</a></div>
   </section>

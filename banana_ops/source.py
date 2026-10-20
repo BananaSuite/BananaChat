@@ -28,6 +28,10 @@ from .files import atomic_write
 # credentials, no ext:: transport, and no redirects or stalled transfers.
 HARDENED = ("-c", "core.hooksPath=/dev/null", "-c", "credential.helper=", "-c", "protocol.ext.allow=never",
             "-c", "http.followRedirects=false", "-c", "http.lowSpeedLimit=1024", "-c", "http.lowSpeedTime=30")
+# With the OpenPGP and X.509 programs disabled, only an SSH signature from the
+# allowed signers file can verify, whatever the object's text says.
+SSH_SIGNATURES_ONLY = ("-c", "gpg.format=ssh", "-c", "gpg.openpgp.program=false", "-c", "gpg.x509.program=false")
+SSH_SIGNATURE = "-----BEGIN SSH SIGNATURE-----"
 ASKPASS = ("import os,sys\nfrom pathlib import Path\n"
            "print(os.environ['BANANA_REPO_USER'] if 'username' in sys.argv[1].lower() "
            "else Path(os.environ['BANANA_REPO_TOKEN_FILE']).read_text().strip())\n")
@@ -51,6 +55,18 @@ def redact(text, secrets=(), limit=600):
     text = re.sub(r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,})", "[redacted]", text)
     text = " ".join("".join(char if char.isprintable() else " " for char in text).split())
     return text[-limit:]
+
+
+def ssh_signed_commit(header):
+    """Whether every signature header of a commit (``gpgsig``, ``gpgsig-sha256``) holds an SSH signature."""
+    signatures = [line.split(" ", 1)[1] for line in header.splitlines() if line.startswith(("gpgsig ", "gpgsig-sha256 "))]
+    return bool(signatures) and all(line == SSH_SIGNATURE for line in signatures)
+
+
+def ssh_signed_tag(body):
+    """Whether the signature Git verifies in a tag object, its last armored block, is an SSH signature."""
+    blocks = [line for line in body.splitlines() if line.startswith("-----BEGIN ")]
+    return bool(blocks) and blocks[-1] == SSH_SIGNATURE
 
 
 RELEASE_TAG = re.compile(r"v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})")
@@ -217,15 +233,14 @@ class GitSource:
         if not re.fullmatch(r"[0-9a-f]{40,64}", str(revision)):
             raise ValueError("Invalid source revision.")
         header = self.git("cat-file", "commit", revision).stdout.split("\n\n", 1)[0]
-        if "BEGIN SSH SIGNATURE" not in header:
+        if not ssh_signed_commit(header):
             detail = ("carries an OpenPGP signature, which this setting does not accept"
                       if "gpgsig" in header else "is not signed")
             raise RuntimeError(
                 "Revision " + revision[:12] + " " + detail + ". Updates require an SSH signature "
                 "from a key in the allowed signers file. Nothing was fetched into a release."
             )
-        result = self.git("-c", "gpg.format=ssh",
-                          "-c", "gpg.ssh.allowedSignersFile=" + str(signers),
+        result = self.git(*SSH_SIGNATURES_ONLY, "-c", "gpg.ssh.allowedSignersFile=" + str(signers),
                           "verify-commit", revision, check=False)
         if result.returncode:
             raise RuntimeError(
@@ -258,13 +273,13 @@ class GitSource:
         if "tag " + tag not in header or "object " + revision not in header or "type commit" not in header:
             raise RuntimeError("Release " + tag + " is a tag object made for another name or commit, so it "
                                "releases nothing. Nothing was fetched into a release.")
-        if "BEGIN SSH SIGNATURE" not in body:
+        if not ssh_signed_tag(body):
             detail = ("carries an OpenPGP signature, which is not accepted" if "BEGIN PGP SIGNATURE" in body
                       else "is not signed")
             raise RuntimeError("Release " + tag + " " + detail + ": with signatures required, a release is an "
                                "annotated tag signed with an allowed SSH key (git tag -s). Nothing was fetched into "
                                "a release.")
-        result = self.git("-c", "gpg.format=ssh", "-c", "gpg.ssh.allowedSignersFile=" + str(signers),
+        result = self.git(*SSH_SIGNATURES_ONLY, "-c", "gpg.ssh.allowedSignersFile=" + str(signers),
                           "verify-tag", tag_object, check=False)
         if result.returncode:
             raise RuntimeError("Release " + tag + " is not signed by a key in the allowed signers file. Nothing "

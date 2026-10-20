@@ -67,7 +67,7 @@ def _with_target_names(rows) -> list[dict]:
 @bp.get("/api/inference", endpoint="inference_status")
 @admin_required
 def inference_status():
-    """Ollama version and running models, fetched by the overview page (fails gracefully)."""
+    """Ollama version and running models, fetched by the overview page; an unreachable server gives reachable=false."""
     result = {"reachable": False, "version": "", "running": [], "error": "", "down": health.inference_down()}
     try:
         result["version"] = ollama.version(timeout=4)

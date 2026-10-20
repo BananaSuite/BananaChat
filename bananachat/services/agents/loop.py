@@ -115,11 +115,11 @@ class Budget:
     def check(self) -> None:
         with self.lock:
             if self.steps >= self.max_steps:
-                raise StopRun("out_of_budget", "agents.stop_steps", limit=self.max_steps)
+                raise StopRun("out_of_budget", "agents.stop_steps", limit=self.max_steps, count=self.max_steps)
             if self.tokens >= self.max_tokens:
                 raise StopRun("out_of_budget", "agents.stop_tokens", limit=self.max_tokens)
         if time.monotonic() >= self.deadline:
-            raise StopRun("out_of_budget", "agents.stop_time", minutes=self.minutes)
+            raise StopRun("out_of_budget", "agents.stop_time", minutes=self.minutes, count=self.minutes)
 
     def add(self, *, steps: int = 0, tokens: int = 0) -> None:
         with self.lock:
@@ -130,7 +130,7 @@ class Budget:
         """Take one step before calling the model, atomically, so parallel sub-agents cannot overshoot."""
         with self.lock:
             if self.steps + self.reserved >= self.max_steps:
-                raise StopRun("out_of_budget", "agents.stop_steps", limit=self.max_steps)
+                raise StopRun("out_of_budget", "agents.stop_steps", limit=self.max_steps, count=self.max_steps)
             self.reserved += 1
 
     def release_step(self) -> None:
@@ -148,7 +148,7 @@ class Budget:
         self.check()
         with self.lock:
             if self.steps + self.reserved > self.max_steps:
-                raise StopRun("out_of_budget", "agents.stop_steps", limit=self.max_steps)
+                raise StopRun("out_of_budget", "agents.stop_steps", limit=self.max_steps, count=self.max_steps)
 
     def steps_left(self) -> int:
         with self.lock:
@@ -161,7 +161,7 @@ class Budget:
     def check_time(self) -> None:
         """The wall-time limit alone: also checked before every tool call, not only at each step."""
         if self.seconds_left() <= 0:
-            raise StopRun("out_of_budget", "agents.stop_time", minutes=self.minutes)
+            raise StopRun("out_of_budget", "agents.stop_time", minutes=self.minutes, count=self.minutes)
 
     def extend(self, seconds: float) -> None:
         with self.lock:
@@ -414,7 +414,8 @@ class TaskRun:
                 self._step(kind="summary", content=summary)
                 self._end("finished", summary=summary)
             else:
-                raise StopRun("out_of_budget", "agents.stop_steps", limit=self.settings.max_steps)
+                raise StopRun("out_of_budget", "agents.stop_steps", limit=self.settings.max_steps,
+                              count=self.settings.max_steps)
         except StopRun as stop:
             text = message(stop.key, **stop.params)
             self._step(kind="error" if stop.state == "failed" else "notice", content=text)
@@ -787,8 +788,8 @@ class TaskRun:
         """Count the step and its tokens against the budgets and charge the ``agent`` credit pool."""
         tokens_in, tokens_out = finished.prompt_tokens or 0, finished.completion_tokens or 0
         step = 1 if finished.state == "completed" or finished.truncated else 0
-        if not step and not tokens_out:
-            return  # like the chat: a call stopped or failed before any output is not charged
+        if not step and not tokens_out and not finished.billable:
+            return  # like the chat: a call stopped or failed before any output, at no cost, is not charged
         self.budget.add(steps=step, tokens=tokens_in + tokens_out)
         model_id = self.model["id"]
         with db.transaction():
@@ -997,7 +998,7 @@ class TaskRun:
             files = unpacked.get("files") if isinstance(unpacked.get("files"), int) else 0
             size = unpacked.get("size") if isinstance(unpacked.get("size"), int) else 0
             key = "agents.notice_imported" if outcome.git else "agents.notice_imported_nogit"
-            self._step(kind="notice", content=message(key, **gitrepo.record_params(
+            self._step(kind="notice", content=message(key, count=files, **gitrepo.record_params(
                 source, directory=target, outcome=outcome, files=files, size=size)))
         finally:
             gitrepo.clear_request(self.task_id)

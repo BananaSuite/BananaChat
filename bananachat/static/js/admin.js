@@ -1,5 +1,5 @@
 // Administrator pages (English-only by design). Progressive enhancement:
-// every action also works as a plain form; scripts add live status and polish.
+// every action also works as a plain form; scripts add live status updates.
 import {
   api, confirmDialog, el, fragmentTarget, keepInitialFragmentVisible, pageData,
   revealDisclosures, setBusy, toast,

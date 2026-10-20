@@ -1,37 +1,9 @@
-"""The life of a model in the catalog: detection, enrollment, and retirement when it goes missing, breaks or is deprecated.
+"""The life of a model in the catalog: detection, enrolment, and retirement when it goes missing, breaks or is
+deprecated.
 
-States are independent columns of ``ai_models`` (see migration v10), so a
-model that comes back returns to exactly what it was:
-
-* **Enrollment** (``enrollment``): ``new`` (detected, hidden, waiting for an
-  administrator), ``auto`` (enabled automatically by the ``automatic`` policy,
-  to be reviewed), ``reviewed`` or ``ignored`` (matches the ignore list or was
-  ignored by hand; never offered). Publishing a ``new`` model reviews it.
-* **Missing** (``missing_at``): absent from the model server for
-  ``missing_syncs`` consecutive successful syncs or ``missing_minutes``. It is
-  hidden (``backend_available=0``) and removed from the catalog after
-  ``retention_days``; chat history keeps its display name.
-* **Failing** (``failing_at``): ``failure_threshold`` load or generation
-  failures within ``failure_window_minutes`` and no success in between (outages
-  seen by the health probe, busy gateways, worker PCs, cancellations and
-  timeouts under load do not count). Hidden from selection and fallback; the ``model-lifecycle`` job sends
-  a small test prompt when the queue has room (back-off from
-  ``recheck_minutes`` up to six hours) and restores it when it answers.
-* **Deprecated** (``deprecated_at``, ``replacement_id``, ``retire_at``): the
-  chat picker hides it and chats that select it move to the replacement with a
-  notice; the API keeps serving it until it is **retired** (``retired_at``),
-  after which it is refused with the replacement's name.
-* **Being deleted** (``delete_requested_at``): hidden while running requests
-  finish, then deleted from the model server.
-
-Every change is written to ``model_lifecycle_events`` with its reason (and to
-the audit log when nobody made it by hand; the administrator views audit their
-own actions).
-
-Limits: enabling a model applies a strictness preset (``light``, ``standard``,
-``heavy``) chosen from its parameter size. The preset is stored in
-``ai_models.limit_preset`` and passed to ``apply_model_preset(model_id, preset)``
-in ``services.limits`` (or ``db.limits``) when that function exists.
+States are independent columns of ``ai_models``, so a model that comes back returns to exactly what it was.
+Every change is written to ``model_lifecycle_events`` with its reason. The states, the settings that drive them
+and the limit presets: docs/architecture.md, section Models.
 """
 
 from __future__ import annotations
@@ -251,7 +223,9 @@ def parameters_billions(size: str | None, count=None) -> float | None:
 def preset_for(model) -> str:
     """Heavy from 30B parameters, standard from 7B, light below; standard when unknown.
 
-    External API models follow their provider's model name instead.
+    External API models follow their provider's model name instead. Subscription
+    models use their family's strictness: e.g. opus and astra are heavy, sonnet
+    and sol standard, haiku and luna light.
     """
     try:
         backend = model["backend"]
@@ -261,6 +235,10 @@ def preset_for(model) -> str:
         from bananachat.services import external_providers
 
         return external_providers.preset_for_name(model["backend_model_name"] or model["ollama_name"])
+    if backend in ("claude", "codex"):
+        from bananachat.services import subscription_pool
+
+        return subscription_pool.strict_policy(backend, model["ollama_name"], family=model["family"] or None)["preset"]
     billions = parameters_billions(model["parameter_size"])
     if billions is None:
         return "standard"
@@ -430,10 +408,40 @@ def sync(config=None, *, source: str = "background") -> dict:
     state.update(ok=True, count=len(tags), new=[name for _id, name in summary["inserted"]][:50],
                  missing=[name for _id, name, _reason in summary["missing"]][:50],
                  returned=[name for _id, name in summary["returned"]][:50])
+    _sync_subscriptions(state, source)
     _save_sync_state(state)
     if state["errors"]:
         log.warning("Model sync: %d model(s) could not be inspected", len(state["errors"]))
     return state
+
+
+def _sync_subscriptions(state: dict, source: str) -> None:
+    """Enroll and refresh subscription models alongside the model server's.
+
+    A provider's models enroll only once its pool is in use (accounts exist) or
+    they are already in the catalogue; otherwise every sync would add curated
+    rows to sites that never asked for them. A provider without an adapter
+    offers nothing until one is configured again.
+    """
+    from bananachat.db import subscription_pool as pool_db
+    from bananachat.services import subscription_pool
+
+    for provider in subscription_pool.PROVIDERS:
+        try:
+            enrolled = db.scalar("SELECT 1 FROM ai_models WHERE backend=? LIMIT 1", (provider,), None)
+            if not enrolled and not pool_db.list_accounts(provider=provider):
+                continue
+            # With nothing to serve them, discovery would report no models and the lifecycle would retire them.
+            active = pool_db.list_accounts(provider=provider, include_disabled=False)
+            if not subscription_pool.connected(provider) or not active:
+                subscription_pool.withdraw(provider)
+                continue
+            result = subscription_pool.sync_catalog(provider, source=source)
+            for key in ("new", "enabled", "missing"):
+                state[key] = (state[key] + result.get(key, []))[:50]
+        except Exception:  # noqa: BLE001 - subscription enrollment must never break the model server sync
+            log.warning("The %s catalogue sync failed", provider, exc_info=True)
+            db.close_thread_connection()
 
 
 def _save_sync_state(state: dict) -> None:
@@ -538,9 +546,6 @@ def enable(model, actor=None, *, preset: str | None = None) -> None:
         fresh = catalog.get(model["id"])
         if fresh is None:
             raise ValueError("The model no longer exists; refresh the catalogue.")
-        if fresh["backend"] not in ("ollama", "comfyui", "external"):
-            # Only the removed Claude subscription connector served other backends.
-            raise ValueError("The connector that served this model was removed; remove it from the catalogue.")
         if fresh["enrollment"] == "ignored":
             raise ValueError(f"{fresh['ollama_name']} is on the ignore list; restore it first.")
         if fresh["retired_at"] or fresh["delete_requested_at"]:
@@ -549,7 +554,7 @@ def enable(model, actor=None, *, preset: str | None = None) -> None:
         preset = preset or current_preset
         from bananachat.db import limits as limits_db
 
-        preserve_policy = fresh["backend"] == "external" and \
+        preserve_policy = fresh["backend"] in ("claude", "codex", "external") and \
             limits_db.has_model_policy(fresh["id"]) and preset == current_preset
         if preserve_policy:
             # Enrollment installs hosted-model limits before publication. A
@@ -870,6 +875,9 @@ def delete_from_server(model, actor=None, *, when_idle: bool = False, config=Non
     for them (the ``model-lifecycle`` job finishes it).
     """
     config = _config(config)
+    if model["backend"] in ("claude", "codex"):
+        raise ValueError("Subscription models are removed from the catalogue, not from a model server: "
+                         "retire or delete the catalogue entry instead.")
     if model["backend"] != "ollama":
         raise ValueError("Only Ollama models can be deleted from here; remove checkpoints on the ComfyUI server.")
     name = _name(model)

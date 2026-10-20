@@ -90,7 +90,7 @@
   </section>
   {% endif %}
 
-  <div class="form-actions">
+  <div class="form-actions form-actions-end">
     <a class="btn btn-ghost" href="{{ url_for('admin.models') }}">Cancel</a>
     <button type="submit" class="btn btn-primary">Save model</button>
   </div>
@@ -127,7 +127,7 @@
         </select>
         <span class="hint" id="limit-preset-hint">{% if model.limit_preset %}Current: {{ presets.get(model.limit_preset, model.limit_preset) }}.{% else %}No preset applied yet.{% endif %} {% if limits_url %}<a href="{{ limits_url }}">Fine-tune this model's limits</a>.{% endif %}</span>
       </div>
-      <div class="form-actions form-actions-start"><button type="submit" name="action" value="preset" class="btn btn-sm">Apply preset</button></div>
+      <div class="form-actions"><button type="submit" name="action" value="preset" class="btn btn-sm">Apply preset</button></div>
     </form>
     <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" class="stack sub-card">
       {{ csrf() }}
@@ -139,7 +139,7 @@
         </select>
         <span class="hint" id="reasoning-levels-hint">Now: {{ levels | join(" / ") if levels else "none" }}. Reasoning effort choices are built from this list.</span>
       </div>
-      <div class="form-actions form-actions-start"><button type="submit" name="action" value="reasoning" class="btn btn-sm">Save levels</button></div>
+      <div class="form-actions"><button type="submit" name="action" value="reasoning" class="btn btn-sm">Save levels</button></div>
     </form>
   </div>
   {% endif %}
@@ -149,7 +149,7 @@
     {{ csrf() }}
     <h3>Failing</h3>
     <p class="small mb-0">Hidden from selection and fallback since {{ when(model.failing_at) }}. {% if model.recheck_at %}Next test prompt {{ when(model.recheck_at) }}.{% endif %}</p>
-    <div class="form-actions form-actions-start">
+    <div class="form-actions">
       <button type="submit" name="action" value="retry_check" class="btn btn-sm">{{ icon("refresh") }}Check again now</button>
       <button type="submit" name="action" value="force_enable" class="btn btn-sm btn-ghost">Enable anyway</button>
     </div>
@@ -166,7 +166,7 @@
     {% else %}
     <p class="small mb-0">Retired {{ when(model.retired_at) }}{% if replacement %}; chats move to <strong>{{ replacement.display_name }}</strong>{% endif %}. The API refuses it.</p>
     {% endif %}
-    <div class="form-actions form-actions-start"><button type="submit" name="action" value="undeprecate" class="btn btn-sm">Restore</button></div>
+    <div class="form-actions"><button type="submit" name="action" value="undeprecate" class="btn btn-sm">Restore</button></div>
     {% else %}
     {% if model.is_image_generation %}
     <p class="small muted mb-0">A deprecated checkpoint is left out of the image picker and of the automatic choice while another checkpoint is available. Requests that name it keep working until it is retired.</p>
@@ -184,13 +184,13 @@
         </select>
       </div>
       {% endif %}
-      {{ utc_input("retire_at", "retire-at", "Retire on", "After this moment it is retired automatically. Leave empty to retire it by hand.", (model.retire_at | replace(" ", "T"))[:16] if model.retire_at else "", utc_min) }}
+      {{ utc_input("retire_at", "retire-at", "Retire on", "Time in UTC. After this moment it is retired automatically. Leave empty to retire it by hand.", (model.retire_at | replace(" ", "T"))[:16] if model.retire_at else "", utc_min) }}
       <div class="field">
         <label for="deprecation-note">Note</label>
         <input type="text" id="deprecation-note" name="note" maxlength="500" value="{{ model.deprecation_note or '' }}">
       </div>
     </div>
-    <div class="form-actions form-actions-start">
+    <div class="form-actions">
       <button type="submit" name="action" value="deprecate" class="btn btn-sm">{{ "Save deprecation" if model.deprecated_at else "Deprecate" }}</button>
       {% if model.deprecated_at %}<button type="submit" name="action" value="undeprecate" class="btn btn-sm" formnovalidate>Undo deprecation</button>{% endif %}
       {#- Its own (hidden) form, for its confirmation; the button sits with the other lifecycle actions. -#}

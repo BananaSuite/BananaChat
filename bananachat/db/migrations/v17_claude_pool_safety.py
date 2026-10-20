@@ -1,9 +1,4 @@
-"""Version 17: exclusive, renewable Claude account leases and quota freshness.
-
-No credentials are stored here. Existing quota counters and administrator
-limits remain intact; previous reports are conservatively marked as reported
-snapshots so an old observation cannot silently become unlimited capacity.
-"""
+"""Version 17: lease and quota-freshness columns for the Claude account pool (removed by v21)."""
 
 from sqlite_migrations import add_columns, execute_script
 

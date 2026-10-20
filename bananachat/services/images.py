@@ -262,7 +262,7 @@ class ImageJob:
         if self.user["role"] == "admin" or limit <= 0:
             return
         if not users.hit(f"images:user:{self.user['id']}", limit, 60):
-            raise ImageError(self._say("images.error_rate", limit=limit), 429, "rate_limit_exceeded",
+            raise ImageError(self._say("images.error_rate", limit=limit, count=limit), 429, "rate_limit_exceeded",
                              retry_after=60)
 
     def _admit(self) -> None:

@@ -403,7 +403,7 @@ class CheckpointAgentTests(unittest.TestCase):
         descriptors = (agent._root_fd, agent._state_fd)
         try:
             # Simulate expiry of the close grace period while the remote read
-            # is still blocked, without making this regression take five seconds.
+            # is still blocked, without making this test take five seconds.
             with patch.object(agent._worker, "join", return_value=None):
                 agent.close()
             for descriptor in descriptors:

@@ -46,6 +46,8 @@ MAX_TOKENS = 1_000_000_000
 ANTHROPIC_VERSION = '2023-06-01'
 PROBE_PROMPT = 'Reply with the single word OK.'
 PROBE_TOKENS = 32
+# The result sent for a tool call that has none in the history (the run ended before it ran).
+TOOL_NOT_RUN = 'Not run: the run stopped before this call.'
 # How often a streaming answer rereads its provider's row (disabled or edited meanwhile: the answer ends).
 PROVIDER_RECHECK_SECONDS = 2.0
 _RESOLVERS = ThreadPoolExecutor(max_workers=4, thread_name_prefix='provider-dns')
@@ -159,15 +161,16 @@ def _addresses(host, port, allow_private):
     approved = []
     for family, socktype, proto, _, address in addresses:
         ip = ipaddress.ip_address(address[0].split('%')[0])
+        # ::1 lies in the IPv4-compatible ::/96 and reserved ::/8 blocks: it is a private (loopback) address.
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is None and (
                 ip.sixtofour is not None or ip.teredo is not None
                 or any(ip in network for network in _NAT64_NETWORKS)
-                or ip in _IPV4_COMPATIBLE):
+                or (ip in _IPV4_COMPATIBLE and not ip.is_loopback)):
             raise UpstreamError('The provider resolves to a restricted address. Use a public endpoint or explicitly '
                                 'allow a trusted private server.', code='provider_address_refused')
         ip = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped else ip
-        if ip in _METADATA_ADDRESSES or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved \
-                or (not ip.is_global and not allow_private):
+        if ip in _METADATA_ADDRESSES or ip.is_link_local or ip.is_multicast or ip.is_unspecified \
+                or (ip.is_reserved and not ip.is_loopback) or (not ip.is_global and not allow_private):
             raise UpstreamError('The provider resolves to a restricted address. Use a public endpoint or explicitly '
                                 'allow a trusted private server.', code='provider_address_refused')
         if family in (socket.AF_INET, socket.AF_INET6):
@@ -558,14 +561,36 @@ def _convert(messages, protocol):
     :func:`_anthropic`) goes back block for block with the provider's own tool ids; ``records`` lists the
     positions of those turns and ``round_start`` where the current tool round begins (after the last user
     message). :func:`_replay` then decides which signed thinking blocks are kept.
+
+    Both APIs refuse a tool call without a result and a result without a call. A stored agent history can have
+    either (a run stopped between the calls of one step, a history window that begins with a result), so calls
+    left unanswered get :data:`TOOL_NOT_RUN` before the next turn and results without a call are left out.
     """
     result, system, pending = [], [], []
     records, round_start = [], 0
+
+    def answer(call_id, content):
+        if protocol != 'anthropic':
+            result.append({'role': 'tool', 'content': content, 'tool_call_id': call_id})
+            return
+        block = {'type': 'tool_result', 'tool_use_id': call_id, 'content': content}
+        previous = result[-1] if result else None
+        # Parallel tool results belong in one user turn.
+        if previous and previous['role'] == 'user' and isinstance(previous['content'], list) and \
+                previous['content'] and all(item.get('type') == 'tool_result' for item in previous['content']):
+            previous['content'].append(block)
+        else:
+            result.append({'role': 'user', 'content': [block]})
+
     for index, message in enumerate(messages):
         role = message.get('role')
         content = message.get('content') or ''
         if role not in ('system', 'user', 'assistant', 'tool') or not isinstance(content, str):
             raise UpstreamError('Unsupported conversation format.')
+        if role != 'tool':
+            for _name, call_id in pending:
+                answer(call_id, TOOL_NOT_RUN)
+            pending = []
         if protocol == 'anthropic' and role == 'system':
             if content:
                 system.append(content)
@@ -587,7 +612,6 @@ def _convert(messages, protocol):
             if message.get('tool_calls'):
                 pending = [(block['name'], block['id']) for block in item['content'] if block['type'] == 'tool_use']
         elif role == 'assistant' and message.get('tool_calls'):
-            pending = []
             calls = []
             for position, call in enumerate(message['tool_calls']):
                 function = call.get('function', call)
@@ -606,20 +630,10 @@ def _convert(messages, protocol):
         if role == 'tool':
             name = message.get('tool_name')
             found = next(((n, i) for n, i in pending if n == name), None)
-            if found is None:
-                raise UpstreamError('A tool result has no matching call.')
-            pending.remove(found)
-            if protocol == 'anthropic':
-                result_block = {'type': 'tool_result', 'tool_use_id': found[1], 'content': content}
-                previous = result[-1] if result else None
-                # Parallel tool results belong in one user turn.
-                if previous and previous['role'] == 'user' and isinstance(previous['content'], list) and \
-                        previous['content'] and all(block.get('type') == 'tool_result' for block in previous['content']):
-                    previous['content'].append(result_block)
-                    continue
-                item = {'role': 'user', 'content': [result_block]}
-            else:
-                item['tool_call_id'] = found[1]
+            if found is not None:
+                pending.remove(found)
+                answer(found[1], item['content'])
+            continue
         if protocol == 'anthropic' and not item['content']:
             continue  # Claude refuses empty turns; consecutive turns of one role are merged by the API.
         result.append(item)
@@ -627,6 +641,8 @@ def _convert(messages, protocol):
             records.append((len(result) - 1, record))
         elif role == 'user':
             round_start = len(result)
+    for _name, call_id in pending:
+        answer(call_id, TOOL_NOT_RUN)
     return result, '\n\n'.join(system), (records, round_start)
 
 

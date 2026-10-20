@@ -1,8 +1,8 @@
 {% from "partials/icons.html" import icon %}
 {%- set path = current_path() %}
 <header class="topbar">
+  {% include "partials/mascot.html" %}
   <a class="brand" href="{{ url_for('core.index') }}">
-    <img src="{{ url_for('static', filename='img/favicon.png') }}" alt="" width="32" height="32">
     <span>{{ site_name }}</span>
   </a>
   {% if current_user %}

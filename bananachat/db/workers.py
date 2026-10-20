@@ -251,7 +251,7 @@ def expire_created_before(before: float, now: float) -> int:
 
 
 def scrub_terminal() -> int:
-    """Belt and braces: no prompt survives a terminal state."""
+    """Clear the messages and options of finished jobs that still hold them."""
     return db.execute(f"UPDATE worker_jobs SET messages='[]', options=NULL WHERE status IN ({_marks(TERMINAL)}) "
                       "AND (messages<>'[]' OR options IS NOT NULL)", TERMINAL).rowcount
 

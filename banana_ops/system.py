@@ -21,6 +21,32 @@ from .files import atomic_write, digest_file, read_environment, read_json
 from . import profile
 
 
+# The built-in subscription connectors: the module that enables each, its manifest setting and profile keys.
+SUBSCRIPTION_CONNECTORS = (
+    ("Claude", "BC_CLAUDE_EXTENSION", "bananachat.services.claude_code", "BC_CLAUDE_CODE_CONFIG", ("home", "config_dir")),
+    ("Codex", "BC_CODEX_EXTENSION", "bananachat.services.codex_cli", "BC_CODEX_CLI_CONFIG", ("codex_home",)),
+)
+
+
+def subscription_paths(environment, *, uid, root):
+    """Profile directories the enabled subscription connectors must be allowed to write."""
+    from bananachat.services.claude_sandbox import managed_paths
+
+    enabled = [(label, environment.get(manifest, ""), keys)
+               for label, setting, module, manifest, keys in SUBSCRIPTION_CONNECTORS if environment.get(setting) == module]
+    paths = []
+    for label, manifest, keys in enabled:
+        others = [other for _, other, _ in enabled if other and other != manifest]
+        try:
+            found = managed_paths(manifest, uid=uid, root=root, keys=keys, forbidden=others)
+        except OSError:
+            raise ValueError(f"The native {label} manifest, private profiles or Bubblewrap executable is unavailable.") from None
+        if any(path.is_relative_to(other) or other.is_relative_to(path) for path in found for other in paths):
+            raise ValueError("Claude and Codex profiles need separate private directories.")
+        paths += found
+    return paths
+
+
 def set_release_owner(path, uid, gid, *, readonly=False):
     """Change release ownership through directory descriptors, never following links.
 
@@ -284,6 +310,10 @@ class System:
     def install_units(self, settings):
         root = Path(settings["root"])
         commands = profile.service_commands(settings)
+        native_paths = []
+        if settings["product"] == "BananaChat" and settings["mode"] != "compute":
+            native_paths = subscription_paths(read_environment(root / "config/app.env"),
+                                              uid=pwd.getpwnam(settings["service"]).pw_uid, root=root)
         for name, command in commands.items():
             after = "network-online.target"
             extra = ""
@@ -292,6 +322,8 @@ class System:
                 extra = "SupplementaryGroups=docker\n"
             if name == settings["service"] and name + "-ollama" in commands:
                 after += " " + name + "-ollama.service"
+            if name == settings["service"]:
+                extra += "".join(f"ReadWritePaths={path}\n" for path in native_paths)
             unit = ("# Managed by BananaSuite\n[Unit]\nDescription=" + settings["product"] + " " + settings["mode"] + "\n"
                     f"After={after}\nWants=network-online.target\n\n[Service]\nUser={settings['service']}\nGroup={settings['service']}\n"
                     f"WorkingDirectory={root / 'current'}\nEnvironmentFile={root / 'config/app.env'}\n"
@@ -453,8 +485,7 @@ class System:
                             issues.append(f"Tenant has no running container: {directory}")
                             continue
                         # Internal Docker networks may omit published host ports.
-                        # Resolve each recreated tenant's current bridge address,
-                        # as the portal does, instead of probing stale mappings.
+                        # Use each recreated tenant's current bridge address, not a stale port mapping.
                         address = str(ipaddress.IPv4Address(item["addresses"][0]))
                         port = item["internal_port"]
                         if not 1 <= port <= 65535:

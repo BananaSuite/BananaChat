@@ -1,21 +1,49 @@
 # Contributing to BananaChat
 
-The [development guide](docs/development.md) explains how to run and test the
-project, and [architecture](docs/architecture.md) the conventions the code follows.
+Open an issue to discuss a substantial change before writing it, or send a
+pull request with a focused fix. Report security vulnerabilities privately as
+described in [SECURITY.md](SECURITY.md). Discussions and reviews follow the
+[code of conduct](CODE_OF_CONDUCT.md).
 
-Open an issue to discuss a substantial change, or send a pull request with a focused fix. Describe the problem, the resulting behaviour, and the checks you ran. Include screenshots when a visible change needs them. Do not include runtime data, credentials, or generated build output.
+## Development setup
 
-Use Python 3.12 or newer, create a virtual environment, and install `requirements.txt` plus `pytest` and `ruff`. Run `python -m pytest -q` and `python -m ruff check .` before sending a change. Tests should exercise behaviour and regressions rather than reproduce implementation details. User-facing text needs both an English and an Italian translation.
+You need Python 3.12 or newer and Git. Node.js runs the Markdown renderer
+tests, Git and [age](https://age-encryption.org/) the backup tests, and
+`ssh-keygen` the signed-update tests (`apt install age openssh-client`).
 
-Keep changes small enough to review. Preserve access checks, CSRF protection, resource limits, and third-party notices. Document new configuration and migration steps. Report security vulnerabilities using [SECURITY.md](SECURITY.md).
+```sh
+git clone https://github.com/BananaSuite/BananaChat.git
+cd BananaChat
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt pytest ruff==0.17.1   # the ruff version CI uses
+./dev.sh                          # http://127.0.0.1:8000, prints the setup token
+```
 
-BananaVibe may write the first draft of a change a maintainer asked for; a maintainer still reviews, tests and merges it. Keep private prompts out of source and public PR text. Web and compute servers update independently, so preserve API compatibility or document a deliberate migration order. Automatic updates must remain an explicit operator choice.
+The tests need no Ollama or GPU. The [development guide](docs/development.md)
+covers the optional Docker and browser cases, and
+[architecture](docs/architecture.md) the conventions the code follows.
 
-The lifecycle code, launcher, maintenance tool, and regressions retain a shared-file manifest from the earlier BananaSuite layout. Product identity stays in `banana_ops/product.py`. Run `python scripts/sync_lifecycle.py --check` locally. After reviewing a lifecycle change, run `--record` and include the manifest with the code; CI verifies it. The tool can compare or synchronise another compatible checkout that also contains `banana_ops` and this manifest. Current BananaWiki uses its own `bananawiki/ops` implementation; review equivalent fixes there separately instead of copying the older layout over it. Synchronisation refuses unrecorded destination edits and preserves unrelated files.
+## Tests and linting
 
-Encrypted backup tests require Git and age (`apt install age` on Debian/Ubuntu); they use disposable local repositories and dummy credentials. Run `python scripts/sync_backups.py --check` for the recorded `banana_backup` code. After reviewing a change, use `--record` and include the manifest. Use `--write ../OTHER_CHECKOUT` only for a compatible checkout with the same package and manifest, then review each diff. Current BananaWiki keeps its backup implementation in `bananawiki/ops/backups`. The copy refuses unrecorded changes in the destination.
+```sh
+python -m pytest -q
+python -m ruff check .
+python scripts/sync_lifecycle.py --check
+python scripts/sync_backups.py --check
+```
 
-Run the browser regression with a separate optional test dependency:
+CI runs these on Python 3.12 to 3.14 with Node.js required
+(`BC_REQUIRE_NODE=1`), plus `pip-audit`, the sandbox tests under Docker and
+Podman, and the browser check below. Ruff checks correctness and security
+rules only. Fix a security warning (for example, check a URL's scheme before
+urllib opens it), or mark a reviewed false positive with
+`# noqa: Sxxx - reason` on its line; `ruff.toml` explains the few rules that
+are off.
+
+Tests should exercise behaviour, not reproduce implementation details.
+
+### Browser check
 
 ```sh
 python -m pip install -r requirements-browser.txt
@@ -23,8 +51,43 @@ python -m playwright install --with-deps chromium
 python scripts/check_browser.py
 ```
 
-This starts a temporary local instance with an imitation model server and checks sign-in with CSRF enabled, chatting and streaming, Markdown escaping, the model picker, and desktop and mobile layouts. It needs no real model server or microphone. The instance is removed afterwards; screenshots and results are saved under `.browser-artifacts/`. CI runs this check and Ruff's correctness and security rules alongside the Python suite. Fix a security finding (for example, check a URL's scheme before urllib opens it), or mark a reviewed false positive with `# noqa: Sxxx - reason` on its line; `ruff.toml` explains the few rules that are off.
+This starts a temporary local instance with an imitation model server and
+checks sign-in with CSRF on, chatting and streaming, Markdown escaping, the
+model picker, and the desktop and mobile layouts. It needs no real model
+server or microphone. Screenshots and results are saved under
+`.browser-artifacts/`.
 
-Contributions are made under the project's GNU AGPL version 3 licence. Contributors retain copyright in their contributions.
+## Rules
 
-Discussions and reviews follow the [code of conduct](CODE_OF_CONDUCT.md).
+* Keep access checks, CSRF protection, resource limits and third-party
+  notices intact.
+* User-facing text needs an English, an Italian and a German translation.
+  The administrator interface is English-only.
+* Web and compute servers update independently: keep their protocol backward
+  compatible, or document the upgrade order.
+* Automatic updates stay an explicit operator choice.
+* `banana_ops/` and `banana_backup/` are pinned by manifests. After a reviewed
+  change, run `python scripts/sync_lifecycle.py --record` (or
+  `sync_backups.py --record`) and commit the updated manifest with the code.
+  Product identity stays in `banana_ops/product.py`.
+* The top bar mascot is a port of BananaWiki's: BananaWiki's
+  `scripts/make_icons.py --check` fails while the version named in
+  `static/js/mascot.js` is behind that tree's.
+* Document new configuration in `docs/configuration.md` and migration steps in
+  `UPGRADING.md` and `CHANGELOG.md`.
+
+## Commits and pull requests
+
+* One topic per pull request; keep it small enough to review.
+* Write commit subjects in the imperative ("Fix quota reset for invited
+  users"), with a body that explains why when it is not obvious.
+* Describe what changed, how you tested it (commands and results), and include
+  screenshots for visible changes.
+* Do not commit runtime data, credentials or generated build output.
+* A maintainer reviews every change before it is merged.
+
+## Licence
+
+Contributions are made under the project's licence, the GNU Affero General
+Public License version 3 only (`AGPL-3.0-only`). Contributors keep the
+copyright in their contributions.

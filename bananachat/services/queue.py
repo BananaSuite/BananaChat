@@ -76,7 +76,8 @@ def _memory_ok() -> bool:
 
 def _model_memory_ok(name):
     if name:
-        row = db.one("SELECT backend FROM ai_models WHERE backend='external' AND ollama_name=?", (name,))
+        row = db.one("SELECT backend FROM ai_models WHERE backend IN ('external', 'claude', 'codex') AND "
+                     "(ollama_name=? OR (backend IN ('claude', 'codex') AND backend_model_name=?))", (name, name))
         if row is not None:
             return True  # Hosted inference does not allocate a local model.
     return _memory_ok()
@@ -182,8 +183,9 @@ class Slot:
         if not _memory_ok():
             # A local request waiting for model memory must not stall hosted
             # requests. Priority/arrival order still applies to eligible work.
-            memory_filter = "AND EXISTS (SELECT 1 FROM ai_models m WHERE m.backend='external' " \
-                            "AND m.ollama_name=w.model_name) "
+            memory_filter = "AND EXISTS (SELECT 1 FROM ai_models m WHERE m.backend IN ('external','claude','codex') " \
+                            "AND (m.ollama_name=w.model_name OR " \
+                            "(m.backend IN ('claude','codex') AND m.backend_model_name=w.model_name))) "
         first = db.one(
             "SELECT w.req_id FROM inference_queue w WHERE w.status='waiting' AND w.heartbeat_at>=? AND "
             "(w.owner_key IS NULL OR NOT EXISTS (SELECT 1 FROM inference_queue r WHERE r.status='running' "

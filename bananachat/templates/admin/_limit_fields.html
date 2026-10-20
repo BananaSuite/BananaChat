@@ -61,6 +61,6 @@
   {{ token_field("weekly_tokens", "Tokens per week", shown.weekly_tokens if shown else none, id ~ "-weekly", "Empty: use the model policy.", false) }}
 </div>
 {{ checkbox("locked", "Lock this model for " ~ username, shown.locked if shown else false, "Blocks chat, API and agents until unlocked.") }}
-{{ checkbox("token_exempt", "Exempt from this model's token limits", shown.token_exempt if shown else false, "Service token limits and provider capacity still apply.") }}
+{{ checkbox("token_exempt", "Exempt from this model's token limits", shown.token_exempt if shown else false, "Service token limits still apply.") }}
 {{ checkbox("rate_exempt", "Exempt from this model's request-rate limits", shown.rate_exempt if shown else false, "Service request rates still apply.") }}
 {%- endmacro %}

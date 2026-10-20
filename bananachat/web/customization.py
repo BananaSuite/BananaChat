@@ -33,7 +33,7 @@ from werkzeug.exceptions import NotFound
 from bananachat import db, security
 from bananachat.db import settings as site_settings
 from bananachat.db import users
-from bananachat.i18n import translate
+from bananachat.i18n import LANGUAGE_NAMES, translate
 from bananachat.services import background
 
 bp = Blueprint("customization", __name__)
@@ -287,7 +287,7 @@ def save_preferences():
         merged = {**current, **{key: value for key, value in changes.items() if key in CLIENT_KEYS}}
         saved = users.save_preferences(user["id"], merged)
     language_changed = saved["interface_language"] != current["interface_language"]
-    if saved["interface_language"] in ("it", "en"):
+    if saved["interface_language"] in LANGUAGE_NAMES:
         session["language"] = saved["interface_language"]
     elif language_changed:
         # Back to "default": forget the choice copied into the session, so the browser's language applies.

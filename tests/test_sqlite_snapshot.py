@@ -29,7 +29,7 @@ def test_snapshot_is_consistent_during_writes_and_supports_normal_filenames(tmp_
                 ready.set()
     thread = threading.Thread(target=writer)
     thread.start()
-    destination = tmp_path / "Luca's wiki backup: verified.db"
+    destination = tmp_path / "Team's backup: verified.db"
     try:
         assert ready.wait(3)
         snapshot(source, destination)

@@ -1,7 +1,7 @@
 # BananaChat worker
 
-The worker lets a BananaChat server use the Ollama on your computer — a gaming
-PC, a workstation, a Mac — to answer chat and API requests. It runs quietly in
+The worker lets a BananaChat server use the Ollama on your computer (a gaming
+PC, a workstation, a Mac) to answer chat and API requests. It runs quietly in
 the background, steps aside while you use the machine and stops taking work
 while you play games.
 
@@ -51,7 +51,7 @@ python bananachat_worker.py status
 
 The administrator's Workers page shows the computer as *online* within a few
 seconds. `python bananachat_worker.py config` prints the settings in use, the
-idle and GPU readings and the models Ollama offers — the first thing to run
+idle and GPU readings and the models Ollama offers. Run it first
 when something does not work. `python bananachat_worker.py run` runs the
 worker in the foreground instead (Ctrl+C stops it).
 

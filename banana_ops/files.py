@@ -44,7 +44,12 @@ def absolute_path(value):
     return path
 
 
-def atomic_write(path, content, mode=0o600):
+def atomic_write(path, content, mode=0o600, owner=None):
+    """Replace *path* atomically; *owner* is an optional ``(uid, gid)`` for the new file.
+
+    Mode and owner are set through the open descriptor: the directory may
+    belong to a service account that can swap the temporary name for a link.
+    """
     path = Path(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.is_symlink():
@@ -52,10 +57,12 @@ def atomic_write(path, content, mode=0o600):
     fd, temporary = tempfile.mkstemp(prefix=".write-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as target:
+            os.fchmod(target.fileno(), mode)
+            if owner is not None:
+                os.fchown(target.fileno(), *owner)
             target.write(content.encode() if isinstance(content, str) else content)
             target.flush()
             os.fsync(target.fileno())
-        os.chmod(temporary, mode)
         os.replace(temporary, path)
         directory = os.open(path.parent, os.O_DIRECTORY)
         try:

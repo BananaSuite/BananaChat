@@ -2,14 +2,15 @@
 // and the limit-request form (shows the fields of the chosen kind of request).
 import { el, pageData, t } from "./core.js";
 
-/** <textarea data-counter maxlength="N"> shows "used / N" below itself (announced politely when near the limit). */
+/** <textarea data-counter maxlength="N"> shows "used / N" at the end of its hint (announced politely when near the limit). */
 function initCounters() {
   for (const field of document.querySelectorAll("textarea[data-counter][maxlength]")) {
     const limit = Number(field.getAttribute("maxlength"));
-    const counter = el("div", { class: "char-counter", "aria-live": "polite" });
+    const counter = el("span", { class: "char-counter", "aria-live": "polite" });
     if (!field.id) continue;
     counter.id = `${field.id}-counter`;
-    field.after(counter);
+    const anchor = field.nextElementSibling?.classList.contains("hint") ? field.nextElementSibling : field;
+    anchor.after(counter);
     const describedBy = field.getAttribute("aria-describedby");
     field.setAttribute("aria-describedby", describedBy ? `${describedBy} ${counter.id}` : counter.id);
     const update = () => {

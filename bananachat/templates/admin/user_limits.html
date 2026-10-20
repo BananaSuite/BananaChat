@@ -25,14 +25,16 @@
 <div class="alert alert-info mb-3">{{ icon("info") }}<p>Administrators are never limited. The settings below take effect only if this account becomes a regular user.</p></div>
 {% endif %}
 
-<nav class="admin-section-nav" aria-label="Sections">
-  <a href="#exemptions">Exemptions</a><a href="#pool-api">Services</a><a href="#models">Models</a><a href="#effort">Reasoning effort</a><a href="#speed-title">Speed and tier</a><a href="#grants-title">Grants</a>
+<nav class="admin-toc" aria-label="Sections">
+  <div class="section-nav" data-section-nav>
+    <a href="#exemptions">Exemptions</a><a href="#pool-api">Services</a><a href="#models">Models</a><a href="#effort">Reasoning effort</a><a href="#speed-title">Speed and tier</a><a href="#grants-title">Grants</a>
+  </div>
 </nav>
 
 <div class="section-stack">
   <section class="settings-section stack" id="exemptions" aria-labelledby="exemptions-title">
     <h2 id="exemptions-title">Account exemptions</h2>
-    <p class="muted small mb-0">Apply across services, API keys and models. Usage is still recorded; model locks, access permissions and provider capacity still apply.</p>
+    <p class="muted small mb-0">Apply across services, API keys and models. Usage is still recorded; model locks and access permissions still apply.</p>
     <form method="post" action="{{ url_for('admin.user_limits_exemptions', user_id=user.id) }}" class="stack">
       {{ csrf() }}
       {{ checkbox("token_exempt", "Exempt from token limits", settings.token_exempt, "Skip service and model 5-hour and weekly limits.") }}

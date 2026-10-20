@@ -17,7 +17,7 @@
   <td class="cell-full worker-name"><strong>{{ w.name }}</strong><br><span class="small faint mono">{{ w.id[:12] }}</span>{% if w.platform %}<br><span class="small muted">{{ w.platform }}</span>{% endif %}</td>
   <td class="worker-status">{{ status_badge(w.status) }}{% if w.working %} <span class="badge badge-primary">Running a job</span>{% endif %}{% if w.paused %} <span class="badge badge-warning">Paused after failures</span>{% endif %}</td>
   <td data-label="Activity:">{{ activity_badge(w.activity) }}</td>
-  <td class="worker-gpu" data-label="GPU:">{{ w.gpu_name or "—" }}{% if w.gpu_util is not none %}<br><span class="small muted">{{ w.gpu_util }}% busy</span>{% endif %}</td>
+  <td class="worker-gpu" data-label="GPU:">{{ w.gpu_name or "—" }}{% if w.gpu_util is not none and w.status in ("online", "busy") %}<br><span class="small muted">{{ w.gpu_util }}% busy</span>{% endif %}</td>
   <td data-label="Models:">
     {% if w.models %}
     <details class="inline-details"><summary class="nowrap">{{ w.models | length }} model{{ "s" if w.models | length != 1 }}{{ icon("chevron-down") }}</summary>
@@ -72,13 +72,17 @@
       A request answered by a worker — including the conversation history and any attached images — is processed on
       that person’s computer, where it can be logged or copied. Register only machines whose owners you trust with
       your users’ conversations, and tell your users that some answers are produced on volunteer hardware.</p>
-    <p class="small muted">Administrators’ own requests always use the local server. A worker gets a request only when it
-      is online, not gaming and advertises the model; if none takes it within {{ claim_timeout }} seconds, or it fails
-      before answering, the local server answers instead. A worker that fails or stalls a job is paused: it gets no job
-      for a minute, twice as long after each further failure (up to an hour), until it completes one again. The server
-      deletes a job’s prompt as soon as it ends and the job record after an hour.</p>
   </div>
 </div>
+
+<details class="settings-section admin-help">
+  <summary>{{ icon("chevron-down") }}<span>How requests reach workers</span></summary>
+  <p class="muted small mb-0">Administrators’ own requests always use the local server. A worker gets a request only when it
+    is online, not gaming and advertises the model; if none takes it within {{ claim_timeout }} seconds, or it fails
+    before answering, the local server answers instead. A worker that fails or stalls a job is paused: it gets no job
+    for a minute, twice as long after each further failure (up to an hour), until it completes one again. The server
+    deletes a job’s prompt as soon as it ends and the job record after an hour.</p>
+</details>
 
 {% if new_token %}
 <section class="settings-section" aria-labelledby="new-token-title">

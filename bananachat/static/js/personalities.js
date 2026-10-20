@@ -7,7 +7,7 @@ function initCounters(root = document) {
   for (const field of root.querySelectorAll("[data-counter][maxlength]")) {
     if (!field.id) continue;
     const limit = Number(field.getAttribute("maxlength"));
-    const counter = el("span", { class: "persona-counter", id: `${field.id}-counter`, "aria-live": "off" });
+    const counter = el("span", { class: "char-counter", id: `${field.id}-counter`, "aria-live": "off" });
     const anchor = field.nextElementSibling?.classList.contains("hint") ? field.nextElementSibling : field;
     anchor.after(counter);
     const describedBy = field.getAttribute("aria-describedby");

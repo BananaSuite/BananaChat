@@ -2,12 +2,12 @@
   "schema": 1,
   "files": {
     "banana_backup/__init__.py": "b97a54fce6c906f048f17791ced5e01efcba0d756f03792d508391062b89e2be",
-    "banana_backup/cli.py": "a05ecaa5a9fa34d82e5d8ccb0dad67803ed30fc47d79f5f9c461f21fa6a7ff7f",
+    "banana_backup/cli.py": "665e11e54b771946716fae60fc2cbbf311ebc7017ec2beedafa6daf98babab9f",
     "banana_backup/crypto.py": "6cb6c6e4f4e3bd3ee1d6b397eb01e508a94653a0466bea74d6c85cda48fe7cde",
-    "banana_backup/files.py": "9c1f041d4eb5386904bbfd3ef19819bac993cf76357c4204de16a75b86fe6676",
-    "banana_backup/git.py": "9a32f439d47d6527ec88c872141a8c3dba008a6360259a5745a8dcec02c6567d",
-    "banana_backup/store.py": "29beab3caafd1de40eea400388423c3500a4b2875043272e5ed29fd041cf399b",
+    "banana_backup/files.py": "45dce6eacc1f577b33a76da63d19deecbd30dd6636a3aa81fb3ebea954a50dd8",
+    "banana_backup/git.py": "946b5a89afa2b3c00f683081ea0a1a2e73dfbc8e1d6e8aa7fcdba980397248e1",
+    "banana_backup/store.py": "d3d88007a65d0f0cabf8fd69a93a5ca14b96ff9124ff9aa8c5bce20985762609",
     "scripts/sync_backups.py": "b0ab9d2fbcabb44c446360eb1be0c1b1a1cd7e40860d8a7f71bd0059c7e373c8",
-    "tests/test_git_backups.py": "ab55fef64dd296061c0f7ab5bcc4876fd5936a58b12947a5c3921efc5094720b"
+    "tests/test_git_backups.py": "efd0e85f1beb73ec8274253144557d0542f07010fdea9962c33ed461f68c6fe4"
   }
 }

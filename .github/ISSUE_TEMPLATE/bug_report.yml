@@ -6,8 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to file a bug report.
-        For **security vulnerabilities**, please follow [SECURITY.md](https://github.com/BananaSuite/BananaChat/blob/main/SECURITY.md) instead.
+        For security vulnerabilities, follow [SECURITY.md](https://github.com/BananaSuite/BananaChat/blob/main/SECURITY.md) instead.
 
   - type: dropdown
     id: deployment
@@ -15,9 +14,11 @@ body:
       label: Deployment type
       description: Where are you running BananaChat?
       options:
-        - Self-hosted (single instance)
-        - Local development (`make dev`)
-        - Other (please describe)
+        - Managed single server
+        - Managed web + compute
+        - Manual install
+        - Local development
+        - Other
     validations:
       required: true
 
@@ -45,7 +46,7 @@ body:
     id: description
     attributes:
       label: What happened?
-      description: Clear description of the bug.
+      description: What you saw, and any error message.
     validations:
       required: true
 
@@ -63,7 +64,7 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
+      label: Expected behaviour
     validations:
       required: true
 
@@ -72,9 +73,10 @@ body:
     attributes:
       label: Logs
       description: |
-        Relevant excerpts from `logs/`, the browser console, or
-        `journalctl -u bananachat.service`. **Redact any secrets, tokens, or
-        personal data before pasting.**
+        Relevant excerpts from `journalctl -u bananachat`, the application log
+        (`BC_LOG_FILE`, by default `bananachat.log` in the instance folder) or
+        the browser console. Remove secrets, tokens and personal data before
+        pasting.
       render: shell
     validations:
       required: false

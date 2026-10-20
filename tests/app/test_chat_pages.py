@@ -81,6 +81,17 @@ def test_other_users_chats_are_not_found(app, alice, make_user):
 def test_signed_out_requests_get_a_json_401(app):
     response = Browser(app).fetch("/chat/abc/status")
     assert response.status_code == 401 and response.json["error"]["code"] == "auth_required"
+    italian = Browser(app).fetch("/chat/abc/status", headers={"Accept-Language": "it"})
+    assert italian.status_code == 401
+    assert italian.json["error"]["message"] == "La sessione è terminata. Accedi di nuovo."
+
+
+@pytest.mark.parametrize("action", ["title", "share", "personality"])
+def test_json_bodies_that_are_not_objects_are_refused(app, alice, action):
+    session_id = new_chat(alice)
+    send(alice, session_id)
+    response = alice.post_json(f"/chat/{session_id}/{action}", ["not", "an", "object"])
+    assert response.status_code == 400, response.get_data(as_text=True)[:300]
 
 
 # ----- history, search and paging ---------------------------------------------------------
@@ -201,6 +212,44 @@ def test_ending_a_no_history_chat_erases_it(app, alice):
     assert alice.get(f"/chat/{session_id}").status_code == 404
 
 
+def test_a_no_history_message_refused_by_a_full_queue_leaves_no_audit_copy(make_app, make_user):
+    """A refused send is undone completely: the page gives the text back and nothing of it is kept."""
+    import time
+
+    from bananachat import db
+
+    app = make_app(MAX_CONCURRENT=1, MAX_QUEUE_DEPTH=1)
+    setup_models(app)
+    browser = user_browser(app, make_user)
+    session_id = new_chat(browser, incognito=True)
+    with app.app_context():
+        db.execute("INSERT INTO inference_queue (req_id, priority, status, owner_pid, enqueued_at, heartbeat_at) "
+                   "VALUES ('other', 0, 'running', 1, ?, ?)", (time.time(), time.time() + 3600))
+    response = send(browser, session_id, "Private question")
+    assert response.status_code == 429
+    assert messages(app, session_id) == []
+    with app.app_context():
+        assert db.scalar("SELECT COUNT(*) FROM incognito_audit WHERE session_id=?", (session_id,)) == 0
+
+
+@pytest.mark.parametrize("incognito", [False, True])
+def test_a_reused_empty_chat_is_not_erased_while_the_user_is_on_it(app, alice, incognito):
+    """/chat and "New chat" reuse the newest empty chat, so an old one must not be purged under the user."""
+    from bananachat import db
+    from bananachat.db import chats, users
+    from bananachat.services import chat as chat_service
+
+    with app.app_context():
+        old = chats.create(users.get_by_username("alice")["id"], incognito=incognito)
+        db.execute("UPDATE chat_sessions SET created_at=?, updated_at=? WHERE id=?",
+                   (db.now(-timedelta(days=8)), db.now(-timedelta(days=8)), old))
+    assert new_chat(alice, incognito=incognito) == old
+    with app.app_context():
+        chat_service.purge_no_history(app)
+        chat_service.purge_deleted(app)
+    assert send(alice, old, "Still here?").status_code == 200
+
+
 # ----- deletion -------------------------------------------------------------------------
 
 def test_deleted_chats_disappear_and_are_erased_after_the_retention_period(app, alice):
@@ -286,12 +335,37 @@ def test_downloads_handle_non_latin_titles(app, alice):
     response = alice.get(f"/chat/{session_id}/download")
     assert response.status_code == 200 and response.mimetype == "text/markdown"
     disposition = response.headers["Content-Disposition"]
-    disposition.encode("latin-1")  # header values must be Latin-1: the old code crashed here
+    disposition.encode("latin-1")  # header values must be Latin-1
     ascii_name = re.search(r'filename="([^"]+)"', disposition).group(1)
     assert ascii_name.endswith(".md") and ascii_name.isascii()
     assert unquote(disposition.split("filename*=UTF-8''", 1)[1]) == "Привет 你好 plans.md"
     body = response.get_data(as_text=True)
     assert body.startswith("# Привет 你好 / plans") and "Hello there" in body
+
+
+def test_download_reads_attachments_once_per_batch_of_messages(app, alice):
+    from bananachat import db
+
+    session_id = chat_with_answer(alice)
+    with app.app_context(), db.transaction():
+        for number in range(450):
+            message = db.execute("INSERT INTO chat_messages (session_id, role, content, created_at) VALUES (?,?,?,?)",
+                                 (session_id, "user", f"note {number}", db.now())).lastrowid
+            if number % 100 == 0:
+                db.execute("INSERT INTO chat_attachments (id, message_id, kind, filename, media_type, size_bytes, "
+                           "sha256, extracted_text, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                           (f"file{number:03d}", message, "text", f"notes-{number}.txt", "text/plain", 4,
+                            "cd" * 32, "text", db.now()))
+    statements = []
+    db.conn().set_trace_callback(statements.append)
+    try:
+        body = alice.get(f"/chat/{session_id}/download").get_data(as_text=True)
+    finally:
+        db.conn().set_trace_callback(None)
+    assert 1 <= sum("FROM chat_attachments" in statement for statement in statements) <= 3, len(statements)
+    for number in range(0, 450, 100):
+        assert f"note {number}\n\n_" in body and f"notes-{number}.txt" in body
+    assert body.index("notes-100.txt") < body.index("note 101\n")
 
 
 def test_answers_export_as_pdf(app, alice):
@@ -302,6 +376,36 @@ def test_answers_export_as_pdf(app, alice):
     assert response.get_data().startswith(b"%PDF-1.4") and b"Hello from the fake model." in response.get_data()
     question = [row for row in messages(app, session_id) if row["role"] == "user"][0]
     assert alice.get(f"/chat/{session_id}/messages/{question['id']}/pdf").status_code == 404
+
+
+def test_the_markdown_export_keeps_a_user_message_that_starts_like_reasoning(app, alice):
+    """Only answers carry a reasoning block, so a user's "<think>..." text is exported as typed."""
+    session_id = new_chat(alice)
+    send(alice, session_id, "<think>my own notes</think> and the question")
+    wait_idle(app, session_id)
+    text = alice.get(f"/chat/{session_id}/download").get_data(as_text=True)
+    body = text.split("\n---\n", 1)[1]  # the title repeats the first message
+    assert "<think>my own notes</think> and the question" in body
+
+
+def test_the_shared_view_calls_the_sharer_user(app, alice):
+    session_id = chat_with_answer(alice)
+    url = alice.post_json(f"/chat/{session_id}/share", {"action": "create"}).json["url"]
+    html = Browser(app).get(url.replace("http://localhost", ""), headers={"Accept-Language": "en"}).get_data(as_text=True)
+    assert 'aria-label="User"' in html and 'aria-label="You"' not in html
+
+
+def test_the_shared_view_counts_tokens_in_the_readers_language(app, alice, fake_ollama):
+    from bananachat.i18n import translate
+
+    fake_ollama.reply = "one two three"
+    session_id = new_chat(alice)
+    send(alice, session_id, "Hello")
+    wait_idle(app, session_id)
+    url = alice.post_json(f"/chat/{session_id}/share", {"action": "create"}).json["url"]
+    page = app.test_client().get(url, headers={"Accept-Language": "it"}).get_data(as_text=True)
+    assert translate("it", "js.chat_tokens", count=3) in page
+    assert "3 tokens" not in page
 
 
 # ----- service status ------------------------------------------------------------------

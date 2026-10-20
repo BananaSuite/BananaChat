@@ -1,6 +1,6 @@
 """Every setting the web application reads is documented and listed in ``.env.example``.
 
-``test_review2_ui.test_configuration_reference_lists_every_setting`` covers the
+``test_interface_contracts.test_configuration_reference_lists_every_setting`` covers the
 settings parsed by ``bananachat/config.py``'s typed readers; this covers the
 others: the optional flag reader and the few settings read straight from the
 environment (the development server, the launcher, Gunicorn, Git downloads).

@@ -1,7 +1,7 @@
 """The agent sandbox runner (``python -m compute.sandbox_runner``) against a recording fake engine.
 
 Real-container behaviour (network, read-only root, limits, timeouts...) is
-proven in ``test_sandbox_runner_docker.py``.
+tested in ``test_sandbox_runner_docker.py``.
 """
 
 import base64

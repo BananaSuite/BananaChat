@@ -11,7 +11,7 @@ import subprocess
 
 from .files import atomic_write, digest_file, maintenance_lock, read_json, write_json
 from .manager import Manager
-from . import profile
+from . import cloudflare, profile
 
 
 def source_options(parser):
@@ -131,6 +131,10 @@ def parser():
     proxy = commands.add_parser("proxy", help="Print or install the matching HTTPS Caddy configuration")
     proxy.add_argument("--install", action="store_true")
     proxy.add_argument("--replace", action="store_true", help="Explicitly replace an existing Caddyfile, retaining a private backup")
+    proxy.add_argument("--email", default="", help="ACME account e-mail for certificate notices")
+    proxy.add_argument("--cloudflare", action=argparse.BooleanOptionalAction, default=None,
+                       help="The DNS record is proxied by Cloudflare (orange cloud): skip the ACME challenge that cannot pass "
+                            "Cloudflare's proxy. By default this follows what the domain resolves to.")
     uninstall = commands.add_parser("uninstall", help="Remove services and updater; retain files unless --purge is selected")
     uninstall.add_argument("--purge", action="store_true")
     uninstall.add_argument("--confirm", default="", metavar="SERVICE_NAME")
@@ -275,8 +279,39 @@ def reset_two_step(manager, username):
     return result
 
 
+def caddy_version(manager):
+    """The installed Caddy's version, or None when unknown."""
+    try:
+        result = manager.system.run(["caddy", "version"], check=False, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return profile.parse_version(result.stdout or "") if result.returncode == 0 else None
+
+
+def cloudflare_notes(domain, choice, version):
+    """Whether the domain counts as proxied by Cloudflare (``--cloudflare``, else what it resolves to) and what to tell the operator."""
+    proxied = cloudflare.proxied(domain) if choice is None else choice
+    if choice is not None:
+        notes = [f"Cloudflare: {domain} is treated as {'proxied' if proxied else 'not proxied'} (--{'' if proxied else 'no-'}cloudflare)."]
+    elif proxied:
+        notes = [f"Cloudflare: {domain} resolves to Cloudflare's addresses and is treated as proxied (--no-cloudflare changes that)."]
+    else:
+        notes = [f"Cloudflare: {domain} does not resolve to Cloudflare's addresses (use --cloudflare if it is proxied)."]
+    if proxied:
+        notes.append("Certificates come from Let's Encrypt over ACME HTTP-01, which needs Cloudflare's 'Always Use HTTPS' off or a "
+                     "rule that skips /.well-known/acme-challenge/. Wildcard certificates (DNS-01, origin certificate) are not supported here.")
+        if not profile.supports_client_ip(version):
+            notes.append("Caddy " + ".".join(map(str, version)) + " cannot pass the visitors' real addresses from Cloudflare "
+                         "(needs 2.7 or newer); rate limits then apply per Cloudflare address. Upgrade Caddy and run proxy again.")
+    return proxied, notes
+
+
 def configure_proxy(manager, args):
-    text = profile.caddyfile(manager.settings())
+    settings = manager.settings()
+    version = caddy_version(manager)
+    proxied, notes = cloudflare_notes(settings.get("domain"), args.cloudflare, version)
+    text = profile.caddyfile(settings, email=args.email, cloudflare_proxy=proxied, client_ip=profile.supports_client_ip(version))
+    print("\n".join(notes), file=sys.stderr)
     if not args.install:
         print(text, end="")
         return None
@@ -306,7 +341,7 @@ def configure_proxy(manager, args):
     finally:
         candidate.unlink(missing_ok=True)
     write_json(manager.config_dir / "proxy.json", {"installed_sha256": digest_file(destination), "previous": str(backup) if backup else None})
-    return {"outcome": "proxy configured", "domain": manager.settings()["domain"]}
+    return {"outcome": "proxy configured", "domain": settings["domain"], "cloudflare": proxied}
 
 
 def main(argv=None):

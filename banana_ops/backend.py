@@ -18,7 +18,6 @@ import getpass
 import hashlib
 import http.client
 import json
-import os
 from pathlib import Path
 import secrets
 import ssl
@@ -290,11 +289,10 @@ def rotate_token(manager, url=None):
             if candidate.is_symlink():
                 raise ValueError(f"The compute token file {candidate} must not be a symlink.")
         for candidate in paths:
-            previous = candidate.stat() if candidate.is_file() else None
-            atomic_write(candidate, secrets.token_hex(32) + "\n")
-            if previous is not None:
-                # A token file outside the data directory keeps the owner that lets the gateway read it.
-                os.chown(candidate, previous.st_uid, previous.st_gid)
+            previous = candidate.lstat() if candidate.is_file() else None
+            # A token file outside the data directory keeps the owner that lets the gateway read it.
+            atomic_write(candidate, secrets.token_hex(32) + "\n",
+                         owner=(previous.st_uid, previous.st_gid) if previous is not None else None)
         if management is None:
             # Only once the file exists: the gateway refuses to start with a missing one.
             environment = read_environment(manager.config_dir / "app.env")

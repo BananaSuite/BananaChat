@@ -1,38 +1,15 @@
-"""Community consent for quota requests: other people can back someone's request with part of their own quota.
+"""Community consent for quota requests: other people back someone's request with part of their own limit.
 
-A quota request (any kind, for a service or one model: 5-hour or weekly
-tokens, a request rate, a temporary boost such as unlimited use for 24 hours,
-or a reasoning-effort level) can be **offered to the community** when it is
-sent. Then, while its voting window is open (``community_hours``, 72 by
-default):
+* :func:`vote` - support (renouncing some tokens in the same scope) or object; raises :class:`VoteError`.
+* :func:`consent` - whether the votes are enough to approve the request.
+* :func:`apply` - grant the increase for a limited time and take the supporters' pledges off their limits.
+* :func:`release` and :func:`close_expired` - free the pledges of requests that were decided, cancelled or whose
+  voting closed. A request whose voting closed without consent waits for an administrator.
 
-* administrators can still approve or deny it at once;
-* other people can **support** it - renouncing some tokens of their own limit
-  in the same scope (the same service's 5-hour or weekly tokens, or the same
-  model's) - or **object** to it; a vote can be withdrawn while voting is open;
-* when the consent is good enough (:func:`consent`), the request is approved
-  automatically: the increase is applied as a time-limited grant (a temporary
-  request lasts its own hours, other kinds ``community_boost_hours``; an
-  effort level is unlocked), and every supporter's renounced tokens are taken
-  off their own limit for the same time.
-
-Consent is good when at least ``community_min_supporters`` people support it,
-supporters are at least ``community_approval_percent`` % of everyone who
-voted, and (for token increases) the renounced tokens cover
-``community_coverage_percent`` % of the increase (0: votes alone decide).
-Supporters must not be the requester or an administrator, must have had their
-account for ``community_min_account_days`` and must not be suspended; each
-person can hold at most ``community_max_pledge_percent`` % of their own limit
-renounced at a time (across open and approved requests).
-
-When voting closes without consent, the request keeps waiting for an
-administrator, as long as it takes, until an administrator decides or the
-requester cancels it. Pledges of a request that is cancelled, denied,
-approved by an administrator (the site grants it) or whose voting closed are
-released at once.
-
-Administrators switch the whole feature, and each kind of request, on or off
-(on by default). Everything is in **tokens**.
+Consent is good when at least ``community_min_supporters`` people support the request, they are at least
+``community_approval_percent`` % of the votes, and their renounced tokens cover ``community_coverage_percent`` %
+of a token increase. The requester, administrators, suspended accounts and accounts younger than
+``community_min_account_days`` cannot vote. Stored tables: docs/architecture.md, section Limits.
 """
 
 from __future__ import annotations

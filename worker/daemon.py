@@ -244,7 +244,6 @@ class Worker:
         job = Job(payload)
         self.current = job
         self.monitor.own_job = True
-        self.priority.apply(self.monitor.state, self.ollama.managed_pid)
         settings = self.settings
         first_token = _positive(payload.get("first_token_timeout"), settings.first_token_timeout)
         total = _positive(payload.get("generation_timeout"), settings.generation_timeout)
@@ -253,6 +252,7 @@ class Worker:
         try:
             if not self.ollama.ensure_running():
                 raise OllamaError("Ollama is not running and could not be started.")
+            self.priority.apply(self.monitor.state, self.ollama.managed_pid)  # also an Ollama started just now
             for content, done, usage in self.ollama.chat(
                     payload["model"], payload["messages"], payload.get("options") or None,
                     first_token_timeout=first_token, read_timeout=settings.read_timeout, total_timeout=total,

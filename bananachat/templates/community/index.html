@@ -15,10 +15,10 @@
   <div class="section-stack">
     <details class="settings-section community-rules" aria-labelledby="community-rules">
       <summary id="community-rules">{{ t("community.rules_title") }}</summary>
-      <p class="mb-1">{{ t("community.rules", min=options.min_supporters, approval=options.approval_percent, hours=options.hours) }}</p>
-      {% if options.coverage_percent %}<p class="mb-1">{{ t("community.rules_tokens", coverage=options.coverage_percent, boost=options.boost_hours, share=options.max_pledge_percent) }}</p>
-      {% else %}<p class="mb-1">{{ t("community.rules_votes_only", boost=options.boost_hours, share=options.max_pledge_percent) }}</p>{% endif %}
-      <p class="hint mb-0">{{ t("community.rules_after", days=options.min_account_days) }}</p>
+      <p class="mb-1">{{ t("community.rules", min=options.min_supporters, approval=options.approval_percent, window=t("time.hours", count=options.hours), count=options.min_supporters) }}</p>
+      {% if options.coverage_percent %}<p class="mb-1">{{ t("community.rules_tokens", coverage=options.coverage_percent, boost=options.boost_hours, share=options.max_pledge_percent, count=options.boost_hours) }}</p>
+      {% else %}<p class="mb-1">{{ t("community.rules_votes_only", boost=options.boost_hours, share=options.max_pledge_percent, count=options.boost_hours) }}</p>{% endif %}
+      <p class="hint mb-0">{{ t("community.rules_after", days=options.min_account_days, count=options.min_account_days) }}</p>
     </details>
 
     {% if not options.enabled %}
@@ -33,7 +33,7 @@
     <section class="settings-section community-request" id="request-{{ row.id }}" aria-labelledby="request-{{ row.id }}-title">
       <h2 id="request-{{ row.id }}-title">{{ item.summary }}</h2>
       {#- One byline under the title: who asked, when, and when voting closes (the dot stays with the first part). -#}
-      <p class="muted mb-1 community-byline">{{ t_html("community.asked_by", user=row.username, date=(row.created_at | datetime_html)) }}&nbsp;· <span class="community-deadline">{{ t_html("community.closes", date=(row.community_until | datetime_html)) }}</span></p>
+      <p class="muted mb-1 community-byline">{{ t_html("community.asked_by", user=row.username, date=(row.created_at | local_time)) }}&nbsp;· <span class="community-deadline">{{ t_html("community.closes", date=(row.community_until | local_time)) }}</span></p>
       <blockquote class="mb-1">{{ row.reason }}</blockquote>
       <ul class="community-stats">
         <li>{{ t("community.stat_supporters", supporters=c.supporters, min=c.min_supporters) }}</li>
@@ -53,7 +53,7 @@
       {% endif %}
 
       {% if item.problem %}
-      <p class="hint mb-0">{{ t("community.cannot_" ~ item.problem, days=options.min_account_days) }}</p>
+      <p class="hint mb-0">{{ t("community.cannot_" ~ item.problem, days=options.min_account_days, count=options.min_account_days) }}</p>
       {% else %}
       <div class="row community-vote">
         <form method="post" action="{{ url_for('community.vote', request_id=row.id) }}" class="row community-support" data-busy>
@@ -89,7 +89,7 @@
       <h2 id="my-pledges">{{ t("account.pledges") }}</h2>
       <ul class="community-pledges">
         {% for row in pledges %}
-        <li>{{ t("account.pledge_active" if row.starts_at else "account.pledge_promised", tokens=(row.tokens | tokens), period=t("account.pledge_scope_" ~ (row.scope or "window")), target=(row.model_name if row.model_id is not none else t("account.pool_" ~ (row.pool or "api"))), user=row.username, until=((row.ends_at or "")[:16])) }}</li>
+        <li>{{ t_html("account.pledge_active" if row.starts_at else "account.pledge_promised", tokens=(row.tokens | tokens), period=t("account.pledge_scope_" ~ (row.scope or "window")), target=(row.model_name if row.model_id is not none else t("account.pool_" ~ (row.pool or "api"))), user=row.username, until=(row.ends_at | local_time)) }}</li>
         {% endfor %}
       </ul>
     </section>

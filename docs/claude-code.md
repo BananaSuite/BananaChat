@@ -1,0 +1,292 @@
+# Claude Code subscription connector
+
+BananaChat includes an opt-in connector to the unmodified official Claude Code
+CLI. It supports one subscription or a pool of subscriptions, selected by an
+administrator, alongside a separate [Codex pool](codex-cli.md). Use this only
+within your provider-approved deployment (see the
+[routing constraint](subscription-router.md#subscription-routing-constraint)).
+No website scraping, copied cookies, API keys or credentials in the source ZIP
+are required. API billing is deliberately not a fallback.
+
+## Server setup
+
+1. Run the connector on a Linux/POSIX server under a dedicated, unprivileged
+   service identity. Install the official Claude Code CLI using Anthropic's
+   installation instructions. Pin and test the deployed version (this connector
+   was checked against 2.1.303): it must support `auth status --json`,
+   `--safe-mode`, `--restricted`, `--system-prompt-file`,
+   `--system-prompt-snapshot`, `--effort`, `--include-partial-messages` and the
+   other flags below. Production requires Bubblewrap (`apt install bubblewrap`
+   on Debian), with unprivileged user namespaces available. Install the
+   standalone native CLI in a root-owned, non-writable directory such as
+   `/opt/claude/bin/claude`. The executable and its parent directories must
+   belong to root and have no group/other writes. The binary must be publicly
+   readable/executable (`0755`), with searchable parent directories (`0755`);
+   root-only permissions refuse managed preflight.
+2. Create a private home and configuration directory for each subscription,
+   owned by that identity, with mode `0700`. Keep them outside the repository,
+   web root, uploads and source backups. Give each account a distinct directory;
+   do not point two profiles at the same authentication state. Their outer
+   parent directories must be root-owned and non-writable by the service user.
+   Keep them under `/srv`, outside the managed installation; `/home`, `/root`,
+   `/tmp` and system directories are refused. Account directories cannot
+   overlap; keep them apart from Codex profiles too (managed installations
+   refuse an overlap). For a default managed installation, create the first
+   profile with:
+
+   ```sh
+   sudo install -d -m 0755 /srv/bananachat-claude
+   sudo install -d -m 0700 -o bananachat -g bananachat \
+     /srv/bananachat-claude/account-one \
+     /srv/bananachat-claude/account-one/config
+   ```
+3. Authenticate each profile with the official login flow, as the service user:
+
+   ```sh
+   sudo -u bananachat env HOME=/srv/bananachat-claude/account-one \
+   CLAUDE_CONFIG_DIR=/srv/bananachat-claude/account-one/config \
+   /opt/claude/bin/claude auth login
+   ```
+
+   Log in with the intended subscription account, then verify with the same
+   environment and `claude auth status --json`. Replace `bananachat` with the
+   service name chosen at installation. The connector requires `loggedIn: true`,
+   `authMethod: "claude.ai"`, `apiProvider: "firstParty"` and a subscription
+   type; API-key, helper, Bedrock/Vertex, gateway and token-override
+   authentication is rejected. Never upload these authentication files to Git.
+4. Create a readable private JSON manifest (`0600`, same service owner),
+   outside every profile, with parent directories the service can traverse. See
+   [claude-code.example.json](claude-code.example.json). Set the actual
+   executable path and profile directories. Automatic discovery asks the
+   official CLI for its supported models and reasoning levels through the SDK
+   control protocol, without generating a response. Only text chat
+   (`completion`) is supported by this connector. Models need not be identical
+   across profiles; shared models offer only the effort levels reported by all
+   their serving accounts.
+5. Configure and restart BananaChat:
+
+   ```sh
+   BC_CLAUDE_EXTENSION=bananachat.services.claude_code
+   BC_CLAUDE_CODE_CONFIG=/srv/bananachat-claude/connector.json
+   ```
+
+   For a managed installation, add these values to its private
+   `/opt/bananachat/config/app.env`, then run `sudo bananachat restart`.
+   Start/restart validates the manifest before stopping a healthy service and
+   regenerates only the profile directories' `ReadWritePaths`. It retains
+   `ProtectSystem=strict`, `ProtectHome=true` and `NoNewPrivileges=true`.
+   Other deployments must give the service write access to those same private
+   profiles and permit Bubblewrap's user, mount, PID, IPC, UTS and cgroup
+   namespaces. An unset extension leaves Claude disconnected.
+   Manifest changes require restarting all application workers.
+6. In **Administration → Models → Claude**, add an account for each profile you
+   want to use. Choose its profile, priority, five-hour token budget and optional
+   weekly budget, and, if wanted, caps at a share of the subscription's own
+   allowance: a percentage of the five-hour window, of the weekly window, and
+   per model family such as Fable. One profile can belong to only one pooled
+   account. Click **Check login**, then **Refresh models** and select the
+   models to enrol. Publish them through the normal model review flow, or
+   enable Claude's automatic enrolment option. Previously unchecked models
+   remain excluded; genuinely new models are enrolled with strict limits.
+   Disable an account to remove it from routing; one enabled account works
+   without any special pool configuration.
+7. Run a short real conversation per model/account. Check text, cancellation,
+   recorded tokens, upstream exhaustion and another-account failover before
+   opening access to users. Authentication checks do not prove model access or
+   remaining subscription capacity.
+
+The CLI is an execution transport. BananaChat's database scheduler selects
+accounts, enforces model/account limits and grants one renewable request lease
+per account. No language model makes routing or quota decisions. Account
+selection honours admin priority, capacity, caps and model availability; retry
+is allowed only before any text or thinking is emitted. A Claude model is only
+ever answered by a Claude account.
+
+## Automatic model discovery
+
+New profiles use `"discovery": "automatic"` without a `models` list. The CLI's
+initialisation response supplies canonical model IDs, display names and effort
+levels. No user prompt is sent and no model answer is generated. Models the
+organisation has disabled are never offered. BananaChat caches discovery for
+five minutes; **Refresh models** invalidates the cache. Failed discovery cannot
+fabricate a catalogue. Verified missing models become unavailable without
+discarding their history or custom limits.
+
+For a restricted automatic catalogue, include a `models` allowlist. Entries must
+still appear in the CLI's current catalogue; supported efforts are intersected
+with the allowlist. Existing aliases can be preserved for older conversations.
+An old manifest with an explicit `models` list and no `discovery` setting keeps
+manual discovery for compatibility. Set `"discovery": "automatic"` to verify
+those entries against the live CLI, or omit `models` to discover all supported
+models. `"discovery": "manual"` requires an operator-verified model list and
+cannot prove that a listed model still works.
+
+Model availability can differ from entitlement on an actual request. Run a
+short conversation for every model you publish. Unsupported models fail closed;
+CLI version changes must be verified before upgrading.
+
+## Automatic subscription usage
+
+`"usage_source": "automatic"` is the default. The official CLI's `get_usage`
+control request reads subscription usage using its own native authentication
+and refresh, without website scraping, reading OAuth tokens or sending a chat
+prompt. The adapter reports five-hour and weekly remaining fractions, reset
+times, verified subscription type, and model-specific weekly scopes when the
+CLI supplies them. The Max multiplier (5x or 20x) comes from the account's
+verified rate-limit tier. It does not convert provider percentages into a fixed
+number of tokens.
+
+The administration page separates **subscription usage** from **local token
+budgets**. Observations are cached briefly and expire after 15 minutes or their
+reported reset time. The original upstream observation time is preserved;
+re-reading a cached CLI response cannot renew an old observation. An invalid,
+missing or stale automatic report pauses only its account. Other fresh accounts
+can continue. Model-scoped exhaustion restricts the affected family. Provider
+weekly capacity remains binding even when local weekly token budgets are off.
+Percentage caps apply to these observations: an account capped at 70 % of its
+five-hour allowance stops receiving requests once the CLI reports 70 % used.
+
+If the provider returns HTTP `429`, the native CLI may retain its previous
+usage snapshot. Administration keeps that snapshot's original timestamp,
+verified plan and last-known percentages visible as **stale**. It remains
+`available: false`: the account stays paused until a fresh observation is
+verified. Retaining a readout never renews its timestamp or unlocks routing.
+Such a cached snapshot may omit Opus and Sonnet weekly scopes; a family cap on
+a scope the snapshot lacks keeps that family out of rotation.
+
+Automatic retries after a stale response wait five minutes. **Refresh quota**
+can request another check at most once per minute; it does not bypass the
+upstream CLI's cache or provider throttling. Only verified plan metadata can
+supply a Max multiplier; usage percentages do not establish a token entitlement.
+
+Metadata refreshes run at most four profile tasks concurrently and share a
+bounded overall deadline. Concurrent usage readers share an in-flight request;
+a short snapshot cache coalesces repeated refreshes. A slow or failed profile
+cannot make a large pool perform serial network calls without a deadline.
+
+BananaChat also records terminal CLI usage: input, cache-creation input,
+cache-read input and output tokens. Interrupted responses conservatively
+estimate unreported usage. Local five-hour token budgets and optional weekly
+budgets remain administrator controls; observations never rewrite those
+budgets or raise remaining capacity. Priority, observed capacity, caps, model
+support and exclusive leases determine routing. A quota rejection pauses the
+selected account until its reset; failover is allowed only before output
+begins. When the CLI reports that an account has started using paid extra
+usage, the connector treats it as exhausted and rests the account rather than
+spending beyond the subscription.
+An explicit model-scoped observation restricts that family. A native quota
+rejection without a verified scope conservatively rests the whole account
+until its reported reset rather than guessing which models remain usable.
+Provider capacity failures are temporary availability errors; they must not
+mark a working model as failed or remove it from the catalogue.
+The public API returns `503 provider_capacity_unavailable` with
+`Retry-After: 30` when subscription quota, fresh observations or an exclusive
+request slot are unavailable. These refusals use no model tokens. Internal
+user token/rate limits keep their `429` responses; malformed or failed model
+streams remain provider errors. Configured fallback can run before output;
+text or thinking already emitted is never replayed on another model/account.
+
+If the deployed CLI cannot report usage, fix the version/login/network or
+explicitly choose `"usage_source": "local"`. That mode retains token limits
+but leaves subscription remaining capacity unknown, so percentage caps keep the
+account out of rotation. It is an operator choice, not an automatic fallback
+after failed telemetry.
+
+An authorised external telemetry integration can instead set `telemetry_file`
+for a profile. The private `0600` file takes precedence and contains:
+
+```json
+{"observed_at": 1790928000, "window_left": 0.4, "weekly_left": 0.7}
+```
+
+Use the actual UTC observation timestamp, fractions 0–1 or `null` for unknown
+scopes, and optional `window_resets_at`/`weekly_resets_at` Unix timestamps. Never
+rewrite an old observation's timestamp. Invalid/stale files pause that account.
+
+Every active profile must use a distinct subscription. Different directories
+alone do not make different accounts: repeated authenticated identities are
+excluded from discovery and routing. Identity fingerprints stay inside the
+adapter and are not displayed, persisted or included in audit details.
+Authentication or identity invalidation clears cached usage observations,
+including stale display data. Changing a profile's authenticated account also
+invalidates its cached models. Before generation, the connector requires a fresh report
+for that identity and checks the requested model's capacity again.
+
+## Process isolation and protocol
+
+Every request uses a fresh temporary working directory in its private profile
+home. The connector sets `--tools ""`, an empty strict MCP configuration,
+`--safe-mode`, `--restricted`, `--disable-slash-commands`,
+`--no-session-persistence`, `--system-prompt-snapshot off` and
+`--max-turns 1`. `--restricted` makes the CLI ignore the profile's own user,
+project and local settings files, so environment or API-key helpers placed
+there cannot take effect. The CLI's initialisation record must report no
+tools, no MCP servers and no API-key source before any answer is accepted;
+otherwise every chat on that profile fails closed. The connector replaces the
+coding system prompt with the conversation's system prompt and passes the
+role-tagged conversation as JSON on stdin. Extra effort maps to CLI `xhigh`;
+unsupported effort levels are rejected. Temperature and output-token sampling
+controls are not exposed by this CLI transport; configured request deadlines
+and response size limits are binding. An answer stopped at the model's token
+limit is reported as truncated. Images and other non-text content are rejected
+explicitly.
+
+Only a small environment allowlist is inherited, including operator-configured
+HTTP(S)/ALL proxy settings, NO_PROXY and certificate trust. This preserves
+required outbound network policy in proxied deployments. API keys, alternate base URLs,
+OAuth environment overrides and provider switches are excluded, and the CLI's
+self-updater is switched off. Native subscription authentication is checked
+before each request. No prompt is interpolated into shell code or put in
+process arguments. Stdout and stderr are bounded; stderr and auth identity
+details never reach users or application logs. Structured terminal success and
+a successful process exit are both required before an answer is marked
+complete. EOF, malformed records, negative usage, timeout and cancellation fail
+closed. The process group is terminated and reaped before releasing the account
+lease. On Linux, cleanup also waits for non-zombie process-group descendants to
+stop. If shutdown cannot be confirmed, the pooled account is disabled for
+operator review before its lease is released.
+
+Production native calls run inside Bubblewrap with a fresh filesystem and PID
+namespace, no capabilities and no new privileges. Read-only system runtime,
+public DNS/CA files and the native executable are mounted; only the active
+profile is persistently writable. Chat's installation, data, uploads, both
+connector manifests, other profiles and host process descriptors are absent.
+Sandbox setup failures refuse the native call; production never retries
+without isolation. All deployments must keep source, storage and the global
+connector manifest outside the exposed public runtime trees, including
+`/usr/local/bin` and `/usr/local/lib`. Profile paths are checked again before
+each invocation; a replaced nested configuration symlink refuses the call, and
+nested configuration uses only its enclosing home mount. Only explicit
+`BC_ENV=development` or `testing` permits the subprocess fixtures to run
+without Bubblewrap.
+
+Outbound networking and the operator's proxy settings remain available. Extra
+CA trust (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` or
+`CURL_CA_BUNDLE`) must name a root-owned, non-writable, world-readable regular
+file; that file alone is mounted read-only, including when outside `/etc`.
+`SSL_CERT_DIR` supports `/etc/ssl/certs` only. Copy custom public trust files to
+a root-owned location when necessary; arbitrary certificate parent directories
+are never mounted. Maintain the deployment's approved egress policy.
+
+CLI safe-mode flags add a separate restriction. Managed Claude Code policy can
+still add managed hooks; the operator must verify that policy before enabling
+the service. The manifest/executable/profile files are trusted operator
+configuration, not browser uploads. Separate OS identities/containers are
+preferable if stricter separation between the subscription credentials is
+required.
+
+Regression tests use a real subprocess fixture, not live subscription accounts.
+They verify auth isolation, streamed text, accounting, terminal errors, real
+cancellation/timeout cleanup, duplicate-profile prevention and admin bindings.
+The original connector was checked against a live subscription on 2 October
+2026 with official Claude Code 2.1.287. The rebuilt one was checked on 19
+October 2026 with 2.1.303 and one Team subscription: the login check, model
+discovery (all four families with their effort levels), five-hour, weekly and
+Fable usage, and a short Haiku answer, whose initialisation record confirmed
+that no tools or MCP servers were exposed. That covers one account and one
+model; it does not establish multi-account failover or other model access.
+Verify every published model and authenticated profile on your deployment, as
+in step 7, before opening access.
+
+Protocol references: [official CLI options](https://code.claude.com/docs/en/cli-reference)
+and [structured SDK message types](https://platform.claude.com/docs/en/agent-sdk/typescript).

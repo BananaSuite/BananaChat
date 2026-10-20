@@ -1,7 +1,7 @@
-"""Interface translations (Italian and English).
+"""Interface translations (Italian, English and German).
 
 Catalogs live in ``bananachat/i18n/*.json``; each file covers one area of the
-interface and has the shape ``{"en": {key: text}, "it": {key: text}}``. Keys
+interface and has the shape ``{"en": {key: text}, "it": {key: text}, "de": {key: text}}``. Keys
 must be unique across files. Texts use ``{name}`` placeholders; a text may be
 an object ``{"one": ..., "other": ...}`` chosen by the ``count`` argument.
 Keys starting with ``js.`` are also sent to the browser.
@@ -18,7 +18,9 @@ from pathlib import Path
 
 from ..config import SUPPORTED_LANGUAGES
 
-LANGUAGE_NAMES = {"it": "Italiano", "en": "English"}
+LANGUAGE_NAMES = {"it": "Italiano", "en": "English", "de": "Deutsch"}
+# Languages that write 1,5 rather than 1.5.
+DECIMAL_COMMA = frozenset({"it", "de"})
 _DIRECTORY = Path(__file__).parent
 
 

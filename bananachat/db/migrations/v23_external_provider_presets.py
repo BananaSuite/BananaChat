@@ -64,7 +64,7 @@ def _bare_gemini_ids(conn, provider_id):
         return
     if not isinstance(listing, list):
         return
-    # The saved listing as discover() now returns it, so the admin page matches it with the models above.
+    # Store the listing in the form discover() returns, so the admin page matches it with the models above.
     entries, seen = [], set()
     for item in listing:
         if isinstance(item, dict) and isinstance(item.get("id"), str):

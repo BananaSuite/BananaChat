@@ -1,7 +1,7 @@
 ## Change
 
-Describe the problem and resulting behavior. Link a related issue if there is one.
+What changes for users or operators, and why. Link the issue if there is one.
 
-## Validation
+## Checks
 
-Describe the checks you ran and any deployment or migration considerations. Include a screenshot when it helps review a visual change.
+The tests and checks you ran, and anything an operator must do when updating (settings, migrations, order of servers). Add a screenshot for visual changes.

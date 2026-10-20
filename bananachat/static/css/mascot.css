@@ -1,0 +1,71 @@
+/* The mascot in place of the top bar logo: idle bob, blink, hover tilt, hop on click, sunglasses drop
+   (static/js/mascot.js, which names the BananaWiki mascot this follows). Less motion, asked in Customise or
+   by the system, keeps it still: the blocks at the end. */
+
+.mascot { display: inline-flex; flex: none; padding: 0; border: 0; background: none; cursor: pointer;
+  line-height: 0; border-radius: var(--radius-sm); touch-action: manipulation; }
+/* The sprite's two empty left columns go into the bar's padding, and the name follows the art at the brand's
+   .55rem gap plus 2px instead of the bar's gap (1.25rem, .5rem with the menu collapsed). */
+.topbar > .mascot { margin-left: -2px; }
+.topbar > .mascot + .brand { margin-left: calc(2px + .55rem - 1.25rem); }
+.topbar.nav-collapsed > .mascot + .brand { margin-left: calc(2px + .55rem - .5rem); }
+.mascot__body { display: inline-block; animation: mascot-bob 2.4s steps(1, end) infinite; }
+.mascot .mascot-sprite { display: block; width: 32px; height: 32px; transition: transform .15s steps(2, end); }
+.mascot:focus-visible .mascot-sprite { transform: rotate(-8deg); }
+/* Touch screens keep :hover after a tap, which would leave the banana tilted. */
+@media (hover: hover) {
+  .mascot:hover .mascot-sprite { transform: rotate(-8deg); }
+}
+.mascot--hop .mascot__body { animation: mascot-hop .4s steps(4, end); }
+.mascot--eager.mascot--hop .mascot__body { animation-name: mascot-hop-high; }
+/* The Konami code with less motion asked: one still lean instead of the shower. */
+.mascot--lean .mascot-sprite { transform: rotate(-8deg); }
+/* Fingers get the touch size, the sprite centred; the art stays in place and the name follows the box. */
+@media (pointer: coarse) {
+  .mascot { min-width: var(--touch-target); min-height: var(--touch-target); align-items: center; justify-content: center; }
+  .topbar > .mascot { margin-left: -8px; }
+  .topbar > .mascot + .brand { margin-left: -1.25rem; }
+  .topbar.nav-collapsed > .mascot + .brand { margin-left: -.5rem; }
+}
+
+.mascot-sprite .mascot__eyes { animation: mascot-blink 5s steps(1, end) infinite; }
+.mascot-sprite:not(.mascot-sprite--shades) .mascot__shades { visibility: hidden; }
+.mascot--shades-drop .mascot__shades { animation: mascot-shades-drop .5s steps(1, end); }
+/* Added by the script when the sunglasses land; seen only while it runs across the lenses. */
+.mascot__glint { opacity: 0; }
+.mascot--shades-drop .mascot__glint { animation: mascot-glint .32s steps(1, end) .5s; }
+
+@keyframes mascot-bob { 0% { transform: translateY(0); } 50% { transform: translateY(2px); } }
+@keyframes mascot-blink { 0%, 100% { opacity: 1; } 94% { opacity: 0; } 97% { opacity: 1; } }
+@keyframes mascot-hop { 0% { transform: translateY(0); } 40% { transform: translateY(-8px); }
+  70% { transform: translateY(-4px); } 100% { transform: translateY(0); } }
+@keyframes mascot-hop-high { 0% { transform: translateY(0); } 40% { transform: translateY(-12px); }
+  70% { transform: translateY(-6px); } 100% { transform: translateY(0); } }
+/* Whole art pixels, falling faster each frame, with one pixel of bounce. */
+@keyframes mascot-shades-drop { 0% { transform: translateY(-8px); } 14% { transform: translateY(-7px); }
+  28% { transform: translateY(-5px); } 42% { transform: translateY(-2px); } 56% { transform: translateY(0); }
+  70% { transform: translateY(-1px); } 84%, 100% { transform: translateY(0); } }
+/* Lens columns 4, 5, 7 and 8: the bridge between them is skipped. */
+@keyframes mascot-glint { 0% { opacity: 1; transform: translateX(0); } 25% { transform: translateX(1px); }
+  50% { transform: translateX(3px); } 75% { transform: translateX(4px); } 100% { opacity: 0; transform: translateX(4px); } }
+
+/* The Konami code: small copies of the sprite falling past the page for about three seconds. */
+.mascot-shower { position: fixed; inset: 0; z-index: 150; overflow: hidden; pointer-events: none; }
+.mascot-shower__banana { position: absolute; top: -40px; margin-left: -16px; animation: mascot-fall 2s linear both; }
+.mascot-shower__banana .mascot-sprite { display: block; width: 16px; height: 16px; }
+.mascot-shower__banana--big .mascot-sprite { width: 32px; height: 32px; }
+@keyframes mascot-fall { from { transform: translateY(0) rotate(-12deg); }
+  to { transform: translateY(calc(100vh + 80px)) rotate(12deg); } }
+
+/* Less motion: app.css runs every animation once in no time, which would still flick the banana; it stands
+   still instead (clicks still put the sunglasses on). After the rules, as it uses the same selectors. */
+@media (prefers-reduced-motion: reduce) {
+  .mascot__body, .mascot--hop .mascot__body, .mascot--eager.mascot--hop .mascot__body, .mascot-sprite .mascot__eyes,
+  .mascot--shades-drop .mascot__shades, .mascot--shades-drop .mascot__glint, .mascot-shower__banana { animation: none; }
+  .mascot-shower { display: none; }
+  .mascot .mascot-sprite { transition: none; }
+}
+body.reduce-motion :is(.mascot__body, .mascot-sprite .mascot__eyes, .mascot__shades, .mascot__glint,
+  .mascot-shower__banana) { animation: none; }
+body.reduce-motion .mascot-shower { display: none; }
+body.reduce-motion .mascot .mascot-sprite { transition: none; }

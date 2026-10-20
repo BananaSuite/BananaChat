@@ -14,9 +14,8 @@
 {%- endmacro %}
 {% block title %}Models{% endblock %}
 {% macro server_badges(model) -%}
-<span class="badge">{{ {"comfyui": "ComfyUI", "external": "External API", "ollama": "Ollama"}.get(model.backend, model.backend | capitalize) }}</span>
-{% if model.backend_available %}<span class="badge badge-success">Available</span>
-{% else %}<span class="badge badge-danger" title="Last seen {{ model.backend_last_seen_at | datetime }}">Not installed</span>{% endif %}
+<span>{{ {"comfyui": "ComfyUI", "external": "External API", "ollama": "Ollama"}.get(model.backend, model.backend | capitalize) }}</span>
+{% if not model.backend_available %}<span class="badge badge-danger" title="Last seen {{ model.backend_last_seen_at | datetime }}">Not installed</span>{% endif %}
 {%- endmacro %}
 {% block admin_content %}
 {% call header("Models", "Publish models to users, review new ones, retire old ones and tune their defaults.") %}
@@ -76,7 +75,7 @@
     <p class="hint">Hugging Face checkpoints need image generation and the checkpoint download agent; configure them first or leave those unchecked.</p>
     {% endif %}
     {% endif %}
-    <div class="form-actions form-actions-start">
+    <div class="form-actions">
       {% if recovery.missing_choices %}
       <button type="submit" name="action" value="download" class="btn btn-primary">{{ icon("download") }}Download selected models</button>
       <button type="submit" name="action" value="defer" class="btn btn-ghost" formnovalidate>Not now</button>
@@ -207,9 +206,9 @@
           <td class="col-optional catalog-server">{{ server_badges(model) }}</td>
           <td class="col-optional">
             <div class="badge-row">
-              {% if model.is_image_generation %}<span class="badge badge-info">Images</span>{% endif %}
-              {% if model.supports_vision %}<span class="badge badge-info">Vision</span>{% endif %}
-              {% if model.is_reasoning %}<span class="badge badge-info">Reasoning</span>{% endif %}
+              {% if model.is_image_generation %}<span class="badge">Images</span>{% endif %}
+              {% if model.supports_vision %}<span class="badge">Reads images</span>{% endif %}
+              {% if model.is_reasoning %}<span class="badge">Reasoning</span>{% endif %}
               {% if model.is_uncensored %}<span class="badge badge-warning">Uncensored</span>{% endif %}
               {% if model.system_prompt %}<span class="badge">System prompt</span>{% endif %}
               {% if model.limit_preset %}<span class="badge" title="Limit preset">{{ presets.get(model.limit_preset, model.limit_preset) }} limits</span>{% endif %}
@@ -265,7 +264,7 @@
       <button type="button" class="btn btn-sm btn-danger" data-unload-all>Unload all</button>
     </div>
   </div>
-  <p class="muted small">Models stay in GPU memory for a while after use. Unloading frees memory; the next request loads them again.</p>
+  <p class="muted small">How long a model stays in memory after a request is set by <code>BC_KEEP_ALIVE</code> (by default it is unloaded when the answer ends). Unloading frees memory; the next request loads it again.</p>
   <div id="running-models" aria-live="polite"><p class="muted">Checking…</p></div>
   <noscript><p class="hint">Enable JavaScript to see and unload running models.</p></noscript>
 </section>
