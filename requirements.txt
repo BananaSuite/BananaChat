@@ -12,7 +12,7 @@ filelock>=3.20.3,<4
 Pillow>=13.0.0,<14
 pypdf>=6.21.1,<7
 # Encrypts external API provider keys at rest.
-cryptography>=50.0.1,<51
+cryptography>=50.0.2,<51
 # QR codes for setting up two-step verification (pure Python; images through Pillow).
 qrcode>=8.2,<9
 # Optional but recommended: memory and CPU figures for admission control and metrics.
