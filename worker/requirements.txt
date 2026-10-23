@@ -2,6 +2,6 @@
 # These optional packages improve what it can measure:
 
 # NVIDIA GPU utilisation and name without spawning nvidia-smi.
-nvidia-ml-py>=12.0
+nvidia-ml-py>=13.615.71
 # Lowering the priority of the Ollama process the worker starts.
 psutil>=5.9
