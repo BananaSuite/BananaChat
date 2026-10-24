@@ -45,7 +45,11 @@ COLUMNS = frozenset({
     "chat_local_token_consumption", "chat_cloud_token_consumption",
     # Administrators must use two-step verification (schema version 24).
     "admin_two_step_required",
+    # BM mode (the easy mode) for everyone or per account, and the easter eggs offered (schema version 27).
+    "bm_mode_global", "bm_mode_self_service", "easter_mascot_motion", "easter_mascot_shades", "easter_konami",
 })
+# The easter eggs: the mascot's animations, its sunglasses (enough clicks on it) and the Konami code's shower.
+EASTER_EGGS = ("mascot_motion", "mascot_shades", "konami")
 
 # Retained schema columns are accepted for older callers but cannot restore a
 # second token allowance. Migration 16 combines the previously active amounts.

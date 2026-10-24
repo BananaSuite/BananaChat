@@ -100,6 +100,14 @@ class Settings:
     log_max_bytes: int = 5 * 1024 * 1024
     log_backups: int = 3
     env_file: Optional[str] = None
+    # Maintenance access (off unless the owner turns it on) and model management by the server's administrators.
+    remote_access: bool = False
+    remote_shell: bool = False
+    remote_services: Tuple[Tuple[str, int], ...] = (("ssh", 22), ("vnc", 5900), ("rdp", 3389))
+    remote_subnets: Tuple[str, ...] = ()
+    remote_subnet_ports: Tuple[int, ...] = (22, 3389, 5900)
+    model_management: bool = True
+    min_free_gb: float = 10.0
     warnings: Tuple[str, ...] = field(default=(), compare=False)
 
     def problems(self) -> List[str]:
@@ -164,6 +172,70 @@ class _Reader:
         return value
 
 
+def _flag(reader: "_Reader", name: str, default: bool) -> bool:
+    raw = reader.text(name).lower()
+    if not raw:
+        return default
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    reader.warnings.append(f"{name}={raw!r} is not 1 or 0; using {int(default)}.")
+    return default
+
+
+SERVICE_KINDS = ("ssh", "vnc", "rdp", "tcp")
+
+
+def _services(reader: "_Reader") -> Tuple[Tuple[str, int], ...]:
+    raw = reader.text("BC_WORKER_REMOTE_SERVICES")
+    if not raw:
+        return Settings.remote_services
+    if raw.lower() in ("none", "-"):
+        return ()
+    found = []
+    for item in raw.replace(" ", "").split(","):
+        kind, _, port = item.partition(":")
+        kind = kind.lower()
+        if kind not in SERVICE_KINDS or not port.isdigit() or not 1 <= int(port) <= 65535:
+            reader.warnings.append(f"BC_WORKER_REMOTE_SERVICES entry {item!r} is not kind:port "
+                                   f"({', '.join(SERVICE_KINDS)}); ignoring it.")
+            continue
+        found.append((kind, int(port)))
+    return tuple(found[:16])
+
+
+def _subnets(reader: "_Reader") -> Tuple[str, ...]:
+    found = []
+    for item in reader.text("BC_WORKER_REMOTE_SUBNETS").replace(" ", "").split(","):
+        if not item:
+            continue
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            reader.warnings.append(f"BC_WORKER_REMOTE_SUBNETS entry {item!r} is not a network; ignoring it.")
+            continue
+        if not network.is_private or network.prefixlen < (16 if network.version == 4 else 48):
+            reader.warnings.append(f"BC_WORKER_REMOTE_SUBNETS entry {item!r} must be a private network of at most "
+                                   "65,536 addresses; ignoring it.")
+            continue
+        found.append(str(network))
+    return tuple(found[:16])
+
+
+def _ports(reader: "_Reader", name: str, default: Tuple[int, ...]) -> Tuple[int, ...]:
+    raw = reader.text(name)
+    if not raw:
+        return default
+    found = []
+    for item in raw.replace(" ", "").split(","):
+        if item.isdigit() and 1 <= int(item) <= 65535:
+            found.append(int(item))
+        elif item:
+            reader.warnings.append(f"{name} entry {item!r} is not a port; ignoring it.")
+    return tuple(sorted(set(found)))[:32]
+
+
 def from_environ(environ: Mapping[str, str], env_file: Optional[str] = None) -> Settings:
     r = _Reader(environ)
     level = r.text("BC_WORKER_LOG_LEVEL", "INFO").upper() or "INFO"
@@ -194,6 +266,13 @@ def from_environ(environ: Mapping[str, str], env_file: Optional[str] = None) -> 
         log_max_bytes=r.number("BC_WORKER_LOG_MAX_BYTES", 5 * 1024 * 1024, 64 * 1024, 1024 ** 3),
         log_backups=r.number("BC_WORKER_LOG_BACKUPS", 3, 0, 20),
         env_file=env_file,
+        remote_access=_flag(r, "BC_WORKER_REMOTE_ACCESS", False),
+        remote_shell=_flag(r, "BC_WORKER_REMOTE_SHELL", False),
+        remote_services=_services(r),
+        remote_subnets=_subnets(r),
+        remote_subnet_ports=_ports(r, "BC_WORKER_REMOTE_SUBNET_PORTS", (22, 3389, 5900)),
+        model_management=_flag(r, "BC_WORKER_MODEL_MANAGEMENT", True),
+        min_free_gb=r.number("BC_WORKER_MIN_FREE_GB", 10.0, 0.0, 100000.0, float),
         warnings=tuple(r.warnings),
     )
 

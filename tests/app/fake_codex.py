@@ -93,10 +93,42 @@ def run_exec():
     sys.exit(SCENARIO.get("exit", 0))
 
 
+def device_login():
+    """``codex login --device-auth``: print the link and code (with colours, as the real CLI), then wait until the
+    test "approves" by writing $CODEX_HOME/approved (or "denied"), as OpenAI's page would."""
+    login = SCENARIO.get("login", {})
+    if login.get("fail_early"):
+        print("Error logging in with device code: error sending request for url "
+              "(https://auth.openai.com/api/accounts/deviceauth/usercode)", flush=True)
+        sys.exit(1)
+    print("\nWelcome to Codex [v\x1b[90m0.164.0\x1b[0m]\n\x1b[90mOpenAI's command-line coding agent\x1b[0m\n"
+          "\nFollow these steps to sign in with ChatGPT using device code authorization:\n"
+          "\n1. Open this link in your browser and sign in to your account\n"
+          "   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\n"
+          "\n2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n"
+          "   \x1b[94mWXYZ-12345\x1b[0m\n", flush=True)
+    for _ in range(int(login.get("wait", 300))):
+        if (HOME / "approved").exists():
+            (HOME / "scenario.json").write_text(json.dumps({**SCENARIO, "account": ACCOUNT, "login": {}}))
+            print("Successfully logged in", flush=True)
+            sys.exit(0)
+        if (HOME / "denied").exists():
+            print("Error logging in with device code: device code was denied", flush=True)
+            sys.exit(1)
+        time.sleep(0.1)
+    sys.exit(1)
+
+
 record({"kind": "start", "args": sys.argv[1:], "env": dict(os.environ), "cwd": os.getcwd()})
 if sys.argv[1:2] == ["app-server"]:
     app_server()
 elif sys.argv[1:2] == ["exec"]:
     run_exec()
+elif sys.argv[1:3] == ["login", "--device-auth"]:
+    device_login()
+elif sys.argv[1:2] == ["logout"]:
+    (HOME / "scenario.json").write_text(json.dumps({**SCENARIO, "account": None}))
+    print("Successfully logged out", flush=True)
+    sys.exit(0)
 else:
     sys.exit(2)

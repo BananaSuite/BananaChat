@@ -441,8 +441,10 @@ function composeForm(text, files) {
   const form = new FormData();
   form.append("content", text);
   if (picker.selected !== "auto") form.append("model", picker.selected);
-  if (effortPicker.selected) form.append("effort", effortPicker.selected);
-  for (const input of document.querySelectorAll("[data-param]")) {
+  // BM mode (the easy mode) hides the reasoning and sampling controls: their saved values must not apply unseen.
+  const easy = document.body.classList.contains("bm-mode");
+  if (effortPicker.selected && !easy) form.append("effort", effortPicker.selected);
+  for (const input of easy ? [] : document.querySelectorAll("[data-param]")) {
     if (input.value.trim() !== "") form.append(input.name, input.value.trim());
   }
   for (const file of files) form.append("files", file, file.name);

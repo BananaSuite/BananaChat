@@ -26,6 +26,9 @@ class Preset:
     # Suggested non-secret headers; "{site_url}" and "{site_name}" are filled in by the page.
     headers: tuple = ()
     local: bool = False  # a server on this machine or the local network (needs trusted private endpoints)
+    # Runs the models on the operator's own hardware: they count as local models (token limits, the local share of
+    # the chat settings), the model list is checked every minute and they hide while the server is off.
+    own_hardware: bool = False
     key_required: bool = True
     reasoning: str = "reasoning_effort"  # how effort is sent: "reasoning_effort" or "openrouter"
     token_parameter: str = "max_tokens"  # noqa: S105 - what "Automatic" resolves to: an API field name
@@ -53,10 +56,14 @@ PRESETS = {preset.key: preset for preset in (
     Preset("azure", "Azure OpenAI", "openai", "https://YOUR-RESOURCE.openai.azure.com/openai/v1",
            auth_style="api-key", token_parameter="max_completion_tokens",  # noqa: S106 - an API field name
            hint="Replace YOUR-RESOURCE. Enrol your deployment names with “Add a model ID manually”."),
-    Preset("lmstudio", "LM Studio (local)", "openai", "http://localhost:1234/v1", local=True, key_required=False),
-    Preset("vllm", "vLLM (local)", "openai", "http://localhost:8000/v1", local=True, key_required=False),
+    Preset("lmstudio", "LM Studio (local)", "openai", "http://localhost:1234/v1", local=True, key_required=False,
+           own_hardware=True, hint="Start the server in LM Studio (Developer → Start server). Models load on first use; "
+                                   "their context length and vision support come from LM Studio's own API."),
+    Preset("vllm", "vLLM (local)", "openai", "http://localhost:8000/v1", local=True, key_required=False,
+           own_hardware=True, hint="vllm serve <model>. Add --api-key and enter it here if the server is shared."),
     Preset("llamacpp", "llama.cpp server (local)", "openai", "http://localhost:8080/v1", local=True,
-           key_required=False),
+           key_required=False, own_hardware=True,
+           hint="llama-server -m model.gguf --jinja. The context size comes from the server's /props."),
     Preset("litellm", "LiteLLM proxy", "openai", "http://localhost:4000/v1", local=True, key_required=False,
            hint="Use a LiteLLM virtual key if the proxy requires one."),
     Preset("custom", "Other OpenAI-compatible service", "openai", "",

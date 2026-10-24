@@ -112,8 +112,9 @@ def test_every_admin_page_renders(app, admin, make_user, fake_ollama):
         metrics.record_snapshot(gpu_memory_used_mb=1000, gpu_memory_total_mb=8000, metrics_source="nvidia-smi",
                                 active_models=["llama3.2:3b"])
         pulls.enqueue("qwen3:4b", None)
+    # Placeholder IDs name no record: skip those URLs (an account's sign-in state is JSON about one account).
     pages = [url for endpoint, url in _admin_urls(app, "GET") if "<" not in url and "/x" not in url
-             and not url.endswith("/1")]
+             and not url.endswith(("/1", "/1/login"))]
     pages += [f"/admin/users/{bob['id']}", f"/admin/models/{model['id']}/edit",
               f"/admin/models/categories/{category}/edit", "/admin/access/uncensored/0",
               f"/admin/access/model/{model['id']}", f"/admin/access/category/{category}", "/admin/metrics?range=7d",

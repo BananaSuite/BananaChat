@@ -26,6 +26,7 @@ function initPresetForms() {
       field("auth_style").value = preset.auth_style;
       field("headers").value = headerText(preset.headers);
       field("local").checked = Boolean(preset.local);
+      field("own_hardware").checked = Boolean(preset.own_hardware);
       if (name && !name.value && select.value !== "custom") name.value = preset.label.replace(/ \(local\)$/, "");
       if (hint) hint.textContent = preset.hint || "";
       if (preset.base_url.includes("YOUR-RESOURCE")) {

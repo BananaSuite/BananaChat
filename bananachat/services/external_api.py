@@ -392,7 +392,7 @@ def discover(provider):
                 if len(models) > MAX_MODELS:
                     raise UpstreamError('Model list too large.')
             if provider['protocol'] != 'anthropic' or not data.get('has_more'):
-                return models
+                return _with_native_details(provider, models, cancel)
             last = data.get('last_id')
             if not isinstance(last, str) or not MODEL_ID.fullmatch(last) or not items:
                 raise UpstreamError('Invalid model pagination.')
@@ -404,6 +404,104 @@ def discover(provider):
         raise _error(error, provider) from None
     finally:
         supervisor.clear_deadline(deadline)
+
+
+# ----- what local servers add to their OpenAI-compatible model list ---------------------------------------------
+
+_LM_STUDIO_LEVELS = ('off', 'low', 'medium', 'high')
+
+
+def _lm_studio_details(data):
+    """LM Studio's own model list (``/api/v1/models`` from 0.4, ``/api/v0/models`` before) by model ID."""
+    details = {}
+    if isinstance(data, dict) and isinstance(data.get('models'), list):  # 0.4 and later
+        for item in data['models']:
+            if not isinstance(item, dict) or not isinstance(item.get('key'), str) \
+                    or item.get('type') not in ('llm', 'embedding', 'decision'):
+                continue
+            capabilities = item.get('capabilities') if isinstance(item.get('capabilities'), dict) else {}
+            loaded = [instance.get('config') for instance in item.get('loaded_instances') or []
+                      if isinstance(instance, dict) and isinstance(instance.get('config'), dict)]
+            context = next((value for value in (_count(config.get('context_length')) for config in loaded) if value),
+                           None) or _count(item.get('max_context_length'))
+            reasoning = capabilities.get('reasoning') if isinstance(capabilities.get('reasoning'), dict) else {}
+            allowed = reasoning.get('allowed_options') if isinstance(reasoning.get('allowed_options'), list) else []
+            levels = [level for level in _LM_STUDIO_LEVELS if level in allowed]
+            details[item['key']] = {
+                'chat': item.get('type') == 'llm', 'context': context,
+                'vision': capabilities['vision'] if isinstance(capabilities.get('vision'), bool) else None,
+                'tools': capabilities['trained_for_tool_use']
+                if isinstance(capabilities.get('trained_for_tool_use'), bool) else None,
+                'reasoning': levels if len(levels) > 2 else None,
+                'display': item['display_name'] if isinstance(item.get('display_name'), str) else None}
+    elif isinstance(data, dict) and isinstance(data.get('data'), list):  # 0.3: type llm, vlm or embeddings
+        for item in data['data']:
+            if not isinstance(item, dict) or not isinstance(item.get('id'), str):
+                continue
+            kind = item.get('type')
+            if kind not in ('llm', 'vlm', 'embeddings'):
+                continue  # not LM Studio's answer (another server behind the preset)
+            details[item['id']] = {'chat': kind != 'embeddings', 'vision': kind == 'vlm',
+                                   'context': _count(item.get('max_context_length'))}
+    return details
+
+
+def _llama_cpp_details(data):
+    """llama.cpp's ``/props``: the context the server was started with (``-c``) and whether it reads images."""
+    if not isinstance(data, dict):
+        return {}
+    settings = data.get('default_generation_settings')
+    context = _count(settings.get('n_ctx')) if isinstance(settings, dict) else None
+    modalities = data.get('modalities') if isinstance(data.get('modalities'), dict) else {}
+    vision = modalities.get('vision') if isinstance(modalities.get('vision'), bool) else None
+    return {'*': {'chat': True, 'context': context, 'vision': vision}}
+
+
+def _server_root(provider):
+    """The provider with its address at the server's root (``…/v1`` removed), for the server's own API."""
+    root = dict(provider)
+    base = (provider['base_url'] or '').rstrip('/')
+    if not base.endswith('/v1'):
+        return None
+    root['base_url'] = base[:-3]
+    return root
+
+
+def _with_native_details(provider, models, cancel):
+    """Complete a local server's listing with what its own API says (context length, vision, embeddings...).
+
+    Optional: an older server, another product behind the same preset, or any failure leaves the listing as is."""
+    preset = provider['preset'] if 'preset' in provider.keys() else ''
+    if preset not in ('lmstudio', 'llamacpp') or not models:
+        return models
+    root = _server_root(provider)
+    if root is None:
+        return models
+    details = {}
+    paths = ('/api/v1/models', '/api/v0/models') if preset == 'lmstudio' else ('/props',)
+    for path in paths:
+        try:
+            data = _get_json(root, path, cancel)
+            details = _lm_studio_details(data) if preset == 'lmstudio' else _llama_cpp_details(data)
+        except Cancelled:
+            raise
+        except Exception as error:  # noqa: BLE001 - the extra details are optional (and may be malformed)
+            log.debug('%s%s did not answer usably for provider %s: %s', provider['preset'], path, provider['id'],
+                      type(error).__name__)
+            details = {}
+            continue
+        if details:
+            break
+    for entry in models:
+        found = details.get(entry['id']) or details.get('*')
+        if not found:
+            continue
+        for key in ('chat', 'context', 'vision', 'tools', 'reasoning'):
+            if found.get(key) is not None:
+                entry[key] = found[key]
+        if found.get('display') and entry['display'] == entry['id']:
+            entry['display'] = ' '.join(found['display'].split())[:120]
+    return models
 
 
 def check_key(provider):

@@ -197,6 +197,8 @@ class Config:
     min_free_disk_gb: float = 2.0
     http_threads: int = 16
     max_concurrent: int = 4
+    # Requests to hosted models (external providers, Claude, Codex) at the same time; they use no local capacity.
+    max_concurrent_hosted: int = 16
     max_queue_depth: int = 50
     queue_timeout: int = 120
     generation_timeout: int = 300
@@ -213,6 +215,10 @@ class Config:
     inference_fallback_api_key: str = ""
     workers_enabled: bool = False
     worker_claim_timeout: int = 20
+    # Maintenance access to worker PCs (SSH, VNC, RDP, a built-in terminal) through tunnels the workers open.
+    worker_remote_access: bool = False
+    worker_subnet: str = "10.77.0.0/16"
+    worker_tunnels_per_process: int = 4
     # Operator-installed subscription adapters; unset keeps that provider disconnected.
     claude_extension: str = ""
     claude_code_config: str = ""
@@ -440,6 +446,22 @@ def _path(value, base):
     return path if path.is_absolute() else (base / path)
 
 
+def _worker_subnet(r) -> str:
+    """The private IPv4 network whose addresses name worker PCs for remote access (never routed by the OS)."""
+    import ipaddress
+
+    value = r.text("BC_WORKER_SUBNET", "10.77.0.0/16") or "10.77.0.0/16"
+    try:
+        network = ipaddress.IPv4Network(value, strict=False)
+        if not network.is_private or not 8 <= network.prefixlen <= 24:
+            raise ValueError
+    except ValueError:
+        r.warnings.append(f"BC_WORKER_SUBNET={value!r} must be a private IPv4 network from /8 to /24; "
+                          "using 10.77.0.0/16.")
+        return "10.77.0.0/16"
+    return str(network)
+
+
 def load_config(environ=None, *, load_secret=True) -> Config:
     """Build a :class:`Config` from *environ* (defaults to ``os.environ``)."""
     env = os.environ if environ is None else environ
@@ -534,6 +556,7 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         min_free_disk_gb=r.number("BC_MIN_FREE_DISK_GB", 2, 0, 100_000),
         http_threads=r.integer("BC_HTTP_THREADS", 16, 8, 64),
         max_concurrent=max_concurrent,
+        max_concurrent_hosted=r.integer("BC_MAX_CONCURRENT_HOSTED", 16, 1, 256),
         max_queue_depth=r.integer("BC_MAX_QUEUE_DEPTH", 50, max_concurrent, 1000),
         queue_timeout=r.integer("BC_QUEUE_TIMEOUT", 120, 5, 3600),
         generation_timeout=generation_timeout,
@@ -550,6 +573,9 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         inference_fallback_api_key=_bearer_token(r, "BC_INFERENCE_FALLBACK_API_KEY", fallback_url) if fallback_url else "",
         workers_enabled=r.flag("BC_WORKERS_ENABLED", False),
         worker_claim_timeout=r.integer("BC_WORKER_CLAIM_TIMEOUT", 20, 2, 600),
+        worker_remote_access=r.flag("BC_WORKER_REMOTE_ACCESS", False),
+        worker_subnet=_worker_subnet(r),
+        worker_tunnels_per_process=r.integer("BC_WORKER_TUNNELS_PER_PROCESS", 4, 1, 64),
         claude_extension=_extension(r, "BC_CLAUDE_EXTENSION", "Claude"),
         claude_code_config=r.text("BC_CLAUDE_CODE_CONFIG"),
         codex_extension=_extension(r, "BC_CODEX_EXTENSION", "Codex"),

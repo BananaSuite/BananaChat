@@ -24,6 +24,7 @@ BLUEPRINTS = (
     ("bananachat.web.agents", "bp"),
     ("bananachat.web.api_v1", "bp"),
     ("bananachat.web.worker_api", "bp"),
+    ("bananachat.web.remote_api", "bp"),
     ("bananachat.web.admin", "bp"),
 )
 

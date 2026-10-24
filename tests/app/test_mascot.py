@@ -31,6 +31,7 @@ def _topbar(html: str) -> str:
 def test_the_mascot_takes_the_logo_s_place_and_the_name_still_links_home(app):
     topbar = _topbar(_signed_in(app, "admin").get("/account").get_data(as_text=True))
     button = re.search(r'<button type="button" class="mascot" data-mascot data-mascot-clicks="11" '
+                       r'data-mascot-motion="1" data-mascot-shades="1" data-mascot-konami="1" '
                        r'aria-label="BananaChat mascot" title="BananaChat mascot">\s*'
                        r'<span class="mascot__body">(<svg class="mascot-sprite" .*?</svg>)</span>\s*</button>',
                        topbar, re.S)

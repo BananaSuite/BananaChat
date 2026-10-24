@@ -15,14 +15,16 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from flask import abort, current_app, flash, request
+from flask import abort, current_app, flash, jsonify, request, url_for
 
-from bananachat import db
+from bananachat import db, security
 from bananachat.db import catalog
 from bananachat.db import settings as site_settings
 from bananachat.db import subscription_pool as pool_db
 from bananachat.security import admin_required
-from bananachat.services import model_lifecycle, subscription_pool
+from bananachat.services import model_lifecycle, subscription_login, subscription_pool, subscription_setup
+from bananachat.services.subscription_cli import ConnectorError
+from bananachat.services.subscription_profiles import NEW_PROFILE, account_of
 
 from . import _reauth, bp
 from ._helpers import FormError, audit, back, choice, integer, text, tokens
@@ -122,7 +124,31 @@ def _context(provider: str) -> dict:
     adapter = _adapter(provider)
     bindings = adapter.bindings() if adapter else {}
     transport = current_app.extensions.get(f"{provider}_transport", {})
-    return {"accounts": accounts, "quota": quota, "discovery": discovery, "available": available,
+    managed = bool(adapter is not None and getattr(adapter, "managed_root", None))
+    signin = {}
+    for row in accounts:
+        state = subscription_login.signin_status(provider, row["id"])
+        if state:
+            checked = state.get("checked_at")
+            state = {**state, "checked": _stamp(checked) if isinstance(checked, (int, float)) else None}
+        signin[row["id"]] = state
+    logins = {row["id"]: subscription_login.status(provider, row["id"]) for row in accounts}
+    can_sign_in = adapter is not None and callable(getattr(adapter, "login_command", None))
+    placeholder = 987654321
+
+    def template(endpoint):
+        return url_for(endpoint, account_id=placeholder).replace(str(placeholder), "ACCOUNT_ID")
+
+    return {"managed": managed, "new_profile": NEW_PROFILE, "signin": signin, "logins": logins,
+            "can_sign_in": can_sign_in, "setup_checks": subscription_setup.checks(provider),
+            "managed_accounts": {row["id"] for row in accounts
+                                 if account_of(bindings.get(str(row["id"]), row["label"])) is not None},
+            "active_logins": [account_id for account_id, login in logins.items()
+                              if login and login.get("state") in subscription_login.ACTIVE],
+            "login_urls": {"login": template(f"admin.{provider}_account_login"),
+                           "code": template("admin.claude_account_login_code") if provider == "claude" else None,
+                           "cancel": template(f"admin.{provider}_account_login_cancel")},
+            "accounts": accounts, "quota": quota, "discovery": discovery, "available": available,
             "enrollment": "automatic" if automatic else "manual", "automatic_enrollment": automatic,
             "connected": subscription_pool.connected(provider),
             "has_discovery": subscription_pool.discovers(provider),
@@ -173,7 +199,8 @@ def _profile(provider: str) -> str | None:
     adapter = _adapter(provider)
     if adapter is None:
         return None
-    return choice("profile", tuple(adapter.profiles), label=f"{SETUP[provider]['client']} profile")
+    options = tuple(adapter.profiles) + ((NEW_PROFILE,) if getattr(adapter, "managed_root", None) else ())
+    return choice("profile", options, label=f"{SETUP[provider]['client']} profile")
 
 
 def _bind(adapter, account, name: str) -> None:
@@ -199,15 +226,21 @@ def account_check(provider, account_id):
     if adapter is None:
         abort(400)
     shown = _shown_errors(adapter)
+    native = getattr(sys.modules.get(type(adapter).__module__), "NativeAuthenticationError", None)
     try:
         name, _ = adapter.profile_for(row)
-        adapter.check_profile(name)
+        result = adapter.check_profile(name)
     except shown as error:
+        if isinstance(native, type) and isinstance(error, native):
+            subscription_login.record_signin(provider, account_id, signed_in=False, message=str(error))
         flash(str(error), "error")
     except Exception as error:  # noqa: BLE001 - other errors can carry provider output; only their type is logged
         log.warning("Checking a %s profile failed (%s)", provider, type(error).__name__)
         flash("The profile could not be checked. Verify its private server configuration.", "error")
     else:
+        result = result if isinstance(result, dict) else {}
+        subscription_login.record_signin(provider, account_id, signed_in=True,
+                                         plan=result.get("subscription_type") or result.get("plan"))
         flash("Subscription login verified. Model access is checked when a request runs.", "success")
     audit(f"{provider}_account_check", row["label"], {"id": account_id})
     return back(f"admin.{provider}_pool", _anchor=f"account-{account_id}")
@@ -230,9 +263,15 @@ def account_add(provider):
         with db.transaction():
             account_id = pool_db.add_account(label, provider=provider, priority=priority, window_limit=window,
                                              weekly_limit=weekly, **caps)
+            if profile == NEW_PROFILE:
+                # A private profile of its own, signed in from this page with the official login.
+                profile = adapter.create_managed_profile(account_id)
             if profile is not None:
                 _bind(adapter, pool_db.get(account_id), profile)
     except (FormError, ValueError) as error:
+        flash(str(error), "error")
+        return back(f"admin.{provider}_pool")
+    except ConnectorError as error:  # credential-free, written for administrators
         flash(str(error), "error")
         return back(f"admin.{provider}_pool")
     if adapter is not None:
@@ -253,19 +292,30 @@ def account_save(provider, account_id):
     if request.form.get("action") == "delete":
         if not _reauth.confirmed():
             return back(pool, _anchor=f"account-{account_id}")
+        bound = adapter.bindings().get(str(account_id), row["label"]) if adapter is not None else None
         try:
             with db.transaction():
                 pool_db.remove_account(account_id)
                 if adapter is not None:
-                    bindings = dict(adapter.bindings())
+                    bindings = dict(site_settings.state_get(adapter.bindings_key, {}) or {})
                     bindings.pop(str(account_id), None)
                     site_settings.state_set(adapter.bindings_key, bindings)
         except ValueError as error:
             flash(str(error), "error")
             return back(pool, _anchor=f"account-{account_id}")
+        removed = False
+        if adapter is not None and account_of(bound) == account_id and adapter.is_managed(bound):
+            # The account's own profile signed in on this page: its sign-in goes with it.
+            subscription_login.cancel(provider, account_id)
+            try:
+                removed = adapter.remove_managed_profile(bound)
+            except (ConnectorError, OSError) as error:
+                flash(f"The account was removed, but its profile could not be deleted: {error}", "error")
+        subscription_login.forget(provider, account_id)
         subscription_pool.invalidate(provider)
-        audit(f"{provider}_account_delete", row["label"], {"id": account_id})
-        flash(f"Subscription account {row['label']} removed.", "success")
+        audit(f"{provider}_account_delete", row["label"], {"id": account_id, "profile_deleted": removed})
+        flash(f"Subscription account {row['label']} removed." + (" Its sign-in on this server was deleted."
+                                                                 if removed else ""), "success")
         return back(pool)
     try:
         status = choice("status", pool_db.STATUSES, label="Status")
@@ -372,3 +422,101 @@ def refresh(provider):
     else:
         flash(f"{name} pool quota re-read.", "success")
     return back(f"admin.{provider}_pool")
+
+
+# ----- signing in from this page ------------------------------------------------------------------------------
+
+def _json(value, status=200):
+    response = jsonify(value)
+    response.status_code = status
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _signin_adapter(provider: str):
+    adapter = _adapter(provider)
+    if adapter is None or not callable(getattr(adapter, "login_command", None)):
+        raise subscription_login.LoginError(f"{SETUP[provider]['name']} is not connected on this server. Follow the "
+                                            "setup checklist on this page first.")
+    return adapter
+
+
+@bp.route("/models/claude/accounts/<int:account_id>/login", methods=["GET", "POST"],
+          endpoint="claude_account_login", defaults={"provider": "claude"})
+@bp.route("/models/codex/accounts/<int:account_id>/login", methods=["GET", "POST"],
+          endpoint="codex_account_login", defaults={"provider": "codex"})
+@admin_required
+def account_login(provider, account_id):
+    """GET: the account's sign-in (JSON). POST: start the official sign-in in its profile (needs a confirmation)."""
+    row = _account(provider, account_id)
+    if request.method == "GET":
+        return _json({"login": subscription_login.status(provider, account_id),
+                      "signin": subscription_login.signin_status(provider, account_id)})
+    payload = request.get_json(silent=True) if request.is_json else None
+    problem = _reauth.refusal((payload or {}).get("reauth_secret") if isinstance(payload, dict) else None)
+    if problem:
+        return security.json_error(problem, 403, "reauth_required")
+    try:
+        adapter = _signin_adapter(provider)
+        session = subscription_login.start(current_app._get_current_object(), adapter, provider, row,
+                                           by=(security.current_user() or {}).get("username") or "")
+    except subscription_login.LoginError as error:
+        return security.json_error(str(error), 409, "login_unavailable")
+    except ConnectorError as error:  # credential-free, written for administrators
+        return security.json_error(str(error), 409, "login_unavailable")
+    audit(f"{provider}_account_login", row["label"], {"id": account_id})
+    return _json({"login": session}, 202)
+
+
+@bp.post("/models/claude/accounts/<int:account_id>/login/code", endpoint="claude_account_login_code",
+         defaults={"provider": "claude"})
+@admin_required
+def account_login_code(provider, account_id):
+    _account(provider, account_id)
+    payload = request.get_json(silent=True) if request.is_json else None
+    code = (payload or {}).get("code") if isinstance(payload, dict) else request.form.get("code")
+    try:
+        session = subscription_login.submit_code(provider, account_id, code)
+    except subscription_login.LoginError as error:
+        return security.json_error(str(error), 400, "invalid_code")
+    return _json({"login": session})
+
+
+@bp.post("/models/claude/accounts/<int:account_id>/login/cancel", endpoint="claude_account_login_cancel",
+         defaults={"provider": "claude"})
+@bp.post("/models/codex/accounts/<int:account_id>/login/cancel", endpoint="codex_account_login_cancel",
+         defaults={"provider": "codex"})
+@admin_required
+def account_login_cancel(provider, account_id):
+    row = _account(provider, account_id)
+    session = subscription_login.cancel(provider, account_id)
+    audit(f"{provider}_account_login_cancel", row["label"], {"id": account_id})
+    if security.wants_json():
+        return _json({"login": session})
+    flash("Sign-in cancelled.", "info")
+    return back(f"admin.{provider}_pool", _anchor=f"account-{account_id}")
+
+
+@bp.post("/models/claude/accounts/<int:account_id>/logout", endpoint="claude_account_logout",
+         defaults={"provider": "claude"})
+@bp.post("/models/codex/accounts/<int:account_id>/logout", endpoint="codex_account_logout",
+         defaults={"provider": "codex"})
+@admin_required
+def account_logout(provider, account_id):
+    row = _account(provider, account_id)
+    try:
+        adapter = _signin_adapter(provider)
+        if pool_db.leased(account_id):
+            raise subscription_login.LoginError("Wait for this account's current request to finish first.")
+        subscription_login.sign_out(adapter, provider, row)
+    except subscription_login.LoginError as error:
+        flash(str(error), "error")
+        return back(f"admin.{provider}_pool", _anchor=f"account-{account_id}")
+    except Exception as error:  # noqa: BLE001 - provider output stays out of the page
+        log.warning("Signing out a %s profile failed (%s)", provider, type(error).__name__)
+        flash("The account could not be signed out. See the server log.", "error")
+        return back(f"admin.{provider}_pool", _anchor=f"account-{account_id}")
+    audit(f"{provider}_account_logout", row["label"], {"id": account_id})
+    flash(f"{row['label']} is signed out on this server. It answers no requests until it is signed in again.",
+          "success")
+    return back(f"admin.{provider}_pool", _anchor=f"account-{account_id}")

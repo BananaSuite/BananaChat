@@ -1,9 +1,14 @@
 """Admission control for inference, shared by every worker process.
 
-``inference_queue`` holds one row per waiting or running request. A request
-runs when fewer than ``BC_MAX_CONCURRENT`` are running and it is the first
-waiting row in (priority, arrival) order whose owner has nothing running
-(at most three requests per owner, one of them running). Rows carry a heartbeat
+``inference_queue`` holds one row per waiting or running request. Requests
+wait and run in one of two **lanes**: ``local`` (Ollama on this server, the
+compute server or a worker PC; at most ``BC_MAX_CONCURRENT`` running) and
+``hosted`` (external API providers and the Claude and Codex pools; at most
+``BC_MAX_CONCURRENT_HOSTED``), so local requests stuck on a model server or a
+worker that went away never hold up hosted ones (nor the other way round). In
+its lane a request runs when the lane has a free place and it is the first
+waiting row in (priority, arrival) order whose owner has nothing running in
+that lane (at most three requests per owner and lane). Rows carry a heartbeat
 renewed by the supervisor; rows of crashed processes expire after
 ``LEASE_SECONDS`` and are removed. A worker process that exits frees its rows
 at once (:func:`release_process`), and the gunicorn master lets those of a
@@ -50,6 +55,10 @@ _held: set[str] = set()  # request ids of the rows this process holds
 _held_lock = threading.Lock()
 
 
+LANES = ("local", "hosted")
+HOSTED_BACKENDS = ("external", "claude", "codex")
+
+
 class QueueFull(RuntimeError):
     """The queue (or this owner's share of it) is full."""
 
@@ -58,9 +67,20 @@ class QueueTimeout(RuntimeError):
     """The request waited too long for a free slot."""
 
 
-def _limits():
+def _limits(lane: str = "local"):
     config = current_app.config["BC"]
+    if lane == "hosted":
+        return getattr(config, "max_concurrent_hosted", 16), config.max_queue_depth
     return config.max_concurrent, config.max_queue_depth
+
+
+def lane_for(model) -> str:
+    """``hosted`` for a model that no local server answers, else ``local``."""
+    try:
+        backend = model["backend"] if model is not None else None
+    except (KeyError, IndexError, TypeError):
+        backend = None
+    return "hosted" if backend in HOSTED_BACKENDS else "local"
 
 
 def _memory_ok() -> bool:
@@ -91,9 +111,15 @@ def _wake_waiters() -> None:
 class Slot:
     """A place in the inference queue. Always use as a context manager."""
 
-    def __init__(self, priority: int, *, owner_key: str | None = None, model: str | None = None):
+    def __init__(self, priority: int, *, owner_key: str | None = None, model: str | None = None,
+                 lane: str = "local"):
+        if lane not in LANES:
+            raise ValueError("Unknown queue lane.")
         self.priority = priority
-        self.owner_key = owner_key
+        self.lane = lane
+        # One running request per owner and lane (the unique index on running owner keys): a hosted request of an
+        # account does not wait for its local one.
+        self.owner_key = f"{owner_key}:hosted" if owner_key and lane == "hosted" else owner_key
         # The model this request uses, so a model is not deleted under it (see set_model).
         self.model = model
         self.request_id = uuid.uuid4().hex
@@ -104,18 +130,19 @@ class Slot:
 
     # context management -------------------------------------------------
     def __enter__(self):
-        max_concurrent, max_depth = _limits()
+        max_concurrent, max_depth = _limits(self.lane)
         now = time.time()
         with db.transaction():
             db.execute("DELETE FROM inference_queue WHERE heartbeat_at<?", (now - LEASE_SECONDS,))
-            if db.scalar("SELECT COUNT(*) FROM inference_queue", default=0) >= max_depth:
+            if db.scalar("SELECT COUNT(*) FROM inference_queue WHERE lane=?", (self.lane,), 0) >= max_depth:
                 raise QueueFull("The service is busy. Please try again shortly.")
             if self.owner_key and db.scalar("SELECT COUNT(*) FROM inference_queue WHERE owner_key=?",
                                             (self.owner_key,), 0) >= MAX_PER_OWNER:
                 raise QueueFull("You already have several requests in progress. Wait for them to finish.")
             db.execute("INSERT INTO inference_queue (req_id, priority, status, owner_pid, enqueued_at, heartbeat_at, "
-                       "owner_key, model_name) VALUES (?,?,'waiting',?,?,?,?,?)",
-                       (self.request_id, self.priority, os.getpid(), now, now, self.owner_key, self.model))
+                       "owner_key, model_name, lane) VALUES (?,?,'waiting',?,?,?,?,?,?)",
+                       (self.request_id, self.priority, os.getpid(), now, now, self.owner_key, self.model,
+                        self.lane))
         supervisor.register_slot(self.request_id)
         with _held_lock:
             _held.add(self.request_id)
@@ -156,23 +183,23 @@ class Slot:
         if row is None or row["status"] == "running":
             return 0
         return db.scalar(
-            "SELECT COUNT(*) FROM inference_queue WHERE status='waiting' AND heartbeat_at>=? AND "
+            "SELECT COUNT(*) FROM inference_queue WHERE status='waiting' AND heartbeat_at>=? AND lane=? AND "
             "(priority<? OR (priority=? AND seq<=?))",
-            (time.time() - LEASE_SECONDS, row["priority"], row["priority"], row["seq"]), 1)
+            (time.time() - LEASE_SECONDS, self.lane, row["priority"], row["priority"], row["seq"]), 1)
+
+    def _running(self, cutoff: float) -> int:
+        return db.scalar("SELECT COUNT(*) FROM inference_queue WHERE status='running' AND heartbeat_at>=? AND lane=?",
+                         (cutoff, self.lane), 0)
 
     def _try_start(self) -> bool:
-        max_concurrent, _ = _limits()
+        max_concurrent, _ = _limits(self.lane)
         cutoff = time.time() - LEASE_SECONDS
-        running = db.scalar("SELECT COUNT(*) FROM inference_queue WHERE status='running' AND heartbeat_at>=?",
-                            (cutoff,), 0)
-        if running >= max_concurrent:
+        if self._running(cutoff) >= max_concurrent:
             return False
-        if not self._is_next(cutoff) or not _model_memory_ok(self.model):
+        if not self._is_next(cutoff) or (self.lane == "local" and not _model_memory_ok(self.model)):
             return False
         with db.transaction():
-            running = db.scalar("SELECT COUNT(*) FROM inference_queue WHERE status='running' AND heartbeat_at>=?",
-                                (cutoff,), 0)
-            if running >= max_concurrent or not self._is_next(cutoff):
+            if self._running(cutoff) >= max_concurrent or not self._is_next(cutoff):
                 return False
             updated = db.execute("UPDATE inference_queue SET status='running', started_at=?, heartbeat_at=? "
                                  "WHERE req_id=? AND status='waiting'", (time.time(), time.time(), self.request_id))
@@ -180,18 +207,18 @@ class Slot:
 
     def _is_next(self, cutoff: float) -> bool:
         memory_filter = ""
-        if not _memory_ok():
+        if self.lane == "local" and not _memory_ok():
             # A local request waiting for model memory must not stall hosted
-            # requests. Priority/arrival order still applies to eligible work.
+            # requests that older releases queued in this lane. Priority/arrival order still applies to eligible work.
             memory_filter = "AND EXISTS (SELECT 1 FROM ai_models m WHERE m.backend IN ('external','claude','codex') " \
                             "AND (m.ollama_name=w.model_name OR " \
                             "(m.backend IN ('claude','codex') AND m.backend_model_name=w.model_name))) "
         first = db.one(
-            "SELECT w.req_id FROM inference_queue w WHERE w.status='waiting' AND w.heartbeat_at>=? AND "
+            "SELECT w.req_id FROM inference_queue w WHERE w.status='waiting' AND w.heartbeat_at>=? AND w.lane=? AND "
             "(w.owner_key IS NULL OR NOT EXISTS (SELECT 1 FROM inference_queue r WHERE r.status='running' "
-            "AND r.owner_key=w.owner_key AND r.heartbeat_at>=?)) " + memory_filter +
+            "AND r.owner_key=w.owner_key AND r.heartbeat_at>=? AND r.lane=w.lane)) " + memory_filter +
             "ORDER BY w.priority, w.seq LIMIT 1",
-            (cutoff, cutoff))
+            (cutoff, self.lane, cutoff))
         return first is not None and first["req_id"] == self.request_id
 
     def wait(self, *, timeout: float, cancel: CancelToken | None = None, on_position=None) -> None:

@@ -1,5 +1,36 @@
 """External-provider metadata. API secrets are never part of these rows."""
+import sqlite3
+import threading
+import time
+
 from bananachat import db
+
+LOCAL_CACHE_SECONDS = 15
+_local_cache: dict = {}
+_local_lock = threading.Lock()
+
+
+def local_ids() -> frozenset:
+    """IDs of the providers that run on the operator's own hardware (``local_backend``), cached for a few seconds
+    per database: :func:`bananachat.services.limits.is_local` asks for every request."""
+    key = str(db.path())
+    now = time.monotonic()
+    with _local_lock:
+        cached = _local_cache.get(key)
+        if cached is not None and now - cached[0] < LOCAL_CACHE_SECONDS:
+            return cached[1]
+    try:
+        ids = frozenset(row[0] for row in db.query("SELECT id FROM external_providers WHERE local_backend=1"))
+    except sqlite3.OperationalError:
+        ids = frozenset()  # a database before schema version 27
+    with _local_lock:
+        _local_cache[key] = (now, ids)
+    return ids
+
+
+def forget_local_ids() -> None:
+    with _local_lock:
+        _local_cache.clear()
 
 
 def get(provider_id):
@@ -13,7 +44,7 @@ def list_providers(*, enabled_only=False):
 
 def save(provider_id=None, **fields):
     allowed = {'name', 'base_url', 'protocol', 'secret_ref', 'enabled', 'allow_private', 'auto_enroll', 'token_parameter',
-               'stream_usage', 'preset', 'auth_style', 'extra_headers'}
+               'stream_usage', 'preset', 'auth_style', 'extra_headers', 'local_backend'}
     if not fields or not fields.keys() <= allowed:
         raise ValueError('Invalid provider fields.')
     with db.transaction():

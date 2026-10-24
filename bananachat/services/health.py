@@ -13,8 +13,20 @@ import time
 from bananachat.db import settings as site_settings
 
 STATE_KEY = "inference_health"
+# An outage recorded longer ago than this without a new probe is not believed: the probe stopped (no process runs
+# the background services, or the server became local), and a stale "down" would pause answers and downloads for ever.
+STALE_SECONDS = 900
 _lock = threading.Lock()
 _cache = {"at": 0.0, "down": False}
+
+
+def _down(state) -> bool:
+    if not isinstance(state, dict) or not state.get("down"):
+        return False
+    checked = state.get("checked_at")
+    if isinstance(checked, (int, float)) and not isinstance(checked, bool) and time.time() - checked > STALE_SECONDS:
+        return False
+    return True
 
 
 def inference_down(max_age: float = 5.0) -> bool:
@@ -23,7 +35,7 @@ def inference_down(max_age: float = 5.0) -> bool:
         if now - _cache["at"] < max_age:
             return _cache["down"]
     state = site_settings.state_get(STATE_KEY, {}) or {}
-    down = bool(state.get("down"))
+    down = _down(state)
     with _lock:
         _cache.update(at=now, down=down)
     return down

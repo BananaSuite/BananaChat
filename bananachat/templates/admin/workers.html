@@ -28,6 +28,7 @@
   </td>
   <td class="nowrap" data-label="Last heartbeat:">{% if w.last_heartbeat %}<span title="{{ w.last_heartbeat | datetime }}">{{ w.last_heartbeat | timeago }}</span>{% else %}never{% endif %}</td>
   <td class="actions">
+    <a class="btn btn-sm" href="{{ url_for('admin.worker_detail', worker_id=w.id) }}">{{ icon("settings") }}<span>Manage</span></a>
     <form method="post" action="{{ url_for('admin.workers_state', worker_id=w.id) }}"
           {% if w.status != 'disabled' %}data-confirm="Stop sending jobs to “{{ w.name }}”? A job it is running now is stopped." data-confirm-label="Disable"{% endif %}>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -119,6 +120,67 @@
     </table>
   </div>
   <p class="empty" id="workers-empty"{% if workers %} hidden{% endif %}>No workers yet. Register one above.</p>
+</section>
+
+<section class="settings-section" aria-labelledby="bulk-title">
+  <h2 id="bulk-title">Download a model to worker PCs</h2>
+  <form method="post" action="{{ url_for('admin.workers_command_bulk') }}" class="row" data-busy>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="field grow">
+      <label for="bulk-model">Model</label>
+      <input type="text" id="bulk-model" name="model" required maxlength="300" placeholder="qwen3:4b" autocomplete="off" spellcheck="false" aria-describedby="bulk-model-hint">
+      <span class="hint" id="bulk-model-hint">Every online worker that manages its models downloads it with its own Ollama. Follow the progress on each worker's Manage page; a worker that is offline gets it when it comes back (within a day).</span>
+    </div>
+    <button type="submit" class="btn btn-primary">{{ icon("download") }}<span>Download everywhere</span></button>
+  </form>
+</section>
+
+<section class="settings-section" aria-labelledby="remote-access-title" id="remote-access">
+  <h2 id="remote-access-title">Maintenance access</h2>
+  {% if not remote_enabled %}
+  <p class="muted">Off. With <code>BC_WORKER_REMOTE_ACCESS=1</code> (and <code>BC_WORKERS_ENABLED=1</code>) administrators can reach worker PCs for maintenance through tunnels the workers open themselves: a terminal and the screen (VNC) in the browser, and SSH, VNC or RDP from their own computer with the connect helper. No port is opened on the worker's network, and each worker's owner decides what can be reached.</p>
+  {% else %}
+  <p class="muted small">Open a worker's <em>Manage</em> page for its terminal and screen. For SSH, VNC and RDP clients on your own computer, download the <a href="{{ helper_url }}" download="bananachat_connect.py">connect helper</a> (one Python file, Linux, macOS and Windows) and create an access key here. Each worker has an address in the virtual network <code>{{ subnet }}</code>, reachable through the helper wherever the worker is.</p>
+  <pre class="card small">python bananachat_connect.py login {{ server_url }}
+python bananachat_connect.py list
+ssh -o ProxyCommand="python bananachat_connect.py proxy %h %p" user@WORKER-ADDRESS
+python bananachat_connect.py socks --listen 127.0.0.1:1080</pre>
+  <h3>Access keys</h3>
+  <form id="key-form" class="row">
+    <div class="field grow"><label for="key-label">Label</label><input type="text" id="key-label" name="label" maxlength="80" placeholder="e.g. Luca's laptop" autocomplete="off"></div>
+    <div class="field"><label for="key-hours">Valid for (hours)</label><input type="number" id="key-hours" name="hours" min="1" max="720" value="8" required></div>
+    {{ reauth_field("key-reauth") }}
+    <button type="submit" class="btn btn-primary">{{ icon("key") }}<span>Create key</span></button>
+  </form>
+  <div class="table-wrap mt-1">
+    <table class="table table-stack table-stack-md">
+      <thead><tr><th>Label</th><th>Created</th><th>Expires</th><th>Last used</th><th class="actions"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody id="keys-body">
+        {% for key in keys %}
+        <tr><td>{{ key.label or "—" }}{% if key.revoked %} <span class="badge">revoked</span>{% elif not key.active %} <span class="badge">expired</span>{% endif %}<br><span class="small muted">{{ key.created_by or "" }}</span></td>
+          <td class="small">{{ key.created_at | int | datetime if key.created_at else "—" }}</td>
+          <td class="small">{{ key.expires_at | int | datetime if key.expires_at else "—" }}</td>
+          <td class="small">{{ key.last_used_at | int | datetime if key.last_used_at else "never" }}</td>
+          <td class="actions">{% if key.active %}<form method="post" action="{{ url_for('admin.workers_key_revoke', key_id=key.id) }}" data-confirm="Revoke this key? The helper using it stops working and its sessions end." data-confirm-danger><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-ghost">Revoke</button></form>{% endif %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not keys %}<p class="small muted">No access keys yet.</p>{% endif %}
+  <h3>Recent sessions</h3>
+  {% if sessions %}
+  <div class="table-wrap">
+    <table class="table table-stack table-stack-md">
+      <thead><tr><th>Worker</th><th>Target</th><th>Status</th><th>By</th><th>Opened</th></tr></thead>
+      <tbody>
+        {% for item in sessions %}
+        <tr><td>{{ item.worker or "—" }}</td><td class="mono">{{ item.target }}</td><td>{{ item.status }}{% if item.error and item.status == "failed" %}<br><span class="small muted">{{ item.error }}</span>{% endif %}</td><td>{{ item.by }}</td><td class="small">{{ item.created_at | int | datetime }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<p class="small muted">None yet. Every session is also recorded in the audit log.</p>{% endif %}
+  {% endif %}
 </section>
 
 <section class="settings-section" aria-labelledby="setup-title">

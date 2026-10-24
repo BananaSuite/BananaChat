@@ -67,6 +67,17 @@ function apply() {
   }
   if (prefs.contrast) body.classList.add(`contrast-${prefs.contrast}`);
   body.classList.toggle("reduce-motion", Boolean(prefs.reduce_motion));
+  body.classList.toggle("bm-mode", Boolean(data.bm_mode_global) || prefs.bm_mode === true);
+  const mascot = document.querySelector("[data-mascot]");
+  if (mascot) {
+    // The easter eggs: on when the site offers them and this person wants them (mascot.js reads these at each use).
+    const site = data.easter_site || {};
+    const flags = { mascotMotion: "mascot_motion", mascotShades: "mascot_shades", mascotKonami: "konami" };
+    for (const [attribute, egg] of Object.entries(flags)) {
+      mascot.dataset[attribute] = site[egg] !== false && prefs[`egg_${egg}`] !== false ? "1" : "0";
+    }
+    mascot.dispatchEvent(new CustomEvent("bananachat:eggs"));
+  }
   for (const kind of SEMANTIC) {
     const level = prefs[`semantic_${kind}`];
     if (level) body.classList.add(`sem-${kind}-${level}`);
@@ -207,6 +218,10 @@ function save() {
       reloadNeeded ||= Boolean(result.reload);
       if (ticket !== revision) return;
       prefs = { ...prefs, ...result.preferences };
+      if (changes.bm_mode !== prefs.bm_mode) {  // refused (an administrator decides it): show the real state
+        apply();
+        syncForm();
+      }
       savedRevision = ticket;
       setStatus(t("customize_saved"), "is-saved");
     } catch (error) {

@@ -27,7 +27,8 @@ import time
 import uuid
 from pathlib import Path
 
-from flask import Blueprint, current_app, g, jsonify, render_template, request, send_from_directory, session, url_for
+from flask import (Blueprint, current_app, flash, g, jsonify, redirect, render_template, request,
+                   send_from_directory, session, url_for)
 from werkzeug.exceptions import NotFound
 
 from bananachat import db, security
@@ -239,7 +240,7 @@ def index():
         else "dark"
     config = _config()
     data = {
-        "preferences": prefs,
+        "preferences": _with_bm_mode(prefs, user),
         "defaults": users.PREFERENCE_DEFAULTS,
         "site_palettes": {"dark": site_settings.palette(settings, "dark"),
                           "light": site_settings.palette(settings, "light")},
@@ -247,6 +248,8 @@ def index():
         "presets": {name: {mode: dict(zip(COLOR_ORDER, colours, strict=True)) for mode, colours in variants.items()}
                     for name, variants in PRESETS.items()},
         "font_scales": users.FONT_SCALES,
+        "bm_mode_global": bool(settings.get("bm_mode_global")),
+        "easter_site": {egg: bool(settings.get(f"easter_{egg}", 1)) for egg in site_settings.EASTER_EGGS},
         "background_url": _background_url(prefs),
         "background_max_bytes": config.background_max_bytes,
         "urls": {
@@ -263,14 +266,22 @@ def index():
 
 # ----- JSON API -------------------------------------------------------------
 
-def _payload(prefs: dict, **extra):
-    return jsonify({"ok": True, "preferences": prefs, "background_url": _background_url(prefs), **extra})
+def _with_bm_mode(prefs: dict, user) -> dict:
+    """The preferences as the page sees them, with the account's BM mode (kept on the account: administrators
+    may decide it, see db.users.bm_mode_switchable)."""
+    return {**prefs, "bm_mode": users.bm_mode(user, g.settings)}
+
+
+def _payload(prefs: dict, user, **extra):
+    return jsonify({"ok": True, "preferences": _with_bm_mode(prefs, user), "background_url": _background_url(prefs),
+                    "bm_mode_switchable": users.bm_mode_switchable(user, g.settings), **extra})
 
 
 @bp.get("/api/preferences", endpoint="get_preferences")
 @security.login_required
 def get_preferences():
-    return _payload(users.get_preferences(security.current_user()["id"]))
+    user = security.current_user()
+    return _payload(users.get_preferences(user["id"]), user)
 
 
 @bp.post("/api/preferences", endpoint="save_preferences")
@@ -286,13 +297,20 @@ def save_preferences():
         current = users.get_preferences(user["id"])
         merged = {**current, **{key: value for key, value in changes.items() if key in CLIENT_KEYS}}
         saved = users.save_preferences(user["id"], merged)
+        wanted = changes.get("bm_mode")
+        # Ignored when the site has it on for everyone or an administrator decides it for this account: the
+        # answer carries the account's real state, so the page shows it.
+        if isinstance(wanted, bool) and users.bm_mode_switchable(user, g.settings) \
+                and wanted != users.bm_mode(user, g.settings):
+            users.set_bm_mode(user["id"], wanted)
+            user = users.get(user["id"])
     language_changed = saved["interface_language"] != current["interface_language"]
     if saved["interface_language"] in LANGUAGE_NAMES:
         session["language"] = saved["interface_language"]
     elif language_changed:
         # Back to "default": forget the choice copied into the session, so the browser's language applies.
         session.pop("language", None)
-    return _payload(saved, reload=language_changed)
+    return _payload(saved, user, reload=language_changed)
 
 
 @bp.get("/api/accessibility", endpoint="legacy_get")
@@ -300,6 +318,20 @@ def save_preferences():
 def legacy_get():
     """The previous release returned the bare preferences object."""
     return jsonify(users.get_preferences(security.current_user()["id"]))
+
+
+@bp.post("/customize/bm-mode", endpoint="toggle_bm_mode")
+@security.login_required
+@security.rate_limit("preferences", 120, 60, per_user=True)
+def toggle_bm_mode():
+    """Switch BM mode (the easy mode) on or off from the account menu, then return to the page."""
+    user = security.current_user()
+    if users.bm_mode_switchable(user, g.settings):
+        users.set_bm_mode(user["id"], not users.bm_mode(user, g.settings))
+    else:
+        flash(_t("customize.bm_mode_everyone" if g.settings.get("bm_mode_global") else "customize.bm_mode_admin_only"),
+              "error")
+    return redirect(security.safe_next_url(request.form.get("next")) or url_for("chat.index"))
 
 
 @bp.post("/api/preferences/reset", endpoint="reset_preferences")
@@ -314,7 +346,7 @@ def reset_preferences():
     remove_background_file(previous["background_image"])
     if previous["interface_language"] != "default":
         session.pop("language", None)
-    return _payload(defaults, defaults=defaults, reload=previous["interface_language"] != "default")
+    return _payload(defaults, user, defaults=defaults, reload=previous["interface_language"] != "default")
 
 
 @bp.route("/api/preferences/background", methods=["POST", "DELETE"], endpoint="upload_background")
@@ -328,7 +360,7 @@ def upload_background():
     user = security.current_user()
     if request.method == "DELETE":
         clear_background(user["id"])
-        return _payload(users.get_preferences(user["id"]), url="")
+        return _payload(users.get_preferences(user["id"]), user, url="")
     upload = request.files.get("file") or request.files.get("image")
     if upload is None or not upload.filename:
         return security.json_error(_t("customize.background_missing"), 400)
@@ -340,7 +372,7 @@ def upload_background():
         code = "too_large" if problem.status == 413 else "invalid_image"
         return security.json_error(_t(problem.key, **problem.params), problem.status, code)
     prefs = users.get_preferences(user["id"])
-    return _payload(prefs, background_image=filename, url=_background_url(prefs))
+    return _payload(prefs, user, background_image=filename, url=_background_url(prefs))
 
 
 # ----- serving --------------------------------------------------------------

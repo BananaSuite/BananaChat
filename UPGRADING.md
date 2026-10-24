@@ -15,6 +15,40 @@ The updater backs everything up, starts the new release and checks `/health`
 before letting users back in. If anything fails it restores the old code and
 database together.
 
+## 1.7.2 to 1.7.3
+
+One database migration (`v27_worker_maintenance`, schema version 27), additive
+only. Nothing new is switched on by the update except what is listed here.
+Going back to 1.7.2 is a normal `sudo bananachat rollback`, which restores the
+database from before the update.
+
+- **Hosted lane.** Requests to external providers and the subscription pools
+  no longer count towards `BC_MAX_CONCURRENT`; they have their own limit,
+  `BC_MAX_CONCURRENT_HOSTED` (16). Lower it if a provider rate-limits you.
+- **Local providers.** Providers made from the LM Studio, vLLM and llama.cpp
+  presets are marked *Runs on our own hardware*: their models now count as
+  local models for the chat token settings, and while such a server is off its
+  models are hidden. Untick the option on a provider that is not on your
+  hardware.
+- **Subscriptions.** Existing profiles and manifests keep working. To sign new
+  accounts in from the page, run
+  `sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py`
+  (add `--allow-bwrap-userns` on Ubuntu 23.10 and later) and follow
+  [Claude Code](docs/claude-code.md#quick-setup-sign-in-from-the-administration-page).
+- **Worker maintenance access** is off until you set
+  `BC_WORKER_REMOTE_ACCESS=1` and a worker's owner allows it. It uses
+  WebSockets through the existing proxy; each open session holds an HTTP
+  thread (`BC_WORKER_TUNNELS_PER_PROCESS`, default 4 per process).
+- **Workers** keep working with their current daemon. Copy the new `worker/`
+  folder to a PC for maintenance access, model management, hardware readings
+  and reasoning relay; model management is on by default there
+  (`BC_WORKER_MODEL_MANAGEMENT=0` refuses it).
+- **BM mode** starts off for every account. Administration → Settings turns
+  it on for everyone, or leaves it per account; people may switch their own
+  unless you untick that there or lock an account on its page.
+- **Easter eggs** stay as they were (all on); Administration → Settings →
+  Easter eggs switches each off for the site.
+
 ## 1.7.1 to 1.7.2
 
 One database migration (`v26_subscription_pool`, schema version 26) adds the

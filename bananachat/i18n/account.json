@@ -477,7 +477,20 @@
   },
   "account.quota_community_kinds": "The community can approve: {kinds}.",
   "account.quota_submitted_community": "Request sent to the administrators and the community.",
-  "account.reason_renounced": "Pledged to someone else −{tokens} until {until}"
+  "account.reason_renounced": "Pledged to someone else −{tokens} until {until}",
+  "customize.bm_mode": "BM mode (easy mode)",
+  "customize.bm_mode_hint": "A simpler interface: the chat, the model choice and the essentials. Reasoning effort, sampling settings, personalities and the extra pages are hidden, and their defaults apply.",
+  "customize.eggs": "Easter eggs",
+  "customize.eggs_hint": "Small surprises hidden around the site. Switch off any you would rather not meet.",
+  "customize.egg_mascot_motion": "Lively banana",
+  "customize.egg_mascot_motion_hint": "The banana in the top bar bobs, blinks and hops when clicked.",
+  "customize.egg_mascot_shades": "The banana's secret",
+  "customize.egg_mascot_shades_hint": "Something happens if you keep clicking the banana in the top bar.",
+  "customize.egg_konami": "Banana shower",
+  "customize.egg_konami_hint": "A famous video-game code, typed anywhere on a page, makes it rain bananas.",
+  "customize.egg_site_off": "Turned off on this site.",
+  "customize.bm_mode_everyone": "It is on for everyone on this site.",
+  "customize.bm_mode_admin_only": "An administrator switches it for your account."
  },
  "it": {
   "account.title": "Account",
@@ -957,7 +970,20 @@
   },
   "account.quota_community_kinds": "La community può approvare: {kinds}.",
   "account.quota_submitted_community": "Richiesta inviata agli amministratori e alla community.",
-  "account.reason_renounced": "Ceduti a un'altra persona −{tokens} fino al {until}"
+  "account.reason_renounced": "Ceduti a un'altra persona −{tokens} fino al {until}",
+  "customize.bm_mode": "Modalità BM (modalità facile)",
+  "customize.bm_mode_hint": "Un'interfaccia più semplice: la chat, la scelta del modello e l'essenziale. Impegno di ragionamento, parametri di campionamento, personalità e pagine aggiuntive sono nascosti e si usano i valori predefiniti.",
+  "customize.eggs": "Easter egg",
+  "customize.eggs_hint": "Piccole sorprese nascoste nel sito. Disattiva quelle che preferisci non incontrare.",
+  "customize.egg_mascot_motion": "Banana vivace",
+  "customize.egg_mascot_motion_hint": "La banana nella barra in alto ondeggia, sbatte le palpebre e salta quando la clicchi.",
+  "customize.egg_mascot_shades": "Il segreto della banana",
+  "customize.egg_mascot_shades_hint": "Succede qualcosa se continui a cliccare la banana nella barra in alto.",
+  "customize.egg_konami": "Pioggia di banane",
+  "customize.egg_konami_hint": "Un famoso codice dei videogiochi, digitato in qualsiasi pagina, fa piovere banane.",
+  "customize.egg_site_off": "Disattivato su questo sito.",
+  "customize.bm_mode_everyone": "È attiva per tutti su questo sito.",
+  "customize.bm_mode_admin_only": "Per il tuo account la gestisce un amministratore."
  },
  "de": {
   "account.title": "Konto",
@@ -1437,6 +1463,19 @@
   },
   "account.quota_community_kinds": "Die Community kann genehmigen: {kinds}.",
   "account.quota_submitted_community": "Anfrage an die Administratoren und die Community gesendet.",
-  "account.reason_renounced": "An eine andere Person abgegeben −{tokens} bis {until}"
+  "account.reason_renounced": "An eine andere Person abgegeben −{tokens} bis {until}",
+  "customize.bm_mode": "BM-Modus (einfacher Modus)",
+  "customize.bm_mode_hint": "Eine einfachere Oberfläche: der Chat, die Modellauswahl und das Wesentliche. Denkaufwand, Sampling-Einstellungen, Persönlichkeiten und zusätzliche Seiten werden ausgeblendet; es gelten die Standardwerte.",
+  "customize.eggs": "Easter Eggs",
+  "customize.eggs_hint": "Kleine Überraschungen, versteckt auf der Website. Schalte aus, was du lieber nicht entdecken möchtest.",
+  "customize.egg_mascot_motion": "Lebhafte Banane",
+  "customize.egg_mascot_motion_hint": "Die Banane in der oberen Leiste wippt, blinzelt und hüpft beim Anklicken.",
+  "customize.egg_mascot_shades": "Das Geheimnis der Banane",
+  "customize.egg_mascot_shades_hint": "Es passiert etwas, wenn du die Banane in der oberen Leiste immer wieder anklickst.",
+  "customize.egg_konami": "Bananenregen",
+  "customize.egg_konami_hint": "Ein berühmter Videospiel-Code, auf einer beliebigen Seite eingegeben, lässt Bananen regnen.",
+  "customize.egg_site_off": "Auf dieser Website ausgeschaltet.",
+  "customize.bm_mode_everyone": "Er ist auf dieser Website für alle eingeschaltet.",
+  "customize.bm_mode_admin_only": "Für dein Konto schaltet ihn eine Administratorin oder ein Administrator um."
  }
 }

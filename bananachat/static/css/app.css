@@ -708,3 +708,8 @@ body.sem-heading-2 .prose :is(h1, h2, h3, h4) { color: var(--primary); border-bo
   .topbar, .site-footer, .toasts { display: none !important; }
   body { background: #fff; color: #000; }
 }
+
+/* BM mode (the easy mode): a simpler interface. Advanced controls and extra pages are hidden; the chat sends
+   no reasoning effort or sampling settings (static/js/chat.js), so the defaults apply. */
+.bm-mode .bm-hide { display: none !important; }
+.bm-mode .composer-box { padding-block: .35rem; }

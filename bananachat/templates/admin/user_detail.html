@@ -53,6 +53,26 @@
     {% endif %}
   </section>
 
+  <section class="settings-section" id="bm-mode" aria-labelledby="bm-mode-title">
+    <h2 id="bm-mode-title">BM mode</h2>
+    {% if bm_mode_global %}<p class="muted small">BM mode is on for everyone (<a href="{{ url_for('admin.settings') }}#bm-mode">Settings</a>); what you choose here applies when it is per account again.</p>{% endif %}
+    <form method="post" action="{{ url_for('admin.user_bm_mode', user_id=user.id) }}" class="stack">
+      {{ csrf() }}
+      <fieldset class="admin-fieldset">
+        <legend>The easy mode for this account</legend>
+        <label class="check"><input type="radio" name="state" value="on"{% if user.bm_mode %} checked{% endif %}><span>On<small>A simpler interface: advanced controls and extra pages are hidden.</small></span></label>
+        <label class="check"><input type="radio" name="state" value="off"{% if not user.bm_mode %} checked{% endif %}><span>Off</span></label>
+      </fieldset>
+      <fieldset class="admin-fieldset">
+        <legend>Who switches it</legend>
+        <label class="check"><input type="radio" name="control" value="site"{% if user.bm_mode_control not in ("self", "admin") %} checked{% endif %}><span>The site's rule<small>Currently {{ "the person, in Customise or the account menu" if bm_mode_self_service else "administrators only" }} (Settings).</small></span></label>
+        <label class="check"><input type="radio" name="control" value="self"{% if user.bm_mode_control == "self" %} checked{% endif %}><span>{{ user.username }} themselves<small>Even when the site leaves it to administrators.</small></span></label>
+        <label class="check"><input type="radio" name="control" value="admin"{% if user.bm_mode_control == "admin" %} checked{% endif %}><span>Administrators only<small>{{ user.username }} cannot switch it themselves.</small></span></label>
+      </fieldset>
+      <div class="form-actions"><button type="submit" class="btn">Save BM mode</button></div>
+    </form>
+  </section>
+
   {% if not is_self %}
   <section class="settings-section" aria-labelledby="role-title">
     <h2 id="role-title">Role</h2>

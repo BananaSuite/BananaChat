@@ -10,6 +10,11 @@ from bananachat.config import load_config
 from bananachat.services import subscription_pool
 
 
+
+def _state(transport):
+    """Whether a provider is connected, and whether it failed (the transport also keeps the error message)."""
+    return {key: transport[key] for key in ("configured", "error")}
+
 def _install(monkeypatch, factory):
     module = ModuleType("bc_test_subscription_adapter")
     module.create_adapter = factory
@@ -41,7 +46,7 @@ def test_extension_installs_callbacks_without_calling_provider(make_app, monkeyp
     calls = []
     adapter = _adapter(calls)
     app = make_app(**{f"{provider.upper()}_EXTENSION": _install(monkeypatch, lambda config: adapter)})
-    assert app.extensions[f"{provider}_transport"] == {"configured": True, "error": False}
+    assert _state(app.extensions[f"{provider}_transport"]) == {"configured": True, "error": False}
     assert _slot(provider)["chat"] == adapter.chat
     assert _slot(provider)["discovery"] == adapter.discover
     assert _slot(provider)["reporter"] == adapter.quota
@@ -51,20 +56,20 @@ def test_extension_installs_callbacks_without_calling_provider(make_app, monkeyp
 def test_providers_connect_independently(make_app, monkeypatch):
     app = make_app(CLAUDE_EXTENSION=_install(monkeypatch, lambda config: _adapter([])))
     assert subscription_pool.connected("claude") and not subscription_pool.connected("codex")
-    assert app.extensions["codex_transport"] == {"configured": False, "error": False}
+    assert _state(app.extensions["codex_transport"]) == {"configured": False, "error": False}
 
 
 def test_an_adapter_for_another_provider_is_refused(make_app, monkeypatch):
     # The Claude adapter wired into the Codex setting must not serve Codex accounts.
     app = make_app(CODEX_EXTENSION=_install(monkeypatch, lambda config: _adapter([], provider="claude")))
-    assert app.extensions["codex_transport"] == {"configured": False, "error": True}
+    assert _state(app.extensions["codex_transport"]) == {"configured": False, "error": True}
     assert not subscription_pool.connected("codex")
 
 
 def test_missing_callback_leaves_all_transport_disconnected(make_app, monkeypatch):
     module_name = _install(monkeypatch, lambda config: SimpleNamespace(chat=_adapter([]).chat))
     app = make_app(CLAUDE_EXTENSION=module_name)
-    assert app.extensions["claude_transport"] == {"configured": False, "error": True}
+    assert _state(app.extensions["claude_transport"]) == {"configured": False, "error": True}
     assert _slot("claude") == {}
 
 
@@ -97,7 +102,7 @@ def test_async_callbacks_fail_closed(make_app, monkeypatch, method, kind):
     setattr(adapter, method, {"function": callback, "object": AsyncCallable(),
                               "partial": partial(callback)}[kind])
     app = make_app(CLAUDE_EXTENSION=_install(monkeypatch, lambda config: adapter))
-    assert app.extensions["claude_transport"] == {"configured": False, "error": True}
+    assert _state(app.extensions["claude_transport"]) == {"configured": False, "error": True}
     assert not subscription_pool.connected("claude")
 
 
@@ -107,7 +112,7 @@ def test_async_factory_is_rejected_without_creating_a_coroutine(make_app, monkey
         return _adapter([])
 
     app = make_app(CLAUDE_EXTENSION=_install(monkeypatch, partial(factory) if wrapped else factory))
-    assert app.extensions["claude_transport"] == {"configured": False, "error": True}
+    assert _state(app.extensions["claude_transport"]) == {"configured": False, "error": True}
 
 
 def test_factory_error_is_not_logged_with_secrets(make_app, monkeypatch, warnings_log):
@@ -125,7 +130,7 @@ def test_new_unconfigured_app_cannot_reuse_previous_adapter(make_app, monkeypatc
     make_app(CLAUDE_EXTENSION=_install(monkeypatch, lambda config: _adapter([])))
     assert subscription_pool.connected("claude")
     app = make_app()
-    assert app.extensions["claude_transport"] == {"configured": False, "error": False}
+    assert _state(app.extensions["claude_transport"]) == {"configured": False, "error": False}
     assert not subscription_pool.connected("claude")
 
 

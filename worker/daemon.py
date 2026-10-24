@@ -8,7 +8,11 @@ Threads:
   the owner starts gaming before the running job produced any text, hands the
   job back to the server so another worker can take it;
 * main - long-polls for a job, runs it on the local Ollama, streams the answer
-  in pieces (at most every 100 ms or 4,096 characters) and completes it.
+  in pieces (at most every 100 ms or 4,096 characters) and completes it;
+* remote - only while the server's administrators work with this PC and its
+  owner allowed it: maintenance sessions (see ``remote_access``);
+* model commands - downloads and removals the administrators asked for (see
+  ``model_commands``), one thread each.
 
 SIGTERM/SIGINT stop the worker gracefully: a job that has not produced text
 goes back to the pool, a job in the middle of its answer is reported as
@@ -24,9 +28,12 @@ import threading
 import time
 from typing import List, Optional
 
+from . import __version__, system_info
 from .activity import Monitor, get_gpu_name
 from .client import Client, ServerError
 from .local_ollama import Cancelled, LocalOllama, OllamaError
+from .model_commands import ModelCommands
+from .remote_access import RemoteAccess
 from .resources import Priority
 
 log = logging.getLogger("bananachat.worker")
@@ -67,12 +74,16 @@ class Job:
 
 
 class Worker:
-    def __init__(self, settings, *, client=None, ollama=None, monitor=None, priority=None):
+    def __init__(self, settings, *, client=None, ollama=None, monitor=None, priority=None, remote=None,
+                 commands=None):
         self.settings = settings
         self.client = client or Client(settings)
         self.ollama = ollama or LocalOllama(settings)
         self.monitor = monitor or Monitor(settings)
         self.priority = priority or Priority()
+        self.remote = remote or RemoteAccess(settings, self.client)
+        self.commands = commands or ModelCommands(settings, self.client, self.ollama,
+                                                  on_change=lambda: self.refresh_models())
         self.stop_event = threading.Event()
         self.models: List[str] = []
         self.ollama_version: Optional[str] = None
@@ -118,7 +129,12 @@ class Worker:
             threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True),
             threading.Thread(target=self.monitor.run, args=(self.stop_event, self._activity_changed),
                              name="activity", daemon=True),
+            threading.Thread(target=self.remote.run, args=(self.stop_event,), name="remote", daemon=True),
         ]
+        if getattr(self.settings, "remote_access", False):
+            log.warning("Remote access is on: the server's administrators can reach %s%s",
+                        ", ".join(f"{kind} {port}" for kind, port in self.settings.remote_services) or "no service",
+                        " and a terminal on this PC" if self.settings.remote_shell else "")
         for thread in threads:
             thread.start()
         self.send_heartbeat()
@@ -157,6 +173,18 @@ class Worker:
         job = self.current
         if job is not None:
             payload["job_id"] = job.id
+        # Optional parts (older servers ignore them): maintenance access, hardware and features.
+        features = ["think"]
+        if getattr(self.commands, "enabled", False):
+            features.append("model_commands")
+            payload["commands_running"] = self.commands.running_ids()
+        if getattr(self.settings, "remote_access", False):
+            features.append("remote_access")
+        try:
+            payload["remote"] = self.remote.advertise()
+            payload["system"] = system_info.collect(features, __version__)
+        except Exception:  # noqa: BLE001 - optional readings never stop a heartbeat
+            log.debug("Could not read the optional heartbeat fields", exc_info=True)
         return payload
 
     def send_heartbeat(self, status: Optional[str] = None) -> None:
@@ -170,6 +198,11 @@ class Worker:
         if job is not None and reply.get("job_stop"):
             log.info("The server stopped job %s", job.id[:8])
             job.stop("server")
+        try:
+            self.remote.heartbeat_reply(reply)
+            self.commands.handle(reply.get("commands"))
+        except Exception:  # noqa: BLE001 - optional features never stop the worker
+            log.warning("Could not act on the server's heartbeat reply", exc_info=True)
 
     def _report(self, error: ServerError, what: str) -> None:
         text = {401: "The server rejected the worker token. Check BC_WORKER_TOKEN.",
@@ -227,10 +260,12 @@ class Worker:
             self.run_job(payload)
             self.stop_event.wait(self.settings.poll_gap)
 
-    def _send(self, job: Job, seq: int, content: str, done: bool) -> None:
+    def _send(self, job: Job, seq: int, content: str, done: bool, thinking: str = "") -> None:
         for attempt in range(3):
             try:
-                if not self.client.chunk(job.id, seq, content, done):
+                accepted = self.client.chunk(job.id, seq, content, done, thinking) if thinking else \
+                    self.client.chunk(job.id, seq, content, done)
+                if not accepted:
                     raise _Stop()
                 job.sent_any = True
                 return
@@ -249,6 +284,11 @@ class Worker:
         total = _positive(payload.get("generation_timeout"), settings.generation_timeout)
         log.info("Job %s: %s, %d messages", job.id[:8], payload["model"], len(payload["messages"]))
         seq, pending, last_send = 0, "", time.monotonic()
+        reasoning = []  # reasoning text received since the last piece was sent
+        think = payload.get("think")
+        extra = {}
+        if isinstance(think, (bool, str)) and not (isinstance(think, str) and len(think) > 16):
+            extra = {"think": think, "on_thinking": reasoning.append}
         try:
             if not self.ollama.ensure_running():
                 raise OllamaError("Ollama is not running and could not be started.")
@@ -256,8 +296,18 @@ class Worker:
             for content, done, usage in self.ollama.chat(
                     payload["model"], payload["messages"], payload.get("options") or None,
                     first_token_timeout=first_token, read_timeout=settings.read_timeout, total_timeout=total,
-                    cancel=job.cancel, on_open=job.attach):
+                    cancel=job.cancel, on_open=job.attach, **extra):
                 pending += content
+                thinking = "".join(reasoning)
+                while thinking and (done or len(thinking) >= PIECE_CHARS
+                                    or time.monotonic() - last_send >= PIECE_SECONDS):
+                    reasoning.clear()
+                    piece, thinking = thinking[:PIECE_CHARS], thinking[PIECE_CHARS:]
+                    if thinking:
+                        reasoning.append(thinking)
+                    self._send(job, seq, "", False, piece)
+                    seq += 1
+                    last_send = time.monotonic()
                 while pending and (done or len(pending) >= PIECE_CHARS or time.monotonic() - last_send >= PIECE_SECONDS):
                     piece, pending = pending[:PIECE_CHARS], pending[PIECE_CHARS:]
                     self._send(job, seq, piece, False)

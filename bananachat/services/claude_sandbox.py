@@ -78,8 +78,35 @@ def profile_paths(profiles, *, uid, forbidden=(), keys=("home", "config_dir")):
     return [path for path in unique if not any(path != other and path.is_relative_to(other) for other in unique)]
 
 
+def managed_root(value, *, uid, forbidden=(), sandboxed=True):
+    """The directory holding the profiles administrators sign in from the administration pages.
+
+    It belongs to the service user (mode 0700), so the application can create one private profile per pooled
+    account in it. Each native call still mounts only that account's own profile, never this directory, so a
+    sandboxed CLI cannot reach the other subscriptions. In production its parents are root-owned and not
+    writable by the service, like those of the profiles an operator configures by hand.
+    """
+    path = private_path(value, uid=uid, directory=True)
+    if not sandboxed:
+        return path
+    forbidden = [Path(item).resolve() for item in forbidden]
+    forbidden += [Path(item) for item in ("/usr", "/etc", "/bin", "/lib", "/lib64", "/proc", "/dev", "/run",
+                                          "/tmp", "/home", "/root")]  # noqa: S108 - refused as a profile location
+    if len(path.parts) < 3 or any(path.is_relative_to(other) or other.is_relative_to(path) for other in forbidden):
+        raise SandboxError("Keep the signed-in profiles outside application storage, source and system directories.")
+    for parent in path.parents:
+        info = parent.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise SandboxError("Keep the signed-in profiles below root-owned, non-writable parent directories.")
+    return path
+
+
 def managed_paths(manifest_path, *, uid, root, keys=("home", "config_dir"), forbidden=()):
-    """The profile directories a managed service must be allowed to write; *keys* name them in the manifest."""
+    """The profile directories a managed service must be allowed to write; *keys* name them in the manifest.
+
+    A manifest's ``managed_root`` (profiles signed in from the administration pages) is one of them; with it the
+    manifest may list no profiles of its own.
+    """
     path = private_path(manifest_path, uid=uid)
     private_roots((root, path))
     with path.open("rb") as source:
@@ -94,7 +121,14 @@ def managed_paths(manifest_path, *, uid, root, keys=("home", "config_dir"), forb
         raise SandboxError("The connector configuration must be an object.")
     trusted_executable(manifest.get("binary", ""))
     trusted_executable("/usr/bin/bwrap")
-    return profile_paths(manifest.get("profiles"), uid=uid, forbidden=(root, path, *forbidden), keys=keys)
+    paths = []
+    signed_in = manifest.get("managed_root")
+    if signed_in not in (None, ""):
+        paths.append(managed_root(signed_in, uid=uid, forbidden=(root, path, *forbidden)))
+    profiles = manifest.get("profiles")
+    if profiles or not paths:
+        paths += profile_paths(profiles, uid=uid, forbidden=(root, path, *forbidden, *paths), keys=keys)
+    return paths
 
 
 def trusted_executable(value):
@@ -112,6 +146,22 @@ def trusted_executable(value):
         if info.st_uid != 0 or info.st_mode & 0o022 or not info.st_mode & 0o001:
             raise SandboxError("Keep production native executables in root-owned, non-writable, publicly searchable directories.")
     return str(path)
+
+
+def self_test_command(program="/usr/bin/true"):
+    """A sandbox like :func:`command`'s, running *program* only: checks that Bubblewrap can start one."""
+    result = ["/usr/bin/bwrap", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+              "--unshare-cgroup", "--disable-userns", "--cap-drop", "ALL", "--die-with-parent", "--new-session"]
+    for value in PUBLIC_RUNTIME_DIRS:
+        if Path(value).exists():
+            result += ["--ro-bind", value, value]
+    for value in ("/bin", "/lib", "/lib64"):
+        path = Path(value)
+        if path.is_symlink():
+            result += ["--symlink", os.readlink(path), value]
+        elif path.exists():
+            result += ["--ro-bind", value, value]
+    return result + ["--proc", "/proc", "--dev", "/dev", "--", program]
 
 
 def command(binary, profile, arguments, *, cwd, environment):

@@ -41,7 +41,8 @@ def _header_text(row):
 def _preset_data():
     site_url, site_name = _site()
     return {key: {'label': preset.label, 'protocol': preset.protocol, 'base_url': preset.base_url,
-                  'auth_style': preset.auth_style, 'local': preset.local, 'key_required': preset.key_required,
+                  'auth_style': preset.auth_style, 'local': preset.local, 'own_hardware': preset.own_hardware,
+                  'key_required': preset.key_required,
                   'hint': preset.hint,
                   'headers': provider_presets.headers_for(preset, site_url=site_url, site_name=site_name)}
             for key, preset in provider_presets.PRESETS.items()}
@@ -110,7 +111,8 @@ def _save(provider_id=None):
                           auto_enroll=int(flag('auto_enroll')),
                           token_parameter=choice('token_parameter', ('auto', 'max_tokens', 'max_completion_tokens'),
                                                  label='Output limit field', default='auto'),
-                          stream_usage=int(request.form.get('stream_usage', 'on') in ('on', '1')))
+                          stream_usage=int(request.form.get('stream_usage', 'on') in ('on', '1')),
+                          local_backend=int(preset.own_hardware if defaults else flag('local_backend')))
             if reference or flag('clear_key') or existing is None:
                 fields['secret_ref'] = reference
             provider_id = store.save(provider_id, **fields)
@@ -124,7 +126,8 @@ def _save(provider_id=None):
     if existing and (reference or flag('clear_key')):
         provider_secrets.remove(existing['secret_ref'])
     audit('external_provider_save', name, {'id': provider_id, 'preset': preset.key, 'protocol': protocol,
-                                           'enabled': fields['enabled']})
+                                           'enabled': fields['enabled'], 'local': fields['local_backend']})
+    service.forget_local_providers()
     flash('Provider saved. Test the connection, then refresh the model list and choose the models to offer.',
           'success')
     return back('admin.external_providers', _anchor=f'provider-{provider_id}')

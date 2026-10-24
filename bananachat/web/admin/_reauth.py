@@ -44,6 +44,10 @@ ALWAYS = {
     "admin.external_provider_remove": "deletes the stored API key with the provider",
     "admin.claude_account_add": "adds a subscription that answers users' prompts",
     "admin.codex_account_add": "adds a subscription that answers users' prompts",
+    "admin.workers_remote_session": "opens a terminal or a connection to a service on a worker PC",
+    "admin.workers_key_create": "issues a lasting key that opens connections to worker PCs",
+    "admin.claude_account_login": "signs a subscription in to this server; it then answers users' prompts",
+    "admin.codex_account_login": "signs a subscription in to this server; it then answers users' prompts",
 }
 # Confirmed in one case: endpoint -> when.
 WHEN = {
@@ -63,6 +67,14 @@ EXEMPT = {
         "admin.user_session_revoke", "admin.user_sessions_revoke_all", "admin.invite_delete",
         "admin.workers_delete", "admin.agents_stop_all", "admin.agents_task_stop", "admin.models_unload",
         "admin.models_unload_all", "admin.pull_cancel", "admin.pull_pause", "admin.pulls_queue",
+        "admin.claude_account_login_cancel", "admin.codex_account_login_cancel", "admin.claude_account_logout",
+        "admin.codex_account_logout", "admin.workers_tunnel_close", "admin.workers_key_revoke",
+        "admin.workers_command_cancel",
+    ),
+    # The code completes a sign-in that was confirmed when it started (admin.<provider>_account_login), and
+    # only the CLI process waiting for it can redeem it.
+    "Completes an action confirmed when it started": (
+        "admin.claude_account_login_code",
     ),
     "Moderates what people created; administrators can already read and remove it": (
         "admin.chat_delete", "admin.chat_unshare", "admin.chat_allow_share", "admin.incognito_delete_session",
@@ -88,8 +100,11 @@ EXEMPT = {
         "admin.model_delete_server", "admin.model_enable", "admin.model_ignore", "admin.model_restore",
         "admin.model_reviewed", "admin.model_lifecycle", "admin.model_settings_save", "admin.model_ignore_rule_add",
         "admin.model_ignore_rule_delete", "admin.pull_create", "admin.pulls_bulk", "admin.pull_checkpoint",
-        "admin.pull_move", "admin.pull_retry", "admin.pull_delete", "admin.pulls_clear", "admin.model_recovery",
+        "admin.pull_move", "admin.pull_retry", "admin.pull_retry_now", "admin.pull_delete", "admin.pulls_clear",
+        "admin.model_recovery",
         "admin.category_create", "admin.category_edit", "admin.category_delete", "admin.category_move",
+        # On worker PCs only when their owner allows it (the daemon's BC_WORKER_MODEL_MANAGEMENT).
+        "admin.workers_command_create", "admin.workers_command_bulk", "admin.workers_command_retry",
     ),
     # Enabling a worker again sends prompts to a token issued (and confirmed) at registration; a worker
     # that cannot be trusted any more is removed, which ends its token. Subscription checks, model lists
@@ -99,6 +114,8 @@ EXEMPT = {
         "admin.external_provider_enroll_many", "admin.workers_state", "admin.claude_account_check",
         "admin.claude_sync", "admin.claude_discover", "admin.claude_refresh", "admin.codex_account_check",
         "admin.codex_sync", "admin.codex_discover", "admin.codex_refresh",
+        # Asks a worker to listen for sessions sooner; opening one is confirmed (admin.workers_remote_session).
+        "admin.workers_remote_arm",
     ),
     "Site content, appearance and features": (
         "admin.settings_palette_reset", "admin.database_check", "admin.personality_create",
@@ -107,6 +124,7 @@ EXEMPT = {
         "admin.agents_image_check", "admin.music_settings", "admin.music_hide", "admin.music_remove",
         "admin.music_upload", "admin.music_rename", "admin.music_move", "admin.music_delete",
         "admin.music_participant", "admin.music_opt_in_all", "admin.music_opt_out_all",
+        "admin.settings_bm_mode_all", "admin.user_bm_mode",
     ),
 }
 

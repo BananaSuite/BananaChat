@@ -1,6 +1,9 @@
 // The mascot in place of the top bar logo (partials/mascot.html, css/mascot.css): it hops on every click;
 // enough clicks in a row put its sunglasses on, kept in this browser, and as many again take them off.
 // The Konami code anywhere on the page sends a short shower of small bananas.
+// Each of these easter eggs can be switched off for the site (Administration → Settings) and by each person
+// (Customise): the button's data-mascot-motion, -shades and -konami say which are on, read at every use so the
+// customise page can change them live.
 //
 // Ported from BananaWiki mascot 9556dd7e9f88 (bananawiki/core/mascot.py and bananawiki/core/static/mascot/
 // in that tree). When those change, BananaWiki's scripts/make_icons.py fails until the change is ported here
@@ -39,6 +42,8 @@ function typing(target) {
   return Boolean(target) && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || ""));
 }
 
+const on = (button, egg) => button.dataset[egg] !== "0"; // an easter egg is on for this page
+
 function initMascot(button, sprite) {
   const needed = Math.max(1, Number.parseInt(button.dataset.mascotClicks, 10) || 0);
   const timers = {};
@@ -71,19 +76,31 @@ function initMascot(button, sprite) {
     replay("mascot--shades-drop", 950);
   };
 
-  if (remembered()) wear(true);
+  if (remembered() && on(button, "mascotShades")) wear(true);
+
+  // Switched off live (customise page): the sunglasses come off and a half-done click count is forgotten.
+  button.addEventListener("bananachat:eggs", () => {
+    if (!on(button, "mascotShades") && sprite.classList.contains("mascot-sprite--shades")) wear(false);
+    else if (on(button, "mascotShades") && remembered()) wear(true);
+    clicks = 0;
+    button.classList.remove("mascot--eager");
+  });
 
   button.addEventListener("click", () => {
+    if (!on(button, "mascotShades")) {
+      if (on(button, "mascotMotion")) replay("mascot--hop", 450);
+      return;
+    }
     clicks += 1;
     // Past half way, the hop gets higher.
     if (clicks * 2 >= needed) button.classList.add("mascot--eager");
-    replay("mascot--hop", 450);
+    if (on(button, "mascotMotion")) replay("mascot--hop", 450);
     if (clicks < needed) return;
-    const on = !sprite.classList.contains("mascot-sprite--shades");
-    remember(on);
-    wear(on);
-    if (on) drop();
-    toast(t(on ? "mascot.unlocked" : "mascot.shades_off"), "success");
+    const wearing = !sprite.classList.contains("mascot-sprite--shades");
+    remember(wearing);
+    wear(wearing);
+    if (wearing) drop();
+    toast(t(wearing ? "mascot.unlocked" : "mascot.shades_off"), "success");
     clicks = 0;
     button.classList.remove("mascot--eager");
   });
@@ -110,7 +127,8 @@ function initMascot(button, sprite) {
 
   let progress = 0;
   document.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || typing(event.target)) {
+    if (!on(button, "mascotKonami") || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey
+        || typing(event.target)) {
       progress = 0;
       return;
     }
@@ -123,7 +141,7 @@ function initMascot(button, sprite) {
     if (stillMotion()) {
       replay("mascot--lean", 600);
     } else {
-      replay("mascot--hop", 450);
+      if (on(button, "mascotMotion")) replay("mascot--hop", 450);
       shower();
     }
   });

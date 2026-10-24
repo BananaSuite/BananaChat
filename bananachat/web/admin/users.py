@@ -14,6 +14,7 @@ from flask import Response, flash, render_template, request
 
 from bananachat import db, security
 from bananachat.db import credits, tokens, users
+from bananachat.db import settings as site_settings
 from bananachat.db import limits as limits_db
 from bananachat.security import admin_required
 from bananachat.services import limits, two_step
@@ -80,6 +81,8 @@ def user_detail(user_id):
         current_session=security.current_session_hash(), min_password=security.PASSWORD_MIN,
         suspended_now=users.is_suspended(user), min_datetime=utc_input_min(),
         api_tokens=tokens.count_active(user_id),
+        bm_mode_global=bool(site_settings.get().get("bm_mode_global")),
+        bm_mode_self_service=bool(site_settings.get().get("bm_mode_self_service", 1)),
         chats=db.scalar("SELECT COUNT(*) FROM chat_sessions WHERE user_id=? AND deleted_at IS NULL", (user_id,), 0),
     )
 
@@ -100,6 +103,25 @@ def _limit_summary(user) -> list[dict]:
 def _guard_self(user, action: str):
     if user["id"] == me()["id"]:
         raise FormError(f"You cannot {action} your own account here.")
+
+
+@bp.post("/users/<user_id>/bm-mode", endpoint="user_bm_mode")
+@admin_required
+def user_bm_mode(user_id):
+    """An account's BM mode (the easy mode) and who may switch it: the site's rule, the person, or administrators."""
+    user = user_or_404(user_id)
+    try:
+        state = choice("state", ("on", "off"), label="BM mode")
+        control = choice("control", users.BM_MODE_CONTROLS, label="Who switches it")
+    except FormError as error:
+        flash(str(error), "error")
+        return back("admin.user_detail", user_id=user_id, _anchor="bm-mode")
+    with db.transaction():
+        users.set_bm_mode(user_id, state == "on")
+        users.set_bm_mode_control(user_id, control)
+    audit("user_bm_mode", user["username"], {"on": state == "on", "control": control})
+    flash(f"BM mode saved for {user['username']}.", "success")
+    return back("admin.user_detail", user_id=user_id, _anchor="bm-mode")
 
 
 @bp.post("/users/<user_id>/role", endpoint="user_role")

@@ -30,6 +30,7 @@ from bananachat.services import claude_sandbox
 from bananachat.services import codex_control
 from bananachat.services import subscription_pool
 from bananachat.services.subscription_cli import MAX_LINE, ConnectorError, json_file, private
+from bananachat.services.subscription_profiles import ManagedProfiles
 from bananachat.services.upstream import CancelToken
 
 log = logging.getLogger("bananachat.codex_cli")
@@ -143,7 +144,7 @@ def _running(session, *, deadline=None):
     return found
 
 
-class Adapter:
+class Adapter(ManagedProfiles):
     provider = PROVIDER
     bindings_key = BINDINGS_KEY
 
@@ -160,9 +161,11 @@ class Adapter:
         self.timeout = manifest.get("timeout_seconds", 180)
         if isinstance(self.timeout, bool) or not isinstance(self.timeout, int) or not 10 <= self.timeout <= 900:
             raise ConnectorError("The request timeout must be between 10 and 900 seconds.")
-        profiles = manifest.get("profiles")
-        if not isinstance(profiles, dict) or not 1 <= len(profiles) <= 100:
-            raise ConnectorError("Configure between one and 100 private account profiles.")
+        profiles = manifest.get("profiles", {})
+        signed_in = manifest.get("managed_root") not in (None, "")
+        if not isinstance(profiles, dict) or not (0 if signed_in else 1) <= len(profiles) <= 100:
+            raise ConnectorError("Configure between one and 100 private account profiles, or a managed_root for "
+                                 "profiles signed in from the administration pages.")
         self.profiles = {}
         self._models = {}
         self._model_epoch = 0
@@ -200,22 +203,61 @@ class Adapter:
         if len({p["home"] for p in self.profiles.values()}) != len(self.profiles):
             raise ConnectorError("Each subscription needs a separate authentication directory.")
         self.sandboxed = getattr(config, "environment", "production") not in ("development", "testing")
+        forbidden = [Path(__file__).resolve().parents[2], Path(config.codex_cli_config).resolve()]
+        # The Claude manifest names that provider's logins; a Codex profile must not expose it.
+        forbidden += [getattr(config, name) for name in ("instance_dir", "database_path", "log_file",
+                                                         "maintenance_file", "claude_code_config")
+                      if getattr(config, name, None)]
         if self.sandboxed:
             try:
                 if os.geteuid() == 0:
                     raise claude_sandbox.SandboxError("Production native transport needs an unprivileged identity.")
                 self.binary = claude_sandbox.trusted_executable(self.binary)
                 claude_sandbox.trusted_executable("/usr/bin/bwrap")
-                forbidden = [Path(__file__).resolve().parents[2], Path(config.codex_cli_config).resolve()]
-                # The Claude manifest names that provider's logins; a Codex profile must not expose it.
-                forbidden += [getattr(config, name) for name in ("instance_dir", "database_path", "log_file",
-                                                                 "maintenance_file", "claude_code_config")
-                              if getattr(config, name, None)]
                 claude_sandbox.private_roots(forbidden)
-                claude_sandbox.profile_paths({name: self._mounts(profile) for name, profile in self.profiles.items()},
-                                             uid=os.getuid(), forbidden=forbidden)
-            except (OSError, claude_sandbox.SandboxError):
-                raise ConnectorError("The production Codex sandbox is not configured. Install Bubblewrap and use a root-owned native executable with separate private profiles.") from None
+                if self.profiles:
+                    claude_sandbox.profile_paths({name: self._mounts(profile)
+                                                  for name, profile in self.profiles.items()},
+                                                 uid=os.getuid(), forbidden=forbidden)
+            except FileNotFoundError:
+                raise ConnectorError("The production Codex sandbox is not configured: Bubblewrap (/usr/bin/bwrap) "
+                                     "or a configured path is missing. Install Bubblewrap (apt install bubblewrap) "
+                                     "and run scripts/setup_subscriptions.py.") from None
+            except (OSError, claude_sandbox.SandboxError) as error:
+                raise ConnectorError("The production Codex sandbox is not configured. Install Bubblewrap and use a "
+                                     "root-owned native executable with separate private profiles "
+                                     f"({error}).") from None
+        self._init_managed(manifest, sandboxed=self.sandboxed, forbidden=forbidden)
+
+    def _managed_profile(self, path):
+        return {"home": str(path), "models": [], "discovery": "automatic", "usage_source": "automatic",
+                "managed": True}
+
+    @staticmethod
+    def _prepare_managed(path):
+        return None  # Codex keeps everything in CODEX_HOME itself
+
+    def _command(self, name, arguments, environment):
+        profile = self.profiles[name]
+        if self.sandboxed:
+            return claude_sandbox.command(self.binary, self._mounts(profile), arguments, cwd=profile["home"],
+                                          environment=environment)
+        return [self.binary, *arguments]
+
+    def login_command(self, name):
+        """``(argv, environment, cwd)`` of the official device-code sign-in for a profile."""
+        if name not in self.profiles:
+            raise ConnectorError("Unknown Codex profile.")
+        profile = self.profiles[name]
+        environment = self._env(profile)
+        return self._command(name, ["login", "--device-auth"], environment), environment, profile["home"]
+
+    def logout_command(self, name):
+        if name not in self.profiles:
+            raise ConnectorError("Unknown Codex profile.")
+        profile = self.profiles[name]
+        environment = self._env(profile)
+        return self._command(name, ["logout"], environment), environment, profile["home"]
 
     @staticmethod
     def _mounts(profile):
@@ -334,7 +376,7 @@ class Adapter:
 
     def bindings(self):
         value = settings.state_get(BINDINGS_KEY, {})
-        return value if isinstance(value, dict) else {}
+        return self._managed_bindings(value if isinstance(value, dict) else {})
 
     def profile_for(self, account):
         if account.get("provider", PROVIDER) != PROVIDER:
@@ -351,7 +393,10 @@ class Adapter:
             account = codex_control.account(self, self.profiles[name], cancel=cancel)
         except codex_control.ControlError:
             raise ConnectorError("Codex could not report this profile's login. Check the CLI version and subscription login.") from None
-        if account is None or account["type"] != "chatgpt":
+        if account is None:
+            raise NativeAuthenticationError("This profile is not signed in to a ChatGPT subscription. Sign it in "
+                                            "from Administration → Models → Codex.")
+        if account["type"] != "chatgpt":
             raise NativeAuthenticationError("This profile needs a native ChatGPT subscription login; API-key authentication is not accepted.")
         email = account["email"]
         identity = hashlib.sha256(email.strip().casefold().encode()).hexdigest() \
@@ -369,7 +414,8 @@ class Adapter:
             codex_usage.invalidate(self, self.profiles[name])
             subscription_pool.invalidate(PROVIDER)
         self._identities[name] = (time.monotonic(), identity)
-        return {"authenticated": True}
+        plan = account.get("planType")
+        return {"authenticated": True, "plan": plan[:40] if isinstance(plan, str) and plan else None}
 
     def _identity(self, name, *, cancel=None):
         with self._profile_guard(name, cancel):

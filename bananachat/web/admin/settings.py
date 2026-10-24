@@ -9,6 +9,7 @@ from __future__ import annotations
 from flask import flash, render_template, request
 
 from bananachat.db import settings as site_settings
+from bananachat.db import users
 from bananachat.security import admin_required
 from bananachat.services import two_step
 
@@ -58,6 +59,12 @@ def save():
         # Only the current form's sentinel makes an unchecked value explicit.
         if request.form.get("worker_offline_warning_present") == "1":
             values["worker_offline_warning_enabled"] = 1 if flag("worker_offline_warning_enabled") else 0
+        if request.form.get("easter_eggs_present") == "1":
+            for egg in site_settings.EASTER_EGGS:
+                values[f"easter_{egg}"] = 1 if flag(f"easter_{egg}") else 0
+        if request.form.get("bm_mode_present") == "1":
+            values["bm_mode_global"] = 1 if request.form.get("bm_mode_global") == "1" else 0
+            values["bm_mode_self_service"] = 1 if flag("bm_mode_self_service") else 0
         if request.form.get("admin_two_step_present") == "1":
             values[two_step.REQUIRED_SETTING] = 1 if flag(two_step.REQUIRED_SETTING) else 0
             if values[two_step.REQUIRED_SETTING] and not two_step.enabled(me()["id"]):
@@ -86,6 +93,17 @@ def save():
     audit("settings_save", "site", changed)
     flash("Settings saved." if changed else "Nothing changed.", "success")
     return back("admin.settings")
+
+
+@bp.post("/settings/bm-mode/all", endpoint="settings_bm_mode_all")
+@admin_required
+def bm_mode_all():
+    """Turn BM mode on or off for every account at once (who may switch it keeps its own rule)."""
+    on = request.form.get("state") == "on"
+    count = users.set_bm_mode_all(on)
+    audit("settings_bm_mode_all", "site", {"on": on, "changed": count})
+    flash(f"BM mode is now {'on' if on else 'off'} for every account ({count} changed).", "success")
+    return back("admin.settings", _anchor="bm-mode")
 
 
 @bp.post("/settings/palette/reset", endpoint="settings_palette_reset")

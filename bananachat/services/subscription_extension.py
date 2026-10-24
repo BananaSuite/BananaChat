@@ -46,7 +46,7 @@ def configure(app) -> None:
 def _configure(app, provider: str, module_name: str) -> None:
     subscription_pool.reset_transport(provider)
     app.extensions.pop(f"{provider}_adapter", None)
-    state = {"configured": False, "error": False}
+    state = {"configured": False, "error": False, "message": "", "module": module_name}
     app.extensions[f"{provider}_transport"] = state
     if not module_name:
         return
@@ -70,6 +70,11 @@ def _configure(app, provider: str, module_name: str) -> None:
     except Exception as error:
         subscription_pool.reset_transport(provider)
         state["error"] = True
+        from bananachat.services.subscription_cli import ConnectorError
+
+        if isinstance(error, ConnectorError):
+            # The built-in connectors' errors are written for administrators and carry no credentials.
+            state["message"] = " ".join(str(error).split())[:600]
         # Exception messages can contain secrets from an external adapter.
         log.error("The %s extension failed to initialize (%s); the provider remains disconnected",
                   provider, type(error).__name__)

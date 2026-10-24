@@ -1,5 +1,116 @@
 # Changelog
 
+## 1.7.3 — 2026-10-24
+
+### Claude and Codex subscriptions: sign in from the administration page
+
+- Accounts can now be signed in without a shell on the server. **Add an
+  account** with a *new private profile* and click **Sign in**: the server runs
+  the official CLI's own login in that profile, inside its sandbox, and the
+  page shows its link (Claude: open it, approve, paste back the code it shows;
+  Codex: open `auth.openai.com/codex/device` and enter the one-time code). The
+  login is then checked with the CLI's own status command. **Sign out** uses
+  the CLI's logout; deleting the account deletes its profile. Starting a
+  sign-in needs a recent confirmation.
+- `scripts/setup_subscriptions.py` (run once as root) prepares a managed
+  server: it copies the installed CLIs to a root-owned folder, creates the
+  profile folder, writes the connector manifests (with the new `managed_root`)
+  and their settings, checks the sandbox as the service user (with
+  `--allow-bwrap-userns`, it installs the AppArmor profile Ubuntu 23.10 and
+  later need) and restarts BananaChat.
+- A **Setup** checklist on the Claude and Codex pages reports the module, the
+  configuration, the CLI, the sandbox and sign-in support, each with its fix,
+  instead of a pool that silently did nothing. Connector errors are shown.
+- Providers' terms still apply: shared subscription routing needs their
+  approval ([router design](docs/subscription-router.md)).
+
+### Worker PCs
+
+- **Maintenance access** (`BC_WORKER_REMOTE_ACCESS`, off by default on the
+  server and on every worker): a terminal and a VNC viewer in the browser, and
+  native SSH, VNC and RDP clients through the new connect helper
+  (`bananachat_connect.py`: `proxy`, `forward`, `socks`, `shell`) with
+  revocable access keys. Workers connect out, so nothing is opened on their
+  network; each gets an address in a virtual network (`BC_WORKER_SUBNET`) and
+  can share machines of its owner's network. The owner decides what is
+  reachable and the worker checks every session itself; sessions need a recent
+  confirmation, are logged and time out ([workers](docs/workers.md#maintenance-access)).
+- **Model management**: download a model to one worker or to every online
+  worker, remove models, follow progress, cancel and retry from the Workers
+  pages. Workers refuse names outside the Ollama library and Hugging Face and
+  downloads without `BC_WORKER_MIN_FREE_GB` free; owners can switch it off.
+- Workers report memory, video memory and free disk space, and relay the
+  reasoning of thinking models; requests that ask for reasoning go only to
+  workers that relay it.
+- Worker daemon 1.7.3; older daemons keep working unchanged.
+
+### Model downloads never stay queued for ever
+
+- Model downloads and ComfyUI checkpoints have separate slots, so a checkpoint
+  waiting for its agent no longer keeps Ollama downloads queued.
+- A watchdog puts back downloads whose run vanished; a queued download says
+  why it waits; **Retry now** starts one at once; outage records older than 15
+  minutes are ignored.
+- The background leader runs periodic jobs in parallel (one slow job no longer
+  delays the others) and writes a heartbeat; the Model downloads page warns
+  when no process runs the background services.
+
+### Hosted models keep answering when Ollama or a worker is down
+
+- Requests to external providers and the Claude and Codex pools wait and run
+  in a queue lane of their own (`BC_MAX_CONCURRENT_HOSTED`, default 16), so
+  requests stuck on an unreachable model server or worker no longer hold them
+  up.
+
+### Local model servers
+
+- LM Studio, llama.cpp and vLLM providers can be marked **Runs on our own
+  hardware** (the local presets are, and existing providers made from them are
+  marked by the upgrade): their models count as local models, their lists are
+  checked every minute, automatic enrolment publishes every chat model they
+  list, and their models hide while the server is off and return when it
+  answers. LM Studio's and llama.cpp's own APIs add context length, vision,
+  tool use and embedding detection ([external providers](docs/external-providers.md)).
+
+### BM mode (easy mode)
+
+- A simpler interface that hides reasoning effort, sampling settings,
+  personalities and the extra pages, and sends their defaults.
+- Administration → Settings turns it **on for everyone** (nobody can switch it
+  off) or leaves it **per account**, off unless switched on. Per account,
+  people switch it themselves in Customise or the account menu while the site
+  allows it; otherwise only administrators do.
+- On an account's page administrators switch it on or off and choose who
+  switches it for that account: the site's rule, the person, or administrators
+  only. Settings also turns it on or off for every account at once, and the
+  users list marks accounts that use it.
+
+### Easter egg settings
+
+- Every easter egg can be switched off: the lively mascot (bobbing, blinking,
+  hopping), its sunglasses (the click secret) and the Konami code's banana
+  shower. Administrators choose which the site offers (Administration →
+  Settings → Easter eggs); each person switches off any of those in
+  Customise → Easter eggs, applied at once without a reload. All stay on
+  unless switched off.
+
+### Stability and safety
+
+- Gunicorn's threaded worker could write a stray byte into the database file
+  when a worker was replaced while an answer was still being handed over (it
+  reused a closed wake-up pipe's descriptor); `gunicorn.conf.py` now guards
+  that pipe.
+- Long-running WebSockets and worker polls count towards the threads streaming
+  answers may use, so pages and health checks always keep threads free.
+
+### Upgrade
+
+- The database is upgraded to schema version 27 (`v27_worker_maintenance`:
+  worker sessions, access keys and commands, worker reasoning and hardware
+  columns, `external_providers.local_backend`, the queue lane, the BM mode
+  settings (site and per account) and the easter egg switches). See
+  [UPGRADING.md](UPGRADING.md).
+
 ## 1.7.2 — 2026-10-20
 
 ### Claude and Codex subscription pools

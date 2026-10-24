@@ -131,12 +131,19 @@ class LocalOllama:
 
     # ----- inference --------------------------------------------------------------------------
     def chat(self, model: str, messages: list, options: Optional[dict], *, first_token_timeout: float,
-             read_timeout: float, total_timeout: float, cancel: threading.Event, on_open=None):
-        """Yield ``(content, done, usage)``; ``usage`` is filled on the last record."""
+             read_timeout: float, total_timeout: float, cancel: threading.Event, on_open=None, think=None,
+             on_thinking=None):
+        """Yield ``(content, done, usage)``; ``usage`` is filled on the last record.
+
+        With *think* (``True`` or a level the server chose) the model reasons first; the reasoning text goes to
+        *on_thinking* as it arrives.
+        """
         self.last_used = time.monotonic()
         body = {"model": model, "messages": messages, "stream": True, "keep_alive": self.settings.ollama_keep_alive}
         if options:
             body["options"] = options
+        if think is not None:
+            body["think"] = think
         deadline = time.monotonic() + total_timeout
         try:
             # The first record may take a cold model load.
@@ -175,6 +182,9 @@ class LocalOllama:
                     raise OllamaError(str(record["error"])[:500])
                 message = record.get("message") if isinstance(record.get("message"), dict) else {}
                 content = message.get("content") if isinstance(message.get("content"), str) else ""
+                thinking = message.get("thinking") if isinstance(message.get("thinking"), str) else ""
+                if thinking and on_thinking is not None:
+                    on_thinking(thinking)
                 if record.get("done"):
                     usage = {"prompt_tokens": _count(record.get("prompt_eval_count")),
                              "completion_tokens": _count(record.get("eval_count")),
@@ -195,5 +205,66 @@ class LocalOllama:
             self.last_used = time.monotonic()
 
 
+    # ----- model management (commands from the server's administrators) ------------------------
+    def pull(self, model: str, *, cancel: threading.Event, on_progress=None) -> None:
+        """Download *model*; *on_progress* gets ``(status text, completed bytes, total bytes)``."""
+        self.last_used = time.monotonic()
+        try:
+            response = open_request("POST", self.url, "/api/pull", body={"model": model, "stream": True},
+                                    connect_timeout=10, read_timeout=600, max_bytes=1024 ** 3)
+        except TransportError as error:
+            raise OllamaError(f"Ollama could not be reached: {error}") from None
+        try:
+            if response.status != 200:
+                text = response.read(2048).decode("utf-8", "replace")
+                raise OllamaError(f"Ollama answered HTTP {response.status}: {text.strip()[:300]}")
+            for raw in response.lines():
+                if cancel.is_set():
+                    raise Cancelled()
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except ValueError:
+                    raise OllamaError("Ollama sent an invalid record.") from None
+                if not isinstance(record, dict):
+                    continue
+                if record.get("error"):
+                    raise OllamaError(str(record["error"])[:500])
+                status = str(record.get("status") or "")[:120]
+                if status == "success":
+                    return
+                if on_progress is not None:
+                    on_progress(status, _bytes(record.get("completed")) or None, _bytes(record.get("total")) or None)
+                self.last_used = time.monotonic()
+            raise OllamaError("The download ended before it was complete.")
+        except TransportError as error:
+            if cancel.is_set():
+                raise Cancelled() from None
+            raise OllamaError(str(error)) from None
+        finally:
+            response.close()
+
+    def delete(self, model: str) -> bool:
+        """Remove *model*; False when Ollama does not have it."""
+        try:
+            response = open_request("DELETE", self.url, "/api/delete", body={"model": model}, connect_timeout=10,
+                                    read_timeout=120)
+        except TransportError as error:
+            raise OllamaError(f"Ollama could not be reached: {error}") from None
+        with response:
+            if response.status == 404:
+                return False
+            if response.status != 200:
+                text = response.read(2048).decode("utf-8", "replace")
+                raise OllamaError(f"Ollama answered HTTP {response.status}: {text.strip()[:300]}")
+        return True
+
+
 def _count(value) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 2**31 else 0
+
+
+def _bytes(value) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 2**53 else 0

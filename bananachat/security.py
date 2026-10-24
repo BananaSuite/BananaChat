@@ -29,7 +29,7 @@ from bananachat.db import users
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 # Blueprints authenticated by bearer tokens, never by cookies: CSRF cannot apply.
-BEARER_BLUEPRINTS = frozenset({"api_v1", "worker_api"})
+BEARER_BLUEPRINTS = frozenset({"api_v1", "worker_api", "remote_api"})
 PASSWORD_MIN, PASSWORD_MAX = 8, 1024
 log = logging.getLogger("bananachat.security")
 

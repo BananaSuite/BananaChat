@@ -1,0 +1,67 @@
+{% extends "admin/_layout.html" %}
+{#- One worker PC: its hardware, maintenance access (terminal, VNC, SSH, RDP) and models (web/admin/workers.py). -#}
+{% from "admin/_macros.html" import header %}
+{% from "partials/icons.html" import icon %}
+{% set section = "workers" %}
+{% block title %}{{ worker.name }} · Workers{% endblock %}
+{% block admin_content %}
+{% call header(worker.name, "A worker PC: its hardware, maintenance access and models.") %}{% endcall %}
+<p class="mb-2"><a href="{{ url_for('admin.workers') }}">{{ icon("chevron-left") }}All workers</a></p>
+
+<div class="stack" id="worker-detail" data-worker="{{ worker.id }}">
+<section class="settings-section" aria-labelledby="overview-title">
+  <div class="section-header"><h2 id="overview-title">Overview</h2><span class="small muted" id="detail-updated"></span></div>
+  <dl class="detail-grid" id="worker-overview">
+    <dt>Status</dt><dd data-field="status">{{ data.worker.status | capitalize }}</dd>
+    <dt>Platform</dt><dd data-field="platform">{{ data.worker.platform or "—" }}</dd>
+    <dt>GPU</dt><dd data-field="gpu">{{ data.worker.gpu_name or "—" }}</dd>
+    <dt>Memory</dt><dd data-field="memory">—</dd>
+    <dt>Disk</dt><dd data-field="disk">—</dd>
+    <dt>Daemon</dt><dd data-field="daemon">—</dd>
+  </dl>
+</section>
+
+<section class="settings-section" aria-labelledby="remote-title" id="remote">
+  <div class="section-header"><h2 id="remote-title">Maintenance access</h2></div>
+  {% if not data.remote_enabled %}
+  <div class="alert alert-info" role="note">{{ icon("info") }}<p>Remote access to workers is off on this server. Set <code>BC_WORKER_REMOTE_ACCESS=1</code> (with <code>BC_WORKERS_ENABLED=1</code>) and restart to reach worker PCs for maintenance: a terminal in the browser, VNC, and SSH or RDP from your own computer, without opening any port on the worker's network.</p></div>
+  {% else %}
+  <p class="muted small">The worker connects out to this server; nothing is opened on its network. Its owner decides what can be reached (<code>BC_WORKER_REMOTE_*</code> in the worker's settings) and the worker checks every request itself. Opening a session asks for your password or authenticator code when you have not confirmed in the last ten minutes, and is recorded in the audit log.</p>
+  <div id="remote-panel" class="stack" aria-live="polite"><p class="muted small">Loading…</p></div>
+  {% endif %}
+</section>
+
+<section class="settings-section" aria-labelledby="models-title" id="models">
+  <div class="section-header"><h2 id="models-title">Models on this PC</h2></div>
+  <div id="models-panel" class="stack"><p class="muted small">Loading…</p></div>
+  <form class="row mt-2" id="pull-form" data-busy>
+    <div class="field grow">
+      <label for="pull-model">Download a model to this PC</label>
+      <input type="text" id="pull-model" name="model" required maxlength="300" placeholder="qwen3:4b" autocomplete="off" spellcheck="false" aria-describedby="pull-model-hint">
+      <span class="hint" id="pull-model-hint">From the Ollama library (<code>qwen3:8b</code>) or Hugging Face (<code>hf.co/owner/repository:Q4_K_M</code>). The worker downloads it with its own Ollama and reports the progress here.</span>
+    </div>
+    <button type="submit" class="btn btn-primary">{{ icon("download") }}<span>Download</span></button>
+  </form>
+  <h3 class="mt-2">Downloads and removals</h3>
+  <div class="table-wrap">
+    <table class="table table-stack table-stack-md" id="commands-table">
+      <thead><tr><th>Model</th><th>Action</th><th>Status</th><th>Progress</th><th class="actions"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody id="commands-body"></tbody>
+    </table>
+  </div>
+  <p class="empty" id="commands-empty">Nothing yet.</p>
+</section>
+
+<section class="settings-section" aria-labelledby="native-title" id="native">
+  <h2 id="native-title">SSH, VNC and RDP from your computer</h2>
+  <p class="muted small">Download the <a href="{{ helper_url }}" download="bananachat_connect.py">connect helper</a> (one Python file, standard library only, for Linux, macOS and Windows) and create an access key on the <a href="{{ url_for('admin.workers') }}#remote-access">Workers page</a>. Then:</p>
+  <pre class="card small" id="native-commands">python bananachat_connect.py login {{ server_url }}
+python bananachat_connect.py list</pre>
+  <p class="muted small mb-0">Each worker has an address in the virtual network <code>{{ data.subnet }}</code> that only the helper knows; it works wherever the worker is. The commands for this worker appear above once it reports what it allows.</p>
+</section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="application/json" id="page-data">{{ page_data | tojson }}</script>
+<script type="module" src="{{ url_for('static', filename='js/admin-worker-detail.js') }}"></script>
+{% endblock %}

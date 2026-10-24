@@ -9,7 +9,36 @@ provider-approved deployment (see the
 No website scraping, copied cookies, API keys or credentials in the source ZIP
 are required. API billing is deliberately not a fallback.
 
-## Server setup
+## Quick setup: sign in from the administration page
+
+On a managed installation, as root, install the official Codex CLI and
+Bubblewrap, then run the setup script of the installed release (it prepares
+Claude and Codex together; see [Claude Code](claude-code.md#quick-setup-sign-in-from-the-administration-page)
+for what it does):
+
+```sh
+sudo apt install bubblewrap
+sudo npm install -g @openai/codex          # or the native binary from github.com/openai/codex/releases
+sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py --allow-bwrap-userns
+```
+
+Then open **Administration → Models → Codex**, **Add an account** with the
+profile **New private profile** and click **Sign in**. The server runs the
+official `codex login --device-auth` in the account's own profile and shows a
+link (`https://auth.openai.com/codex/device`) and a one-time code: open the
+link, sign in with the ChatGPT account whose subscription this account should
+use, enter the code and approve. The page continues on its own. If OpenAI
+refuses the code, turn on `Settings → Security → Device code authorization`
+in ChatGPT; in a Business, Enterprise or Edu workspace an administrator of the
+workspace enables device-code sign-in. Codes expire after 15 minutes.
+
+Use this only within your provider-approved deployment; see the
+[routing constraint](subscription-router.md#subscription-routing-constraint).
+
+## Manual setup
+
+The steps below are what the quick setup automates, for other layouts or
+profiles signed in on the server's command line.
 
 1. Run the connector on a Linux/POSIX server under a dedicated, unprivileged
    service identity. Install the official Codex CLI and use its native

@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 PACKAGE_ALIAS = "bananachat_worker_package"
-COMMANDS = ("run", "config", "install", "uninstall", "start", "stop", "status")
+COMMANDS = ("run", "config", "install", "uninstall", "start", "stop", "status", "shell-host")
 
 
 def _package():
@@ -95,6 +95,11 @@ def show_config(settings) -> None:
         ("Idle / light thresholds", f"{settings.idle_threshold} s / {settings.light_threshold} s"),
         ("GPU gaming / active", f"{settings.gpu_gaming_threshold:g} % / {settings.gpu_active_threshold:g} %"),
         ("Log file", settings.log_file or "(console or the service log)"),
+        ("Remote access", ("on: " + (", ".join(f"{kind} {port}" for kind, port in settings.remote_services)
+                                    or "no service") + (" + terminal" if settings.remote_shell else "")
+                           + (f" + network {', '.join(settings.remote_subnets)}" if settings.remote_subnets else ""))
+         if settings.remote_access else "off"),
+        ("Model management", f"on (keeps {settings.min_free_gb:g} GB free)" if settings.model_management else "off"),
         ("Service", service.describe_backend()),
     ]
     for label, value in rows:
@@ -125,6 +130,9 @@ def main(argv=None) -> int:
         print(__doc__)
         return 0
     command = args[0]
+    if command == "shell-host":
+        # Started by the worker itself for a remote terminal session (remote_access.py), never by hand.
+        return _module("shell_host").main()
     if command not in COMMANDS:
         print(f"Unknown command {command!r}. Commands: {', '.join(COMMANDS)}", file=sys.stderr)
         return 1

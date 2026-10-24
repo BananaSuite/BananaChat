@@ -17,6 +17,8 @@ log = logging.getLogger("bananachat.providers")
 # A listed model is withdrawn only after this many consecutive successful listings omit it:
 # listings can briefly leave one out (regional or truncated answers).
 MISSING_LISTINGS = 2
+DOWN_CHECKS = 2             # failed checks in a row before a local server's models hide
+LOCAL_REFRESH_SECONDS = 60
 MAX_BULK = 100
 THINKING_STYLES = ('adaptive', 'budget')
 
@@ -132,8 +134,9 @@ def enroll(provider, model_id, *, display=None, vision=False, reasoning=(), tool
                                                    'counts_toward_pool': True}, None)
         if ignored:
             catalog.set_lifecycle(row['id'], enrollment='ignored', is_rolled_out=0, state_reason='Matches the ignore list.')
-        elif provider['auto_enroll'] and _chat_candidate(model_id) and (listing or {}).get('chat', True) \
-                and not row['enrolled_at']:
+        elif provider['auto_enroll'] and (_local(provider) or _chat_candidate(model_id)) \
+                and (listing or {}).get('chat', True) is not False and not row['enrolled_at']:
+            # A local server lists only what its operator installed: every chat model of it is meant to be used.
             catalog.set_lifecycle(row['id'], enrollment='auto', enrolled_at=db.now(), is_rolled_out=1,
                                   state_reason='Enabled by this provider’s automatic enrolment; review its capabilities.')
     return catalog.get(row['id'])
@@ -179,6 +182,50 @@ def _record_error(provider, error):
                    (message[:500], provider['id'], provider['revision']))
 
 
+def forget_local_providers():
+    """After a provider was saved: :func:`bananachat.services.limits.is_local` reads the change at once here."""
+    store.forget_local_ids()
+
+
+def _local(provider):
+    return bool(provider['local_backend']) if 'local_backend' in provider.keys() else False
+
+
+def _down_key(provider_id):
+    return f'local_provider_down:{provider_id}'
+
+
+def _local_server_down(provider, error):
+    """A local server that does not answer (it is off, or the PC sleeps): after :data:`DOWN_CHECKS` checks in a row
+    its models hide from the model choice, so nobody picks a model that cannot answer. They return with the first
+    listing that works. Errors of a server that answers (a wrong key, a bad address) change nothing."""
+    from bananachat.db import settings as site_settings
+
+    if not _local(provider) or getattr(error, 'code', '') not in ('provider_unreachable', 'provider_timeout'):
+        return
+    state = site_settings.state_get(_down_key(provider['id'])) or {}
+    failures = int(state.get('failures') or 0) + 1
+    site_settings.state_set(_down_key(provider['id']), {'failures': failures, 'since': state.get('since') or db.now()})
+    if failures != DOWN_CHECKS:
+        return
+    reason = 'Its local model server is not answering; the models return when it does.'
+    with db.transaction():
+        hidden = db.execute("UPDATE ai_models SET backend_available=0, missing_reason=? WHERE backend='external' "
+                            "AND external_provider_id=? AND backend_available=1 AND missing_at IS NULL",
+                            (reason, provider['id'])).rowcount
+    if hidden:
+        log.warning('Local model server %s is not answering: %d model(s) hidden until it is back',
+                    provider['name'], hidden)
+
+
+def _local_server_up(provider):
+    from bananachat.db import settings as site_settings
+
+    if _local(provider) and site_settings.state_get(_down_key(provider['id'])):
+        site_settings.state_delete(_down_key(provider['id']))
+        log.info('Local model server %s answers again', provider['name'])
+
+
 def sync(provider_id):
     from bananachat.db import model_lifecycle as lifecycle_db
     provider = store.get(provider_id)
@@ -188,7 +235,9 @@ def sync(provider_id):
         models = discover(provider)
     except UpstreamError as error:
         _record_error(provider, error)
+        _local_server_down(provider, error)
         raise
+    _local_server_up(provider)
     with db.transaction():
         fresh = store.get(provider_id)
         if fresh is None or not fresh['enabled'] or fresh['revision'] != provider['revision']:
@@ -208,11 +257,12 @@ def sync(provider_id):
                 metadata = {}
             listed = offered.get(row['backend_model_name'])
             if listed is not None or metadata.get('manual'):
+                # A local server reports the context it was started with: it replaces the stored one.
+                context = (listed or {}).get('context')
                 db.execute('UPDATE ai_models SET backend_available=1, backend_last_seen_at=?, missing_at=NULL, '
                            'missing_reason=NULL, absent_syncs=0, absent_since=NULL, absent_counted_at=NULL, '
                            'external_config=?, context_length=COALESCE(?, context_length) WHERE id=?',
-                           (now, json.dumps(_listing_metadata(metadata, listed)), (listed or {}).get('context'),
-                            row['id']))
+                           (now, json.dumps(_listing_metadata(metadata, listed)), context, row['id']))
                 if row['missing_at']:
                     lifecycle_db.add_event(row['id'], row['ollama_name'], 'returned',
                                            'Listed by the external API provider again.')
@@ -273,7 +323,22 @@ def refresh_models(app):
         except (OSError, ValueError):
             log.warning('The key file of external provider %s could not be encrypted', provider['id'])
     for provider in store.list_providers(enabled_only=True):
+        if _local(provider):
+            continue  # checked every minute by refresh_local_models
         try:
             sync(provider['id'])
         except (ValueError, UpstreamError):
             continue  # Failed discovery never marks existing models as absent.
+
+
+@job('local-provider-models', every=LOCAL_REFRESH_SECONDS, initial_delay=20)
+def refresh_local_models(app):
+    """Model servers on the operator's hardware change often (a model loaded in LM Studio, a llama.cpp restart)
+    and cost nothing to ask: their lists are checked every minute, and their models hide while they are off."""
+    for provider in store.list_providers(enabled_only=True):
+        if not _local(provider):
+            continue
+        try:
+            sync(provider['id'])
+        except (ValueError, UpstreamError):
+            continue

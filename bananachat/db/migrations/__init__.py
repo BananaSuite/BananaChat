@@ -28,6 +28,7 @@ from .v23_external_provider_presets import upgrade as v23_external_provider_pres
 from .v24_two_step import upgrade as v24_two_step
 from .v25_run_owner_worker_backoff import upgrade as v25_run_owner_worker_backoff
 from .v26_subscription_pool import upgrade as v26_subscription_pool
+from .v27_worker_maintenance import upgrade as v27_worker_maintenance
 
 # The on-disk identity of BananaChat databases. The value is ASCII "BAIA" and
 # dates from when the project was named BananaAI; every existing database
@@ -61,6 +62,7 @@ MIGRATIONS = (
     v24_two_step,
     v25_run_owner_worker_backoff,
     v26_subscription_pool,
+    v27_worker_maintenance,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

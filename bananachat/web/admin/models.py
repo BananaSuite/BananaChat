@@ -717,6 +717,18 @@ def pull_pause(job_id):
     return back("admin.model_downloads")
 
 
+@bp.post("/models/downloads/<int:job_id>/retry-now", endpoint="pull_retry_now")
+@admin_required
+def pull_retry_now(job_id):
+    job = _job_or_404(job_id)
+    if pulls.retry_now(job_id):
+        audit("model_pull_retry_now", job["ollama_name"], {"job": job_id})
+        flash(f"{job['ollama_name']} is tried again as soon as the queue allows.", "success")
+    else:
+        flash("That download is not waiting for a retry.", "info")
+    return back("admin.model_downloads")
+
+
 @bp.post("/models/downloads/<int:job_id>/move", endpoint="pull_move")
 @admin_required
 def pull_move(job_id):

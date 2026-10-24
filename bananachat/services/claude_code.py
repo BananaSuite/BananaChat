@@ -28,6 +28,7 @@ from bananachat.db import subscription_pool as accounts
 from bananachat.services import claude_sandbox
 from bananachat.services import subscription_pool
 from bananachat.services.subscription_cli import MAX_LINE, ConnectorError, json_file, private
+from bananachat.services.subscription_profiles import ManagedProfiles
 from bananachat.services.upstream import CancelToken
 
 log = logging.getLogger("bananachat.claude_code")
@@ -104,7 +105,7 @@ def _group_running(group, *, deadline=None):
     return False
 
 
-class Adapter:
+class Adapter(ManagedProfiles):
     provider = PROVIDER
     bindings_key = BINDINGS_KEY
 
@@ -121,9 +122,11 @@ class Adapter:
         self.timeout = manifest.get("timeout_seconds", 180)
         if isinstance(self.timeout, bool) or not isinstance(self.timeout, int) or not 10 <= self.timeout <= 900:
             raise ConnectorError("The request timeout must be between 10 and 900 seconds.")
-        profiles = manifest.get("profiles")
-        if not isinstance(profiles, dict) or not 1 <= len(profiles) <= 100:
-            raise ConnectorError("Configure between one and 100 private account profiles.")
+        profiles = manifest.get("profiles", {})
+        signed_in = manifest.get("managed_root") not in (None, "")
+        if not isinstance(profiles, dict) or not (0 if signed_in else 1) <= len(profiles) <= 100:
+            raise ConnectorError("Configure between one and 100 private account profiles, or a managed_root for "
+                                 "profiles signed in from the administration pages.")
         self.profiles = {}
         self._models = {}
         self._model_epoch = 0
@@ -159,21 +162,65 @@ class Adapter:
                 or len({p["home"] for p in self.profiles.values()}) != len(self.profiles):
             raise ConnectorError("Each subscription needs a separate authentication directory.")
         self.sandboxed = getattr(config, "environment", "production") not in ("development", "testing")
+        forbidden = [Path(__file__).resolve().parents[2], Path(config.claude_code_config).resolve()]
+        # The Codex manifest names that provider's logins; a Claude profile must not expose it.
+        forbidden += [getattr(config, name) for name in ("instance_dir", "database_path", "log_file",
+                                                         "maintenance_file", "codex_cli_config")
+                      if getattr(config, name, None)]
         if self.sandboxed:
             try:
                 if os.geteuid() == 0:
                     raise claude_sandbox.SandboxError("Production native transport needs an unprivileged identity.")
                 self.binary = claude_sandbox.trusted_executable(self.binary)
                 claude_sandbox.trusted_executable("/usr/bin/bwrap")
-                forbidden = [Path(__file__).resolve().parents[2], Path(config.claude_code_config).resolve()]
-                # The Codex manifest names that provider's logins; a Claude profile must not expose it.
-                forbidden += [getattr(config, name) for name in ("instance_dir", "database_path", "log_file",
-                                                                 "maintenance_file", "codex_cli_config")
-                              if getattr(config, name, None)]
                 claude_sandbox.private_roots(forbidden)
-                claude_sandbox.profile_paths(self.profiles, uid=os.getuid(), forbidden=forbidden)
-            except (OSError, claude_sandbox.SandboxError):
-                raise ConnectorError("The production Claude sandbox is not configured. Install Bubblewrap and use root-owned native executables with separate private profiles.") from None
+                if self.profiles:
+                    claude_sandbox.profile_paths(self.profiles, uid=os.getuid(), forbidden=forbidden)
+            except FileNotFoundError:
+                raise ConnectorError("The production Claude sandbox is not configured: Bubblewrap (/usr/bin/bwrap) "
+                                     "or a configured path is missing. Install Bubblewrap (apt install bubblewrap) "
+                                     "and run scripts/setup_subscriptions.py.") from None
+            except (OSError, claude_sandbox.SandboxError) as error:
+                raise ConnectorError("The production Claude sandbox is not configured. Install Bubblewrap and use "
+                                     "root-owned native executables with separate private profiles "
+                                     f"({error}).") from None
+        self._init_managed(manifest, sandboxed=self.sandboxed, forbidden=forbidden)
+
+    def _managed_profile(self, path):
+        return {"home": str(path), "config_dir": str(Path(path) / ".claude"), "models": [], "telemetry": None,
+                "discovery": "automatic", "usage_source": "automatic", "managed": True}
+
+    @staticmethod
+    def _prepare_managed(path):
+        config_dir = Path(path) / ".claude"
+        try:
+            os.mkdir(config_dir, 0o700)
+        except FileExistsError:
+            pass
+        claude_sandbox.private_path(config_dir, uid=os.getuid(), directory=True)
+
+    def _command(self, name, arguments, environment):
+        profile = self.profiles[name]
+        if self.sandboxed:
+            return claude_sandbox.command(self.binary, profile, arguments, cwd=profile["home"],
+                                          environment=environment)
+        return [self.binary, *arguments]
+
+    def login_command(self, name):
+        """``(argv, environment, cwd)`` of the official interactive sign-in for a profile (run on a terminal)."""
+        if name not in self.profiles:
+            raise ConnectorError("Unknown Claude Code profile.")
+        profile = self.profiles[name]
+        environment = self._env(profile, usage_metadata=True)
+        environment.update(TERM="xterm-256color", COLUMNS="4000", LINES="40")
+        return self._command(name, ["auth", "login", "--claudeai"], environment), environment, profile["home"]
+
+    def logout_command(self, name):
+        if name not in self.profiles:
+            raise ConnectorError("Unknown Claude Code profile.")
+        profile = self.profiles[name]
+        environment = self._env(profile, usage_metadata=True)
+        return self._command(name, ["auth", "logout"], environment), environment, profile["home"]
 
     def _env(self, profile, *, usage_metadata=False):
         # Allowlist prevents inherited API keys, token overrides, hooks or provider switches.
@@ -285,7 +332,7 @@ class Adapter:
 
     def bindings(self):
         value = settings.state_get(BINDINGS_KEY, {})
-        return value if isinstance(value, dict) else {}
+        return self._managed_bindings(value if isinstance(value, dict) else {})
 
     def profile_for(self, account):
         if account.get("provider", PROVIDER) != PROVIDER:
@@ -307,8 +354,10 @@ class Adapter:
         status = records[0]
         # A null plan means no subscription. An API key is listed even beside a
         # claude.ai login, and chat refuses any session that could fall back to it.
-        if status["loggedIn"] is False \
-                or (isinstance(status.get("authMethod"), str) and status["authMethod"] != "claude.ai") \
+        if status["loggedIn"] is False:
+            raise NativeAuthenticationError("This profile is not signed in to a Claude subscription. Sign it in "
+                                            "from Administration → Models → Claude.")
+        if (isinstance(status.get("authMethod"), str) and status["authMethod"] != "claude.ai") \
                 or (isinstance(status.get("apiProvider"), str) and status["apiProvider"] != "firstParty") \
                 or ("subscriptionType" in status and status["subscriptionType"] is None) or "apiKeySource" in status:
             raise NativeAuthenticationError("This profile needs native Claude subscription login; API-key authentication is not accepted.")

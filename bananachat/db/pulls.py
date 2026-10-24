@@ -155,19 +155,64 @@ def enqueue(name: str, requested_by: str | None, *, backend: str = "ollama", sou
 
 
 def claim_next(limit: int = 1, *, skip_backend: str | None = None):
-    """Atomically start the first runnable queued job while fewer than *limit* run (not of *skip_backend*)."""
+    """Atomically start the first runnable queued job of a backend that runs fewer than *limit* jobs (and is not
+    *skip_backend*).
+
+    Each backend has its own *limit*: Ollama downloads and ComfyUI checkpoints go to different servers, so a
+    checkpoint waiting in the checkpoint agent's own queue never holds up model downloads (and the other way round).
+    """
     with db.transaction():
-        if db.scalar("SELECT COUNT(*) FROM model_pull_jobs WHERE status='pulling'", default=0) >= max(1, limit):
-            return None
-        job = db.one("SELECT id FROM model_pull_jobs WHERE status='queued' AND paused=0 AND "
-                     "(next_attempt_at IS NULL OR next_attempt_at<=?) AND backend IS NOT ? "
-                     "ORDER BY queue_position, id LIMIT 1", (db.now(), skip_backend))
+        full = [row[0] for row in db.query("SELECT backend, COUNT(*) FROM model_pull_jobs WHERE status='pulling' "
+                                           "GROUP BY backend") if row[1] >= max(1, limit)]
+        skipped = sorted({*full, *([skip_backend] if skip_backend else [])})
+        sql = ("SELECT id FROM model_pull_jobs WHERE status='queued' AND paused=0 AND "
+               "(next_attempt_at IS NULL OR next_attempt_at<=?)")
+        params: list = [db.now()]
+        if skipped:
+            sql += f" AND backend NOT IN ({','.join('?' for _ in skipped)})"
+            params += skipped
+        job = db.one(sql + " ORDER BY queue_position, id LIMIT 1", params)
         if job is None:
             return None
         db.execute("UPDATE model_pull_jobs SET status='pulling', started_at=?, error_message=NULL, progress_at=?, "
                    "claim_token=? WHERE id=?", (db.now(), db.now(), secrets.token_hex(16), job["id"]))
         claimed = get(job["id"])
     return claimed
+
+
+def running_count() -> int:
+    return db.scalar("SELECT COUNT(*) FROM model_pull_jobs WHERE status='pulling'", default=0)
+
+
+def note_waiting(backend: str, detail: str) -> int:
+    """Tell administrators why queued jobs of *backend* do not start (not those paused or waiting for a retry)."""
+    return db.execute("UPDATE model_pull_jobs SET progress_detail=? WHERE status='queued' AND backend=? AND paused=0 "
+                      "AND next_attempt_at IS NULL AND progress_detail<>?", (detail[:500], backend, detail[:500])
+                      ).rowcount
+
+
+def requeue_orphans(before: str, running_ids, note: str) -> list:
+    """Jobs left ``pulling`` without progress since *before* by a run that no longer exists (not in *running_ids*,
+    the jobs this process runs) go back to the queue. Returns their ids."""
+    running_ids = set(running_ids)
+    found = []
+    with db.transaction():
+        for row in db.query("SELECT id, claim_token FROM model_pull_jobs WHERE status='pulling' "
+                            "AND COALESCE(progress_at, started_at, created_at)<?", (before,)):
+            if row["id"] in running_ids:
+                continue
+            if db.execute("UPDATE model_pull_jobs SET status='queued', progress_detail=?, claim_token=NULL "
+                          "WHERE id=? AND status='pulling' AND claim_token IS ?",
+                          (note[:500], row["id"], row["claim_token"])).rowcount:
+                found.append(row["id"])
+    return found
+
+
+def retry_now(job_id: int) -> bool:
+    """Start a job waiting for its next attempt as soon as the queue allows."""
+    return db.execute("UPDATE model_pull_jobs SET next_attempt_at=NULL, progress_detail=? WHERE id=? "
+                      "AND status='queued' AND next_attempt_at IS NOT NULL",
+                      ("Retrying now at an administrator's request.", job_id)).rowcount == 1
 
 
 _OWNED = " AND (? IS NULL OR claim_token=?)"

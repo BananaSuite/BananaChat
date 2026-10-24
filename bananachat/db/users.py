@@ -26,7 +26,11 @@ PREFERENCE_DEFAULTS = {
     "custom_accent": "", "custom_sidebar": "",
     "semantic_bold": 0, "semantic_italic": 0, "semantic_code": 0, "semantic_link": 0, "semantic_heading": 0,
     "background_image": "",
+    # Easter eggs this person wants (each also needs the site to offer it).
+    "egg_mascot_motion": True, "egg_mascot_shades": True, "egg_konami": True,
 }
+EGG_KEYS = ("egg_mascot_motion", "egg_mascot_shades", "egg_konami")
+BM_MODE_CONTROLS = ("site", "self", "admin")
 COLOR_KEYS = ("custom_bg", "custom_text", "custom_primary", "custom_secondary", "custom_accent", "custom_sidebar")
 SEMANTIC_KEYS = ("semantic_bold", "semantic_italic", "semantic_code", "semantic_link", "semantic_heading")
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -65,6 +69,9 @@ def clean_preferences(raw) -> dict:
         prefs[key] = value.lower() if isinstance(value, str) and _HEX_COLOR.match(value) else ""
     for key in SEMANTIC_KEYS:
         prefs[key] = _int_in(raw.get(key), 0, 2, 0)
+    for key in EGG_KEYS:
+        if key in raw:
+            prefs[key] = raw[key] is True or raw[key] in (1, "1", "true")
     background = raw.get("background_image")
     prefs["background_image"] = background if isinstance(background, str) and _BACKGROUND.match(background) else ""
     return prefs
@@ -76,6 +83,62 @@ def get_preferences(user_id: str) -> dict:
         return clean_preferences(json.loads(value) if value else {})
     except ValueError:
         return dict(PREFERENCE_DEFAULTS)
+
+
+# ----- BM mode (the easy mode) ----------------------------------------------
+#
+# Either on for everyone (site_settings.bm_mode_global), or chosen per account (users.bm_mode). Who switches an
+# account's BM mode: the site's rule (bm_mode_self_service: the person, or only administrators), unless an
+# administrator decided for that account (users.bm_mode_control "self" or "admin").
+
+def _column(row, name, default):
+    try:
+        value = row[name]
+    except (IndexError, KeyError, TypeError):
+        return default
+    return default if value is None else value
+
+
+def bm_mode(user, settings: dict | None) -> bool:
+    """Whether BM mode is on for *user* (a users row; None for visitors, who never get it)."""
+    if user is None:
+        return False
+    if (settings or {}).get("bm_mode_global"):
+        return True
+    return bool(_column(user, "bm_mode", 0))
+
+
+def bm_mode_switchable(user, settings: dict | None) -> bool:
+    """Whether *user* may switch BM mode on and off themselves."""
+    settings = settings or {}
+    if user is None or settings.get("bm_mode_global"):
+        return False
+    control = _column(user, "bm_mode_control", "site")
+    if control == "site":
+        return bool(settings.get("bm_mode_self_service", 1))
+    return control == "self"
+
+
+def set_bm_mode(user_id: str, on: bool) -> int:
+    return db.execute("UPDATE users SET bm_mode=? WHERE id=?", (int(bool(on)), user_id)).rowcount
+
+
+def set_bm_mode_control(user_id: str, control: str) -> int:
+    if control not in BM_MODE_CONTROLS:
+        raise ValueError("Unknown BM mode control.")
+    return db.execute("UPDATE users SET bm_mode_control=? WHERE id=?", (control, user_id)).rowcount
+
+
+def set_bm_mode_all(on: bool) -> int:
+    """Turn BM mode on or off for every account (who may switch it keeps its own rule)."""
+    return db.execute("UPDATE users SET bm_mode=? WHERE bm_mode<>?", (int(bool(on)), int(bool(on)))).rowcount
+
+
+def easter_eggs(prefs: dict, settings: dict | None) -> dict:
+    """``{egg: on}`` for each easter egg: offered by the site and wanted by this person."""
+    settings = settings or {}
+    return {egg: bool(settings.get(f"easter_{egg}", 1)) and bool(prefs.get(f"egg_{egg}", True))
+            for egg in ("mascot_motion", "mascot_shades", "konami")}
 
 
 def save_preferences(user_id: str, prefs: dict) -> dict:

@@ -223,3 +223,46 @@ reports pause the affected account; other fresh subscriptions remain available.
 Live account tests are still necessary. Local regression tests verify the
 loader, scheduler, quota validation and stream behaviour using fake adapters.
 They do not certify an unconfigured subscription connection.
+
+## Signing accounts in from the administration pages
+
+With a `managed_root` in a connector manifest (the setup script
+`scripts/setup_subscriptions.py` adds one), administrators create a **new
+private profile** for an account and sign it in from **Administration → Models
+→ Claude** or **Codex**, without a shell on the server:
+
+- the server starts the provider's own sign-in command in that profile, inside
+  the same sandbox as the answers: `claude auth login --claudeai` (a link, then
+  a code the administrator pastes back) or `codex login --device-auth` (a link
+  and a one-time code to enter at OpenAI);
+- the page relays only the provider's link and code; credentials are written
+  by the official tool into the profile and never pass through BananaChat;
+- a sign-in session ends after 15 minutes, on cancel, or when the tool exits;
+  the account's login is then checked with the tool's own status command;
+- starting a sign-in needs a recent confirmation (password or authenticator
+  code); signing out runs the tool's own logout, and deleting the account
+  removes its private profile.
+
+Profiles made this way live in `managed_root/managed-<account id>`, owned by
+the service and invisible to other accounts' sandboxes. Profiles listed in the
+manifest still work alongside them. The **Setup** checklist at the top of each
+page reports the connector module, the configuration, the official CLI, the
+sandbox and sign-in support, each with how to fix it.
+
+## Sandbox on Ubuntu
+
+Bubblewrap needs unprivileged user namespaces. Ubuntu 23.10 and later restrict
+them with AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`), and the
+Setup checklist then reports that the sandbox cannot start. Either:
+
+- run `sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py
+  --allow-bwrap-userns`, which installs `/etc/apparmor.d/bananachat-bwrap`, a
+  profile that lets only `/usr/bin/bwrap` create user namespaces, and reloads
+  it; or
+- write an equivalent profile yourself (`abi <abi/4.0>, include <tunables/global>
+  profile bananachat-bwrap /usr/bin/bwrap flags=(unconfined) { userns, }`) and load it with
+  `sudo apparmor_parser -r`.
+
+Turning the restriction off for the whole system
+(`sysctl kernel.apparmor_restrict_unprivileged_userns=0`) also works but is
+broader than needed. Subscription answers stay off until the sandbox works.

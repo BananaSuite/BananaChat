@@ -31,6 +31,7 @@
     <div class="section-nav" data-section-nav>
       <a href="#appearance">{{ t("customize.appearance") }}</a>
       <a href="#reading">{{ t("customize.reading") }}</a>
+      <a href="#easter-eggs">{{ t("customize.eggs") }}</a>
       <a href="#preview-title">{{ t("customize.preview") }}</a>
       <a href="#more-appearance">{{ t("customize.more_options") }}</a>
     </div>
@@ -51,6 +52,16 @@
               {% endfor %}
             </select>
             <span class="hint" id="language-hint">{{ t("customize.language_hint") }}</span>
+          </div>
+        </div>
+        <div class="preference-grid">
+          <div class="motion-preference">
+            <label class="switch">
+              <input type="checkbox" name="bm_mode" value="1"{% if bm_mode %} checked{% endif %}{% if not bm_mode_switchable %} disabled{% endif %} aria-describedby="bm-mode-hint">
+              <span class="track" aria-hidden="true"></span>
+              <span>{{ t("customize.bm_mode") }}</span>
+            </label>
+            <p class="hint mt-0" id="bm-mode-hint">{{ t("customize.bm_mode_hint") }}{% if not bm_mode_switchable %} {{ t("customize.bm_mode_everyone") if settings.bm_mode_global else t("customize.bm_mode_admin_only") }}{% endif %}</p>
           </div>
         </div>
       </section>
@@ -85,6 +96,24 @@
             <label for="sidebar_width">{{ t("customize.sidebar_width") }} <output for="sidebar_width" id="sidebar_width_value">{{ prefs.sidebar_width }} px</output></label>
             <input type="range" id="sidebar_width" name="sidebar_width" min="200" max="420" step="10" value="{{ prefs.sidebar_width }}">
           </div>
+        </div>
+      </section>
+
+      <section class="settings-section stack" id="easter-eggs" aria-labelledby="easter-eggs-title">
+        <h2 id="easter-eggs-title">{{ t("customize.eggs") }}</h2>
+        <p class="hint mt-0">{{ t("customize.eggs_hint") }}</p>
+        <div class="preference-grid">
+          {% for egg in ["mascot_motion", "mascot_shades", "konami"] %}
+          {%- set offered = settings.get("easter_" ~ egg, 1) %}
+          <div class="motion-preference">
+            <label class="switch">
+              <input type="checkbox" name="egg_{{ egg }}" value="1"{% if prefs["egg_" ~ egg] %} checked{% endif %}{% if not offered %} disabled{% endif %} aria-describedby="egg-{{ egg }}-hint">
+              <span class="track" aria-hidden="true"></span>
+              <span>{{ t("customize.egg_" ~ egg) }}</span>
+            </label>
+            <p class="hint mt-0" id="egg-{{ egg }}-hint">{{ t("customize.egg_" ~ egg ~ "_hint") if offered else t("customize.egg_site_off") }}</p>
+          </div>
+          {% endfor %}
         </div>
       </section>
 

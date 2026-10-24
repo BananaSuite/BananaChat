@@ -63,6 +63,26 @@
           </div>
           <p class="hint mt-1">Used for visitors and for users who did not choose a theme.</p>
         </fieldset>
+        <fieldset class="choice-group">
+          <legend>Easter eggs</legend>
+          <input type="hidden" name="easter_eggs_present" value="1">
+          <label class="check"><input type="checkbox" name="easter_mascot_motion"{% if s.easter_mascot_motion != 0 %} checked{% endif %}><span>Lively mascot<small>The banana in the top bar bobs, blinks, tilts on hover and hops when clicked. Off: it stays still.</small></span></label>
+          <label class="check"><input type="checkbox" name="easter_mascot_shades"{% if s.easter_mascot_shades != 0 %} checked{% endif %}><span>The mascot's sunglasses<small>Eleven clicks in a row on the banana put its sunglasses on (remembered in that browser), as many again take them off.</small></span></label>
+          <label class="check"><input type="checkbox" name="easter_konami"{% if s.easter_konami != 0 %} checked{% endif %}><span>Banana shower<small>The Konami code (↑ ↑ ↓ ↓ ← → ← → B A) typed on any page makes small bananas fall for three seconds.</small></span></label>
+          <p class="hint mt-1">Each person can also switch off the ones the site offers, in Customise. Less motion (theirs or their system's) always keeps the banana still.</p>
+        </fieldset>
+        <fieldset class="choice-group" id="bm-mode">
+          <legend>BM mode (easy mode)</legend>
+          <input type="hidden" name="bm_mode_present" value="1">
+          <p class="hint mt-0">A simpler interface: the chat, the model choice and the essentials. Reasoning effort, sampling settings, personalities and the extra pages are hidden, and their defaults apply.</p>
+          <label class="check"><input type="radio" name="bm_mode_global" value="0"{% if not s.bm_mode_global %} checked{% endif %}><span>Per account<small>Off unless switched on for an account, by the person or by an administrator (Users → an account → BM mode).</small></span></label>
+          <label class="check"><input type="radio" name="bm_mode_global" value="1"{% if s.bm_mode_global %} checked{% endif %}><span>On for everyone<small>Every account uses BM mode and nobody can switch it off.</small></span></label>
+          <label class="check"><input type="checkbox" name="bm_mode_self_service"{% if s.bm_mode_self_service != 0 %} checked{% endif %}><span>People may switch it on and off themselves<small>In Customise and the account menu. Off: only administrators switch it. An account can have its own rule either way.</small></span></label>
+          <div class="row mt-1">
+            <button type="submit" class="btn btn-sm" form="bm-all-on">Turn on for every account</button>
+            <button type="submit" class="btn btn-sm" form="bm-all-off">Turn off for every account</button>
+          </div>
+        </fieldset>
       </div>
     </section>
 
@@ -145,6 +165,11 @@
   <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
 </form>
 
+{% for state in ["on", "off"] %}
+<form method="post" action="{{ url_for('admin.settings_bm_mode_all') }}" id="bm-all-{{ state }}" data-confirm="Turn BM mode {{ state }} for every account now? Unsaved changes on this page are lost." hidden>
+  {{ csrf() }}<input type="hidden" name="state" value="{{ state }}">
+</form>
+{% endfor %}
 {% for mode in ["dark", "light"] %}
 <form method="post" action="{{ url_for('admin.settings_palette_reset') }}" id="reset-{{ mode }}" data-confirm="Reset the {{ mode }} palette to the default colours? Unsaved changes on this page are lost." hidden>
   {{ csrf() }}<input type="hidden" name="mode" value="{{ mode }}">

@@ -33,6 +33,7 @@
     </div>
   </div>
   {% if queue.queue_paused %}<p class="alert alert-warning mb-0 mt-1">The queue is paused. Nothing downloads until you resume it; paused downloads continue from where they stopped.</p>{% endif %}
+  {% if queue.active and queue.background.alive is false %}<p class="alert alert-warning mb-0 mt-1" id="background-warning">No server process is running the background services{% if queue.background.age %} (last seen {{ queue.background.age }} s ago){% endif %}, so queued downloads cannot start. Restart BananaChat (<code>sudo bananachat restart</code>), and run it with Gunicorn or <code>python -m bananachat</code>, which start them.</p>{% endif %}
   <p class="small {{ 'danger-text' if disk.checked and not disk.ok else 'muted' }} mb-0 mt-1" id="disk-space">{{ icon("server") }} {{ disk.message }}</p>
 </section>
 
@@ -142,6 +143,11 @@
           </td>
           <td class="nowrap small" data-label="Requested:">{{ when(job.created_at) }}{% if job.requested_by_name %}<br class="stack-break"><span class="muted"><span class="stack-sep"> · </span>{{ job.requested_by_name }}</span>{% endif %}</td>
           <td class="actions">
+            {% if job.status == "queued" and job.next_attempt_at and not job.paused %}
+            <form method="post" action="{{ url_for('admin.pull_retry_now', job_id=job.id) }}">
+              {{ csrf() }}<button type="submit" class="btn btn-sm" aria-label="Retry {{ job.ollama_name }} now">{{ icon("refresh") }}Retry now</button>
+            </form>
+            {% endif %}
             {% if job.status in ("queued", "pulling") %}
             <form method="post" action="{{ url_for('admin.pull_pause', job_id=job.id) }}">
               {{ csrf() }}

@@ -10,7 +10,11 @@ Stopping is not cancelling. When the process shuts down or is recycled, or an
 administrator pauses a job or the whole queue, the job goes back to the queue
 and resumes later (Ollama and the checkpoint agent both resume partial
 downloads); nothing is deleted. Jobs left ``pulling`` by a process that died
-are re-queued when the next leader starts. Transient errors (the network,
+are re-queued when the next leader starts, and a job whose run vanished while the
+leader kept running (no progress for longer than the stall time) is re-queued
+by the leader's watchdog. Each backend (Ollama, ComfyUI checkpoints) has its
+own ``download_concurrency``, so a checkpoint waiting in the agent's queue
+never blocks model downloads. Transient errors (the network,
 a busy gateway, no progress for ``stall_minutes``) are retried with back-off up
 to ``download_retries`` times (while the health probe sees a remote model
 server as down, Ollama downloads wait without using a retry); errors that name
@@ -400,6 +404,11 @@ def resume(job_id: int) -> bool:
     return pulls_db.set_paused(job_id, False)
 
 
+def retry_now(job_id: int) -> bool:
+    """Skip the back-off of a download waiting for its next attempt."""
+    return pulls_db.retry_now(job_id)
+
+
 def set_queue_paused(paused: bool, actor=None) -> None:
     """Pause or resume the whole queue (running downloads stop and wait, nothing is lost)."""
     from bananachat.services import model_lifecycle
@@ -421,7 +430,8 @@ def queue_status() -> dict:
     current = model_lifecycle.policy()
     summary = pulls_db.summary()
     summary.update(queue_paused=current["downloads_paused"], concurrency=current["download_concurrency"],
-                   retries=current["download_retries"], stall_minutes=current["stall_minutes"])
+                   retries=current["download_retries"], stall_minutes=current["stall_minutes"],
+                   background=background.leader_status())
     return summary
 
 
@@ -506,6 +516,7 @@ def _execute(job, config, stopping) -> None:
     operation = None
     try:
         operation = model_lifecycle.operation_lock(job["ollama_name"], config, backend=job["backend"])
+        noted = False
         while True:
             _check_claim(job, token)
             try:
@@ -513,6 +524,11 @@ def _execute(job, config, stopping) -> None:
                 break
             except Timeout:
                 progress["at"] = time.monotonic()  # waiting for an older operation is not a stalled download
+                if not noted:
+                    noted = True
+                    pulls_db.update_progress(job["id"], job["progress_pct"] or 0,
+                                             "Waiting for another operation on this model (a deletion or "
+                                             "download) to finish.", owner=_owner(job))
                 token.wait(0.25)
         _check_claim(job, token)
         if job["backend"] == "comfyui":
@@ -809,23 +825,50 @@ def _requeue_abandoned(job) -> None:
         log.exception("Download job %s could not be queued again", job["id"])
 
 
+ORPHAN_CHECK_SECONDS = 30
+BACKENDS = ("ollama", "comfyui")
+WAITING_FOR_SERVER = "Waiting for the model server to be reachable again; the download starts as soon as it is."
+
+
+def recover_orphans(stall_minutes: int) -> list:
+    """Jobs left ``pulling`` by a run that ended without saving its outcome (a thread that died, a process killed
+    while the leader kept running) go back to the queue once they made no progress for longer than the stall time
+    (plus a margin); the downloads this process runs are never touched."""
+    with _lock:
+        mine = set(_running)
+    before = db.now(timedelta(seconds=-(max(1, stall_minutes) * 60 + 120)))
+    found = pulls_db.requeue_orphans(before, mine, "Its download stopped reporting; it was queued again and "
+                                                   "resumes from where it stopped.")
+    for job_id in found:
+        log.warning("Download job %s stopped reporting progress; it is queued again", job_id)
+    return found
+
+
 @background.job("model-pulls", every=2, long_running=True, initial_delay=3)
 def run_downloads(app) -> None:
-    """Leader-only loop: resume interrupted jobs once, then run queued ones (``download_concurrency`` at a time)."""
+    """Leader-only loop: resume interrupted jobs once, then run queued ones (``download_concurrency`` at a time per
+    backend). Jobs whose run vanished are queued again; queued jobs that cannot start say why."""
     if not _state["recovered"]:
         resumed = pulls_db.reset_stuck()
         _state["recovered"] = True
         if resumed:
             log.info("Resuming %d interrupted model download(s)", resumed)
     workers: dict[int, threading.Thread] = {}
+    checked = 0.0
     while not background.stopping():
         for job_id, thread in list(workers.items()):
             if not thread.is_alive():
                 workers.pop(job_id)
         current = _policy()
+        if time.monotonic() - checked >= ORPHAN_CHECK_SECONDS:
+            checked = time.monotonic()
+            recover_orphans(current["stall_minutes"])
+        skipped = _skipped_backend(app.config["BC"])
+        if skipped:
+            pulls_db.note_waiting(skipped, WAITING_FOR_SERVER)
         job = None
-        if not current["downloads_paused"] and len(workers) < current["download_concurrency"]:
-            job = pulls_db.claim_next(current["download_concurrency"], skip_backend=_skipped_backend(app.config["BC"]))
+        if not current["downloads_paused"] and len(workers) < current["download_concurrency"] * len(BACKENDS):
+            job = pulls_db.claim_next(current["download_concurrency"], skip_backend=skipped)
         if job is not None:
             thread = threading.Thread(target=_job_thread, args=(app, job), name=f"bananachat-pull-{job['id']}",
                                       daemon=True)

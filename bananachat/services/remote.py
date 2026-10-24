@@ -274,14 +274,23 @@ def _requeue(job, now: float) -> bool:
     return bool(store.requeue(job["id"], now))
 
 
-def idle_workers_for(name: str, now: float | None = None) -> list:
-    """Available workers without a running job that advertise *name*."""
+def worker_features(worker) -> set[str]:
+    """What a worker daemon reported it supports (``think``, ``model_commands``, ``remote_access``)."""
+    from bananachat.services.worker_remote import system_info
+
+    features = system_info(worker).get("features") if "system_info" in worker.keys() else None
+    return {item for item in features or [] if isinstance(item, str)}
+
+
+def idle_workers_for(name: str, now: float | None = None, *, feature: str | None = None) -> list:
+    """Available workers without a running job that advertise *name* (and support *feature*)."""
     now = time.time() if now is None else now
     wanted = model_aliases(name)
     busy = store.workers_with_active_jobs()
     return [worker for worker in store.online(now - HEARTBEAT_FRESH_SECONDS)
             if worker["id"] not in busy and worker_is_available(worker, now)
-            and wanted & _alias_set(advertised_models(worker))]
+            and wanted & _alias_set(advertised_models(worker))
+            and (feature is None or feature in worker_features(worker))]
 
 
 def should_route(user, model, *, request_type: str | None = None, think=None, config=None) -> bool:
@@ -290,10 +299,8 @@ def should_route(user, model, *, request_type: str | None = None, think=None, co
         return False
     if _field(model, "backend") not in (None, "ollama"):
         return False  # worker PCs run Ollama models only (never external API providers or subscription pools)
-    if think:
-        # Worker jobs carry no reasoning setting and the daemon relays only the
-        # answer, so a request that asks for reasoning stays on this server.
-        return False
+    # Reasoning goes only to daemons that relay it (they report the "think" feature); older ones answer without.
+    feature = "think" if think else None
     if _field(user, "role") == "admin":
         return False
     if request_type in NO_REMOTE_REQUEST_TYPES:
@@ -306,7 +313,7 @@ def should_route(user, model, *, request_type: str | None = None, think=None, co
         if account_benched(user, now):
             return False
         avoided = _workers_avoided_by(user, now)
-        idle = [worker for worker in idle_workers_for(name, now) if worker["id"] not in avoided]
+        idle = [worker for worker in idle_workers_for(name, now, feature=feature) if worker["id"] not in avoided]
         return len(idle) > store.count_pending(model_aliases(name))
     except sqlite3.Error:
         log.warning("Worker routing check failed; using the local server", exc_info=True)
@@ -344,7 +351,7 @@ def stream(model_name, messages, options, *, cancel, priority, first_token_timeo
     else:
         job_id = uuid.uuid4().hex
         store.insert_job(job_id, model_name, messages_json, options_json, int(priority), time.time(),
-                         requested_by=user_id)
+                         requested_by=user_id, think=json.dumps(think) if think is not None else None)
         _announce()
         try:
             yield from _relay(job_id, cancel, config, float(first_token_timeout), deadline)
@@ -422,9 +429,10 @@ def _relay(job_id: str, cancel, config, first_token_timeout: float, deadline: fl
                 _fail_relay(job_id, "failed", "The worker sent an incomplete answer.", produced, blame="worker")
             last_seq = row["seq"]
             terminal = bool(row["done"])
-            if row["content"]:
+            thinking = row["thinking"] if "thinking" in row.keys() else ""
+            if row["content"] or thinking:
                 produced = True
-                yield Chunk(content=row["content"])
+                yield Chunk(content=row["content"], thinking=thinking or "")
         if rows and last_seq > 0:
             store.delete_chunks_before(job_id, last_seq)
 
@@ -537,6 +545,17 @@ def heartbeat(worker, body, config=None) -> dict:
     job_id = body.get("job_id")
     if job_id is not None and not isinstance(job_id, str):
         raise InvalidRequest("Invalid job_id.")
+    from bananachat.services import worker_commands, worker_remote
+
+    try:
+        remote_access = worker_remote.parse_remote(body.get("remote"))
+    except ValueError as error:
+        raise InvalidRequest(str(error)) from None
+    system = worker_remote.parse_system(body.get("system"))
+    running = body.get("commands_running")
+    if running is not None and (not isinstance(running, list) or len(running) > 64 or not all(
+            isinstance(item, str) and len(item) == 32 for item in running)):
+        raise InvalidRequest("Invalid commands_running.")
 
     now = time.time()
     job_stop = False
@@ -545,6 +564,8 @@ def heartbeat(worker, body, config=None) -> dict:
                                gpu_util=float(gpu_util) if gpu_util is not None else None,
                                ollama_version=ollama_version, capabilities_json=capabilities_json,
                                activity_state=activity, platform=platform)
+        if remote_access is not None or system is not None:
+            worker_remote.record(worker["id"], remote_access, system)
         if status != "online" or activity == "gaming":
             # The owner is gaming or the worker is going away: jobs it has not
             # started answering go back to the pool (older daemons silently
@@ -559,11 +580,19 @@ def heartbeat(worker, body, config=None) -> dict:
             job = store.get_job(job_id)
             job_stop = (job is None or job["worker_id"] != worker["id"] or job["status"] not in store.ACTIVE
                         or bool(job["stop_requested"]))
-    return {"ok": True, "job_stop": job_stop}
+    reply = {"ok": True, "job_stop": job_stop}
+    # Optional parts that older daemons ignore: remote access and model commands.
+    remote_reply = worker_remote.heartbeat_reply(worker["id"], config)
+    if remote_reply is not None:
+        reply["remote"] = remote_reply
+    command_reply = worker_commands.heartbeat(worker, system, running=running)
+    if command_reply is not None:
+        reply["commands"] = command_reply
+    return reply
 
 
 def _job_payload(job, config) -> dict:
-    return {
+    payload = {
         "job_id": job["id"],
         "model": job["model_name"],
         "messages": json.loads(job["messages"] or "[]"),
@@ -573,6 +602,15 @@ def _job_payload(job, config) -> dict:
         "lease_seconds": lease_seconds(config),
         "generation_timeout": config.generation_timeout,
     }
+    think = job["think"] if "think" in job.keys() else None
+    if think:
+        try:
+            value = json.loads(think)
+        except ValueError:
+            value = None
+        if isinstance(value, (bool, str)):
+            payload["think"] = value  # Ollama's think: false, true or a level (newer daemons only read it)
+    return payload
 
 
 def claim(worker, models: list[str] | None, config=None):
@@ -582,8 +620,10 @@ def claim(worker, models: list[str] | None, config=None):
     now = time.time()
     failed_since = now - USER_FAULT_SECONDS
     active = store.active_jobs_for_worker(worker["id"])
+    reasoning = "think" in worker_features(worker)  # older daemons would drop the reasoning
     if not active and (_paused(worker, now)
-                       or store.next_pending(names, worker_id=worker["id"], failed_since=failed_since) is None):
+                       or store.next_pending(names, worker_id=worker["id"], failed_since=failed_since,
+                                             reasoning=reasoning) is None):
         return None
     with db.transaction():
         current = store.get(worker["id"])
@@ -598,7 +638,7 @@ def claim(worker, models: list[str] | None, config=None):
                 _misbehaved(job, worker["id"], now, "abandoned a job it was answering")
         if _paused(store.get(worker["id"]), now):
             return None
-        job = store.next_pending(names, worker_id=worker["id"], failed_since=failed_since)
+        job = store.next_pending(names, worker_id=worker["id"], failed_since=failed_since, reasoning=reasoning)
         if job is None or not store.set_claimed(job["id"], worker["id"], now):
             return None
     log.info("Worker job %s (%s) claimed by %s", job["id"][:8], job["model_name"], worker["name"])
@@ -671,13 +711,14 @@ def submit_chunk(worker, job_id: str, body, config=None) -> dict:
     if not isinstance(body, dict):
         raise InvalidRequest("Expected a JSON object.")
     seq, content, done = body.get("seq"), body.get("content", ""), body.get("done", False)
+    thinking = body.get("thinking") or ""
     if isinstance(seq, bool) or not isinstance(seq, int) or not 0 <= seq < MAX_CHUNK_SEQ:
         raise InvalidRequest("Invalid chunk sequence.")
     if content is None:
         content = ""
-    if not isinstance(content, str) or not isinstance(done, bool):
+    if not isinstance(content, str) or not isinstance(done, bool) or not isinstance(thinking, str):
         raise InvalidRequest("Invalid chunk.")
-    size = len(content.encode("utf-8"))
+    size = len(content.encode("utf-8")) + len(thinking.encode("utf-8"))
     if size > MAX_CHUNK_BYTES:
         raise InvalidRequest("The chunk is too large.")
     now = time.time()
@@ -689,7 +730,8 @@ def submit_chunk(worker, job_id: str, body, config=None) -> dict:
         if seq < expected:
             # A retry of something already accepted (the reply was lost).
             stored = store.chunk(job_id, seq)
-            if stored is None or (stored["content"] == content and bool(stored["done"]) == done):
+            if stored is None or (stored["content"] == content and bool(stored["done"]) == done
+                                  and (stored["thinking"] or "") == thinking):
                 store.renew_lease(worker["id"], now)
                 return {"ok": True, "stop": False}
             store.finish(job_id, "failed", now, error="The worker sent conflicting chunks.")
@@ -703,12 +745,13 @@ def submit_chunk(worker, job_id: str, body, config=None) -> dict:
         budget = config.chat_max_response_bytes - job["stream_bytes"]
         if size > budget:
             # Keep what fits and end the answer here, as the local path does.
-            content = _truncate_utf8(content, budget)
-            store.insert_chunk(job_id, seq, content, True, now)
-            store.advance(job_id, len(content.encode("utf-8")), now)
+            thinking = _truncate_utf8(thinking, budget)
+            content = _truncate_utf8(content, budget - len(thinking.encode("utf-8")))
+            store.insert_chunk(job_id, seq, content, True, now, thinking=thinking)
+            store.advance(job_id, len(content.encode("utf-8")) + len(thinking.encode("utf-8")), now)
             store.finish(job_id, "done", now, finish_reason="length", only_from=store.ACTIVE)
             return {"ok": True, "stop": True}
-        store.insert_chunk(job_id, seq, content, done, now)
+        store.insert_chunk(job_id, seq, content, done, now, thinking=thinking)
         store.advance(job_id, size, now)
     return {"ok": True, "stop": False}
 
@@ -814,6 +857,9 @@ def set_enabled(worker_id: str, enabled: bool) -> bool:
             store.clear_pause(worker_id)  # an administrator vouches for it again
         else:
             store.finish_worker_jobs(worker_id, "The worker was disabled.", now)
+            from bananachat.db import worker_remote as remote_store
+
+            remote_store.end_worker_tunnels(worker_id, "The worker was disabled.", now)
     return True
 
 

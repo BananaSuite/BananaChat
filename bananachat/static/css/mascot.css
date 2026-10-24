@@ -57,6 +57,13 @@
 @keyframes mascot-fall { from { transform: translateY(0) rotate(-12deg); }
   to { transform: translateY(calc(100vh + 80px)) rotate(12deg); } }
 
+/* The animated mascot easter egg switched off (site or person): a still banana, like with less motion. */
+.mascot[data-mascot-motion="0"] :is(.mascot__body, .mascot__eyes) { animation: none; }
+.mascot[data-mascot-motion="0"] .mascot-sprite { transition: none; }
+@media (hover: hover) {
+  .mascot[data-mascot-motion="0"]:hover .mascot-sprite { transform: none; }
+}
+
 /* Less motion: app.css runs every animation once in no time, which would still flick the banana; it stands
    still instead (clicks still put the sunglasses on). After the rules, as it uses the same selectors. */
 @media (prefers-reduced-motion: reduce) {

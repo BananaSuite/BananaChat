@@ -172,7 +172,8 @@
     "customize.more_options_hint": "Optional colours, highlighting and background.",
     "status.local_outage_title": "Local model server unavailable",
     "status.local_outage_text": "Hosted models are still available. Choose one to keep chatting.",
-    "status.local_outage_text_public": "Hosted models remain available while the local server reconnects."
+    "status.local_outage_text_public": "Hosted models remain available while the local server reconnects.",
+    "nav.bm_mode": "BM mode (easy)"
   },
   "it": {
     "common.skip_to_content": "Vai al contenuto",
@@ -347,7 +348,8 @@
     "customize.more_options_hint": "Colori, evidenziazione e sfondo facoltativi.",
     "status.local_outage_title": "Server dei modelli locali non disponibile",
     "status.local_outage_text": "I modelli esterni sono disponibili. Scegline uno per continuare.",
-    "status.local_outage_text_public": "I modelli esterni restano disponibili mentre il server locale si riconnette."
+    "status.local_outage_text_public": "I modelli esterni restano disponibili mentre il server locale si riconnette.",
+    "nav.bm_mode": "Modalità BM (facile)"
   },
   "de": {
     "common.skip_to_content": "Zum Inhalt springen",
@@ -522,6 +524,7 @@
     "customize.more_options_hint": "Optionale Farben, Hervorhebungen und Hintergrund.",
     "status.local_outage_title": "Lokaler Modellserver nicht verfügbar",
     "status.local_outage_text": "Gehostete Modelle sind weiterhin verfügbar. Wähle eines, um weiterzuchatten.",
-    "status.local_outage_text_public": "Gehostete Modelle bleiben verfügbar, während sich der lokale Server neu verbindet."
+    "status.local_outage_text_public": "Gehostete Modelle bleiben verfügbar, während sich der lokale Server neu verbindet.",
+    "nav.bm_mode": "BM-Modus (einfach)"
   }
 }

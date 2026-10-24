@@ -324,7 +324,9 @@ def build_options(model, overrides: dict | None = None, *, max_tokens: int | Non
 def generate(request: TextRequest, cancel: CancelToken):
     """Run *request*; see the module docstring for the event protocol."""
     config = current_app.config["BC"]
-    slot = queue.Slot(request.priority, owner_key=request.owner_key, model=_backend_name(request.model))
+    # Hosted models wait in a lane of their own: a model server or worker that went away cannot hold them up.
+    slot = queue.Slot(request.priority, owner_key=request.owner_key, model=_backend_name(request.model),
+                      lane=queue.lane_for(request.model))
     with slot:
         for position in slot.positions(timeout=config.queue_timeout, cancel=cancel):
             yield Queued(position)

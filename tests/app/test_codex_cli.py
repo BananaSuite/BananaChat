@@ -98,7 +98,7 @@ def _answer(*events):
 
 def test_chatgpt_login_is_accepted_and_api_key_login_refused(connector):
     adapter, home, _ = connector
-    assert adapter.check_profile("primary") == {"authenticated": True}
+    assert adapter.check_profile("primary") == {"authenticated": True, "plan": "plus"}
     for account in ({"type": "apiKey"}, {"type": "amazonBedrock", "usesCodexManagedCredentials": False}, None):
         _scenario(home, account=account)
         with pytest.raises(NativeAuthenticationError, match="ChatGPT subscription"):

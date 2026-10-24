@@ -51,15 +51,33 @@ class Client:
             raise ServerError("The server sent an invalid job.")
         return data
 
-    def chunk(self, job_id: str, seq: int, content: str, done: bool) -> bool:
-        """Send a piece of the answer. Returns False when the server wants the job stopped."""
-        _status, reply = self._call("POST", f"/jobs/{job_id}/chunk", {"seq": seq, "content": content, "done": done})
+    def chunk(self, job_id: str, seq: int, content: str, done: bool, thinking: str = "") -> bool:
+        """Send a piece of the answer (and of its reasoning). Returns False when the server wants the job stopped."""
+        body = {"seq": seq, "content": content, "done": done}
+        if thinking:
+            body["thinking"] = thinking
+        _status, reply = self._call("POST", f"/jobs/{job_id}/chunk", body)
         return reply.get("ok") is True and not reply.get("stop")
 
     def complete(self, job_id: str, tokens_in: int, tokens_out: int, finish_reason: str) -> bool:
         _status, reply = self._call("POST", f"/jobs/{job_id}/complete", {
             "tokens_in": tokens_in, "tokens_out": tokens_out, "finish_reason": finish_reason})
         return reply.get("ok") is True
+
+    def remote_poll(self) -> List[dict]:
+        """Remote sessions waiting for this worker (long poll; empty when none came)."""
+        status, data = self._call("GET", "/remote/poll", read_timeout=POLL_READ_TIMEOUT)
+        if status == 204:
+            return []
+        sessions = data.get("sessions")
+        if not isinstance(sessions, list):
+            raise ServerError("The server sent an invalid session list.")
+        return [item for item in sessions if isinstance(item, dict)][:16]
+
+    def command_report(self, command_id: str, body: dict) -> dict:
+        """Report a model command's progress; the reply's ``cancel`` asks to stop it."""
+        _status, reply = self._call("POST", f"/commands/{command_id}", body)
+        return reply
 
     def fail(self, job_id: str, error: str, *, requeue: bool = False) -> None:
         body = {"error": "deferred" if requeue else (error or "The worker failed.")[:500]}

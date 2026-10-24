@@ -29,10 +29,10 @@ LIVE = ("pending", "claimed", "streaming")
 TERMINAL = ("done", "failed", "timeout")
 
 _WORKER_COLUMNS = ("id, name, token_hash, platform, gpu_name, gpu_util, ollama_version, capabilities, "
-                   "activity_state, status, last_heartbeat, registered_at, strikes, cooldown_until")
+                   "activity_state, status, last_heartbeat, registered_at, strikes, cooldown_until, system_info")
 _JOB_COLUMNS = ("id, worker_id, model_name, messages, options, status, priority, stop_requested, created_at, "
                 "claimed_at, done_at, heartbeat_at, tokens_in, tokens_out, error_message, stream_bytes, "
-                "next_chunk_seq, finish_reason, requeues, deferred_by, requested_by, fault")
+                "next_chunk_seq, finish_reason, requeues, deferred_by, requested_by, fault, think")
 
 
 def _marks(values) -> str:
@@ -112,10 +112,10 @@ def workers_with_active_jobs() -> set[str]:
 # ----- jobs ---------------------------------------------------------------------
 
 def insert_job(job_id: str, model_name: str, messages_json: str, options_json, priority: int, now: float, *,
-               requested_by: str | None = None) -> None:
+               requested_by: str | None = None, think: str | None = None) -> None:
     db.execute("INSERT INTO worker_jobs (id, model_name, messages, options, status, priority, created_at, heartbeat_at, "
-               "requested_by) VALUES (?,?,?,?,'pending',?,?,?,?)",
-               (job_id, model_name, messages_json, options_json, priority, now, now, requested_by))
+               "requested_by, think) VALUES (?,?,?,?,'pending',?,?,?,?,?)",
+               (job_id, model_name, messages_json, options_json, priority, now, now, requested_by, think))
 
 
 def set_fault(job_id: str, fault: str) -> None:
@@ -156,11 +156,15 @@ def get_job(job_id: str):
     return db.one(f"SELECT {_JOB_COLUMNS} FROM worker_jobs WHERE id=?", (job_id,))
 
 
-def next_pending(model_names=None, *, worker_id: str | None = None, failed_since: float | None = None):
+def next_pending(model_names=None, *, worker_id: str | None = None, failed_since: float | None = None,
+                 reasoning: bool = True):
     """The next job waiting for a worker (optionally only for these model names, not one *worker_id* handed back,
-    and, with *failed_since*, not one of an account whose job failed on *worker_id* after that)."""
+    and, with *failed_since*, not one of an account whose job failed on *worker_id* after that). Without
+    *reasoning*, jobs that asked for the model's reasoning are left to daemons that relay it."""
     sql = f"SELECT {_JOB_COLUMNS} FROM worker_jobs WHERE status='pending' AND stop_requested=0"
     params: list = []
+    if not reasoning:
+        sql += " AND (think IS NULL OR think IN ('false', 'null'))"
     if worker_id is not None:
         sql += " AND (deferred_by IS NULL OR deferred_by<>?)"
         params.append(worker_id)
@@ -264,17 +268,18 @@ def delete_terminal_before(before: float) -> int:
 # ----- chunks -------------------------------------------------------------------
 
 def chunk(job_id: str, seq: int):
-    return db.one("SELECT seq, content, done FROM worker_job_chunks WHERE job_id=? AND seq=?", (job_id, seq))
+    return db.one("SELECT seq, content, done, thinking FROM worker_job_chunks WHERE job_id=? AND seq=?",
+                  (job_id, seq))
 
 
-def insert_chunk(job_id: str, seq: int, content: str, done: bool, now: float) -> None:
-    db.execute("INSERT INTO worker_job_chunks (job_id, seq, content, done, created_at) VALUES (?,?,?,?,?)",
-               (job_id, seq, content, int(done), now))
+def insert_chunk(job_id: str, seq: int, content: str, done: bool, now: float, *, thinking: str = "") -> None:
+    db.execute("INSERT INTO worker_job_chunks (job_id, seq, content, done, created_at, thinking) VALUES (?,?,?,?,?,?)",
+               (job_id, seq, content, int(done), now, thinking or ""))
 
 
 def chunks_after(job_id: str, seq: int, limit: int = 256):
-    return db.query("SELECT seq, content, done FROM worker_job_chunks WHERE job_id=? AND seq>? ORDER BY seq LIMIT ?",
-                    (job_id, seq, limit))
+    return db.query("SELECT seq, content, done, thinking FROM worker_job_chunks WHERE job_id=? AND seq>? "
+                    "ORDER BY seq LIMIT ?", (job_id, seq, limit))
 
 
 def delete_chunks_before(job_id: str, seq: int) -> None:

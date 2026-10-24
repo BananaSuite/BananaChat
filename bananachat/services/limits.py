@@ -836,8 +836,19 @@ def rate_limit(user, pool: str) -> RateLimit:
 # ----- model limits -------------------------------------------------------------------
 
 def is_local(model) -> bool:
-    """Whether a model is served by this site's own backends (Ollama, ComfyUI): no ``provider``, or a local one."""
-    return _get(model, "provider", "") in LOCAL_PROVIDERS
+    """Whether a model is served by this site's own backends: Ollama, ComfyUI, or an OpenAI-compatible server on the
+    operator's own hardware (an external provider marked ``local_backend``, such as LM Studio or llama.cpp)."""
+    provider = _get(model, "provider", "")
+    if provider in LOCAL_PROVIDERS:
+        return True
+    if isinstance(provider, str) and provider.startswith("external:"):
+        from bananachat.db import external_providers
+
+        try:
+            return int(provider.split(":", 2)[1]) in external_providers.local_ids()
+        except (ValueError, IndexError):
+            return False
+    return False
 
 
 def consumes_token_limits(model, pool: str | None) -> bool:

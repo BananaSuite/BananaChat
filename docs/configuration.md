@@ -185,6 +185,7 @@ amount per five hours; see [Architecture → Limits](architecture.md#limits).
 | `BC_OLLAMA_SYNC_INTERVAL` | `60` | Seconds between model-list refreshes. |
 | `BC_KEEP_ALIVE` | `0` | How long Ollama keeps a model loaded after a request (seconds, `-1` forever). |
 | `BC_MAX_CONCURRENT` | `4` | Requests generating at the same time, across all processes. Size it for your hardware. |
+| `BC_MAX_CONCURRENT_HOSTED` | `16` | Requests to hosted models (external API providers, Claude and Codex pools) generating at the same time, across all processes (1–256). They wait and run in a lane of their own, so an unreachable Ollama or worker never holds them up, and they never take `BC_MAX_CONCURRENT`'s slots. |
 | `BC_MAX_QUEUE_DEPTH` | `50` | Requests waiting or running before new ones are refused. |
 | `BC_QUEUE_TIMEOUT` | `120` | Seconds a request may wait in the queue. |
 | `BC_GENERATION_TIMEOUT` | `300` | Seconds a single answer may take. |
@@ -201,6 +202,9 @@ amount per five hours; see [Architecture → Limits](architecture.md#limits).
 | `BC_INFERENCE_HEALTH_FAILURES` | `3` | Failed probes before an outage is declared. |
 | `BC_WORKERS_ENABLED` | `0` | Allow volunteer worker PCs (see [workers](workers.md)). |
 | `BC_WORKER_CLAIM_TIMEOUT` | `20` | Seconds a job may wait for a worker before it runs locally instead. |
+| `BC_WORKER_REMOTE_ACCESS` | `0` | Maintenance access to worker PCs whose owners allow it: the built-in terminal and VNC viewer in Administration → Workers, and native SSH, VNC and RDP clients through the connect helper. Every session needs a recent confirmation and is logged ([workers](workers.md#maintenance-access)). |
+| `BC_WORKER_SUBNET` | `10.77.0.0/16` | The virtual network that gives each worker an address for the connect helper (a private IPv4 network from /8 to /24). It is never routed by any operating system; changing it gives every worker a new address. |
+| `BC_WORKER_TUNNELS_PER_PROCESS` | `4` | Remote-session WebSockets one Gunicorn process relays at once (1–64). Each holds an HTTP thread for as long as the session is open: raise `BC_HTTP_THREADS` with it. |
 | `BC_OLLAMA_MODEL_DIR` | `OLLAMA_MODELS`, else `~/.ollama/models` | Checked for free space before model downloads when Ollama is local (empty disables). |
 | `BC_MIN_FREE_DISK_GB` | `2` | Minimum free space for a model download. |
 
@@ -353,8 +357,11 @@ private profiles signed in to their own subscriptions, set
 `BC_CLAUDE_EXTENSION=bananachat.services.claude_code` with
 `BC_CLAUDE_CODE_CONFIG`, and `BC_CODEX_EXTENSION=bananachat.services.codex_cli`
 with `BC_CODEX_CLI_CONFIG`, each an absolute path to a private JSON manifest.
-The server operator installs the tools and signs each profile in outside the
-managed installation. Web administrators choose profiles, caps and budgets in
+The server operator installs the tools; `sudo python3
+/opt/bananachat/current/scripts/setup_subscriptions.py` then writes these
+settings and manifests (with a `managed_root`), so administrators can create
+private profiles and sign them in from the pages. Profiles signed in on the
+command line keep working. Web administrators choose profiles, caps and budgets in
 **Administration → Models → Claude** and **Codex**: an account can stop at a
 share of the provider's own five-hour or weekly allowance (for example 70 % and
 90 %), and per model family at a share of that family's allowance (such as

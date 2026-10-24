@@ -144,6 +144,94 @@ their requests' sake within 30 minutes, without an answered job in between,
 cannot run what it advertises (or misreports it) and is paused like any
 failing worker.
 
+## Maintenance access
+
+With `BC_WORKER_REMOTE_ACCESS=1` on the server, administrators can reach worker
+PCs whose **owners allow it** (`BC_WORKER_REMOTE_ACCESS=1` in the worker's own
+settings, see [worker/README.md](../worker/README.md#maintenance-access-off-unless-you-allow-it)).
+Nothing is opened on the worker's network: the worker connects out to the
+server for each session, so it works behind home routers and carrier NAT.
+
+- **In the browser:** Administration → Workers → *Manage* shows what the owner
+  allows. **Terminal** opens the worker's built-in terminal (only when its
+  owner also set `BC_WORKER_REMOTE_SHELL=1`) and **Screen** a VNC viewer of the
+  worker's own VNC server (Screen Sharing on a Mac, any VNC server on Linux or
+  Windows), both under the site's strict content policy (xterm.js and noVNC
+  are bundled under `static/vendor`).
+- **With native clients:** download the connect helper
+  (`bananachat_connect.py`, standard-library Python 3.9+ on Linux, macOS or
+  Windows) from the same page and create an **access key** (it needs a recent
+  confirmation, expires after at most 30 days and can be revoked). Then:
+
+  ```sh
+  python bananachat_connect.py login https://chat.example.org
+  python bananachat_connect.py list
+  ssh -o ProxyCommand="python bananachat_connect.py proxy %h %p" anna@10.77.0.2
+  python bananachat_connect.py forward 10.77.0.2:5900 --local 15900    # a VNC viewer on localhost:15900
+  python bananachat_connect.py forward 10.77.0.3:3389 --local 13389    # Remote Desktop to localhost:13389
+  python bananachat_connect.py socks                                   # SOCKS5 on 127.0.0.1:1080
+  ```
+
+### The virtual network
+
+Each worker gets an address in `BC_WORKER_SUBNET` (`10.77.0.2`, `10.77.0.3`, …,
+shown on the Workers page and by `list`), and can also be named `<name>.bc`.
+The network is *virtual*: no operating system routes it, the connect helper
+resolves it. Through a worker, administrators can also reach machines of the
+owner's network that the owner listed (`BC_WORKER_REMOTE_SUBNETS`, ports in
+`BC_WORKER_REMOTE_SUBNET_PORTS`): `ssh -o ProxyCommand=... admin@192.168.1.20`
+goes through whichever worker shares `192.168.1.0/24`.
+
+### Safety
+
+- Both sides must agree: the server checks the owner's last reported settings
+  and the worker checks every session again against its current ones.
+- Opening a session from the browser, and creating an access key, needs a
+  recent confirmation (password or authenticator code). Browser WebSockets are
+  accepted only from the site's own pages and only for the administrator who
+  opened the session. Access keys are stored as SHA-256 digests and stop
+  working when they expire, are revoked, or their administrator loses the role.
+- Every session is recorded (who, which worker, target, when, bytes) in
+  Administration → Workers and in the audit log; the worker logs it too.
+- A worker listens for sessions only while *armed*: for 15 minutes after an
+  administrator opened its page or a session, or used the connect helper.
+- Sessions end after 2 hours without traffic and after 12 hours at most.
+  Ending a session in the page closes it within seconds, and so does
+  revoking its access key or demoting, suspending or deleting the
+  administrator who opened it.
+
+### How the relay works
+
+The two WebSockets of a session (the worker's and the administrator's) may
+reach different Gunicorn processes. Each process joins its end to a small relay
+on `127.0.0.1` run by the process that leads the background services
+(`tunnel-broker`); the relay pairs the two ends and copies bytes. Joining it
+is a mutual challenge with a key derived from the secret key, so another local
+user can neither join a session, replay a captured opening, nor pose as the
+relay. Each WebSocket holds an HTTP thread while it is open and counts with the
+streaming answers towards the threads they may use; `BC_WORKER_TUNNELS_PER_PROCESS`
+(default 4) bounds them further, so raise `BC_HTTP_THREADS` with it. A peer that
+reads nothing for a minute ends its session, so a stalled client never pins a
+thread. Caddy (and Cloudflare) pass WebSockets through; nothing needs
+configuring.
+
+## Model management on workers
+
+Administrators can download a model to a worker's Ollama, or remove one, from
+the worker's page, and download one model to every online worker at once from
+the Workers page. The command reaches the worker in its next heartbeat reply;
+the worker runs it against its own Ollama (only Ollama library and Hugging
+Face names, only with `BC_WORKER_MIN_FREE_GB` free) and reports progress every
+few seconds. A cancelled command stops at its next report. Nothing waits for
+ever: a command for an offline worker says so and fails after a day, a running
+one that stops reporting fails after 15 minutes (at once when the worker
+restarted), and failed commands can be retried. Owners can refuse with
+`BC_WORKER_MODEL_MANAGEMENT=0`.
+
+Workers from 1.7.3 also report their memory, video memory and free disk space
+(shown on their page), and relay the reasoning of thinking models: a request
+that asks for reasoning goes only to workers that relay it.
+
 ## Protocol
 
 The daemon talks to `/worker/v1` with `Authorization: Bearer <token>`. The
@@ -157,6 +245,16 @@ working; new fields are optional.
 | `POST /jobs/<id>/chunk` | `{seq, content, done}` | `{ok, stop}` |
 | `POST /jobs/<id>/complete` | `{tokens_in, tokens_out, finish_reason}` | `{ok, stop}` |
 | `POST /jobs/<id>/fail` | `{error}` or `{error: "deferred"}` / `{requeue: true}` | `{ok, stop}` |
+| `GET /remote/poll` | | `{"sessions": [{id, kind, host, port}]}` or `204` (while armed) |
+| `GET /tunnel/<id>` | WebSocket | the worker's end of a session: binary messages carry the bytes |
+| `POST /commands/<id>` | `{status, percent, detail, completed, total, error}` | `{ok, cancel}` |
+
+Daemons from 1.7.3 add to the heartbeat `remote` (what the owner allows),
+`system` (`ram_*`, `vram_*`, `disk_*`, `cpu_count`, `features`, `version`) and
+`commands_running`, and the reply may carry `remote: {armed, poll_seconds}` and
+`commands: [{id, kind, model}]`. A job may carry `think` (Ollama's value) and
+chunks may carry `thinking`; only daemons that report the `think` feature get
+such jobs.
 
 - Polls wait up to 25 seconds for a job; each server process holds at most
   four waiting polls and answers further ones with 204 at once, so polls never

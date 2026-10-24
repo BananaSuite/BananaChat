@@ -105,6 +105,21 @@ with db.transaction():                                        # BEGIN IMMEDIATE 
   dropped in the browser). Each area owns `bananachat/i18n/<area>.json` with
   identical key sets for `en`, `it` and `de`; keys are namespaced by area. The
   administrator interface is English-only by design and does not use the catalogues.
+* **BM mode** (the easy mode, a simpler interface) is on for everyone
+  (`site_settings.bm_mode_global`) or per account (`users.bm_mode`). Who
+  switches an account's: `users.bm_mode_control` (`self`, `admin`, or `site`:
+  `site_settings.bm_mode_self_service`); see `db.users.bm_mode` and
+  `bm_mode_switchable`. The preferences API reports it as `bm_mode` and ignores
+  a change the account may not make.
+  While it is on, `<body>` has the class `bm-mode`, and every element with the
+  class `bm-hide` is hidden: mark advanced controls and extra navigation with
+  it. Hidden controls must not keep acting unseen: the chat sends no reasoning
+  effort or sampling settings in BM mode.
+* **Easter eggs** live in `static/js/mascot.js`. Each has a site switch
+  (`site_settings.easter_<egg>`) and a personal one (`egg_<egg>` preference);
+  `db.users.easter_eggs()` combines them into the mascot button's
+  `data-mascot-*` attributes, which the script reads at every use, so the
+  Customise page can switch them live. A new easter egg gets both switches.
 
 ## Service status
 
@@ -140,9 +155,23 @@ the server to use now together with that server's own token, so the outage
 fallback never receives the compute token; model downloads and deletions
 always use the primary server.
 
+The queue (`services.queue`) has two lanes. Ollama, worker and ComfyUI
+requests wait in the *local* lane (`BC_MAX_CONCURRENT`); hosted models
+(external API providers, the Claude and Codex pools) in the *hosted* lane
+(`BC_MAX_CONCURRENT_HOSTED`). Each lane has its own depth, positions and
+running slots, so requests stuck on an unreachable model server or worker
+never hold up an answer from a provider that is up, and the outage gate
+(`services.status`) pauses only what needs the local server.
+
 `services.supervisor` runs one thread per process that renews queue and chat
 leases and applies Stop requests; `services.background` runs periodic jobs in
-one elected process (`@background.job(name, every=seconds)`).
+one elected process (`@background.job(name, every=seconds)`). The leader runs
+due jobs in parallel (at most four at a time), so one slow job (a model sync
+waiting on a timeout) never delays the others, and writes a heartbeat every
+15 seconds (`background_leader` in `runtime_state`): pages that depend on
+background work (Model downloads) warn when no process has led for 90 seconds.
+Long-running jobs (`long_running=True`: downloads, the tunnel relay) keep their
+own thread.
 
 A chat run's lease (`active_streams`, `db/runs.py`) names its account and
 outlives its chat: deleting or erasing a chat while it answers only asks the
@@ -258,6 +287,14 @@ gateway) and refusals fail at once. A download is done only when `/api/tags`
 lists the model with a digest (kept on the job). Only an administrator's cancel
 ends a job; it removes the partial download of a model that was not installed
 before unless they keep it.
+
+Each backend (Ollama, the ComfyUI checkpoint agent) has its own slots, so a
+checkpoint waiting for its agent never keeps model downloads queued. A watchdog
+(every 30 seconds) puts back a job marked running whose run vanished (its
+thread died with a process, or it stopped making progress for `stall_minutes`).
+A queued job always says why it waits (another download running, the model
+server down, the operation lock held) and an administrator can start it at
+once with **Retry now**; outage records older than 15 minutes are not believed.
 
 ## Limits
 
@@ -433,6 +470,19 @@ kind (local/cloud, `limits.is_local`) first, then the other kind when
 `quota_fallback_to_local`/`quota_fallback_to_cloud` allow it; unblocked choices
 get fallbacks of the other kind for failures before any output. The API keeps
 named models strict.
+
+## Workers
+
+`services.remote` routes requests to volunteer worker PCs (see
+[workers](workers.md)). Maintenance access adds `services.worker_remote`
+(sessions, access keys, virtual addresses), `services.websocket` (RFC 6455 on
+the WSGI server's own socket: `gunicorn.socket` or `werkzeug.socket`; the views
+are WebSocket routes, `websocket=True`), `services.tunnel_broker` (the relay
+that pairs the two ends of a session across Gunicorn processes, on
+`127.0.0.1`, joined through a mutual challenge with a key derived from the secret key) and
+`web._tunnels` (the administrator's end; same-origin checks for browsers).
+`services.worker_commands` queues model downloads and removals for workers and
+fails what stops reporting. The SQL lives in `db/worker_remote.py`.
 
 ## Personalities
 

@@ -21,14 +21,31 @@
 {% call header("Models", "Pool the site’s " ~ setup.name ~ " subscription accounts, cap how much of each they use and choose the models they offer.") %}{% endcall %}
 {% include "admin/_models_tabs.html" %}
 
+{% set setup_ok = setup_checks | selectattr("ok", "false") | list | length == 0 %}
+<section class="settings-section mb-3" aria-labelledby="setup-title" id="setup">
+  <details class="inline-details"{% if not setup_ok %} open{% endif %}>
+    <summary><h2 id="setup-title" class="inline-heading">Setup {% if setup_ok %}<span class="badge badge-success">Ready</span>{% else %}<span class="badge badge-warning">Needs attention</span>{% endif %}</h2>{{ icon("chevron-down") }}</summary>
+    <ul class="setup-checklist mt-1">
+      {% for item in setup_checks %}
+      <li class="setup-check setup-check-{{ 'ok' if item.ok else ('bad' if item.ok is false else 'na') }}">
+        <span class="setup-mark" aria-hidden="true">{% if item.ok %}{{ icon("check") }}{% elif item.ok is false %}{{ icon("alert") }}{% else %}{{ icon("info") }}{% endif %}</span>
+        <span><strong>{{ item.label }}</strong><span class="visually-hidden">: {{ "done" if item.ok else ("needs attention" if item.ok is false else "not applicable") }}</span><br><span class="small muted break-anywhere">{{ item.detail }}</span>{% if item.fix %}<br><span class="small">{{ item.fix }}</span>{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="small muted mb-0">On a managed server, <code>sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py</code> prepares everything above once (the official CLI, the private profile folder and the configuration) and restarts BananaChat. Then add accounts below and sign each one in from this page. See <em>docs/subscription-router.md</em>.</p>
+    <p class="small muted mb-0 mt-1">{{ setup.name }} subscriptions are personal plans; check the provider's terms before answering other people's requests with them.</p>
+  </details>
+</section>
+
 <section class="settings-section mb-3" aria-labelledby="pool-title">
   <div class="section-header"><h2 id="pool-title">Pool status</h2>
     <form method="post" action="{{ url_for(endpoint ~ '_refresh') }}" data-busy>{{ csrf() }}<button class="btn btn-sm" type="submit">Refresh quota</button></form>
   </div>
   {% if extension_error %}
-  <div class="alert alert-warning" role="status">{{ icon("alert") }}<p>The {{ setup.name }} adapter could not initialise, so {{ setup.name }} stays disconnected. Check <code>{{ setup.extension }}</code>, <code>{{ setup.manifest }}</code> and the server log, then restart.</p></div>
+  <div class="alert alert-warning" role="status">{{ icon("alert") }}<p>The {{ setup.name }} adapter could not initialise, so {{ setup.name }} stays disconnected. The <a href="#setup">setup checklist</a> says why.</p></div>
   {% elif not connected %}
-  <div class="alert alert-warning" role="status">{{ icon("alert") }}<p><strong>Disconnected.</strong> {{ setup.name }} requests need an adapter configured on this server. For {{ setup.client }}, set <code>{{ setup.extension }}={{ setup.module }}</code> and <code>{{ setup.manifest }}</code> to its private profile manifest, then restart. See <em>docs/subscription-router.md</em>.</p></div>
+  <div class="alert alert-warning" role="status">{{ icon("alert") }}<p><strong>Disconnected.</strong> {{ setup.name }} requests need the {{ setup.client }} connector on this server. Follow the <a href="#setup">setup checklist</a>.</p></div>
   {% else %}
   <p><strong>{{ setup.client ~ " configured." if profiled else "Adapter configured." }}</strong> Model discovery and quota reports decide which requests can run.</p>
   {% endif %}
@@ -49,12 +66,12 @@
 
 <section class="settings-section mb-3" aria-labelledby="accounts-title">
   <div class="section-header"><h2 id="accounts-title">Accounts ({{ accounts | length }})</h2></div>
-  <p class="muted small">{% if profiled %}Choose a private server profile for each account; each profile can be used once. The operator signs each profile in to its subscription on the server. See <em>docs/subscription-router.md</em>.{% else %}Use the account labels expected by your adapter. Credentials belong in its server configuration.{% endif %}</p>
+  <p class="muted small">{% if managed %}Add an account with a <strong>new profile</strong>, then <strong>Sign in</strong>: the official {{ setup.client }} sign-in opens on {{ "Anthropic's" if provider == "claude" else "OpenAI's" }} own page, and the login stays in that account's private profile on this server. {% endif %}{% if profiled %}Each profile can be used by one account.{% if not managed %} The operator signs each profile in on the server, or from this page once the setup adds a profile folder.{% endif %}{% else %}Use the account labels expected by your adapter. Credentials belong in its server configuration.{% endif %}</p>
   <form method="post" action="{{ url_for(endpoint ~ '_account_add') }}" class="stack" data-busy>
     {{ csrf() }}
     <div class="form-grid">
       <div class="field"><label for="{{ provider }}-label" class="required">Account name</label><input type="text" id="{{ provider }}-label" name="label" required maxlength="80" placeholder="{{ setup.example }}"></div>
-      {% if profiled %}<div class="field"><label for="{{ provider }}-profile" class="required">{{ setup.client }} profile</label><select id="{{ provider }}-profile" name="profile" required>{% for profile in profiles %}<option value="{{ profile }}">{{ profile }}</option>{% endfor %}</select></div>{% endif %}
+      {% if profiled %}<div class="field"><label for="{{ provider }}-profile" class="required">{{ setup.client }} profile</label><select id="{{ provider }}-profile" name="profile" required>{% if managed %}<option value="{{ new_profile }}" selected>New profile (sign in on this page)</option>{% endif %}{% for profile in profiles if not profile.startswith("managed-") %}<option value="{{ profile }}">{{ profile }}</option>{% endfor %}</select></div>{% endif %}
       <div class="field"><label for="{{ provider }}-priority">Priority</label><input id="{{ provider }}-priority" name="priority" type="number" value="0" min="-100" max="100"></div>
       {{ token_field("window_limit", "5-hour token budget", none, provider ~ "-window", "Tokens this server may use per 5 hours, e.g. 100k.", true, "100k") }}
       {{ token_field("weekly_limit", "Weekly token budget", none, provider ~ "-weekly", "Optional, off by default.", false) }}
@@ -74,6 +91,19 @@
     <p class="small muted mb-0">Local token budget: {{ used[0] | number }} / {{ account.window_limit | number if account.window_limit is not none else "not set" }} used per 5 hours{% if account.weekly_limit is not none %} · {{ used[1] | number }} / {{ account.weekly_limit | number }} per week{% endif %}{% if account.id in resting %} · resting until {{ resting[account.id] | datetime }}{% endif %}</p>
     {% if account.quota_source == "reported" %}<p class="small muted mb-0">Provider report: {{ account.quota_updated_at | datetime }}{% if account.id in stale %} · stale, requests paused{% endif %}</p>{% endif %}
     {% if account.last_error %}<p class="small muted mb-0">Last error: {{ account.last_error }}</p>{% endif %}
+    {% if profiled %}
+    {% set state = signin[account.id] %}
+    <div class="signin-row" data-signin-account="{{ account.id }}" data-signin-label="{{ account.label }}">
+      <p class="small mb-0" data-signin-state>{% if state and state.signed_in %}{{ icon("check") }} <strong>Signed in</strong>{% if state.plan %} · {{ state.plan | capitalize }}{% endif %}{% if state.checked %} · checked {{ state.checked | timeago }}{% endif %}{% elif state %}<strong>Not signed in.</strong> {{ state.message }}{% else %}Sign-in not checked yet.{% endif %}</p>
+      {% if can_sign_in %}
+      <div class="row gap-1">
+        <button type="button" class="btn btn-sm{% if not (state and state.signed_in) %} btn-primary{% endif %}" data-signin-start>{{ icon("key") }}{{ "Sign in again" if state and state.signed_in else "Sign in" }}</button>
+        {% if state and state.signed_in %}<form method="post" action="{{ url_for(endpoint ~ '_account_logout', account_id=account.id) }}" data-confirm="Sign {{ account.label }} out on this server? It answers no requests until it is signed in again.">{{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost">Sign out</button></form>{% endif %}
+      </div>
+      <div class="signin-panel" data-signin-panel hidden aria-live="polite"></div>
+      {% endif %}
+    </div>
+    {% endif %}
     {% if usage %}
     <div class="stack">
       <p class="small mb-0"><strong>Subscription: {{ usage.plan_label or "plan unknown" }}</strong>{% if usage.source == "file" %} · authorised observation file{% endif %}</p>
@@ -124,7 +154,7 @@
     <details class="inline-details"><summary>Remove this account{{ icon("chevron-down") }}</summary>
       <form id="{{ prefix }}-remove" method="post" action="{{ url_for(endpoint ~ '_account_save', account_id=account.id) }}" class="stack mt-2" data-confirm="Remove {{ account.label }} from the pool?" data-confirm-danger>
         {{ csrf() }}<input type="hidden" name="action" value="delete">
-        <p class="muted small mb-0">Requests stop going to this subscription. Its login on the server is not changed.</p>
+        <p class="muted small mb-0">Requests stop going to this subscription. {% if account.id in managed_accounts %}Its private profile and the sign-in stored in it are deleted from this server.{% else %}Its login on the server is not changed.{% endif %}</p>
         {{ reauth_field(prefix ~ "-remove-reauth") }}
         <div class="form-actions form-actions-start"><button class="btn btn-ghost" type="submit">Remove account</button></div>
       </form>
@@ -158,4 +188,9 @@
   </form>
   {% endif %}
 </section>
+{% endblock %}
+{% block scripts %}
+<script type="application/json" id="page-data">{{ {"provider": provider, "name": setup.name, "client": setup.client,
+  "urls": login_urls, "reauth": reauth_needed(), "active": active_logins} | tojson }}</script>
+<script type="module" src="{{ url_for('static', filename='js/admin-subscriptions.js') }}"></script>
 {% endblock %}

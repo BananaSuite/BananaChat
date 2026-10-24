@@ -66,6 +66,7 @@
           {% if row.suspended and (not row.suspended_until or row.suspended_until > now) %}
           <span class="badge badge-danger">Suspended{% if row.suspended_until %} until {{ row.suspended_until | datetime }}{% endif %}</span>
           {% else %}Active{% endif %}
+          {% if row.bm_mode %} <span class="badge" title="BM mode (easy mode) is on for this account">BM mode</span>{% endif %}
         </td>
         <td class="nowrap col-optional">
           {% if row.role == "admin" %}<span class="muted">Unlimited</span>

@@ -6,14 +6,14 @@ BananaChat is a self-hosted chat application for [Ollama](https://ollama.com/). 
 
 - **Chat** with streaming answers, reasoning display, Markdown, attachments (images, PDFs, text and code), personalities, share links, search, exports and no-history chats.
 - **OpenAI-compatible API** (`/v1/chat/completions`, `/v1/models`, `/v1/images/generations`) with personal keys, a playground and per-account token limits.
-- **External API providers**: Anthropic, OpenAI, OpenRouter and other OpenAI-compatible services, with presets and keys encrypted on the server. See [setup](docs/external-providers.md).
-- **Claude Code and Codex subscription pools**: several subscription accounts each, with automatic model and usage discovery, caps at a share of each provider's five-hour, weekly and per-family allowance, and strict model limits. Off by default; administrators select privately signed-in server profiles. See [Claude Code](docs/claude-code.md) and [Codex](docs/codex-cli.md) for provider-approved deployment.
+- **External API providers**: Anthropic, OpenAI, OpenRouter and other OpenAI-compatible services, with presets and keys encrypted on the server. LM Studio, llama.cpp and vLLM on your own hardware count as local models, with their model lists kept current. See [setup](docs/external-providers.md).
+- **Claude Code and Codex subscription pools**: several subscription accounts each, with automatic model and usage discovery, caps at a share of each provider's five-hour, weekly and per-family allowance, and strict model limits. Off by default; administrators sign each account in from the administration page with the official CLIs' own login (a link and a code), after a one-time setup script. See [Claude Code](docs/claude-code.md) and [Codex](docs/codex-cli.md) for provider-approved deployment.
 - **Cloud sessions** for coding work in isolated sandboxes. Off by default. See [agents](docs/agents.md).
 - **Two-step verification** for every account, which administrators can require for all administrators. See [two-step verification](docs/two-step-verification.md).
 - **Administration**: users and invitations, model catalogue and downloads, access policies, quotas, metrics, audit log, maintenance mode and theming.
-- **Scales out**: separate web and GPU servers, volunteer worker PCs, and image generation with [ComfyUI](docs/comfyui.md).
+- **Scales out**: separate web and GPU servers, volunteer worker PCs, and image generation with [ComfyUI](docs/comfyui.md). Workers whose owners allow it can be maintained from the browser (terminal and VNC) or with native SSH, VNC and RDP clients over a virtual network, without opening ports, and administrators manage their models remotely. See [workers](docs/workers.md).
 - **Operations**: one command installs, updates with automatic rollback, backs up (optionally encrypted to a private Git repository) and restores a server. The HTTPS proxy it writes also works behind Cloudflare.
-- English, Italian and German interface, light and dark themes, accessibility options.
+- English, Italian and German interface, light and dark themes, accessibility options, and BM mode: an easy mode with a simpler interface.
 
 ## Try it locally
 

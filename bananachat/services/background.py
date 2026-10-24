@@ -12,11 +12,20 @@ Feature modules register jobs at import time::
 
 ``long_running`` jobs (such as model downloads) get their own thread and are
 called in a loop with the given pause between calls.
+
+Periodic jobs run in short-lived threads, at most :data:`MAX_PARALLEL` at once
+and never two runs of the same job together, so one slow or hanging job (a
+model server that stops answering) cannot hold up the others. The leader
+records a heartbeat in ``runtime_state`` (:func:`leader_status`), so pages can
+tell administrators when no process runs the background services and queued
+work (downloads, worker commands) cannot start.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -41,6 +50,12 @@ _jobs: dict[str, Job] = {}
 _stop = threading.Event()
 _threads: list[threading.Thread] = []
 _state = {"leader": False, "lock": None}
+
+MAX_PARALLEL = 4                  # periodic jobs running at the same time
+HEARTBEAT_KEY = "background_leader"
+HEARTBEAT_SECONDS = 15
+STALE_SECONDS = 90                # a leader silent for longer is gone (or hanging)
+SLOW_JOB_SECONDS = 600            # a periodic job running longer is reported in the log
 
 
 def job(name: str, *, every: float, long_running: bool = False, initial_delay: float = 5.0):
@@ -99,8 +114,12 @@ def _elect(app) -> None:
 
 
 def _interval(app, item: Job) -> float:
-    value = item.every(app) if callable(item.every) else item.every
-    return max(1.0, float(value))
+    try:
+        value = item.every(app) if callable(item.every) else item.every
+        return max(1.0, float(value))
+    except Exception:  # noqa: BLE001 - a broken setting must not stop the scheduler
+        log.warning("Background job %s has an invalid interval; using 60 s", item.name, exc_info=True)
+        return 60.0
 
 
 def _call(app, item: Job) -> None:
@@ -113,17 +132,84 @@ def _call(app, item: Job) -> None:
             db.release_thread_connection()
 
 
+def _beat(app) -> None:
+    """Record that this process leads the background services (read by :func:`leader_status`)."""
+    from bananachat.db import settings as site_settings
+
+    with app.app_context():
+        try:
+            site_settings.state_set(HEARTBEAT_KEY, {"pid": os.getpid(), "host": socket.gethostname()[:120],
+                                                    "at": time.time()})
+        except Exception:  # noqa: BLE001 - the database may be busy; the next beat tries again
+            log.debug("Could not record the background heartbeat", exc_info=True)
+        finally:
+            db.release_thread_connection()
+
+
+def leader_status() -> dict:
+    """``{"alive": bool, "here": bool, "age": seconds or None}`` of the process running the background services."""
+    if _state.get("leader"):
+        return {"alive": True, "here": True, "age": 0}
+    from bananachat.db import settings as site_settings
+
+    try:
+        state = site_settings.state_get(HEARTBEAT_KEY) or {}
+    except Exception:  # noqa: BLE001 - unknown is reported as unknown, never as an error page
+        return {"alive": None, "here": False, "age": None}
+    at = state.get("at") if isinstance(state, dict) else None
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return {"alive": False, "here": False, "age": None}
+    age = max(0.0, time.time() - float(at))
+    return {"alive": age <= STALE_SECONDS, "here": False, "age": round(age)}
+
+
 def _run_periodic(app) -> None:
+    lock = threading.Lock()
     due = {name: time.monotonic() + item.initial_delay for name, item in _jobs.items() if not item.long_running}
-    while not _stop.is_set():
-        now = time.monotonic()
-        for name, when in list(due.items()):
-            item = _jobs.get(name)
-            if item is None or now < when:
-                continue
+    running: dict[str, tuple[threading.Thread, float]] = {}
+    last_beat = 0.0
+    warned: set[str] = set()
+
+    def run(name: str, item: Job) -> None:
+        try:
             _call(app, item)
-            due[name] = time.monotonic() + _interval(app, item)
+        finally:
+            with lock:
+                due[name] = time.monotonic() + _interval(app, item)
+                running.pop(name, None)
+                warned.discard(name)
+
+    while not _stop.is_set():
+        try:
+            now = time.monotonic()
+            if now - last_beat >= HEARTBEAT_SECONDS:
+                _beat(app)
+                last_beat = now
+            with lock:
+                for name, when in list(due.items()):
+                    item = _jobs.get(name)
+                    if item is None:
+                        due.pop(name, None)
+                        continue
+                    if name in running:
+                        started = running[name][1]
+                        if now - started > SLOW_JOB_SECONDS and name not in warned:
+                            warned.add(name)
+                            log.warning("Background job %s has been running for %d s", name, now - started)
+                        continue
+                    if when is None or now < when or len(running) >= MAX_PARALLEL:
+                        continue
+                    due[name] = None
+                    thread = threading.Thread(target=run, args=(name, item), name=f"bananachat-{name}", daemon=True)
+                    running[name] = (thread, now)
+                    thread.start()
+        except Exception:  # noqa: BLE001 - the scheduler itself must never stop
+            log.warning("The background scheduler failed; continuing", exc_info=True)
         _stop.wait(1.0)
+    with lock:
+        threads = [thread for thread, _started in running.values()]
+    for thread in threads:
+        thread.join(5)
     db.close_thread_connection()
 
 

@@ -8,7 +8,51 @@ within your provider-approved deployment (see the
 No website scraping, copied cookies, API keys or credentials in the source ZIP
 are required. API billing is deliberately not a fallback.
 
-## Server setup
+## Quick setup: sign in from the administration page
+
+On a managed installation (Ubuntu or Debian), as root:
+
+1. Install the official Claude Code CLI and Bubblewrap, then run the setup
+   script of the installed release:
+
+   ```sh
+   sudo apt install bubblewrap
+   curl -fsSL https://claude.ai/install.sh | bash      # or: npm install -g @anthropic-ai/claude-code
+   sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py --allow-bwrap-userns
+   ```
+
+   The script copies the CLI's native executable to `/opt/bananachat-cli`
+   (root-owned, as the sandbox requires), creates
+   `/srv/bananachat-subscriptions/claude` for the accounts' private profiles,
+   writes the connector manifest with a `managed_root`, sets
+   `BC_CLAUDE_EXTENSION` and `BC_CLAUDE_CODE_CONFIG`, checks that Bubblewrap
+   can start a sandbox as the service user and restarts BananaChat.
+   `--allow-bwrap-userns` installs the AppArmor profile Ubuntu 23.10 and later
+   need for that (see [Sandbox on Ubuntu](subscription-router.md#sandbox-on-ubuntu)).
+   Run it again after updating the CLI. It signs nothing in and reads no
+   credential.
+2. Open **Administration → Models → Claude**. The **Setup** checklist says what
+   is still missing and how to fix it.
+3. **Add an account** with the profile **New private profile** and click
+   **Sign in** (it asks for your password or authenticator code first). The
+   server runs the official `claude auth login --claudeai` in that account's
+   own profile and shows its link. Open it, sign in with the Claude
+   subscription that account should use and approve; the page then shows a
+   code: paste it into BananaChat. The account checks its login, and
+   **Refresh models** lists what the subscription offers.
+4. Repeat for every subscription in the pool. **Sign out** uses the CLI's own
+   logout; deleting an account deletes its private profile.
+
+Profiles live only on the server (`/srv/bananachat-subscriptions`), never in
+the database, the repository or backups of the application folder. Use this
+only within your provider-approved deployment; see the
+[routing constraint](subscription-router.md#subscription-routing-constraint).
+
+## Manual setup
+
+The steps below are what the quick setup automates, for other layouts or
+profiles signed in on the server's command line. Profiles listed in the
+manifest and private profiles made from the page can be combined.
 
 1. Run the connector on a Linux/POSIX server under a dedicated, unprivileged
    service identity. Install the official Claude Code CLI using Anthropic's

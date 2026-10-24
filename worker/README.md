@@ -102,6 +102,44 @@ When the worker stops (shutdown, logout, `stop`), a request it has not started
 answering goes back to the server; one in the middle of its answer is reported
 as interrupted.
 
+## Maintenance access (off unless you allow it)
+
+You can let the server's administrators reach this computer for maintenance,
+without opening any port: the worker opens the connection to the server when
+an administrator asks, like it does for requests. Set in the settings file:
+
+```ini
+BC_WORKER_REMOTE_ACCESS=1                  # allow it at all (default 0: nothing is reachable)
+BC_WORKER_REMOTE_SERVICES=ssh:22,vnc:5900  # services of this computer they may reach (default ssh:22,vnc:5900,rdp:3389)
+BC_WORKER_REMOTE_SHELL=0                   # 1: also a built-in terminal in their browser (see below)
+BC_WORKER_REMOTE_SUBNETS=192.168.1.0/24    # optional: machines of your network they may reach through this one
+BC_WORKER_REMOTE_SUBNET_PORTS=22,3389,5900 # and on which ports
+```
+
+- The listed services are this computer's own SSH, VNC or RDP servers: they
+  still ask for their own login (your SSH key or password, the VNC password,
+  your Windows sign-in). Enable the ones you want (OpenSSH, Screen Sharing on
+  a Mac, Remote Desktop on Windows, or a VNC server).
+- **The built-in terminal (`BC_WORKER_REMOTE_SHELL=1`) asks for no password:**
+  it is a shell as the account the worker runs as. Turn it on only if you
+  trust the server's administrators with that account.
+- The worker checks every request against these settings itself, whatever the
+  server says, and logs every session it opens.
+- `python bananachat_worker.py config` shows what you allow.
+
+## Model management
+
+The administrators can download models to this computer's Ollama and remove
+them from the Workers page, so it keeps offering what the server needs. A
+download needs `BC_WORKER_MIN_FREE_GB` free on the disk that holds Ollama's
+models (10 GB by default) and stops if the disk is almost full; only models
+from the Ollama library and Hugging Face are accepted. Set
+`BC_WORKER_MODEL_MANAGEMENT=0` to manage your models yourself.
+
+The worker also reports its memory, video memory and free disk space, so the
+administrators can see what fits, and relays the reasoning of thinking models
+when the user asked for it.
+
 ## Security
 
 - The token is sent only to `BC_SERVER_URL`. That address must be `https://`;
@@ -138,9 +176,18 @@ as interrupted.
 | `BC_WORKER_LOG_FILE` | | Write a rotating log file here (set by the Windows installer) |
 | `BC_WORKER_LOG_MAX_BYTES`, `BC_WORKER_LOG_BACKUPS` | `5242880`, `3` | Log rotation |
 | `BC_WORKER_ENV_FILE` | see above | Settings file to read |
+| `BC_WORKER_REMOTE_ACCESS` | `0` | `1` lets the server's administrators reach the services below (see Maintenance access) |
+| `BC_WORKER_REMOTE_SERVICES` | `ssh:22,vnc:5900,rdp:3389` | `kind:port` services of this computer they may reach (`ssh`, `vnc`, `rdp`, `tcp`); `none` for none |
+| `BC_WORKER_REMOTE_SHELL` | `0` | `1` adds a built-in terminal (no password: a shell as this account) |
+| `BC_WORKER_REMOTE_SUBNETS` | | Private networks (at most /16) whose machines they may reach through this computer |
+| `BC_WORKER_REMOTE_SUBNET_PORTS` | `22,3389,5900` | Ports allowed on those networks |
+| `BC_WORKER_MODEL_MANAGEMENT` | `1` | `0` refuses model downloads and removals from the server |
+| `BC_WORKER_MIN_FREE_GB` | `10` | Free disk space a model download needs |
 
 An invalid number falls back to its default with a warning in the log.
 
 The Windows task and the macOS agent are tested against the files and commands
 they produce, not on real Windows or Mac hardware; try a request on your
-machine before relying on it unattended.
+machine before relying on it unattended. The same goes for the built-in
+terminal: it uses a pseudo-terminal on Linux and macOS and ConPTY on Windows 10
+(1809) and later, falling back to a plain pipe on older Windows.

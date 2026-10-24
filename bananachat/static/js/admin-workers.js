@@ -76,8 +76,9 @@ function row(worker) {
     el("button", { type: "submit", class: "btn btn-sm btn-danger" }, icon("trash"), el("span", { text: "Remove" })),
     { message: `Remove “${worker.name}”? Its token stops working immediately and a job it is running now is stopped.`, label: "Remove", danger: true });
 
+  const manage = el("a", { class: "btn btn-sm", href: url(urls.detail) }, icon("settings"), el("span", { text: "Manage" }));
   return el("tr", { dataset: { workerId: worker.id } }, nameCell, statusCell, activityCell, gpuCell, modelsCell, seen,
-    el("td", { class: "actions" }, toggle, " ", remove));
+    el("td", { class: "actions" }, manage, " ", toggle, " ", remove));
 }
 
 function render(workers) {
@@ -139,6 +140,34 @@ form?.addEventListener("submit", async (event) => {
     if (confirmation) confirmation.value = "";
     toast(error.message, "error");
     if (error.code === "reauth_required") (confirmation || addConfirmationField()).focus();
+  } finally {
+    setBusy(button, false);
+  }
+});
+
+// Access keys of the connect helper: created with a confirmation, shown once.
+const keyForm = document.getElementById("key-form");
+keyForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const confirmation = keyForm.querySelector("input[name=reauth_secret]");
+  const button = keyForm.querySelector("button[type=submit]");
+  setBusy(button, true);
+  try {
+    const result = await api(urls.key_create, { json: {
+      label: keyForm.querySelector("input[name=label]").value,
+      hours: Number(keyForm.querySelector("input[name=hours]").value || 8),
+      reauth_secret: confirmation?.value ?? "" } });
+    confirmation?.closest(".field")?.remove();
+    const dialog = secretDialog({
+      title: "Access key",
+      message: `Copy it now: it is shown only once. It works for ${result.key.hours} hour(s) or until you revoke it.`,
+      secret: result.key.token,
+      note: "Run: python bananachat_connect.py login " + window.location.origin + " and paste it when asked.",
+    });
+    dialog?.addEventListener?.("close", () => window.location.reload());
+  } catch (error) {
+    if (confirmation) confirmation.value = "";
+    toast(error.message, "error");
   } finally {
     setBusy(button, false);
   }

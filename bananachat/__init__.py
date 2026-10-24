@@ -5,7 +5,7 @@ tools (the compute proxy, the lifecycle manager) can share constants with it.
 """
 
 PRODUCT_NAME = "BananaChat"
-__version__ = "1.7.2"
+__version__ = "1.7.3"
 
 
 def create_app(*args, **kwargs):

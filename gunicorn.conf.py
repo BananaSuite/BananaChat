@@ -54,6 +54,61 @@ class AccessLogger(Logger):
 
 logger_class = AccessLogger
 
+
+def _guard_the_gthread_wakeup_pipe() -> None:
+    """Never let a request thread write into a file descriptor the worker already closed.
+
+    Gunicorn's threaded worker (26.x) closes the pipe that request threads use to wake its main loop when it shuts
+    down, but keeps the numbers of the closed descriptors. A request still running then (an answer handed over
+    on a worker replacement) writes one zero byte to the old number when it ends; when a database file was opened
+    meanwhile and took that number, the byte lands at the start of the file and the database is lost. Close the
+    pipe under a lock, forget its numbers, and skip the wake-up once it is closed.
+    """
+    try:
+        from gunicorn.workers import gthread
+    except ImportError:  # pragma: no cover - a Gunicorn without the threaded worker
+        return
+    queue_class = getattr(gthread, "PollableMethodQueue", None)
+    if queue_class is None or getattr(queue_class, "_bananachat_guarded", False):
+        return
+    from functools import partial
+
+    guard = threading.Lock()
+
+    def close(self):
+        with guard:
+            descriptors = (self._read_fd, self._write_fd)
+            self._read_fd = self._write_fd = None
+        for descriptor in descriptors:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+
+    def defer(self, callback, *args):
+        self._queue.put(partial(callback, *args))
+        with guard:
+            if self._write_fd is None:
+                return  # the worker is gone: nobody reads the queue any more
+            try:
+                os.write(self._write_fd, b"\x00")
+            except OSError:
+                pass  # a full pipe: the main loop drains the queue anyway
+
+    original_callbacks = queue_class.run_callbacks
+
+    def run_callbacks(self, *args, **kwargs):
+        if self._read_fd is None:
+            return None
+        return original_callbacks(self, *args, **kwargs)
+
+    queue_class.close, queue_class.defer, queue_class.run_callbacks = close, defer, run_callbacks
+    queue_class._bananachat_guarded = True
+
+
+_guard_the_gthread_wakeup_pipe()
+
 # The managed service has a read-only application directory.
 control_socket_disable = True
 # Gunicorn keeps only its worker heartbeat files here (created with mkstemp).

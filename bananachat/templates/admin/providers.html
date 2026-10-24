@@ -34,6 +34,7 @@
   <div class="field"><label for="{{ prefix }}-usage">Streamed token usage (OpenAI-compatible)</label><select id="{{ prefix }}-usage" name="stream_usage"><option value="1"{% if not provider or provider.stream_usage %} selected{% endif %}>Request provider usage</option><option value="0"{% if provider and not provider.stream_usage %} selected{% endif %}>Endpoint has no stream_options support</option></select><span class="hint">Limits and credits use the provider's own token counts. When it sends none, BananaChat records an estimate.</span></div>
   <label class="check"><input type="checkbox" name="auto_enroll"{% if provider and provider.auto_enroll %} checked{% endif %}><span>Enrol new chat models automatically<small>Known chat model families publish with standard token limits. Other models wait for review. Check their capabilities before use.</small></span></label>
   <label class="check"><input type="checkbox" name="allow_private" data-preset-field="local"{% if provider and provider.allow_private %} checked{% endif %}><span>Allow a local or private-network endpoint<small>For servers such as LM Studio, vLLM, llama.cpp or LiteLLM on this machine or your network; plain HTTP is allowed there. Public endpoints still require HTTPS, and link-local and cloud metadata addresses stay blocked.</small></span></label>
+  <label class="check"><input type="checkbox" name="local_backend" data-preset-field="own_hardware"{% if provider and provider.local_backend %} checked{% endif %}><span>Runs on our own hardware (a local model server)<small>Its models count as local models: the local token settings apply, the model list is checked every minute and its models hide while the server is off. Leave off for gateways to cloud services, such as LiteLLM.</small></span></label>
   {% if provider and provider.secret_ref %}<label class="check"><input type="checkbox" name="clear_key"><span>Remove the stored API key</span></label>{% endif %}
 </div></details>
 {{ reauth_field(prefix ~ '-reauth') }}
@@ -52,7 +53,7 @@
 {% set listed = discovered[provider.id] %}
 {% set known = enrolled[provider.id] %}
 <section class="settings-section mb-3" id="provider-{{ provider.id }}">
-  <div class="section-header"><h2>{{ provider.name }} <span class="badge">{{ presets[provider.preset].label if provider.preset in presets else 'Custom' }}</span></h2>
+  <div class="section-header"><h2>{{ provider.name }} <span class="badge">{{ presets[provider.preset].label if provider.preset in presets else 'Custom' }}</span>{% if provider.local_backend %} <span class="badge badge-success">Local</span>{% endif %}</h2>
     <form method="post" action="{{ url_for('admin.external_provider_check', provider_id=provider.id) }}" data-busy>{{ csrf() }}<button class="btn" type="submit"{% if not provider.enabled %} disabled{% endif %}>Refresh model list</button></form></div>
   {% set enrolled_count = bound[provider.id] | length %}
   <p class="muted small">{{ 'Enabled' if provider.enabled else 'Disabled' }} · <span class="mono">{{ provider.base_url }}</span> · {{ enrolled_count }} enrolled model{{ "" if enrolled_count == 1 else "s" }}{% if provider.last_checked_at %} · model list checked {{ when(provider.last_checked_at) }}{% endif %}</p>

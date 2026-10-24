@@ -1,0 +1,38 @@
+{% extends "admin/_layout.html" %}
+{#- A worker PC's screen through its own VNC server and a tunnel the worker opened (web/admin/workers.py). -#}
+{% from "admin/_macros.html" import header %}
+{% from "partials/icons.html" import icon %}
+{% set section = "workers" %}
+{% block title %}Screen · {{ worker.name }}{% endblock %}
+{% block admin_content %}
+{% call header("Screen of " ~ worker.name, "The worker PC's own VNC server (port " ~ page_data.port ~ "), shown here. Its owner's VNC password applies.") %}{% endcall %}
+<div class="remote-toolbar row gap-1 wrap mb-1">
+  <a class="btn btn-sm btn-ghost" href="{{ page_data.back }}">{{ icon("chevron-left") }}Back to the worker</a>
+  <span class="small muted grow" id="remote-status" aria-live="polite">Starting…</span>
+  <button type="button" class="btn btn-sm" id="vnc-cad" hidden>Ctrl+Alt+Del</button>
+  <button type="button" class="btn btn-sm" id="vnc-fullscreen" hidden>Full screen</button>
+  <button type="button" class="btn btn-sm" id="remote-reconnect" hidden>{{ icon("refresh") }}Reconnect</button>
+  <button type="button" class="btn btn-sm btn-ghost" id="remote-end" hidden>End session</button>
+</div>
+<form class="sub-card stack" id="remote-confirm" hidden>
+  <div class="field field-narrow">
+    <label for="remote-reauth" class="required">Your password or authenticator code</label>
+    <input type="password" id="remote-reauth" name="reauth_secret" maxlength="1024" autocomplete="current-password" spellcheck="false" aria-describedby="remote-reauth-hint">
+    <span class="hint" id="remote-reauth-hint">Opening a worker PC's screen needs a recent confirmation; not asked again for 10 minutes.</span>
+  </div>
+  <div class="form-actions form-actions-start"><button type="submit" class="btn btn-primary">Connect</button></div>
+</form>
+<form class="sub-card stack" id="vnc-credentials" hidden>
+  <p class="small muted mb-0">The VNC server asks for its own login (on a Mac, a user of that Mac; elsewhere the VNC password the owner set).</p>
+  <div class="form-grid">
+    <div class="field" id="vnc-username-field" hidden><label for="vnc-username">User name</label><input type="text" id="vnc-username" autocomplete="off" spellcheck="false"></div>
+    <div class="field"><label for="vnc-password">Password</label><input type="password" id="vnc-password" autocomplete="off"></div>
+  </div>
+  <div class="form-actions form-actions-start"><button type="submit" class="btn btn-primary">Sign in</button></div>
+</form>
+<div id="screen" class="remote-screen" aria-label="Screen of {{ worker.name }}"></div>
+{% endblock %}
+{% block scripts %}
+<script type="application/json" id="page-data">{{ page_data | tojson }}</script>
+<script type="module" src="{{ url_for('static', filename='js/worker-vnc.js') }}"></script>
+{% endblock %}

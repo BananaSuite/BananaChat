@@ -118,6 +118,34 @@ one. If a server rejects `stream_options`, set **Streamed token usage** to
 *Endpoint has no stream_options support*; usage is then still read when the
 server sends it, and estimated otherwise.
 
+**Model servers on your own hardware count as local.** LM Studio, vLLM and
+llama.cpp also tick **Runs on our own hardware** (LiteLLM does not: it usually
+forwards to cloud services). For such a provider:
+
+- its models are local models, like Ollama's: the *local* share of the chat
+  token settings applies (Administration → Limits), and quota fallbacks between
+  local and cloud models treat them as local;
+- its model list is checked every minute (cloud providers: every 15 minutes),
+  so a model loaded in LM Studio or a restarted llama.cpp shows up quickly;
+- with **Enrol new chat models automatically**, every chat model it lists is
+  published (cloud providers: known chat families only), since the server
+  lists only what its operator installed;
+- when it stops answering (LM Studio closed, the PC asleep) for two checks in a
+  row its models are hidden from the model choice, with the reason shown in
+  Administration → Models; they return with the first listing that works. A
+  server that answers with an error (a wrong key, a wrong address) changes
+  nothing;
+- LM Studio's own API (`/api/v1/models` from 0.4, `/api/v0/models` before)
+  adds each model's context length (the loaded instance's, when it is loaded),
+  vision, tool use and reasoning levels, and marks embedding models as not for
+  chat; llama.cpp's `/props` adds the context the server was started with
+  (`-c`) and whether it reads images; vLLM lists `max_model_len` itself. Any of
+  these is optional: without it the plain model list is used.
+
+Local servers run in the hosted lane of the request queue
+(`BC_MAX_CONCURRENT_HOSTED`), with their own queueing, so a busy or unreachable
+Ollama never holds them up.
+
 **Other OpenAI-compatible services.** Choose **Other OpenAI-compatible
 service**, enter the API root (without `/chat/completions` or `/models`) and
 pick the key header. **Output limit field** lets a gateway receive
