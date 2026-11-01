@@ -32,7 +32,7 @@ created or rotated; the server stores only its SHA-256 hash, so a lost key
 cannot be recovered. Rotate it instead. Each account can have up to 10 active
 keys. A key acts on behalf of its owner: it sees the models the owner may
 use and spends the owner's allowance. Rotating replaces the value and keeps the
-name, access and lifetime; revoking disables the key immediately. Creating,
+name, access and lifetime; revoking disables the key immediately, and an answer or image it started stops within a few seconds with `invalid_api_key` (what was produced so far is charged). Creating,
 rotating and revoking keys is recorded in the audit log.
 
 * **Access.** A *full access* key can use every endpoint. A *read only* key can
@@ -151,7 +151,13 @@ allowance**, counted in tokens (prompt plus completion).
 
 A request is refused before it starts when no tokens remain, and again when it
 leaves the queue if the tokens ran out (or the account was suspended, or the
-token revoked) while it waited:
+token revoked) while it waited. An answer or image already being generated
+stops within a few seconds when its account is suspended (`account_suspended`);
+the text produced so far is charged, an unfinished image is not. A running
+answer holds what it may cost (its estimated prompt plus its `max_tokens`, at
+most what is left) until it ends and is charged its real usage, so answers
+running at the same time cannot together spend more than the allowance; while
+one holds the rest, others are refused the same way:
 
 ```json
 {"error": {"message": "You have used the tokens of this 5-hour window. They come back at 2026-10-01 14:32 UTC.",
@@ -395,6 +401,7 @@ locked ones marked and a link to request them.
 | No subscription account in the model's pool has allowance left under its caps | 503 (`Retry-After: 30`) | `provider_capacity_unavailable` |
 | A hosted model's provider has a server error or cannot be reached | 503 (`Retry-After: 30`) | `provider_unavailable` |
 | A hosted model's provider refused the request (too long, unsupported content) | 400 | `provider_rejected_request` |
+| A text, `stop` sequence or `model` is not valid Unicode (a lone surrogate such as `"\ud800"`) | 400 | `invalid_text` |
 | A hosted model's provider refused the server's key, permissions or credit | 502 | `provider_misconfigured` |
 | A hosted model is no longer offered by its provider | 404 | `model_not_found` |
 

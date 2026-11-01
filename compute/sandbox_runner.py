@@ -431,6 +431,7 @@ class Config:
     network: str = "none"
     max_sandboxes: int = 4
     max_execs: int = 8
+    max_execs_per_sandbox: int = 0  # 0: automatic (exec_share)
     memory_mb: int = 1024
     cpus: float = 1.0
     pids: int = 256
@@ -465,6 +466,14 @@ class Config:
         self.images = images
         self.trusted_peers = tuple(str(ipaddress.ip_network(item, strict=False)) for item in self.trusted_peers)
 
+    @property
+    def exec_share(self) -> int:
+        """Engine operations one sandbox may run at once: BC_SANDBOX_MAX_EXECS_PER_SANDBOX, by default an equal
+        share of BC_SANDBOX_MAX_EXECS among BC_SANDBOX_MAX sandboxes but at least 2 (a command plus a file
+        operation, say the owner browsing the workspace), never more than BC_SANDBOX_MAX_EXECS."""
+        share = self.max_execs_per_sandbox or max(2, self.max_execs // self.max_sandboxes)
+        return max(1, min(share, self.max_execs))
+
     @classmethod
     def from_env(cls, environ=None) -> "Config":
         environ = os.environ if environ is None else environ
@@ -491,6 +500,7 @@ class Config:
             network=(environ.get("BC_SANDBOX_NETWORK") or "none").strip().lower(),
             max_sandboxes=_integer(environ, "BC_SANDBOX_MAX", 4, 1, 64),
             max_execs=_integer(environ, "BC_SANDBOX_MAX_EXECS", 8, 1, 256),
+            max_execs_per_sandbox=_integer(environ, "BC_SANDBOX_MAX_EXECS_PER_SANDBOX", 0, 0, 256),
             memory_mb=_integer(environ, "BC_SANDBOX_MEMORY_MB", 1024, 64, 65536),
             cpus=_number(environ, "BC_SANDBOX_CPUS", 1.0, 0.1, 64.0),
             pids=_integer(environ, "BC_SANDBOX_PIDS", 256, 16, 4096),
@@ -979,6 +989,7 @@ class Sandbox:
     keeper: str = "1"
     exec_lock: threading.Lock = field(default_factory=threading.Lock)
     active: int = 0
+    slots: int = 0  # engine operations of this sandbox running now (SandboxManager._slot)
     gone: bool = False
     interrupted: bool = False
 
@@ -1246,7 +1257,7 @@ class SandboxManager:
             "--read-only",
             "--tmpfs", f"{WORKSPACE}:rw,exec,nosuid,nodev,size={limits['workspace_mb']}m,{owner},mode=0700",
             # The sandbox container's own private /tmp, not one on this host.
-            "--tmpfs", f"/tmp:rw,noexec,nosuid,nodev,size={TMP_MB}m,mode=1777",  # noqa: S108
+            "--tmpfs", f"/tmp:rw,noexec,nosuid,nodev,size={TMP_MB}m,mode=1777",  # noqa: S108  # nosec B108 - inside the container
             "--user", SANDBOX_USER, "--workdir", WORKSPACE, "--env", f"HOME={WORKSPACE}",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--ipc", "private",
@@ -1403,14 +1414,30 @@ class SandboxManager:
 
     # ----- operations ----------------------------------------------------------------------------------------------
     @contextlib.contextmanager
-    def _slot(self):
-        """One of the BC_SANDBOX_MAX_EXECS engine operations allowed at once (503 when all are taken)."""
-        if not self._slots.acquire(blocking=False):
-            raise ApiError(503, "busy", "The sandbox runner is busy. Retry shortly.", {"Retry-After": "5"})
+    def _slot(self, box: Sandbox | None = None):
+        """One of the BC_SANDBOX_MAX_EXECS engine operations allowed at once (503 when all are taken).
+
+        An operation in *box* also takes one of that sandbox's ``exec_share`` (503 when it already runs that
+        many), so the file operations of one sandbox (a workspace browser opened in many tabs, say) cannot take
+        every slot and refuse the commands of every other sandbox.
+        """
+        if box is not None:
+            with self._lock:
+                if box.slots >= self.config.exec_share:
+                    raise ApiError(503, "busy", "This sandbox already runs as many operations as it may. Retry "
+                                                "shortly.", {"Retry-After": "2"})
+                box.slots += 1
         try:
-            yield
+            if not self._slots.acquire(blocking=False):
+                raise ApiError(503, "busy", "The sandbox runner is busy. Retry shortly.", {"Retry-After": "5"})
+            try:
+                yield
+            finally:
+                self._slots.release()
         finally:
-            self._slots.release()
+            if box is not None:
+                with self._lock:
+                    box.slots -= 1
 
     def _exec_args(self, box: Sandbox, argv, *, interactive=False) -> list:
         args = ["exec"]
@@ -1488,7 +1515,7 @@ class SandboxManager:
         if not box.exec_lock.acquire(blocking=False):
             raise ApiError(409, "busy", "Another command is running in this sandbox.")
         try:
-            with self._slot():
+            with self._slot(box):
                 self._begin(box)
                 try:
                     box.interrupted = False
@@ -1532,7 +1559,7 @@ class SandboxManager:
         argv = ["timeout", "-s", "KILL", str(int(timeout)), "sh", "-c", script, "sh", *args]
         self._begin(box)
         try:
-            with self._slot():
+            with self._slot(box):
                 result = self.engine.run(self._exec_args(box, argv, interactive=stdin is not None), stdin=stdin,
                                          timeout=timeout + 10, limit=limit, drain_limit=drain_limit)
         finally:
@@ -1614,7 +1641,7 @@ class SandboxManager:
         argv = ["timeout", "-s", "KILL", str(ARCHIVE_TIMEOUT), "tar", "-c", "-z", "-f", "-", "-C", WORKSPACE, "."]
         self._begin(box)
         try:
-            with self._slot():
+            with self._slot(box):
                 result = self.engine.run(self._exec_args(box, argv), timeout=ARCHIVE_TIMEOUT + 10,
                                          limit=MAX_ARCHIVE_DOWNLOAD + 1, drain_limit=MAX_ARCHIVE_DOWNLOAD + 1)
         finally:

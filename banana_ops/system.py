@@ -56,7 +56,7 @@ def set_release_owner(path, uid, gid, *, readonly=False):
     def visit(descriptor):
         if readonly:
             os.fchown(descriptor, uid, gid)
-            os.fchmod(descriptor, 0o750)
+            os.fchmod(descriptor, 0o750)  # nosec B103 - release code: owner and service group read it
         for name in os.listdir(descriptor):
             try:
                 child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
@@ -273,7 +273,7 @@ class System:
         if site.is_symlink():
             raise ValueError("The static site must not contain symlinks.")
         if site.is_dir():
-            walk_tree(site, site_entry, site_file, lambda child: os.fchmod(child, 0o755), [])
+            walk_tree(site, site_entry, site_file, lambda child: os.fchmod(child, 0o755), [])  # nosec B103 - a public static site
         return skipped
 
     def prepare_release(self, settings, release):

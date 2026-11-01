@@ -156,8 +156,13 @@ def json_body() -> dict:
     def reject(constant):
         raise ValueError(f"{constant} is not valid JSON")
 
+    from bananachat.app import InvalidJSONText
+
     try:
         body = current_app.json.loads(request.get_data(cache=False) or b"", parse_constant=reject)
+    except InvalidJSONText:
+        raise CompletionError("Text must be valid Unicode (it contains a lone surrogate).", 400,
+                              "invalid_text") from None
     except (ValueError, RecursionError):
         raise CompletionError("The request body is not valid JSON.", 400, "invalid_json") from None
     if not isinstance(body, dict):
@@ -217,6 +222,7 @@ def chat_completions():
         # Wait for admission and the first output, so queue and model problems are plain HTTP errors.
         run.prime(until=(inference.Delta, inference.Finished))
         if params.stream:
+            run.detach()  # the answer must not wait for a client that stops reading
             response = Response(stream_with_context(_stream(run, params)), mimetype="text/event-stream")
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Accel-Buffering"] = "no"

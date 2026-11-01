@@ -17,9 +17,10 @@ import logging
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
-from flask import abort, current_app, g, jsonify, redirect, request, session, url_for
+from flask import abort, after_this_request, current_app, g, jsonify, redirect, request, session, url_for
 from flask.sessions import SecureCookieSessionInterface
 from itsdangerous import BadSignature
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -72,6 +73,31 @@ def burn_password_check(password: str) -> None:
     if method not in _DUMMY:
         _DUMMY[method] = generate_password_hash(secrets.token_hex(16), method=method)
     verify_password(_DUMMY[method], password)
+
+
+# Passwords typed to confirm an action from a signed-in session (the account page,
+# administrator confirmations) share one budget per account, whichever form they
+# come from, so a stolen session cannot guess the password form after form.
+CONFIRM_FAILURES = 10
+CONFIRM_FAILURE_WINDOW = 15 * 60
+CONFIRM_FAILURES_PER_DAY = 50
+
+
+def confirm_password(user, password: str) -> bool | None:
+    """Whether *password* is *user*'s, given to confirm an action; None when too many were wrong.
+
+    The attempt is counted before the check, atomically with the limit, and
+    forgotten when the password is right.
+    """
+    attempt = users.reserve([("confirm-fail:" + user["id"], CONFIRM_FAILURES),
+                             ("confirm-fail-day:" + user["id"], CONFIRM_FAILURES_PER_DAY, 86400)],
+                            CONFIRM_FAILURE_WINDOW)
+    if attempt is None:
+        return None
+    if not verify_password(user["password"], password or ""):
+        return False
+    users.release(attempt)
+    return True
 
 
 def password_problem(password: str, confirmation: str | None = None) -> str | None:
@@ -251,6 +277,28 @@ def current_session_hash() -> str | None:
     return users.session_hash(token) if token else None
 
 
+# How often a streamed download checks that whoever started it may still read it.
+DOWNLOAD_CHECK_SECONDS = 1.0
+
+
+def requester_check(*, admin: bool):
+    """Return a function telling whether the signed-in requester may still receive a download it started.
+
+    It turns False once the browser session that started the download has ended (signed out, revoked,
+    password changed), or the account is suspended or deleted, or, with *admin*, is no longer an
+    administrator. Streamed downloads call it between pieces and stop (the file ends cut short) when it
+    fails. It needs no request context, so it also works in a generator that outlives the request.
+    """
+    requester_id, session_hash = current_user()["id"], current_session_hash()
+
+    def allowed() -> bool:
+        if not users.session_alive(session_hash, requester_id) or users.suspended_or_gone(requester_id):
+            return False
+        return not admin or users.get(requester_id)["role"] == "admin"
+
+    return allowed
+
+
 # ----- responses ------------------------------------------------------------
 
 def wants_json() -> bool:
@@ -363,13 +411,17 @@ def csrf_exempt(view):
     return view
 
 
-def body_limit(max_bytes):
+def body_limit(max_bytes, *, serves=None):
     """Allow a larger (or smaller) request body for one view.
 
     *max_bytes* is a number or a function of the app's ``Config`` returning one.
+    A larger limit is used only for callers the view serves (``app._may_send_large_body``);
+    *serves* (a function of the signed-in user) narrows them further, e.g. to people with
+    access to a feature.
     """
     def decorate(view):
         view.body_limit = max_bytes
+        view.body_limit_serves = serves
         return view
     return decorate
 
@@ -380,10 +432,264 @@ def body_limit(max_bytes):
 RESERVED_THREADS = 4
 
 
+# Waiting worker polls may hold at most this share of the long-request places (at least one): idle
+# workers poll without pause, and the rest stays for the answers people are waiting for.
+POLL_SHARE = 4
+
+
 class _LongRequests:
     def __init__(self):
         self.lock = threading.Lock()
         self.active = 0
+        self.polls = 0
+
+
+def _take_long_request(*, poll: bool = False):
+    """One of this process's long-request places: its release function, or None when all are taken.
+
+    A *poll* (a worker waiting for a job) also needs one of the places polls may hold.
+    """
+    app = current_app._get_current_object()
+    state = app.extensions.setdefault("bananachat.long_requests", _LongRequests())
+    limit = max(2, app.config["BC"].http_threads - RESERVED_THREADS)
+    with state.lock:
+        if state.active >= limit or (poll and state.polls >= max(1, limit // POLL_SHARE)):
+            return None
+        state.active += 1
+        state.polls += 1 if poll else 0
+    released = []
+
+    def release():
+        with state.lock:
+            if not released:
+                released.append(True)
+                state.active -= 1
+                state.polls -= 1 if poll else 0
+
+    return release
+
+
+@contextmanager
+def long_request_place(*, poll: bool = False):
+    """Hold a long-request place for the block; yields False (and holds nothing) when none is free.
+
+    For requests that only sometimes wait, such as worker job polls (*poll*): they answer at once
+    without one, and hold at most a share of the places (``POLL_SHARE``).
+    """
+    release = _take_long_request(poll=poll)
+    try:
+        yield release is not None
+    finally:
+        if release is not None:
+            release()
+
+
+# A response larger than this may not fit in the socket buffers of a client that reads slowly: writing it holds
+# the server thread for as long as the client takes (BC_WRITE_TIMEOUT only ends a client that stops reading).
+LARGE_BODY = 64 * 1024
+
+
+class _Downloads:
+    """This process's download places (``BC_DOWNLOAD_THREADS``), at most a quarter of them for one client, so
+    it takes four clients reading slowly (accounts, or addresses for visitors) to fill them."""
+
+    def __init__(self, total: int):
+        self.total = max(1, total)
+        self.per_client = max(1, self.total // 4)
+        self.lock = threading.Lock()
+        self.active = 0
+        self.clients: dict[str, int] = {}
+
+    def take(self, client: str):
+        """(release function, safe to call twice, and 200), or (None, 503 or 429)."""
+        with self.lock:
+            if self.active >= self.total:
+                return None, 503
+            if self.clients.get(client, 0) >= self.per_client:
+                return None, 429
+            self.active += 1
+            self.clients[client] = self.clients.get(client, 0) + 1
+        released = []
+
+        def release():
+            with self.lock:
+                if released:
+                    return
+                released.append(True)
+                self.active -= 1
+                left = self.clients.get(client, 1) - 1
+                if left > 0:
+                    self.clients[client] = left
+                else:
+                    self.clients.pop(client, None)
+
+        return release, 200
+
+
+def _downloads() -> _Downloads:
+    app = current_app._get_current_object()
+    places = app.extensions.get("bananachat.downloads")
+    if places is None:
+        places = app.extensions.setdefault("bananachat.downloads", _Downloads(app.config["BC"].download_threads))
+    return places
+
+
+def _large(response) -> bool:
+    if request.method == "HEAD" or response.status_code in (204, 304) or response.status_code < 200:
+        return False
+    if response.mimetype == "text/event-stream":
+        return False  # answers and events: they hold a long-request place (long_request)
+    length = response.content_length
+    return length > LARGE_BODY if length is not None else response.is_streamed
+
+
+def _download_client() -> str:
+    user = current_user()
+    return "user:" + user["id"] if user is not None else "address:" + client_key()
+
+
+def _refused_download(status: int):
+    refused = server_busy() if status == 503 else too_many_requests(5)
+    refused.headers["Retry-After"] = "5"
+    refused.headers["Cache-Control"] = "no-store"
+    return refused
+
+
+def download_first(view):
+    """Take the request's download place before the view does its work (an export, a runner archive), so a
+    refused download is never built, counted or audited first; :func:`hold_large_response` keeps it for a
+    large response and gives it back otherwise, and ``release_download_place`` (teardown) after an error."""
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        release, status = _downloads().take(_download_client())
+        if release is None:
+            return _refused_download(status)
+        g.download_place = release
+        return view(*args, **kwargs)
+    wrapper.download_first = True
+    return wrapper
+
+
+def take_download_place():
+    """:func:`download_first` for a view that knows only part way whether its answer will be large: None once
+    the place is taken (kept as :func:`download_first` keeps it), else the refusal to return now."""
+    release, status = _downloads().take(_download_client())
+    if release is None:
+        return _refused_download(status)
+    g.download_place = release
+    return None
+
+
+def release_download_place(_error=None) -> None:
+    """Give back a place :func:`download_first` took when no response kept it (the view raised)."""
+    release = g.pop("download_place", None)
+    if release is not None:
+        release()
+
+
+def hold_large_response(response):
+    """*response*, holding a download place until the server has closed it when it is large or streamed.
+
+    Gunicorn runs ``BC_DOWNLOAD_THREADS`` threads on top of ``BC_HTTP_THREADS`` for these, so readers that take
+    files, exports or long pages slowly never hold the threads that answer pages, health checks and answers.
+    Over the process's places the client gets 503, over its own share (a quarter) 429, with Retry-After.
+    Answers of the token APIs (workers, remote access, ``/v1``) are never refused here: they were already
+    claimed, generated and charged. Their views hold a place of their own until the answer is closed: a
+    long-request place (:func:`long_request`), or for a worker's job the place :func:`take_reply_place` gave
+    before the job was claimed.
+    """
+    held = g.pop("download_place", None)
+    if not _large(response):
+        if held is not None:
+            held()
+        return response
+    if held is not None:
+        _release_on_close(response, held)
+        return response
+    release, status = _downloads().take(_download_client())
+    if release is None:
+        if request.blueprint in BEARER_BLUEPRINTS:
+            return response
+        response.close()  # its generator and files end now
+        return _refused_download(status)
+    _release_on_close(response, release)
+    return response
+
+
+class _ReplyHolders:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.clients: set[str] = set()
+
+
+def take_reply_place(client: str):
+    """A place for a large answer a token API must deliver once it has the work (a worker's claimed job): its
+    release function (safe to call twice), or None, and the work is not taken now.
+
+    A download place, or a long-request place when the process has none left (so other people's slow downloads
+    never stop jobs reaching workers), and one at a time for *client*: a daemon reads one job at a time, and
+    the jobs a worker claims and reads slowly never hold more than one server thread.
+    """
+    app = current_app._get_current_object()
+    holders = app.extensions.setdefault("bananachat.reply_places", _ReplyHolders())
+    with holders.lock:
+        if client in holders.clients:
+            return None
+        holders.clients.add(client)
+    release, _status = _downloads().take(client)
+    if release is None:
+        release = _take_long_request()
+    if release is None:
+        with holders.lock:
+            holders.clients.discard(client)
+        return None
+    released = []
+
+    def give_back() -> None:
+        if released:
+            return
+        released.append(True)
+        try:
+            release()
+        finally:
+            with holders.lock:
+                holders.clients.discard(client)
+
+    return give_back
+
+
+def _release_on_close(response, release) -> None:
+    """Call *release* once the server has closed *response*.
+
+    A file sent with sendfile (``send_file``, ``send_from_directory``) reaches the server as the file wrapper
+    itself (``direct_passthrough``), and only the wrapper's close() is called, not the response's.
+    """
+    if not response.direct_passthrough or request.method == "HEAD" or response.status_code in (204, 304):
+        response.call_on_close(release)
+        return
+    body = response.response
+    close = getattr(body, "close", None)
+
+    def closing() -> None:
+        try:
+            if close is not None:
+                close()
+        finally:
+            release()
+
+    try:
+        body.close = closing
+    except AttributeError:
+        release()  # never keep a place nothing gives back
+
+
+def server_busy():
+    from bananachat.i18n import translate
+
+    language = getattr(g, "lang", None) or "en"
+    response = json_error(translate(language, "chat.error_server_busy"), 503, "server_busy")
+    response.headers["Retry-After"] = "5"
+    return response
 
 
 def long_request(view):
@@ -396,35 +702,17 @@ def long_request(view):
     @functools.wraps(view)
     def wrapper(*args, **kwargs):
         app = current_app._get_current_object()
-        state = app.extensions.setdefault("bananachat.long_requests", _LongRequests())
-        limit = max(2, app.config["BC"].http_threads - RESERVED_THREADS)
-        with state.lock:
-            if state.active >= limit:
-                busy = True
-            else:
-                busy = False
-                state.active += 1
-        if busy:
-            from bananachat.i18n import translate
-
-            language = getattr(g, "lang", None) or "en"
-            response = json_error(translate(language, "chat.error_server_busy"), 503, "server_busy")
-            response.headers["Retry-After"] = "5"
-            return response
-        released = []
-
-        def release():
-            with state.lock:
-                if not released:
-                    released.append(True)
-                    state.active -= 1
-
+        release = _take_long_request()
+        if release is None:
+            return server_busy()
         try:
             response = app.make_response(view(*args, **kwargs))
         except BaseException:
             release()
             raise
-        if response.is_streamed:
+        if response.is_streamed or (request.blueprint in BEARER_BLUEPRINTS and _large(response)):
+            # A token API's large answer is sent even with no download place free (hold_large_response):
+            # writing it to a slow reader holds the thread, so it keeps this place until it is closed.
             response.call_on_close(release)
         else:
             release()
@@ -495,6 +783,12 @@ def too_many_requests(retry_after: int = 60):
 # ----- device cookies for sign-in throttling --------------------------------
 # A browser that has signed in to an account gets its own failure count for
 # that account, so failed attempts by anyone else cannot lock the owner out.
+# The cookie is signed with the account's password hash and its device epoch
+# (``users.device_epoch``): a new password, turning two-step verification on,
+# off or resetting it, and signing out everywhere (``users.revoke_sessions``)
+# retire every device cookie of the account, so cookies collected before
+# cannot multiply the code or password budgets. A browser keeps one nonce per
+# account while its cookie stays valid.
 
 DEVICE_COOKIE_DAYS = 365
 
@@ -509,11 +803,14 @@ def _legacy_device_cookie_name() -> str | None:
     return name if name != _device_cookie_name() else None
 
 
-def _device_signature(user, nonce: str) -> str:
-    # The password hash is signed so that a password change retires every
-    # device cookie. Not the session version: each sign-out increments it.
-    message = f"device:{user['id']}:{user['password']}:{nonce}".encode()
+def _device_signature(user, epoch: str, nonce: str) -> str:
+    # Not the session version: each sign-out increments it.
+    message = f"device:{user['id']}:{user['password']}:{epoch}:{nonce}".encode()
     return hmac.new(current_app.config["SECRET_KEY"].encode(), message, hashlib.sha256).hexdigest()[:32]
+
+
+def _device_epoch(user_id: str) -> str | None:
+    return db.scalar("SELECT device_epoch FROM users WHERE id=?", (user_id,)) or None
 
 
 def device_cookie_nonce(user) -> str | None:
@@ -527,17 +824,50 @@ def device_cookie_nonce(user) -> str | None:
     if (owner != str(user["id"]) or len(nonce) != 22 or len(signature) != 32
             or not nonce.isascii() or not signature.isascii()):
         return None
-    return nonce if hmac.compare_digest(signature, _device_signature(user, nonce)) else None
+    epoch = _device_epoch(user["id"])
+    if epoch is None:
+        return None
+    return nonce if hmac.compare_digest(signature, _device_signature(user, epoch, nonce)) else None
+
+
+def _issue_device_epoch(user) -> str | None:
+    """The account's device epoch, started now if it has none; None when the password changed meanwhile."""
+    with db.transaction():
+        epoch = _device_epoch(user["id"])
+        if epoch is None:
+            epoch = secrets.token_urlsafe(16)
+            if not db.execute("UPDATE users SET device_epoch=? WHERE id=? AND password=?",
+                              (epoch, user["id"], user["password"])).rowcount:
+                return None
+    return epoch
 
 
 def set_device_cookie(response, user) -> None:
-    nonce = secrets.token_urlsafe(16)
-    response.set_cookie(_device_cookie_name(), f"{user['id']}.{nonce}.{_device_signature(user, nonce)}",
+    """Mark this browser as known to *user* (after a full sign-in), keeping its nonce while that is valid."""
+    nonce = device_cookie_nonce(user) or secrets.token_urlsafe(16)
+    epoch = _issue_device_epoch(user)
+    if epoch is None:
+        return
+    response.set_cookie(_device_cookie_name(), f"{user['id']}.{nonce}.{_device_signature(user, epoch, nonce)}",
                         max_age=DEVICE_COOKIE_DAYS * 86400, httponly=True,
                         secure=current_app.config["SESSION_COOKIE_SECURE"], samesite="Lax")
     legacy = _legacy_device_cookie_name()
     if legacy and legacy in request.cookies:
         response.delete_cookie(legacy, path="/", secure=True, httponly=True, samesite="Lax")
+
+
+def renew_device_cookie(user_id: str) -> None:
+    """Give this browser a device cookie again after the account's device cookies were retired.
+
+    For changes made from a signed-in session (two-step verification, signing
+    out everywhere else): that browser stays known to the account.
+    """
+    @after_this_request
+    def _renew(response):
+        user = users.get(user_id)
+        if user is not None:
+            set_device_cookie(response, user)
+        return response
 
 
 # ----- bot protection for anonymous forms -----------------------------------

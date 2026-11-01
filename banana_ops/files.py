@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+import stat
 import tarfile
 import tempfile
 
@@ -160,7 +161,39 @@ def regular_files(directory, *, allowed_link=None, excluded=()):
                 yield path, path.relative_to(root).as_posix()
 
 
+def open_regular(path):
+    """A read descriptor for a regular file: never through a symlink, never blocking on a FIFO."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError(f"Portable packages require regular files and directories: {Path(path).name}")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+class _HashingReader:
+    """Hand a file to ``tarfile`` while hashing exactly the bytes it archives."""
+
+    def __init__(self, source):
+        self.source = source
+        self.digest = hashlib.sha256()
+
+    def read(self, size=-1):
+        chunk = self.source.read(size)
+        self.digest.update(chunk)
+        return chunk
+
+
 def write_package(destination, manifest, inputs):
+    """Write a new package (never overwriting) with a hashed manifest.
+
+    Every file is stored as a regular member, read once through one
+    descriptor: a file with several names (hard links) becomes independent
+    copies that :func:`extract_archive` restores, and the manifest's checksum
+    is of the bytes archived even when the file changes meanwhile.
+    """
     destination = Path(destination).absolute()
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if destination.exists() or destination.is_symlink():
@@ -179,8 +212,13 @@ def write_package(destination, manifest, inputs):
             for path, name in files:
                 if name in manifest["files"]:
                     raise ValueError("Duplicate package entry.")
-                manifest["files"][name] = {"sha256": digest_file(path), "size": path.stat().st_size}
-                archive.add(path, arcname=name, recursive=False)
+                with os.fdopen(open_regular(path), "rb") as handle:
+                    status = os.fstat(handle.fileno())
+                    info = tarfile.TarInfo(name)
+                    info.size, info.mode, info.mtime = status.st_size, stat.S_IMODE(status.st_mode), int(status.st_mtime)
+                    reader = _HashingReader(handle)
+                    archive.addfile(info, reader)
+                manifest["files"][name] = {"sha256": reader.digest.hexdigest(), "size": info.size}
             raw = json.dumps(manifest, sort_keys=True).encode()
             if len(raw) > 16 * 1024 * 1024:
                 raise ValueError("Package manifest is too large.")
@@ -197,13 +235,18 @@ def write_package(destination, manifest, inputs):
     return destination
 
 
-def extract_archive(archive_path, destination, *, max_bytes=1024 ** 4, max_files=100000):
-    """Stream extraction rejects links, special files, duplicates, and traversal."""
+def extract_archive(archive_path, destination, *, max_bytes=1024 ** 4, max_files=100000, hard_links=False):
+    """Stream extraction rejects links, special files, duplicates, and traversal.
+
+    With *hard_links*, a hard link to a regular file extracted earlier from the
+    same archive becomes a copy of it: packages written before
+    :func:`write_package` stored every name as a regular member hold them.
+    """
     destination = Path(destination)
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
     if any(destination.iterdir()):
         raise ValueError("Extract only into an empty staging directory.")
-    seen, total = set(), 0
+    seen, files, total = set(), set(), 0
     with tarfile.open(archive_path, "r|*") as archive:
         for member in archive:
             relative = PurePosixPath(member.name)
@@ -220,6 +263,20 @@ def extract_archive(archive_path, destination, *, max_bytes=1024 ** 4, max_files
             if member.isdir():
                 path.mkdir(mode=0o700, parents=True, exist_ok=True)
                 continue
+            if hard_links and member.islnk() and member.linkname in files:
+                source = destination.joinpath(*PurePosixPath(member.linkname).parts)
+                size = source.stat().st_size
+                total += size
+                if total > max_bytes:
+                    raise ValueError("Archive exceeds the extracted-size limit.")
+                if shutil.disk_usage(destination).free < size + 64 * 1024 * 1024:
+                    raise ValueError("Not enough free space to restore the archive.")
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                with source.open("rb") as original, path.open("xb") as target:
+                    shutil.copyfileobj(original, target, length=1024 * 1024)
+                path.chmod(stat.S_IMODE(source.stat().st_mode))
+                files.add(member.name)
+                continue
             if not member.isfile():
                 raise ValueError("Archive links and special files are not supported.")
             if shutil.disk_usage(destination).free < member.size + 64 * 1024 * 1024:
@@ -230,6 +287,7 @@ def extract_archive(archive_path, destination, *, max_bytes=1024 ** 4, max_files
             if path.stat().st_size != member.size:
                 raise ValueError("Truncated archive entry.")
             path.chmod(0o700 if member.mode & 0o111 else 0o600)
+            files.add(member.name)
     return seen
 
 
@@ -237,7 +295,7 @@ def extract_archive(archive_path, destination, *, max_bytes=1024 ** 4, max_files
 def read_package(path, product, staging_parent):
     with tempfile.TemporaryDirectory(prefix="restore-", dir=staging_parent) as temporary:
         root = Path(temporary)
-        members = extract_archive(path, root)
+        members = extract_archive(path, root, hard_links=True)
         manifest = read_json(root / "manifest.json")
         if not manifest or manifest.get("schema") != 1 or manifest.get("product") != product:
             raise ValueError("This package does not match the application or package format.")

@@ -341,8 +341,9 @@ def share(personality_id):
 @security.login_required
 def unshare(personality_id):
     row = _owned(personality_id)
-    personalities.revoke_share(row["id"])
-    _audit("unshare", row["id"], {"name": row["name"]})
+    # Audited only when a link went offline: each entry then follows a (rate-limited) share.
+    if personalities.revoke_share(row["id"]):
+        _audit("unshare", row["id"], {"name": row["name"]})
     if security.wants_json():
         return {"ok": True}
     flash(_t("personality.share_revoked", name=row["name"]), "success")

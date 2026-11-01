@@ -45,6 +45,14 @@
   "account.sessions_revoke_others_confirm": "Every device except this one will be signed out.",
   "account.sessions_revoked": "All other devices have been signed out.",
   "account.sessions_none": "No active sessions.",
+  "account.revoke_share_links": {
+   "one": "Also stop my chat share link",
+   "other": "Also stop my {count} chat share links"
+  },
+  "account.share_links_revoked": {
+   "one": "Your chat share link has been stopped.",
+   "other": "Your {count} chat share links have been stopped."
+  },
   "account.revoke_api_tokens": {
    "one": "Also revoke my API key",
    "other": "Also revoke my {count} API keys"
@@ -476,6 +484,7 @@
    "other": "Other people can back your request with part of their own quota. With at least {min} supporters and enough consent within {window} it is applied automatically for a limited time; they see your name and reason. Administrators can approve it at any time."
   },
   "account.quota_community_kinds": "The community can approve: {kinds}.",
+  "account.quota_community_unlimited": "Unlimited use always needs an administrator.",
   "account.quota_submitted_community": "Request sent to the administrators and the community.",
   "account.reason_renounced": "Pledged to someone else −{tokens} until {until}",
   "customize.bm_mode": "BM mode (easy mode)",
@@ -538,6 +547,14 @@
   "account.sessions_revoke_others_confirm": "Tutti i dispositivi tranne questo verranno disconnessi.",
   "account.sessions_revoked": "Tutti gli altri dispositivi sono stati disconnessi.",
   "account.sessions_none": "Nessuna sessione attiva.",
+  "account.revoke_share_links": {
+   "one": "Ferma anche il mio link di condivisione della chat",
+   "other": "Ferma anche i miei {count} link di condivisione delle chat"
+  },
+  "account.share_links_revoked": {
+   "one": "Il tuo link di condivisione della chat è stato fermato.",
+   "other": "I tuoi {count} link di condivisione delle chat sono stati fermati."
+  },
   "account.revoke_api_tokens": {
    "one": "Revoca anche la mia chiave API",
    "other": "Revoca anche le mie {count} chiavi API"
@@ -969,6 +986,7 @@
    "other": "Altre persone possono sostenere la tua richiesta cedendo parte della propria quota. Con almeno {min} sostenitori e consenso sufficiente entro {window} viene applicata automaticamente per un tempo limitato; vedranno il tuo nome e la motivazione. Gli amministratori possono approvarla in qualsiasi momento."
   },
   "account.quota_community_kinds": "La community può approvare: {kinds}.",
+  "account.quota_community_unlimited": "L'uso illimitato richiede sempre un amministratore.",
   "account.quota_submitted_community": "Richiesta inviata agli amministratori e alla community.",
   "account.reason_renounced": "Ceduti a un'altra persona −{tokens} fino al {until}",
   "customize.bm_mode": "Modalità BM (modalità facile)",
@@ -1031,6 +1049,14 @@
   "account.sessions_revoke_others_confirm": "Alle Geräte außer diesem werden abgemeldet.",
   "account.sessions_revoked": "Alle anderen Geräte wurden abgemeldet.",
   "account.sessions_none": "Keine aktiven Sitzungen.",
+  "account.revoke_share_links": {
+   "one": "Auch meinen Freigabelink für Chats beenden",
+   "other": "Auch meine {count} Freigabelinks für Chats beenden"
+  },
+  "account.share_links_revoked": {
+   "one": "Dein Freigabelink für einen Chat wurde beendet.",
+   "other": "Deine {count} Freigabelinks für Chats wurden beendet."
+  },
   "account.revoke_api_tokens": {
    "one": "Auch meinen API-Schlüssel widerrufen",
    "other": "Auch meine {count} API-Schlüssel widerrufen"
@@ -1462,6 +1488,7 @@
    "other": "Andere Personen können deine Anfrage mit einem Teil ihres eigenen Kontingents unterstützen. Mit mindestens {min} Unterstützern und ausreichender Zustimmung innerhalb von {window} wird sie automatisch für begrenzte Zeit angewendet; die Unterstützer sehen deinen Namen und deine Begründung. Administratoren können sie jederzeit genehmigen."
   },
   "account.quota_community_kinds": "Die Community kann genehmigen: {kinds}.",
+  "account.quota_community_unlimited": "Unbegrenzte Nutzung braucht immer einen Administrator.",
   "account.quota_submitted_community": "Anfrage an die Administratoren und die Community gesendet.",
   "account.reason_renounced": "An eine andere Person abgegeben −{tokens} bis {until}",
   "customize.bm_mode": "BM-Modus (einfacher Modus)",

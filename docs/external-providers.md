@@ -234,7 +234,8 @@ Limits and credits use the provider's own token counts:
   second for the time it worked before its first output, within the output
   limit; providers generate faster, so this stays below their bill. A request
   stopped or abandoned after it was sent is charged at least its input, even
-  with no output. An answer that failed before any output is charged only for
+  with no output, and so is a Codex request stopped because the model tried
+  to use a tool or ran out of time before any output. An answer that failed before any output is charged only for
   an input count the provider reported.
 - When a provider sends no usage, BananaChat records an estimate and marks it
   as estimated.

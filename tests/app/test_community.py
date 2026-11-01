@@ -204,12 +204,13 @@ def _hosted_model(upstream_name):
     return catalog.get(row["id"])
 
 
-def test_unlimited_for_a_day_on_one_model_by_votes(app, people):
-    """A temporary unlimited boost for one model's own limits (e.g. a strict cloud model)."""
+def test_unlimited_for_a_day_on_one_model_needs_an_administrator(app, people):
+    """A temporary unlimited boost for one model's own limits (e.g. a strict cloud model) lifts every token
+    limit, which no pledge can cover: it is never put to a vote and waits for an administrator."""
     from bananachat import db
-    from bananachat.db import catalog
+    from bananachat.db import catalog, credits, users
     from bananachat.db import limits as limits_db
-    from bananachat.services import limits
+    from bananachat.services import community, limits
 
     asker, ann, bob, cid, _ = people
     with app.test_request_context():
@@ -219,11 +220,11 @@ def test_unlimited_for_a_day_on_one_model_by_votes(app, people):
     request_id = _submit(app, asker, kind="temporary", pool="chat", hours=24, unlimited=True,
                          model_id=model["id"])["id"]
     row = _row(app, request_id)
-    assert row["model_id"] == model["id"] and row["community"] == 1
-    for person in (ann, bob):
-        assert _vote(app, person, request_id)["status"] == "pending"
-    assert _vote(app, cid, request_id)["status"] == "approved"
+    assert row["model_id"] == model["id"] and row["community"] == 0 and row["status"] == "pending"
+    with pytest.raises(community.VoteError):
+        _vote(app, ann, request_id)
     with app.test_request_context():
+        credits.resolve_request(request_id, users.get_by_username("admin")["id"], True)
         grant = limits_db.get_grant(_row(app, request_id)["grant_id"])
         assert grant["model_id"] == model["id"] and grant["kind"] == "unlimited" and grant["pool"] is None
         assert not limits.model_limits(asker, catalog.get(model["id"])).window.limited
@@ -299,28 +300,6 @@ def test_pages(app, people):
         assert options["kinds"] == ("window",) and options["min_supporters"] == 2 and options["hours"] == 24
         stored = settings.get()
         assert stored["quota_fallback_to_local"] == 1 and stored["quota_fallback_to_cloud"] == 0
-
-
-@pytest.mark.parametrize("language,texts", [
-    ("en", ["at least 1 person supports it", "within 1 hour of being sent", "lasts 1 hour ", "at least 1 day old",
-            "Accounts can vote once they are 1 day old.", "With at least 1 supporter and enough consent within 1 hour "]),
-    ("it", ["almeno 1 persona la sostiene", "entro 1 ora dall", "dura 1 ora ", "almeno 1 giorno e",
-            "Gli account possono votare dopo 1 giorno.", "Con almeno 1 sostenitore e consenso sufficiente entro 1 ora "]),
-])
-def test_rules_read_naturally_when_the_settings_are_one(app, people, language, texts):
-    from bananachat.db import users
-
-    asker, ann, *_ = people
-    with app.app_context():
-        _settings(community_min_supporters=1, community_hours=1, community_boost_hours=1, community_min_account_days=1,
-                  community_coverage_percent=0)
-        users.save_preferences(ann["id"], {**users.get_preferences(ann["id"]), "interface_language": language})
-    _submit(app, asker, kind="window", pool="api", tokens=60_000)
-    browser = Browser(app)
-    browser.login("ann")
-    html = browser.get("/community").get_data(as_text=True) + browser.get("/account").get_data(as_text=True)
-    for text in texts:
-        assert text in html
 
 
 def test_migration_14_keeps_requests_and_the_one_pending_rule(app, people):

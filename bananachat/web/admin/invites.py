@@ -1,7 +1,9 @@
 """Invitation codes: create, list with usage, copy the sign-up link, delete.
 
-An administrator invitation makes a new administrator, so creating one needs a recent
-confirmation (:mod:`._reauth`), as a role change does."""
+Creating any invitation needs a recent confirmation (:mod:`._reauth`): even a one-use code
+lets whoever holds it make an account with a password of their choosing, which outlives the
+session, as creating an account does; and one confirmation-free invitation after another would
+add up to opening sign-up."""
 
 from __future__ import annotations
 
@@ -48,7 +50,7 @@ def create_invite():
             expires = db.parse_timestamp(db.now(offset)) if offset else None
         else:
             raise FormError("Choose a valid expiry.")
-        if role == "admin" and not _reauth.confirmed():
+        if not _reauth.confirmed():
             return back("admin.invites")
         created = invites.create(me()["id"], max_uses=uses, expires_at=expires, assigned_role=role, code=code)
     except (FormError, ValueError) as error:

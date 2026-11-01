@@ -100,7 +100,11 @@ def utc_datetime(name: str, *, label: str, future: bool = True) -> datetime | No
         moment = datetime.fromisoformat(raw)
     except ValueError:
         raise FormError(f"{label} is not a valid date and time.") from None
-    moment = moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment.astimezone(timezone.utc)
+    try:
+        # An offset can carry a moment at the edge of the calendar past year 1 or 9999.
+        moment = moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        raise FormError(f"{label} is out of range.") from None
     if future and moment <= datetime.now(timezone.utc):
         raise FormError(f"{label} must be in the future (times are UTC).")
     if moment.year > 9999 or moment.year < 2000:

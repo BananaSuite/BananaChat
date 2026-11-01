@@ -36,12 +36,16 @@ class UpstreamError(RuntimeError):
     rate limited or overloaded (None otherwise). ``retry_after`` is the wait in
     seconds the backend asked for, ``error_type`` the type it named (such as
     Anthropic's ``overloaded_error``) and ``detail`` a credential-free account
-    of the backend's own message, for administrators only.
+    of the backend's own message, for administrators only. ``sent`` is true
+    when the backend had already read the prompt, which the request then pays
+    for as an interrupted one.
     """
 
     def __init__(self, message: str, status: int | None = None, code: str | None = None, kind: str | None = None,
-                 *, retry_after: int | None = None, error_type: str | None = None, detail: str = ""):
+                 *, retry_after: int | None = None, error_type: str | None = None, detail: str = "",
+                 sent: bool = False):
         super().__init__(message)
+        self.sent = sent
         self.status = status
         self.code = code
         self.kind = kind

@@ -8,7 +8,8 @@
 
 Consent is good when at least ``community_min_supporters`` people support the request, they are at least
 ``community_approval_percent`` % of the votes, and their renounced tokens cover ``community_coverage_percent`` %
-of a token increase. The requester, administrators, suspended accounts and accounts younger than
+of a token increase. A temporary grant of unlimited use is never offered to the community: it would lift
+every token limit, and no pledge can cover that, so it always waits for an administrator. The requester, administrators, suspended accounts and accounts younger than
 ``community_min_account_days`` cannot vote. Stored tables: docs/architecture.md, section Limits.
 """
 
@@ -22,7 +23,10 @@ from bananachat import db
 from bananachat.services import background
 
 KINDS = ("window", "weekly", "rate", "temporary", "effort")
-DEFAULTS = {"enabled": True, "kinds": KINDS, "min_supporters": 3, "approval_percent": 66, "coverage_percent": 100,
+# Effort and rate requests cost supporters nothing (no tokens to renounce): offered only when an administrator
+# lists them (migration v29).
+DEFAULT_KINDS = ("window", "weekly", "temporary")
+DEFAULTS = {"enabled": True, "kinds": DEFAULT_KINDS, "min_supporters": 3, "approval_percent": 66, "coverage_percent": 100,
             "hours": 72, "boost_hours": 168, "min_account_days": 7, "max_pledge_percent": 50}
 BOUNDS = {"min_supporters": (1, 1000), "approval_percent": (1, 100), "coverage_percent": (0, 100),
           "hours": (1, 720), "boost_hours": (1, 720), "min_account_days": (0, 3650), "max_pledge_percent": (0, 100)}
@@ -60,10 +64,18 @@ def settings(site: dict | None = None) -> dict:
     return result
 
 
-def offered(kind: str, site: dict | None = None) -> bool:
-    """Whether requests of *kind* can be offered to the community now."""
+def offered(kind: str, site: dict | None = None, *, unlimited: bool = False) -> bool:
+    """Whether requests of *kind* (*unlimited*: a temporary grant of unlimited use) can be offered to the
+    community now. Unlimited use never can (see the module docstring)."""
     options = settings(site)
-    return options["enabled"] and kind in options["kinds"]
+    return options["enabled"] and kind in options["kinds"] and not unlimited
+
+
+def unlimited(row) -> bool:
+    """Whether the request asks for a temporary grant of unlimited use."""
+    from bananachat.db import credits
+
+    return credits.request_kind(row) == "temporary" and bool(row["grant_unlimited"])
 
 
 # ----- what a request asks of the community ---------------------------------------------------
@@ -171,7 +183,7 @@ def voting_open(row, options: dict | None = None, now: str | None = None) -> boo
     now = now or db.now()
     return bool(row["status"] == "pending" and row["community"] and not row["community_closed_at"]
                 and row["community_until"] and row["community_until"] > now and options["enabled"]
-                and credits.request_kind(row) in options["kinds"])
+                and credits.request_kind(row) in options["kinds"] and not unlimited(row))
 
 
 def held(user_id: str, pool: str | None, model_id: int | None, scope_name: str, *, exclude: int | None = None,
@@ -285,7 +297,7 @@ def _settle(row, options: dict) -> str:
     """Approve *row* when its consent is good enough (joins the caller's transaction). Returns its status."""
     if row["status"] != "pending" or not voting_open(row, options):
         return row["status"]
-    if not consent(row, options).reached:
+    if unlimited(row) or not consent(row, options).reached:
         return "pending"
     try:
         with db.transaction():  # a savepoint: nothing stays behind when the request cannot be carried out
@@ -322,12 +334,11 @@ def apply(row, options: dict | None = None, now: datetime | None = None) -> None
         ends = None
     elif kind == "temporary":
         if row["grant_unlimited"]:
-            grant_id = limits_db.create_grant(scope=None, kind="unlimited", amount=0, **common)
-        else:
-            if not base_for(row["user_id"], row)["window_enabled"]:
-                raise ValueError("That limit is no longer on.")
-            grant_id = limits_db.create_grant(scope="window", kind="extra", amount=int(row["new_tokens"] or 0),
-                                              **common)
+            raise ValueError("Unlimited use needs an administrator.")
+        if not base_for(row["user_id"], row)["window_enabled"]:
+            raise ValueError("That limit is no longer on.")
+        grant_id = limits_db.create_grant(scope="window", kind="extra", amount=int(row["new_tokens"] or 0),
+                                          **common)
     elif kind in ("window", "weekly"):
         base = base_for(row["user_id"], row)
         if not base[f"{kind}_enabled"]:
@@ -384,7 +395,8 @@ def count_open() -> int:
     if not options["enabled"]:
         return 0
     return int(db.scalar("SELECT COUNT(*) FROM quota_requests WHERE status='pending' AND community=1 "
-                         "AND community_closed_at IS NULL AND community_until>?", (db.now(),), 0) or 0)
+                         "AND community_closed_at IS NULL AND community_until>? "
+                         "AND NOT (kind='temporary' AND IFNULL(grant_unlimited, 0)=1)", (db.now(),), 0) or 0)
 
 
 def my_pledges(user_id: str):

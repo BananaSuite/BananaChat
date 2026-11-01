@@ -29,6 +29,87 @@ from tests.app.fake_ollama import FakeOllama  # noqa: E402
 TEST_CSRF = "test-csrf-token"
 
 
+# ----- making applications fast (tests only) -----------------------------------------------------------
+# Most tests make an application, and two steps took most of that time: Werkzeug compiling a URL builder
+# for each of the ~320 routes, and running every migration on the new, empty database.
+
+def _cache_url_builders() -> None:
+    """Compile each URL rule's builder once per test process, not once per application.
+
+    The generated code receives the rule as an argument and depends only on the
+    rule's parsed form and defaults, so applications with the same routes can share it.
+    """
+    from werkzeug.routing import rules
+
+    original = rules.Rule._compile_builder
+    compiled: dict = {}
+
+    def cached(self, append_unknown: bool = True):
+        try:
+            key = (self.rule, self.subdomain, self.host, tuple(self._trace),
+                   repr(sorted((self.defaults or {}).items())), append_unknown)
+            hash(key)
+        except TypeError:
+            return original(self, append_unknown)
+        builder = compiled.get(key)
+        if builder is None:
+            builder = compiled[key] = original(self, append_unknown)
+        return builder
+
+    rules.Rule._compile_builder = cached
+
+
+def _cache_migrated_schema() -> None:
+    """Copy a database migrated once per test process into every new, empty database.
+
+    Only an empty database (no tables, version 0) gets the copy, and only for the
+    same list of migration functions, so upgrade tests and tests that replace a
+    migration still run the real migrations.
+    """
+    import sqlite3
+    import threading
+
+    from bananachat import db as database
+
+    original = database.apply_migrations
+    templates: dict = {}
+    lock = threading.Lock()
+
+    def apply_migrations(connection, application_id, migrations):
+        key = (application_id, tuple(map(id, migrations)))
+        empty = (connection.execute("PRAGMA user_version").fetchone()[0] == 0
+                 and connection.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] == 0)
+        with lock:
+            template = templates.get(key) if empty else None
+            if template is not None:
+                template.backup(connection)
+                return
+        original(connection, application_id, migrations)
+        if empty:
+            copy = sqlite3.connect(":memory:", check_same_thread=False)
+            connection.backup(copy)
+            with lock:
+                templates.setdefault(key, copy)
+
+    database.apply_migrations = apply_migrations
+
+
+_cache_url_builders()
+_cache_migrated_schema()
+
+_HASHES: dict = {}
+
+
+def _hashed(password):
+    """The password's hash for the fixture accounts, made once per method and password (salts are not under test)."""
+    from bananachat import security
+
+    key = (security._method(), password)
+    if key not in _HASHES:
+        _HASHES[key] = security.hash_password(password)
+    return _HASHES[key]
+
+
 class Browser:
     """A Flask test client that handles CSRF tokens and sign-in."""
 
@@ -45,12 +126,16 @@ class Browser:
             session["csrf"] = TEST_CSRF
 
     def get(self, url, **kwargs):
+        # Read and close the answer as a browser and the server do: large responses hold a download place until
+        # they are closed (security.hold_large_response). buffered=False keeps a response open.
+        kwargs.setdefault("buffered", True)
         return self.client.get(url, **kwargs)
 
     def post(self, url, data=None, **kwargs):
         self._ensure_csrf()
         data = dict(data or {})
         data.setdefault("csrf_token", TEST_CSRF)
+        kwargs.setdefault("buffered", True)  # as get(): read and closed, unless a test keeps it open
         return self.client.post(url, data=data, **kwargs)
 
     def post_json(self, url, payload=None, method="POST", **kwargs):
@@ -119,13 +204,13 @@ def make_app(tmp_path, fake_ollama):
 
 
 def complete_setup(app, username="admin", password="admin-password"):
-    from bananachat import db, security
+    from bananachat import db
     from bananachat.db import settings as site_settings
     from bananachat.db import users
 
     with app.test_request_context():
         with db.transaction():
-            users.create(username, security.hash_password(password), role="admin")
+            users.create(username, _hashed(password), role="admin")
             site_settings.update(setup_done=1, site_name="Test Chat")
 
 
@@ -137,11 +222,10 @@ def app(make_app):
 @pytest.fixture
 def make_user(app):
     def factory(username, role="user", password=None):
-        from bananachat import security
         from bananachat.db import users
 
         with app.test_request_context():
-            user_id = users.create(username, security.hash_password(password or f"{username}-password"), role=role)
+            user_id = users.create(username, _hashed(password or f"{username}-password"), role=role)
             return users.get(user_id)
     return factory
 

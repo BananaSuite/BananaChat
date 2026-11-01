@@ -180,7 +180,13 @@ The network is *virtual*: no operating system routes it, the connect helper
 resolves it. Through a worker, administrators can also reach machines of the
 owner's network that the owner listed (`BC_WORKER_REMOTE_SUBNETS`, ports in
 `BC_WORKER_REMOTE_SUBNET_PORTS`): `ssh -o ProxyCommand=... admin@192.168.1.20`
-goes through whichever worker shares `192.168.1.0/24`.
+goes through the worker that shares `192.168.1.0/24`. Each owner chooses the
+networks their worker shares, so when more than one worker shares a network
+containing the address (the same `192.168.1.0/24` at two homes, or a wider
+network that covers another's), the server refuses to pick one rather than
+risk sending the session to the wrong worker: name it with `--worker NAME`
+(`proxy` and `forward`). The helper always prints the worker that answered,
+in `proxy` mode too (ssh shows it).
 
 ### Safety
 
@@ -198,7 +204,11 @@ goes through whichever worker shares `192.168.1.0/24`.
 - Sessions end after 2 hours without traffic and after 12 hours at most.
   Ending a session in the page closes it within seconds, and so does
   revoking its access key or demoting, suspending or deleting the
-  administrator who opened it.
+  administrator who opened it. A session opened in the browser also ends
+  when that browser's sign-in does: signing out, *sign out everywhere*,
+  revoking the sign-in or changing the password. Access keys are separate
+  credentials and survive a password change: revoke them too after a
+  suspected compromise.
 
 ### How the relay works
 
@@ -258,7 +268,9 @@ such jobs.
 
 - Polls wait up to 25 seconds for a job; each server process holds at most
   four waiting polls and answers further ones with 204 at once, so polls never
-  occupy many server threads.
+  occupy many server threads. A waiting poll also takes one of the places that
+  streaming answers share (`BC_HTTP_THREADS` minus the four threads kept for
+  short requests); when none is free it gets 204 at once.
 - A heartbeat renews the lease of the worker's running job. The first chunk
   may take `BC_FIRST_TOKEN_TIMEOUT` seconds; after that, a job without a
   chunk or heartbeat for `max(60, 2 × BC_INFERENCE_READ_TIMEOUT)` seconds
@@ -267,7 +279,10 @@ such jobs.
   accepted chunk is acknowledged; a gap or a conflicting retry fails the job).
   Each is at most 16 KB. An answer that reaches `BC_CHAT_MAX_RESPONSE_KB` is
   cut there and ended with finish reason `length` (`stop: true`).
-- `complete` is accepted only after the chunk with `done: true`.
+- `complete` is accepted only after the chunk with `done: true`. The account
+  is charged the usage it reports, capped at twice the server's own estimate of
+  the prompt (about four characters per token, 765 per image) plus 4,096, and
+  at one token per byte of the relayed answer plus 16.
 - `stop: true` means the job ended on the server (the user pressed Stop, it
   timed out or the worker was disabled): stop generating and do not report it.
 - Failed sign-ins are rate-limited per address (30 per 5 minutes).

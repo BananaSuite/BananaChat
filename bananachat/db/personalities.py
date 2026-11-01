@@ -195,8 +195,10 @@ def share(personality_id: int) -> str:
     return token
 
 
-def revoke_share(personality_id: int) -> None:
-    db.execute("UPDATE personalities SET share_token=NULL, shared_at=NULL WHERE id=?", (personality_id,))
+def revoke_share(personality_id: int) -> bool:
+    """Take the personality's share link offline; False when it had none."""
+    return db.execute("UPDATE personalities SET share_token=NULL, shared_at=NULL "
+                      "WHERE id=? AND share_token IS NOT NULL", (personality_id,)).rowcount > 0
 
 
 def by_share_token(token):

@@ -114,8 +114,18 @@ def break_points(value) -> Markup:
 
 def pretty_json(value) -> str:
     """JSON for reading in a <pre> (autoescaped by the template): real characters, not the HTML-safe
-    \\u0026-style escapes of Flask's ``tojson``, which is meant for <script> blocks."""
-    return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+    \\u0026-style escapes of Flask's ``tojson``, which is meant for <script> blocks.
+
+    Indented while that stays within about twice the one-line form, else one line: indentation is repeated
+    on every line, so a deeply nested value (a model's tool arguments) would otherwise grow many times over."""
+    flat = json.dumps(value, ensure_ascii=False, default=str)
+    budget, size, parts = 2 * len(flat) + 256, 0, []
+    for chunk in json.JSONEncoder(indent=2, ensure_ascii=False, default=str).iterencode(value):
+        size += len(chunk)
+        if size > budget:
+            return flat
+        parts.append(chunk)
+    return "".join(parts)
 
 
 def number(value, digits: int = 0) -> str:

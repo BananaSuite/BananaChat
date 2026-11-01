@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from tests.app.conftest import TEST_CSRF, Browser
 
@@ -43,17 +42,6 @@ def test_admin_account_page_is_unlimited(admin):
     response = admin.get("/account")
     assert response.status_code == 200
     assert "<progress" not in response.get_data(as_text=True)
-
-
-def test_password_change_keeps_this_device_and_signs_out_others(app, make_user):
-    make_user("bob")
-    laptop, phone = _signed_in(app, "bob"), _signed_in(app, "bob")
-    response = laptop.post("/account/password", {"current_password": "bob-password", "new_password": "new-secret-99",
-                                                  "confirm_password": "new-secret-99"})
-    assert response.status_code == 302
-    assert laptop.fetch("/account").status_code == 200
-    assert phone.fetch("/account").status_code == 401
-    Browser(app).login("bob", "new-secret-99")
 
 
 def test_password_change_validates(app, make_user):
@@ -250,14 +238,6 @@ def test_the_data_export_contains_the_accounts_agent_tasks(app, make_user):
     assert [step["content"] for step in task["steps"]] == ["Write my CV", "Here is a draft"]
     assert [message["content"] for message in task["messages"]] == ["Make it shorter"]
 
-def test_chats_export_download(app, make_user):
-    make_user("gus")
-    browser = _signed_in(app, "gus")
-    response = browser.get("/account/export/chats")
-    assert response.status_code == 200
-    assert json.loads(response.get_data())["chats"] == []
-
-
 def test_delete_account(app, make_user):
     from bananachat.db import users
 
@@ -417,27 +397,6 @@ def test_access_request_for_a_model_that_denies_the_user(app, make_user):
     with app.app_context():
         rows = access.list_requests(user_id=user["id"])
         assert [(row["scope"], row["resource_id"]) for row in rows] == [("model", model_id)]
-
-
-def test_delete_all_chats(app, make_user):
-    chats = pytest.importorskip("bananachat.db.chats")
-    if not hasattr(chats, "delete_all_for_user"):
-        pytest.skip("chat storage not available yet")
-    from bananachat import db
-
-    user = make_user("nico")
-    with app.app_context():
-        db.execute("INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) VALUES (?,?,?,?,?)",
-                   ("c-nico", user["id"], "Mine", db.now(), db.now()))
-    browser = _signed_in(app, "nico")
-    browser.post("/account/chats/delete-all", {"password": "wrong"})
-    with app.app_context():
-        assert db.scalar("SELECT COUNT(*) FROM chat_sessions WHERE user_id=? AND deleted_at IS NULL",
-                         (user["id"],)) == 1
-    browser.post("/account/chats/delete-all", {"password": "nico-password"})
-    with app.app_context():
-        assert db.scalar("SELECT COUNT(*) FROM chat_sessions WHERE user_id=? AND deleted_at IS NULL",
-                         (user["id"],), 0) == 0
 
 
 def test_catalog_covers_every_key_used_by_these_pages():

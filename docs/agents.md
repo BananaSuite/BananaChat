@@ -82,8 +82,10 @@ ignored; wrong types are a 400. Request bodies need a `Content-Length`
   (including ones that detached with `setsid` or `nohup`) is killed; if that is
   impossible (for example a fork bomb filled the process table) the sandbox is
   removed and `sandbox_removed` is true. 409 `busy` while another command runs
-  in the same sandbox; 503 `busy` when `BC_SANDBOX_MAX_EXECS` engine
-  operations are already running; 410 `sandbox_gone` when the sandbox died
+  in the same sandbox; 503 `busy` (with `Retry-After`) when `BC_SANDBOX_MAX_EXECS` engine
+  operations are already running, or this sandbox already runs
+  `BC_SANDBOX_MAX_EXECS_PER_SANDBOX` of them (file and archive operations
+  count the same way); 410 `sandbox_gone` when the sandbox died
   (for example the command ran `kill -9 -1`). Allow the HTTP request
   `timeout` + 60 seconds.
 
@@ -217,6 +219,7 @@ network. To change the tools, edit the Dockerfile, build a new tag
 | `BC_SANDBOX_NETWORK` | `none` | `none`, or `bridge` to give sandboxes network access (see the warning below). |
 | `BC_SANDBOX_MAX` | `4` | Sandboxes alive at once (1-64). |
 | `BC_SANDBOX_MAX_EXECS` | `8` | Engine operations (commands, file and archive operations) at once. |
+| `BC_SANDBOX_MAX_EXECS_PER_SANDBOX` | `0` (automatic) | Engine operations one sandbox may run at once, so one sandbox's file reads (its owner's workspace browser, say) cannot take the slots other sandboxes' commands need; more get 503 `busy`. Automatic: `BC_SANDBOX_MAX_EXECS` ÷ `BC_SANDBOX_MAX`, at least 2 (a command and a file operation), at most `BC_SANDBOX_MAX_EXECS`. With the defaults, 2. |
 | `BC_SANDBOX_MEMORY_MB` | `1024` | Memory per sandbox, swap disabled. The workspace and `/tmp` live in memory and count towards it. |
 | `BC_SANDBOX_CPUS` | `1.0` | CPUs per sandbox. |
 | `BC_SANDBOX_PIDS` | `256` | Processes and threads per sandbox. |
@@ -464,6 +467,12 @@ into `tar -x --no-same-owner --no-same-permissions` inside the container:
   refused; owners become uid 1000 and modes 0644/0755 (setuid bits dropped);
 - at most two uploads or archive downloads are processed at once (file writes have a
   separate pool of four, so slow archive transfers cannot stall the agents' `write_file`).
+  Each person has one workspace upload and one download at a time, and at most
+  30 workspace uploads an hour, so nobody can keep both slots busy. A task
+  start or Git import that finds them taken waits for one (up to 3 minutes)
+  like it waits for a sandbox; files added to a task that still could not be
+  copied are kept and copied by the task's next run if it starts within a day
+  (see [starting a task](#starting-a-task)).
 
 A failure after validation (for example the workspace filled up) can leave
 some files behind; the answer says so.
@@ -494,7 +503,7 @@ users' sandboxes, the runner token, and the availability of the service.
 | Runaway commands and detached processes | Exec timeout (capped) kills every process except the idle main one, including `setsid`/`nohup` children |
 | Huge output | Per-stream cap with a marker; floods stopped at 16 MB |
 | Zip/gzip bombs, malicious archives | See [archive uploads](#archive-uploads) |
-| Too many sandboxes or operations | `BC_SANDBOX_MAX` (429), one command per sandbox (409), `BC_SANDBOX_MAX_EXECS` (503), two large transfers at once, idle and age reaper |
+| Too many sandboxes or operations | `BC_SANDBOX_MAX` (429), one command per sandbox (409), `BC_SANDBOX_MAX_EXECS` and a share of them per sandbox, `BC_SANDBOX_MAX_EXECS_PER_SANDBOX` (503), two large transfers at once, idle and age reaper; on the web server, one workspace-browser read per person at a time and 60 a minute (429) |
 | Orphaned containers | Label per instance; reconcile on start and in the reaper; removal on shutdown |
 | Unauthenticated use, token guessing | Bearer token (≥ 32 chars, generated 256-bit, file must be 0600 and not a symlink), constant-time comparison, per-address limit on failures |
 | Slow or abusive HTTP clients | Socket timeouts, 10 s to send headers, 5 min per authenticated request (exec: its timeout + 90 s), body limits, no chunked bodies, bounded connections with JSON 503, a few connections per untrusted address and a reserve for trusted ones, archive downloads dropped when the reader stalls |
@@ -570,7 +579,14 @@ allows it, the task can start from a public Git repository
 ([Git repositories](#git-repositories)). You can add files or a
 `.zip`/`.tar.gz` archive (up to `BC_AGENTS_MAX_UPLOAD_MB`, default 20 MB in
 total): they are copied into `/workspace` of the task's sandbox, and archives
-are extracted there, never on the web server. When an administrator allows
+are extracted there, never on the web server. Until then the web server keeps
+them: they are deleted once copied, and files a run could not copy (you
+stopped it first, or the sandbox service was unavailable) are copied by the
+task's next run if it starts within a day, and deleted after that. Files
+waiting like this may take at most `BC_AGENTS_MAX_STORED_UPLOAD_MB` (default
+100 MB) per account; a start with files that would go over it is refused
+(413 `storage_limit`) until earlier ones are copied, expire or their tasks
+are deleted. Administrators are exempt. When an administrator allows
 it, **Allow parallel agents** lets the agent split the work among sub-agents
 that run in parallel.
 
@@ -585,7 +601,12 @@ The task page shows a live timeline (it survives reloads and lost
 connections): your messages, the agent's messages and reasoning, and every
 tool call. Open a tool call to see its exact arguments and the output that was
 given back to the model (long output is shortened to about 8 KB). With parallel agents,
-each sub-agent has a lane with its status, its steps and its report.
+each sub-agent has a lane with its status, its steps and its report. The page
+shows the reports of the newest 64 lanes (about 4,000 characters of each; the
+full report is the lane's `finish` step), and updates the lanes of the current
+and the previous run.
+A long timeline loads in pieces of about 1 MB of text (at least one step
+each), on the page and in the administrator's view of the task alike.
 
 The agent's tools are `bash` (a shell command), `read_file`, `write_file`,
 `edit_file` (replace one exact, unique piece of text), `list_files`,
@@ -603,11 +624,18 @@ paths outside `/workspace` are refused and the agent is told why.
   agent's next step. When it has ended, a message starts a new run of the same
   task, in the same workspace if it still exists, with the conversation so far.
 - **Workspace**: browse the files, open text files, download a file or the
-  whole workspace (`.tar.gz`, up to 50 MB, one download at a time), and upload more files.
+  whole workspace (`.tar.gz`, up to 50 MB, one download at a time), and upload more files
+  (one upload at a time, at most 30 an hour). Each folder listing or file
+  opened is one operation in the sandbox: a person runs one at a time (in all
+  tabs together) and at most 60 a minute; more are answered 429 with
+  `Retry-After`, so browsing never takes the sandbox service from other
+  people's tasks.
   Tasks started from a Git repository also offer **Download changes (.patch)**
   (see [Git repositories](#git-repositories)). After a run
   ends the sandbox is kept for a while (30 minutes by default) and then
-  removed; a follow-up creates a fresh one when needed.
+  removed; a follow-up creates a fresh one when needed. When the runner has
+  no free place for a task that is starting, the kept sandbox due to go first
+  is removed early, so finished tasks never keep running ones waiting.
 
 ### States
 
@@ -834,7 +862,14 @@ process (or the kill switch) can stop any task. If a process dies, its tasks'
 leases expire after 60 seconds and a background job marks them
 *Interrupted*; nothing the dead process might still write is accepted. A
 background job deletes sandboxes whose keep-time ended, and removes runner
-sandboxes of this instance that no task references. When a sandbox
+sandboxes that no task references (their session is a task id, so give each
+web server a runner of its own). Deleting an account deletes its tasks'
+sandboxes and stored uploads at once; a run of a deleted task deletes the
+sandbox it holds, and the hourly retention job removes stored uploads whose
+task no longer exists, files a run could not copy whose task has not run
+again within a day, and files staged by a start that crashed (a start writes
+its files to `agent-uploads/incoming-<task>/` and moves them into place once
+the task exists, so the per-account limit counts starts being decided too). When a sandbox
 disappears during a run (runner restart, TTL), the agent is told that the
 workspace was reset and a new, empty sandbox is created (at most twice per
 run). Model and runner errors are retried at most three times with backoff;

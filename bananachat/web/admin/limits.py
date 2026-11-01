@@ -206,10 +206,7 @@ def _grant_form() -> dict:
     where = request.form.get("pool") or ""
     pool = model = None
     if where.startswith("model:"):
-        try:
-            model = catalog.get(int(where.partition(":")[2]))
-        except ValueError:
-            model = None
+        model = catalog.get(ascii_int(where.partition(":")[2], 18) or 0)
         if model is None:
             raise FormError("That model does not exist.")
     elif where:
@@ -629,7 +626,7 @@ def set_effort(user_id):
                   "success")
             return back("admin.user_limits", user_id=user_id, _anchor="effort")
         target = request.form.get("model_id") or ""
-        model = None if target in ("", "all") else _model_or_404(ascii_int(target) or 0)
+        model = None if target in ("", "all") else _model_or_404(ascii_int(target, 18) or 0)
         level = choice("level", ("", *limits_db.EFFORT_LEVELS), label="Level", default="") or None
         pinned = flag("pinned")
         limits_db.set_effort_level(user_id, model["id"] if model else None, level, pinned=pinned, source="admin",

@@ -19,6 +19,7 @@ import hashlib
 import logging
 import re
 import secrets
+import shutil
 import tempfile
 import time
 import uuid
@@ -203,8 +204,18 @@ def start_task(user, *, prompt: str, model_name: str | None, swarm: bool, files=
         raise AgentError(error.key, 413 if error.key == "agents.upload_too_large" else 400, "bad_upload",
                          **error.params) from None
     task_id, token = uuid.uuid4().hex, uuid.uuid4().hex
-    max_site = site_limit(settings)  # HTTP health must not hold the write lock.
+    if items:
+        _check_stored_uploads(user, sum(len(item["data"]) for item in items))
+    # The files are staged before the write lock (they may be large) and recorded for the account, so the
+    # check inside the transaction counts them, and those of the account's other starts being decided now.
+    created = False
     try:
+        try:
+            uploads.stage(task_id, items, user["id"])
+        except OSError:
+            log.exception("Could not store the uploads of agent task %s", task_id)
+            raise AgentError("agents.error_upload_storage", 500, "server_error") from None
+        max_site = site_limit(settings)  # HTTP health must not hold the write lock.
         with db.transaction():
             user = users.get(user["id"])
             check_access(user)
@@ -215,18 +226,24 @@ def start_task(user, *, prompt: str, model_name: str | None, swarm: bool, files=
             model = choose_model(user, model_name, settings)
             if source is not None and not users.hit(import_rate_key(user), settings.git_imports_per_hour, 3600):
                 raise AgentError("agents.error_import_rate", 429, "rate_limited", retry_after=600)
+            if items:
+                _check_stored_uploads(user, 0)
             _check_start(user, settings, model)
             agents_db.create(task_id, user_id=user["id"], title=auto_title(prompt), prompt=prompt, model_id=model["id"],
                              model_name=model["ollama_name"], swarm=swarm, owner_token=token,
                              max_user=None if user["role"] == "admin" else settings.max_tasks_per_user,
                              max_site=min(max_site, settings.max_tasks_total))
+        created = True
     except agents_db.Busy as busy:
         if busy.scope == "user":
             raise AgentError("agents.error_busy_user", 409, "busy", retry_after=30,
                              max=settings.max_tasks_per_user) from None
         raise AgentError("agents.error_busy_site", 429, "busy", retry_after=60) from None
+    finally:
+        if not created:
+            uploads.discard(task_id)
     try:
-        uploads.store(task_id, items)
+        uploads.commit(task_id)
         if source is not None:
             gitrepo.store_request(task_id, source)
     except OSError:
@@ -235,6 +252,16 @@ def start_task(user, *, prompt: str, model_name: str | None, swarm: bool, files=
         raise AgentError("agents.error_upload_storage", 500, "server_error") from None
     run = _launch(task_id, token, user, model, swarm, settings)
     return Started(task_id, run)
+
+
+def _check_stored_uploads(user, adding: int) -> None:
+    """Refuse a start whose files would take the account over ``BC_AGENTS_MAX_STORED_UPLOAD_MB``: files
+    stored for its tasks and not copied into a sandbox yet (administrators are exempt)."""
+    if user["role"] == "admin":
+        return
+    limit = current_app.config["BC"].agents_max_stored_upload_bytes
+    if uploads.owned_bytes(user["id"]) + adding > limit:
+        raise AgentError("agents.error_upload_account", 413, "storage_limit", size=limit // (1024 * 1024))
 
 
 def _follow_up_state(user, task_id):
@@ -372,6 +399,26 @@ def delete_task(task) -> None:
     agents_db.delete(task["id"])
 
 
+def workspaces_of_user(user_id: str) -> list[tuple[str, str | None]]:
+    """``(task id, sandbox id)`` of every task of an account, read before the account is deleted."""
+    return [(row["id"], row["sandbox_id"]) for row in agents_db.workspaces_of_user(user_id)]
+
+
+def discard_workspaces(workspaces) -> None:
+    """After an account was deleted (its tasks with it): stop its runs here, delete its sandboxes and uploads.
+
+    A run in another process loses its lease and deletes the sandbox it holds itself
+    (:meth:`loop.TaskRun._discard_deleted`); anything missed is swept by :func:`reap_sandboxes` and
+    :func:`purge_old_tasks`.
+    """
+    for task_id, sandbox_id in workspaces:
+        run = loop.local_run(task_id)
+        if run is not None:
+            run.stop("stopped")
+        _delete_sandbox(sandbox_id)
+        uploads.discard(task_id)
+
+
 def _delete_sandbox(sandbox_id: str | None) -> bool:
     if not sandbox_id or not runner_mod.configured():
         return not sandbox_id
@@ -406,7 +453,33 @@ def _runner_problem(error: runner_mod.RunnerError) -> AgentError:
         return AgentError("agents.error_file_too_large", 413, "too_large")
     if error.status in (400, 403, 422):
         return AgentError("agents.error_path", 400, "bad_path")
+    if error.status == 503 and error.code == "busy":
+        return AgentError("agents.error_runner_busy", 503, "busy", retry_after=5)
     return AgentError("agents.error_runner", 503, "unavailable", retry_after=30)
+
+
+WORKSPACE_READS_AT_ONCE = 1      # per person, every process: the runner's engine slots are shared by everyone
+WORKSPACE_READS_PER_MINUTE = 60
+
+
+def _read_workspace(task, path: str) -> dict:
+    """``runner.read`` for the workspace browser (:func:`browse`, :func:`file_bytes`): the task's owner runs
+    :data:`WORKSPACE_READS_AT_ONCE` at a time and :data:`WORKSPACE_READS_PER_MINUTE`, so browsing from many tabs
+    cannot take the runner's engine slots from the commands of other people's tasks (429 with Retry-After)."""
+    client, sandbox_id = workspace_client(task)
+    user_id = task["user_id"]
+    lease = agents_db.claim_workspace_read(user_id, WORKSPACE_READS_AT_ONCE)
+    if lease is None:
+        raise AgentError("agents.error_workspace_reading", 429, "busy", retry_after=2)
+    try:
+        if not users.hit(f"agents:read:{user_id}", WORKSPACE_READS_PER_MINUTE, 60):
+            raise AgentError("agents.error_workspace_rate", 429, "rate_limited", retry_after=30)
+        try:
+            return client.read(sandbox_id, path)
+        except runner_mod.RunnerError as error:
+            raise _runner_problem(error) from None
+    finally:
+        agents_db.release_workspace_read(lease)
 
 
 def browse(task, path: str) -> dict:
@@ -415,11 +488,7 @@ def browse(task, path: str) -> dict:
         path = tools.resolve_path(path or tools.WORKSPACE)
     except tools.ToolError:
         raise AgentError("agents.error_path", 400, "bad_path") from None
-    client, sandbox_id = workspace_client(task)
-    try:
-        data = client.read(sandbox_id, path)
-    except runner_mod.RunnerError as error:
-        raise _runner_problem(error) from None
+    data = _read_workspace(task, path)
     if isinstance(data.get("entries"), list):
         entries = []
         for entry in data["entries"][:1000]:
@@ -450,11 +519,7 @@ def file_bytes(task, path: str) -> tuple[str, bytes]:
         path = tools.resolve_path(path)
     except tools.ToolError:
         raise AgentError("agents.error_path", 400, "bad_path") from None
-    client, sandbox_id = workspace_client(task)
-    try:
-        data = client.read(sandbox_id, path)
-    except runner_mod.RunnerError as error:
-        raise _runner_problem(error) from None
+    data = _read_workspace(task, path)
     if "entries" in data:
         raise AgentError("agents.error_path", 400, "bad_path")
     if data.get("truncated"):
@@ -507,7 +572,9 @@ def fetch_archive(task, *, renew=None):
     return spool
 
 
-def upload_to_workspace(task, files) -> int:
+def upload_to_workspace(task, files, *, before_each=None) -> int:
+    """Copy uploaded *files* into the task's workspace; *before_each* runs before each file is sent (the
+    caller renews its upload lease there, since every file may take the runner's whole timeout)."""
     client, sandbox_id = workspace_client(task)
     try:
         items = uploads.read_uploads(files or (), current_app.config["BC"].agents_max_upload_bytes)
@@ -518,6 +585,8 @@ def upload_to_workspace(task, files) -> int:
         raise AgentError("agents.error_no_files")
     try:
         for item in items:
+            if before_each is not None:
+                before_each()
             if item["kind"] in ("zip", "tar"):
                 client.put_archive(sandbox_id, item["data"], kind=item["kind"])
             else:
@@ -652,7 +721,7 @@ def _stop_leftovers(task_ids) -> None:
                 continue
         except runner_mod.RunnerError as error:
             log.warning("Could not stop leftover processes of agent task %s: %s", task_id, error)
-        agents_db.set_sandbox(task_id, None, row["sandbox_id"], db.now())
+        agents_db.expire_sandbox_now(task_id, row["sandbox_id"])  # not over a sandbox the task got since
 
 
 @background.job("agents-recover", every=30, initial_delay=15)
@@ -679,7 +748,8 @@ def _parse_time(value) -> datetime | None:
 
 
 def reap_sandboxes() -> int:
-    """Delete sandboxes whose keep-time ended, and runner sandboxes of our tasks that we no longer track."""
+    """Delete sandboxes whose keep-time ended, and runner sandboxes of tasks that we no longer track or that
+    no longer exist."""
     if not runner_mod.configured():
         return 0
     removed = 0
@@ -697,14 +767,17 @@ def reap_sandboxes() -> int:
         sandbox_id, session = str(item.get("id") or ""), str(item.get("session") or "")
         if not sandbox_id or sandbox_id in known or not session:
             continue
-        task = agents_db.get(session)
-        if task is None:
+        # Sessions are task ids. The sandbox of a task whose row is gone (deleted while the runner
+        # could not be reached, or with its account) goes too: nothing may keep its files.
+        if not uploads.TASK_ID_RE.fullmatch(session):
             continue  # not one of ours (the runner's own reaper handles it)
         created = _parse_time(item.get("created_at"))
         if created is None or created > cutoff:
             continue
         if _delete_sandbox(sandbox_id):
             removed += 1
+            # A reclaim that could not delete it may have given it back to its task meanwhile.
+            agents_db.forget_sandbox(sandbox_id)
     return removed
 
 
@@ -731,7 +804,30 @@ def purge_old_tasks() -> int:
             total += 1
         if len(rows) < 200:
             break
+    purge_stored_uploads()
     return total
+
+
+def purge_stored_uploads() -> int:
+    """Delete stored uploads (and pending imports) no run can use any more: those of tasks that no longer exist
+    (deleted with their account), and those a run could not copy whose task has not run again within
+    ``uploads.KEEP_UNCOPIED`` after it ended."""
+    removed = 0
+    cutoff = db.now(-uploads.KEEP_UNCOPIED)
+    for task_id in uploads.stored_tasks():
+        # The task row is written before its files are moved into place, so a folder without one is left over.
+        row = agents_db.get(task_id)
+        if row is not None and (row["status"] in agents_db.ACTIVE_STATES or
+                                (row["finished_at"] or row["updated_at"] or "") >= cutoff):
+            continue
+        uploads.discard(task_id)
+        removed += 1
+    for task_id in uploads.staged_tasks():
+        changed = uploads.staged_age(task_id)
+        if changed is not None and changed > uploads.STAGING_GRACE:
+            shutil.rmtree(uploads.staging_folder(task_id), ignore_errors=True)  # its start failed or crashed
+            removed += 1
+    return removed
 
 
 @background.job("agents-retention", every=3600, initial_delay=150)

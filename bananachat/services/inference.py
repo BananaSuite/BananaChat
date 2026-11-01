@@ -8,7 +8,8 @@
 * :class:`Finished` - always last: state ``completed``, ``stopped`` or ``failed``.
 
 Queue problems are raised before any event: ``queue.QueueFull``, ``queue.QueueTimeout`` and
-``upstream.Cancelled`` (cancelled while waiting). Requests with ``tools`` (cloud sessions) get the model's tool
+``upstream.Cancelled`` (cancelled while waiting); also after one, when the last fallback is of the other lane
+and gets no place there. Requests with ``tools`` (cloud sessions) get the model's tool
 calls, unvalidated, in ``Finished.tool_calls`` and never run on worker PCs.
 
 Callers save the result and charge the usage. An answer that does not complete is charged by
@@ -102,6 +103,20 @@ class Finished:
     # Requests with tools: the provider's own record of a completed turn, to be sent back unchanged with the
     # tool results (Claude's signed thinking blocks, see external_api._replay); None for other backends.
     replay: dict | None = None
+
+
+def continues(last, event) -> bool:
+    """Whether *event* only extends *last* for a reader that has read neither (services.event_pump)."""
+    if isinstance(last, Delta) and isinstance(event, Delta):
+        return last.thinking == event.thinking
+    return isinstance(last, Queued) and isinstance(event, Queued)
+
+
+def joined(events: list):
+    """The one event that stands for a run of events that :func:`continues`."""
+    if isinstance(events[0], Delta):
+        return Delta("".join(event.text for event in events), events[0].thinking)
+    return events[-1]
 
 
 MAX_TOOL_CALLS = 32
@@ -340,6 +355,7 @@ def generate(request: TextRequest, cancel: CancelToken):
 def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
     started = time.monotonic()
     wait_ms = slot.wait_ms
+    queue_deadline = time.monotonic() + max(0.0, config.queue_timeout - wait_ms / 1000)
     model = request.model
     limit = request.max_response_bytes or config.chat_max_response_bytes
     attempts = [request.model, *request.fallbacks]
@@ -353,7 +369,24 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
         # concurrent delete then either sees this request or prevents it from
         # starting; it cannot miss the switch between authorization and launch.
         if index:
-            slot.set_model(_backend_name(model))
+            lane = queue.lane_for(model)
+            if lane == slot.lane and slot.running:
+                slot.set_model(_backend_name(model))
+            else:
+                # A fallback of the other kind (a local model after a hosted one) waits for a place in its own
+                # lane, within what is left of the queue timeout: never past BC_MAX_CONCURRENT, the free-memory
+                # check or the account's place there.
+                try:
+                    slot.move(lane, _backend_name(model))
+                    for _position in slot.positions(timeout=max(0.0, queue_deadline - time.monotonic()),
+                                                    cancel=cancel):
+                        pass
+                except (queue.QueueFull, queue.QueueTimeout) as error:
+                    log.info("Fallback %s got no place in the %s lane: %s", model["ollama_name"], lane, error)
+                    if index + 1 < len(attempts):
+                        continue
+                    raise
+                wait_ms += slot.wait_ms
         # Selection can predate a queue wait or another attempt. Never run a
         # model that has since been removed, disabled or withdrawn.
         fresh = catalog.get(model["id"])
@@ -447,7 +480,9 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
             if isinstance(interruption, GeneratorExit):
                 raise  # the caller stopped reading (an API client went away): it charges interrupted_usage()
         except (UpstreamError, OSError) as error:
-            if cancel.cancelled:
+            sent = isinstance(error, UpstreamError) and error.sent
+            if cancel.cancelled or sent:
+                # A prompt the backend read and then refused to answer costs as much as one interrupted.
                 request.attempt.update(interrupted=True, ended=time.monotonic())
             last_error = str(error) or "The model failed."
             capacity_unavailable = isinstance(error, UpstreamError) and error.kind == "capacity"
@@ -467,7 +502,7 @@ def _run_admitted(request: TextRequest, cancel: CancelToken, slot, config):
                     and not _request_fault(error, request):
                 model_lifecycle.record_failure(model, error, config)
             failed_before = True
-            if produced == 0 and not cancel.cancelled and index + 1 < len(attempts):
+            if produced == 0 and not cancel.cancelled and not sent and index + 1 < len(attempts):
                 continue
             finished = _partial(request, model, text_parts, "failed", last_error, wait_ms, started, via_worker)
             if produced == 0:
@@ -562,7 +597,8 @@ def _open_stream(request, model, via_worker, cancel, config):
         effort = _provider_effort(request, model)
         request.attempt["reasoning"] = bool(model["is_reasoning"]) and effort != "off"
         return subscription_pool.stream_chunks(model["backend"], name, request.messages, options=request.options,
-                                               think=request.think, effort=effort, cancel=cancel)
+                                               think=request.think, effort=effort, cancel=cancel,
+                                               user_id=request.user.get("id") if request.user is not None else None)
     if model["backend"] != "ollama":
         # Only Ollama models reach a model server or a worker PC; no other backend ever does.
         raise UpstreamError(f"The model '{model['ollama_name']}' is not available right now.")

@@ -12,6 +12,25 @@ import urllib.request
 from .files import read_json, write_json
 
 RECOVERY_FILE = ".model-recovery.json"
+TRUSTED_REGISTRIES = ("registry.ollama.ai", "hf.co", "huggingface.co")
+CUSTOM_REGISTRY = "Custom registry; review its access and source before downloading."
+
+
+def downloadable(name):
+    """Whether *name* is an Ollama library or Hugging Face name, the only ones restored without review.
+
+    The rule of ``bananachat.services.pulls.validate_ollama_name`` (stdlib only, for the system Python):
+    Ollama takes whatever precedes the last two ``/``-separated parts as the registry host, dotted or not.
+    """
+    if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,299}", name)
+            or ".." in name or "//" in name or name.endswith(("/", ":"))):
+        return False
+    first, _, rest = name.partition("/")
+    if rest and ("." in first or ":" in first) and first.lower() not in TRUSTED_REGISTRIES:
+        return False
+    path = name.rsplit(":", 1)[0] if name.rfind(":") > name.rfind("/") else name
+    parts = path.split("/")
+    return len(parts) <= 2 or "/".join(parts[:-2]).lower() in TRUSTED_REGISTRIES
 
 
 def weight_paths(data, environment):
@@ -91,7 +110,7 @@ def inventory(data, environment, *, upstream=None):
                 model = registry + "/" + model
             else:
                 result["manual"].append({"backend": "ollama", "name": registry + "/" + model + ":" + tag,
-                                         "reason": "Custom registry; review its access and source before downloading."})
+                                         "reason": CUSTOM_REGISTRY})
                 continue
             names.add(model + ":" + tag)
             size = _manifest_size(path)
@@ -99,6 +118,10 @@ def inventory(data, environment, *, upstream=None):
                 sizes[model + ":" + tag] = size
     if len(names) > 10000:
         raise ValueError("The model inventory exceeds 10,000 entries.")
+    # Names from the catalogue or an existing Ollama's list may name any registry, as manifests can.
+    for name in sorted(name for name in names if not downloadable(name)):
+        names.discard(name)
+        result["manual"].append({"backend": "ollama", "name": str(name)[:300], "reason": CUSTOM_REGISTRY})
     result["ollama"] = sorted(names)
     if sizes:
         # Optional: download sizes shown before approving a restore.
@@ -238,8 +261,7 @@ def compute_recovery(data, action, *, assume_yes=False, upstream="http://127.0.0
     address = _ollama_url(upstream)
     failed, completed = [], []
     for name in missing:
-        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._/-]{0,299}", name)
-                or ".." in name or ("/" in name and name.split("/", 1)[0].count(".") and not name.startswith(("hf.co/", "huggingface.co/")))):
+        if not downloadable(name):
             failed.append({"model": str(name)[:300], "reason": "Review this model's registry manually."})
             continue
         request = urllib.request.Request(address + "/api/pull",  # noqa: S310 - scheme checked by _ollama_url()

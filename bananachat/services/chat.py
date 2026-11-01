@@ -256,6 +256,10 @@ def _prepare(user, session, form, files, *, lang: str) -> Prepared:
     if not decision.allowed:
         raise SendError(t("chat.error_rate", seconds=decision.retry_after), 429, "rate_limited",
                         retry_after=decision.retry_after)
+    if not is_admin and chats.account_text_bytes(user["id"]) + len(content.encode("utf-8")) > \
+            config.chat_max_account_text_bytes:
+        raise SendError(t("chat.text_account_budget", size=config.chat_max_account_text_bytes // 2**20),
+                        413, "storage_limit")
 
     with _parsing(session["id"], None if is_admin else user["id"]) as free:
         if not free:
@@ -475,7 +479,7 @@ class Run:
         prepared = self.prepared
         request = inference.TextRequest(
             user=prepared.user, model=self.model, messages=self._messages(), options=prepared.options,
-            request_type="chat_incognito" if prepared.session["is_incognito"] else "chat", priority=prepared.priority, owner_key=f"user:{prepared.user['id']}:chat",
+            request_type="chat_incognito" if prepared.session["is_incognito"] else "chat", priority=prepared.priority, owner_key=queue.account_key(prepared.user["id"]),
             fallbacks=prepared.selection.fallbacks, think=prepared.think, effort=prepared.effort,
             authorize=self._authorize, prepare=self._for_model)
         self._request = request

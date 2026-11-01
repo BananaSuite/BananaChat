@@ -8,7 +8,7 @@ from bananachat import security
 from bananachat.db import chats, users
 from bananachat.numbers import ascii_int
 from bananachat.security import admin_required
-from bananachat.web.chat import messages_json
+from bananachat.web.chat import _int_arg, messages_json
 
 from . import bp
 
@@ -59,7 +59,7 @@ def chat_view(session_id):
     session = chats.admin_get(session_id)
     if session is None:
         abort(404)
-    rows, has_more = chats.message_page(session_id, limit=VIEW_LIMIT)
+    rows, has_more = chats.message_page(session_id, limit=VIEW_LIMIT, max_bytes=4 * 1024 * 1024)
     return render_template("admin/chats_view.html", section="chats", session=session,
                            messages=messages_json(rows, None), truncated=has_more,
                            untitled=chats.is_untitled(session["title"]))
@@ -136,11 +136,13 @@ def incognito():
 def incognito_session(session_id):
     if not chats.valid_id(session_id):
         abort(404)
-    entries = chats.audit_entries(session_id)
+    before = _int_arg("before")
+    entries, earlier = chats.audit_entries(session_id, before=before, limit=VIEW_LIMIT, max_bytes=4 * 1024 * 1024)
     if not entries:
         abort(404)
     return render_template("admin/incognito_session.html", section="chats", session_id=session_id,
-                           owner=entries[0]["username"], messages=entries, live=chats.get(session_id) is not None)
+                           owner=entries[0]["username"], messages=entries, live=chats.get(session_id) is not None,
+                           earlier=earlier, before=before)
 
 
 @bp.post("/incognito/entries/<int:entry_id>/delete", endpoint="incognito_delete_entry")
@@ -152,7 +154,7 @@ def incognito_delete_entry(entry_id):
     chats.delete_audit_entry(entry_id)
     _audit("chat.no_history_entry_delete", entry["session_id"], {"entry": entry_id, "role": entry["role"]})
     flash("The entry was deleted.", "success")
-    if chats.audit_entries(entry["session_id"]):
+    if chats.has_audit_entries(entry["session_id"]):
         return redirect(url_for("admin.incognito_session", session_id=entry["session_id"]))
     return redirect(url_for("admin.incognito"))
 

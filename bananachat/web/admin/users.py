@@ -6,21 +6,23 @@ reinstating or deleting an administrator need a recent confirmation (:mod:`._rea
 
 from __future__ import annotations
 
-import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 
-from flask import Response, flash, render_template, request
+from flask import flash, render_template, request
 
 from bananachat import db, security
-from bananachat.db import credits, tokens, users
+from bananachat.db import chats, credits, tokens, users
 from bananachat.db import settings as site_settings
 from bananachat.db import limits as limits_db
 from bananachat.security import admin_required
 from bananachat.services import limits, two_step
+from bananachat.services.agents import service as agents_service
+from bananachat.web.account import download_export
 from . import _reauth, bp
 
-from ._helpers import FormError, audit, back, choice, me, page, text, user_or_404, utc_datetime, utc_input_min
+from ._helpers import FormError, audit, back, choice, fail, me, page, text, user_or_404, utc_datetime, utc_input_min
 from ._quota_ui import POOL_LABELS
 
 PAGE_SIZE = 50
@@ -52,7 +54,8 @@ def create_user():
     except FormError as error:
         flash(str(error), "error")
         return back("admin.users")
-    if role == "admin" and not _reauth.confirmed():
+    # Any new account, with a password the session chose, keeps working after the session ends.
+    if not _reauth.confirmed():
         return back("admin.users")
     try:
         with db.transaction():
@@ -80,7 +83,7 @@ def user_detail(user_id):
         two_step=two_step.state(user_id), two_step_required=two_step.required_for_admins(),
         current_session=security.current_session_hash(), min_password=security.PASSWORD_MIN,
         suspended_now=users.is_suspended(user), min_datetime=utc_input_min(),
-        api_tokens=tokens.count_active(user_id),
+        api_tokens=tokens.count_active(user_id), share_links=chats.count_shared(user_id),
         bm_mode_global=bool(site_settings.get().get("bm_mode_global")),
         bm_mode_self_service=bool(site_settings.get().get("bm_mode_self_service", 1)),
         chats=db.scalar("SELECT COUNT(*) FROM chat_sessions WHERE user_id=? AND deleted_at IS NULL", (user_id,), 0),
@@ -191,6 +194,7 @@ def reset_password(user_id):
     tokens.revoke_all(user_id)
     audit("user_password", user["username"])
     flash(f"Password of {user['username']} changed. Their sessions and API tokens no longer work.", "success")
+    stop_share_links_if_asked(user)
     return back("admin.user_detail", user_id=user_id)
 
 
@@ -215,10 +219,27 @@ def revoke_all_sessions(user_id):
     user = user_or_404(user_id)
     keep = security.current_session_hash() if user_id == me()["id"] else None
     users.revoke_sessions(user_id, except_hash=keep)
+    if keep:
+        security.renew_device_cookie(user_id)
     audit("user_sessions_revoke_all", user["username"])
     flash(f"{user['username']} has been signed out everywhere" + (" else." if keep else "."), "success")
     revoke_api_tokens_if_asked(user)
+    stop_share_links_if_asked(user)
     return back("admin.user_detail", user_id=user_id)
+
+
+def stop_share_links_if_asked(user) -> None:
+    """Take the account's chat share links offline when the form asked to (the box is ticked by default).
+
+    Someone who held one of its sessions may have shared its chats; a share link shows every later message.
+    """
+    if request.form.get("revoke_share_links") != "1":
+        return
+    stopped = chats.revoke_all_shares(user["id"])
+    if stopped:
+        audit("user_share_links_revoke_all", user["username"], {"count": stopped})
+        flash(f"{stopped} chat share link{'s' if stopped != 1 else ''} of {user['username']} "
+              f"{'were' if stopped != 1 else 'was'} stopped.", "success")
 
 
 def revoke_api_tokens_if_asked(user) -> None:
@@ -235,25 +256,22 @@ def revoke_api_tokens_if_asked(user) -> None:
               f"{'were' if revoked != 1 else 'was'} revoked.", "success")
 
 
-@bp.get("/users/<user_id>/export/<kind>", endpoint="user_export")
+@bp.route("/users/<user_id>/export/<kind>", methods=["GET", "POST"], endpoint="user_export")
 @admin_required
+@security.download_first
 def export(user_id, kind):
     user = user_or_404(user_id)
-    if kind not in ("gdpr", "chats"):
+    # Exports start from the buttons on the user's page (POST), never from a link.
+    if kind not in ("gdpr", "chats") or request.method != "POST":
         return back("admin.user_detail", user_id=user_id)
-    try:
-        from bananachat.services import exports
-        payload = exports.gdpr_export(user_id) if kind == "gdpr" else exports.chats_export(user_id)
-    except ImportError:
-        flash("Exports are not available in this installation.", "error")
-        return back("admin.user_detail", user_id=user_id)
-    audit("user_export", user["username"], {"kind": kind})
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    body = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-    response = Response(body, mimetype="application/json")
     name = "personal-data" if kind == "gdpr" else "chats"
-    response.headers["Content-Disposition"] = f'attachment; filename="{user["username"]}-{name}-{stamp}.json"'
-    response.headers["Cache-Control"] = "private, no-store"
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", user["username"])
+    response = download_export("data" if kind == "gdpr" else "chats", user, f"{safe_name}-{name}-{stamp}.json")
+    if response is None:
+        return fail(f"An export of {user['username']} is still being downloaded. Try again when it has finished.",
+                    "admin.user_detail", user_id=user_id)
+    audit("user_export", user["username"], {"kind": kind})
     return response
 
 
@@ -267,10 +285,17 @@ def delete(user_id):
             raise FormError("Type the username exactly to confirm the deletion.")
         if user["role"] == "admin" and not _reauth.confirmed():
             return back("admin.user_detail", user_id=user_id)
-        users.delete(user_id)
+        background_name = users.get_preferences(user_id)["background_image"]
+        with db.transaction():  # a task started meanwhile is deleted with the account
+            workspaces = agents_service.workspaces_of_user(user_id)
+            users.delete(user_id)
     except (FormError, ValueError) as error:
         flash(str(error), "error")
         return back("admin.user_detail", user_id=user_id)
+    agents_service.discard_workspaces(workspaces)
+    if background_name:
+        from bananachat.web.customization import remove_background_file
+        remove_background_file(background_name)
     audit("user_delete", user["username"], {"role": user["role"]})
     flash(f"Account {user['username']} and all of its data were deleted.", "success")
     return back("admin.users")

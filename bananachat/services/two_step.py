@@ -24,6 +24,12 @@ Wrong codes are counted (:func:`check_code`) per account and browser that
 signed in to it before (its device cookie), or per account for every other
 browser, at sign-in and on the account page alike: only someone holding the
 password gets that far, and they cannot use up a known browser's attempts.
+Device cookies count only when they were issued after the current set-up
+(turning it on, off or resetting it retires them, see :mod:`bananachat.security`),
+and every account also has a daily ceiling of wrong codes whatever the browser
+(:data:`FAILURES_PER_ACCOUNT_DAY`). Wrong codes given to confirm an
+administrator action count against the account's own budget
+(:func:`reserve_code_attempt`).
 The sign-in step is in :mod:`bananachat.web.auth`, the account pages in
 :mod:`bananachat.web.account`.
 """
@@ -49,6 +55,8 @@ REQUIRED_SETTING = "admin_two_step_required"
 FAILURE_WINDOW = 5 * 60
 FAILURES = 10
 FAILURES_PER_DAY = 50
+# Whatever the browser: known browsers together cannot try more than this a day.
+FAILURES_PER_ACCOUNT_DAY = 200
 
 
 class Refused(Exception):
@@ -183,6 +191,18 @@ def verify(user_id: str, code: str | None) -> str | None:
     return None
 
 
+def reserve_code_attempt(user, device: str | None = None) -> list[int] | None:
+    """Count one code attempt of *user* (from a known browser's *device* cookie, or any other); None when refused.
+
+    Release the result with ``users.release`` when the code was right.
+    """
+    key = f"{user['id']}:{device}" if device else user["id"]
+    return users.reserve([("two-step-fail:" + key, FAILURES),
+                          ("two-step-fail-day:" + key, FAILURES_PER_DAY, 86400),
+                          ("two-step-fail-account-day:" + user["id"], FAILURES_PER_ACCOUNT_DAY, 86400)],
+                         FAILURE_WINDOW)
+
+
 def check_code(user, code: str | None) -> str:
     """Accept a code of *user*: ``"totp"`` or ``"recovery_code"``, else :class:`Refused`.
 
@@ -191,10 +211,7 @@ def check_code(user, code: str | None) -> str:
     """
     from bananachat import security
 
-    device = security.device_cookie_nonce(user)
-    key = f"{user['id']}:{device}" if device else user["id"]
-    attempt = users.reserve([("two-step-fail:" + key, FAILURES),
-                             ("two-step-fail-day:" + key, FAILURES_PER_DAY, 86400)], FAILURE_WINDOW)
+    attempt = reserve_code_attempt(user, security.device_cookie_nonce(user))
     if attempt is None:
         raise Refused("two_step.too_many", 429)
     method = verify(user["id"], code)

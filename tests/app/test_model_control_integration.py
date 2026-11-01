@@ -21,6 +21,8 @@ def test_fallback_is_registered_before_its_deletion_check(app, make_user, monkey
 
         class Slot:
             wait_ms = 0
+            lane = "local"
+            running = True
 
             def set_model(self, name):
                 assert name == fallback["ollama_name"]

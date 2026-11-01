@@ -20,8 +20,9 @@ archive URL from those parts:
 * redirects are followed only to allowlisted hosts (checked again, with a new
   resolution, at each hop; at most :data:`MAX_REDIRECTS`), and a redirect to a
   sign-in page means the repository is private;
-* timeouts: :data:`CONNECT_TIMEOUT` to connect (and resolve), :data:`TOTAL_TIMEOUT`
-  for the whole download;
+* timeouts: :data:`CONNECT_TIMEOUT` to connect (and resolve), :data:`READ_TIMEOUT`
+  without data, and :data:`TOTAL_TIMEOUT` for the whole download, enforced on
+  every receive (a server that sends a byte now and then cannot stretch it);
 * the body is streamed into a new mode-0600 file and the size cap is enforced
   while reading (and against ``Content-Length`` first); it must be gzip.
 
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 import base64
 import http.client
+import io
 import ipaddress
 import os
 import re
@@ -405,6 +407,42 @@ def _remaining(deadline: float) -> float:
     return left
 
 
+class _DeadlineReader(io.RawIOBase):
+    """The receiving side of the socket for ``http.client``: every ``recv`` waits at most until *deadline*.
+
+    ``HTTPResponse`` reads through a buffer that keeps receiving until a whole chunk (or header line)
+    arrived, so a timeout checked only between reads would let a server that drips bytes run on forever.
+    """
+
+    def __init__(self, sock, deadline: float):
+        super().__init__()
+        self._sock = sock
+        self._deadline = deadline
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("The download took too long.")
+        self._sock.settimeout(min(READ_TIMEOUT, left))
+        return self._sock.recv_into(buffer)
+
+
+class _DeadlineSocket:
+    """What ``HTTPResponse`` needs of a socket (``makefile``), reading through :class:`_DeadlineReader`."""
+
+    def __init__(self, sock, deadline: float):
+        self._sock = sock
+        self._deadline = deadline
+
+    def makefile(self, mode: str = "rb", *_args, **_kwargs):
+        if mode != "rb":
+            raise ValueError("read-only")
+        return io.BufferedReader(_DeadlineReader(self._sock, self._deadline))
+
+
 class _Hop:
     """One HTTPS request to a checked address; :meth:`close` closes the response and the socket."""
 
@@ -457,7 +495,7 @@ class _Hop:
         try:
             tls.settimeout(min(READ_TIMEOUT, _remaining(deadline)))
             tls.sendall(request.encode("ascii"))
-            self.response = http.client.HTTPResponse(tls, method="GET")
+            self.response = http.client.HTTPResponse(_DeadlineSocket(tls, deadline), method="GET")
             self.response.begin()
         except TimeoutError:
             self.close()

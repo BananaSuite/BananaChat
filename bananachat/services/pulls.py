@@ -66,6 +66,17 @@ def _config(config=None):
 
 # ----- validation -------------------------------------------------------------
 
+def registry_host(name: str) -> str | None:
+    """The registry Ollama would contact for *name*, or None for its default registry.
+
+    Ollama reads ``[host/][namespace/]model[:tag]`` from the right: whatever comes before the last two
+    ``/``-separated parts is the host, whether or not it looks like one (``intranet/ns/model`` too).
+    """
+    path = name.rsplit(":", 1)[0] if name.rfind(":") > name.rfind("/") else name
+    parts = path.split("/")
+    return "/".join(parts[:-2]) if len(parts) > 2 else None
+
+
 def validate_ollama_name(name: str) -> str:
     """Accept Ollama library tags and Hugging Face GGUF names (``hf.co/owner/repo:quant``)."""
     name = (name or "").strip()
@@ -75,6 +86,9 @@ def validate_ollama_name(name: str) -> str:
         raise ValueError("Enter a model name such as llama3.2:3b or hf.co/owner/repository:Q4_K_M.")
     first, _, rest = name.partition("/")
     if rest and ("." in first or ":" in first) and first.lower() not in TRUSTED_REGISTRIES:
+        raise ValueError("Only the Ollama library and Hugging Face (hf.co/…) can be downloaded from here.")
+    host = registry_host(name)
+    if host is not None and host.lower() not in TRUSTED_REGISTRIES:
         raise ValueError("Only the Ollama library and Hugging Face (hf.co/…) can be downloaded from here.")
     if first.lower() in ("hf.co", "huggingface.co") and len(rest.split("/")) < 2:
         raise ValueError("Hugging Face models are named hf.co/owner/repository[:quantization].")

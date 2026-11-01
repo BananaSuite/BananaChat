@@ -26,8 +26,14 @@
         <div class="hint">Counted against the services' limits (× each model's weight), since midnight UTC.</div></dd>
     </dl>
     <div class="section-footer row">
-      <a class="btn btn-sm" href="{{ url_for('admin.user_export', user_id=user.id, kind='gdpr') }}">{{ icon("download") }}Export personal data</a>
-      <a class="btn btn-sm" href="{{ url_for('admin.user_export', user_id=user.id, kind='chats') }}">{{ icon("download") }}Export chats</a>
+      <form method="post" action="{{ url_for('admin.user_export', user_id=user.id, kind='gdpr') }}">
+        {{ csrf() }}
+        <button type="submit" class="btn btn-sm">{{ icon("download") }}Export personal data</button>
+      </form>
+      <form method="post" action="{{ url_for('admin.user_export', user_id=user.id, kind='chats') }}">
+        {{ csrf() }}
+        <button type="submit" class="btn btn-sm">{{ icon("download") }}Export chats</button>
+      </form>
     </div>
   </section>
 
@@ -124,6 +130,7 @@
           <input type="password" id="reset-password2" name="confirm_password" required minlength="{{ min_password }}" maxlength="1024" autocomplete="new-password">
         </div>
       </div>
+      {% if share_links %}<label class="check"><input type="checkbox" name="revoke_share_links" value="1" checked><span>Also stop their {{ "chat share link" if share_links == 1 else share_links ~ " chat share links" }}</span></label>{% endif %}
       {{ reauth_field("password-reauth") }}
       <div class="form-actions"><button type="submit" class="btn">Reset password</button></div>
     </form>
@@ -139,6 +146,7 @@
     <form method="post" action="{{ url_for('admin.user_two_step_reset', user_id=user.id) }}" class="stack" data-confirm="Reset two-step verification for {{ user.username }} and sign them out everywhere?" data-confirm-danger>
       {{ csrf() }}
       {% if api_tokens %}<label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>Also revoke their {{ "API key" if api_tokens == 1 else api_tokens ~ " API keys" }}<small>Scripts using them stop working; {{ user.username }} creates new ones after signing in.</small></span></label>{% endif %}
+      {% if share_links %}<label class="check"><input type="checkbox" name="revoke_share_links" value="1" checked><span>Also stop their {{ "chat share link" if share_links == 1 else share_links ~ " chat share links" }}</span></label>{% endif %}
       {{ reauth_field("two-step-reauth") }}
       <div class="form-actions"><button type="submit" class="btn btn-danger">Reset two-step verification</button></div>
     </form>
@@ -159,6 +167,7 @@
     <form method="post" action="{{ url_for('admin.user_sessions_revoke_all', user_id=user.id) }}" class="row" data-confirm="Sign {{ user.username }} out of {{ 'every other session' if is_self else 'every session' }}?">
       {{ csrf() }}
       {% if api_tokens %}<label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>Also revoke {{ "my" if is_self else "their" }} {{ "API key" if api_tokens == 1 else api_tokens ~ " API keys" }}</span></label>{% endif %}
+      {% if share_links %}<label class="check"><input type="checkbox" name="revoke_share_links" value="1" checked><span>Also stop {{ "my" if is_self else "their" }} {{ "chat share link" if share_links == 1 else share_links ~ " chat share links" }}</span></label>{% endif %}
       <button type="submit" class="btn btn-sm btn-danger">Sign out {{ "other sessions" if is_self else "everywhere" }}</button>
     </form>
     {% endif %}

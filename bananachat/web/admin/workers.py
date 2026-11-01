@@ -123,8 +123,7 @@ def workers_register():
 @bp.post("/workers/<worker_id>/state", endpoint="workers_state")
 @admin_required
 def workers_state(worker_id):
-    payload = request.get_json(silent=True) if request.is_json else None
-    raw = (payload or {}).get("enabled") if payload is not None else request.form.get("enabled")
+    raw = _payload().get("enabled")
     enabled = raw in (True, 1, "1", "true", "on")
     worker = store.get(worker_id)
     if worker is None or not remote.set_enabled(worker_id, enabled):
@@ -270,7 +269,8 @@ def workers_tunnel_ws(tunnel_id):
     if not ID_RE.fullmatch(tunnel_id or "") or worker_remote.session_for_client(
             tunnel_id, user_id=security.current_user()["id"]) is None:
         return _tunnels.error("Session not found or expired.", 404, "not_found")
-    return _tunnels.client_bridge(tunnel_id, status_messages=request.args.get("status") == "1")
+    return _tunnels.client_bridge(tunnel_id, status_messages=request.args.get("status") == "1",
+                                  auth_session=security.current_session_hash())
 
 
 @bp.post("/workers/tunnels/<tunnel_id>/close", endpoint="workers_tunnel_close")
@@ -342,7 +342,7 @@ def workers_key_create():
     try:
         hours = int(fields.get("hours") or worker_remote.KEY_HOURS)
         key_id, token = worker_remote.create_key(security.current_user(), fields.get("label") or "", hours)
-    except (ValueError, worker_remote.RemoteError) as error:
+    except (TypeError, ValueError, worker_remote.RemoteError) as error:
         message = str(error) if isinstance(error, worker_remote.RemoteError) else "Choose a number of hours."
         if security.wants_json():
             return security.json_error(message, 400, "invalid_key")

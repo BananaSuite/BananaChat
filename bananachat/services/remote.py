@@ -66,8 +66,11 @@ NO_REMOTE_REQUEST_TYPES = frozenset({"chat_incognito", "incognito", "no_history"
 _SERVER_STARTED = time.time()
 TOKEN_PREFIX = "bcw_"  # noqa: S105 - the public prefix of worker tokens, not a token
 # Users are charged by the usage a worker reports, so a report is capped at what
-# the job can have used: a token is at least one byte of the prompt or of the
-# relayed answer, plus room for the chat template around the prompt.
+# the job can have used: the prompt at PROMPT_ESTIMATE_FACTOR times the server's
+# own estimate (as for interrupted answers: its text, and IMAGE_TOKEN_ESTIMATE per
+# image, never the bytes of the encoded images), the answer at one token per byte
+# relayed, each plus room for the chat template around it.
+PROMPT_ESTIMATE_FACTOR = 2
 PROMPT_TOKEN_ALLOWANCE = 4096
 ANSWER_TOKEN_ALLOWANCE = 16
 
@@ -613,8 +616,23 @@ def _job_payload(job, config) -> dict:
     return payload
 
 
-def claim(worker, models: list[str] | None, config=None):
-    """Claim the next job this worker can run, or None. Idle checks take no write lock."""
+def _nothing() -> None:
+    pass
+
+
+def payload_bound(job) -> int:
+    """At least the size of the job's reply: JSON-escaping its stored text at most triples it."""
+    return 3 * (len((job["messages"] or "").encode("utf-8")) + len((job["options"] or "").encode("utf-8"))) + 4096
+
+
+def claim(worker, models: list[str] | None, config=None, *, reserve=None):
+    """Claim the next job this worker can run, or None. Idle checks take no write lock.
+
+    *reserve(size)*, called before a job is claimed with a bound on its reply's size, returns the function
+    that gives back the place the reply is sent from, or None to leave the job pending (the web view has no
+    place to send it from, see ``security.take_reply_place``). A place for a job that was not claimed after
+    all is given back here.
+    """
     config = _config(config)
     names = _alias_set(models) if models is not None else None
     now = time.time()
@@ -639,7 +657,13 @@ def claim(worker, models: list[str] | None, config=None):
         if _paused(store.get(worker["id"]), now):
             return None
         job = store.next_pending(names, worker_id=worker["id"], failed_since=failed_since, reasoning=reasoning)
-        if job is None or not store.set_claimed(job["id"], worker["id"], now):
+        if job is None:
+            return None
+        release = reserve(payload_bound(job)) if reserve is not None else _nothing
+        if release is None:
+            return None
+        if not store.set_claimed(job["id"], worker["id"], now):
+            release()
             return None
     log.info("Worker job %s (%s) claimed by %s", job["id"][:8], job["model_name"], worker["name"])
     return _job_payload(job, config)
@@ -649,8 +673,8 @@ _poll_lock = threading.Lock()
 _polls = {"active": 0}
 
 
-def poll(worker, models: list[str] | None, *, wait: float | None = None, config=None):
-    """Long-poll for a job (at most ``MAX_LONG_POLLS`` waiting per process)."""
+def poll(worker, models: list[str] | None, *, wait: float | None = None, config=None, reserve=None):
+    """Long-poll for a job (at most ``MAX_LONG_POLLS`` waiting per process); *reserve* as for :func:`claim`."""
     config = _config(config)
     store.touch(worker["id"], time.time())
     if models is None:
@@ -658,7 +682,7 @@ def poll(worker, models: list[str] | None, *, wait: float | None = None, config=
         # must not mean "any model", or its prompt goes to a PC that cannot run it.
         models = advertised_models(worker)
     wait = LONG_POLL_SECONDS if wait is None else wait
-    job = claim(worker, models, config)
+    job = claim(worker, models, config, reserve=reserve)
     if job is not None or wait <= 0:
         return job
     with _poll_lock:
@@ -674,7 +698,7 @@ def poll(worker, models: list[str] | None, *, wait: float | None = None, config=
             with _new_job:
                 _new_job.wait(min(1.0, left))
             db.release_thread_connection()
-            job = claim(worker, models, config)
+            job = claim(worker, models, config, reserve=reserve)
             if job is not None:
                 return job
         return None
@@ -764,6 +788,22 @@ def _count(value, name) -> int:
     return value
 
 
+def prompt_token_cap(messages_json: str | None) -> int:
+    """The most prompt tokens a worker may report for a job (see PROMPT_ESTIMATE_FACTOR)."""
+    from bananachat.db.credits import IMAGE_TOKEN_ESTIMATE, estimate_tokens
+
+    try:
+        messages = json.loads(messages_json or "[]")
+    except ValueError:
+        messages = []
+    estimate = 0
+    for message in messages if isinstance(messages, list) else ():
+        if isinstance(message, dict):
+            estimate += estimate_tokens(str(message.get("content") or ""))
+            estimate += IMAGE_TOKEN_ESTIMATE * len(message.get("images") or ())
+    return PROMPT_ESTIMATE_FACTOR * estimate + PROMPT_TOKEN_ALLOWANCE
+
+
 def complete(worker, job_id: str, body, config=None) -> dict:
     config = _config(config)
     if not isinstance(body, dict):
@@ -785,7 +825,7 @@ def complete(worker, job_id: str, body, config=None) -> dict:
             store.finish(job_id, "failed", now, error="The worker ended without a completion marker.")
             _misbehaved(job, worker["id"], now, "ended a job without a completion marker")
             return {"ok": False, "stop": True}
-        tokens_in = min(tokens_in, len((job["messages"] or "").encode("utf-8")) + PROMPT_TOKEN_ALLOWANCE)
+        tokens_in = min(tokens_in, prompt_token_cap(job["messages"]))
         tokens_out = min(tokens_out, int(job["stream_bytes"] or 0) + ANSWER_TOKEN_ALLOWANCE)
         store.finish(job_id, "done", now, tokens_in=tokens_in, tokens_out=tokens_out, finish_reason=reason,
                      only_from=store.ACTIVE)

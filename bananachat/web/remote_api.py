@@ -9,7 +9,8 @@ blueprint: no cookies, no CSRF token.
 * ``GET /workers`` -> ``{"workers": [{id, name, slug, address, online, remote}], "subnet"}``
 * ``POST /sessions`` ``{"host", "port"}`` (or ``{"worker", "kind", "host", "port"}``) -> ``{"session": {...}}``
   ``host`` is a worker's address in ``BC_WORKER_SUBNET``, ``<name>.bc``, or an
-  address in a network a worker shares.
+  address in a network a worker shares (409 when several workers share it: the
+  helper then names the ``worker``).
 * ``GET /sessions/<id>/ws`` -> the helper's end of the session (a WebSocket; text
   messages report its status, binary ones carry the connection's bytes).
 

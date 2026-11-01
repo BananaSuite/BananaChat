@@ -105,7 +105,9 @@ capability policy, their categories (scoped to the API or both) and their own
 policy. The Images page and `POST /v1/images/generations` (see
 [api.md](api.md)) share one implementation, limits
 (`BC_IMAGE_GENERATION_RPM` per account and minute, administrators exempt) and
-price.
+price. A request that waited in the queue is checked again when its turn
+comes: if the model was unpublished, removed, taken off the account's access
+or locked for the account meanwhile, it is refused and nothing is charged.
 
 ## Supported models
 

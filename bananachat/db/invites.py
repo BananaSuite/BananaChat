@@ -7,6 +7,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from bananachat import db
+from bananachat.db import users
 
 # Codes are compared without case and can be guessed through the sign-up form,
 # so a chosen code needs about as many possibilities as a random one (40 bits).
@@ -94,15 +95,11 @@ def _usable(row) -> bool:
     expires = db.parse_timestamp(row["expires_at"])
     if expires and expires <= datetime.now(timezone.utc):
         return False
-    creator = db.one("SELECT role, suspended FROM users WHERE id=?", (row["created_by"],)) \
-        if row["created_by"] else None
-    if creator and creator["suspended"]:
-        return False
-    # An administrator invitation carries its creator's authority: it stops working
-    # when the creator is no longer an administrator (demoted or deleted).
-    if row["assigned_role"] == "admin" and (creator is None or creator["role"] != "admin"):
-        return False
-    return True
+    # An invitation carries its creator's authority (only administrators make them): it stops
+    # working while the creator is suspended and for good once the creator is no longer an
+    # administrator (demoted, or deleted: ``created_by`` is then NULL).
+    creator = users.get(row["created_by"]) if row["created_by"] else None
+    return creator is not None and creator["role"] == "admin" and not users.is_suspended(creator)
 
 
 def find_usable(code: str):

@@ -15,6 +15,65 @@ The updater backs everything up, starts the new release and checks `/health`
 before letting users back in. If anything fails it restores the old code and
 database together.
 
+## 1.7.3 to 1.7.6
+
+Two database migrations (`v28_device_epoch`, schema version 28, additive;
+`v29_community_kinds`, schema version 29).
+
+- **Device cookies** issued before the update stop counting once: browsers
+  that signed in before are treated like new ones until their next full
+  sign-in. Nobody is signed out.
+- **Invitations** made by an administrator who has since been demoted or
+  deleted stop working, also those that create ordinary accounts. Make new
+  ones from a current administrator account where they are still needed.
+- **Agent runner.** The web server now deletes runner sandboxes whose task no
+  longer exists (sessions named like a task id), so give each web server a
+  runner of its own.
+- An account keeps at most 50 login sessions; the least recently used end.
+- **Exports** start only from the buttons on the account and user pages
+  (POST with the form's CSRF token). Opening `/account/export/gdpr`,
+  `/account/export/chats` or `/admin/users/<id>/export/<kind>` as a link now
+  leads to that page instead of downloading.
+- **Metrics export.** `/admin/metrics/export.csv` likewise needs a POST with
+  the form's CSRF token; opened as a link it leads to the metrics page.
+  Scripts that fetched it by GET must post the form instead.
+- **Threads.** Each Gunicorn process runs `BC_HTTP_THREADS` plus
+  `BC_DOWNLOAD_THREADS` (new, default 8) threads, 24 instead of 16 by default,
+  for large responses read slowly; more large responses at once than that are
+  answered 503 with Retry-After. Raise it for many simultaneous downloads.
+- **Message storage.** `BC_CHAT_MAX_ACCOUNT_TEXT_MB` (new, default 1024)
+  limits the message text one account stores, counting the copies of its
+  no-history chats kept for administrators. Accounts over it keep reading and
+  deleting their chats; new messages are refused until they are under it.
+- **Cloud-session files.** Files added to a task start that a run could not
+  copy into its sandbox are deleted when the task has not run again within a
+  day (they were kept until the task was deleted). `BC_AGENTS_MAX_STORED_UPLOAD_MB`
+  (new, default 100) limits what one account has waiting; starts with files
+  over it are refused with 413 `storage_limit`.
+- **Sandbox runner.** Update `compute/` on the compute server too: one sandbox
+  now runs at most `BC_SANDBOX_MAX_EXECS_PER_SANDBOX` engine operations at once
+  (new; by default `BC_SANDBOX_MAX_EXECS` ÷ `BC_SANDBOX_MAX`, at least 2). The
+  protocol is unchanged (more get the usual 503 `busy`), so the runner and the
+  web server can be updated in either order. The workspace browser reads one
+  folder or file at a time per person and 60 a minute (429 beyond).
+- **Slow readers.** A streaming client that reads nothing for
+  `BC_WRITE_TIMEOUT` seconds (default 120) is disconnected and its answer
+  stopped and charged; set it to 0 to keep the old behaviour.
+- **Worker helper sessions.** When two workers advertise overlapping networks,
+  an address in both is refused until the helper names the worker
+  (`bananachat_connect.py proxy --worker NAME ...`).
+- **Community board.** Temporary unlimited requests need an administrator;
+  pending ones on the board can no longer be voted through. Sites still on
+  the original default lose effort and rate requests from the board (they
+  cost supporters nothing); tick them again on **Administration → Quotas**
+  to offer them.
+- **Third-party subscription adapters** keep the old resting rule unless they
+  set `reports_cli_start = True` and call `subscription_pool.cli_started()`.
+- **Queue share per account.** An account's chat, API (and playground) and
+  image requests now wait for each other: one of them runs at a time per lane
+  (local or hosted), with three admitted in all. Scripts that ran an API
+  answer while the same account chatted on the web see the second one wait.
+
 ## 1.7.2 to 1.7.3
 
 One database migration (`v27_worker_maintenance`, schema version 27), additive

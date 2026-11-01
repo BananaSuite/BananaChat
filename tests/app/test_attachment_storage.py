@@ -38,9 +38,16 @@ def _compressed_pdf(lines: int = 1200) -> bytes:
 
 def test_a_small_pdf_counts_the_text_it_stores_against_the_account_limit(make_app, make_user, fake_ollama):
     from bananachat import db
+    from bananachat.db import limits
 
     app = make_app(BC_CHAT_MAX_ACCOUNT_ATTACHMENT_MB=1)
     setup_models(app)
+    with app.app_context():
+        # Six sends in a row exceed the default chat burst (5, then 1 a second) on a fast machine; this test is
+        # about storage, so the request rate must not answer first.
+        policy = limits.get_policy("chat")
+        policy["rate"]["enabled"] = False
+        limits.set_policy("chat", policy, None)
     browser = user_browser(app, make_user, "hoarder")
     pdf = _compressed_pdf()
     assert len(pdf) < 4096

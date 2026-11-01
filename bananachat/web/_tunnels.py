@@ -39,9 +39,9 @@ def _status(ws, state: str, message: str = "") -> None:
     ws.send_text(json.dumps({"type": "status", "state": state, "message": message}))
 
 
-def _closed_by_administrator(tunnel_id: str):
+def _closed_by_administrator(tunnel_id: str, auth_session: str | None = None):
     """A ``stopping`` callback: True once the session was ended from the page, or whoever opened it lost the right
-    to (checked every few seconds)."""
+    to (checked every few seconds). *auth_session* is the browser's login session (hash), None for access keys."""
     app = current_app._get_current_object()
     seen = {"at": 0.0, "closed": False}
 
@@ -55,8 +55,8 @@ def _closed_by_administrator(tunnel_id: str):
             try:
                 row = store.tunnel(tunnel_id)
                 seen["closed"] = row is None or row["status"] not in store.LIVE_TUNNELS
-                if not seen["closed"] and not worker_remote.still_allowed(row):
-                    # Demoted, suspended or deleted, or the access key was revoked or expired: the session ends.
+                if not seen["closed"] and not worker_remote.still_allowed(row, auth_session=auth_session):
+                    # Demoted, suspended, deleted or signed out, or the access key was revoked or expired: it ends.
                     worker_remote.ended(tunnel_id, ok=False, error="The administrator's access was withdrawn.")
                     seen["closed"] = True
             finally:
@@ -66,8 +66,9 @@ def _closed_by_administrator(tunnel_id: str):
     return check
 
 
-def client_bridge(tunnel_id: str, *, status_messages: bool):
-    """Accept the WebSocket and relay it to the worker's end of the session."""
+def client_bridge(tunnel_id: str, *, status_messages: bool, auth_session: str | None = None):
+    """Accept the WebSocket and relay it to the worker's end of the session (while *auth_session*, the browser's
+    login session, lasts)."""
     config = current_app.config["BC"]
     if not websocket.requested(request.environ):
         return error("Expected a WebSocket.", 400)
@@ -113,7 +114,7 @@ def client_bridge(tunnel_id: str, *, status_messages: bool):
                 _status(ws, "connected")
             except websocket.WebSocketError:
                 pass  # the browser left: the bridge below notices and ends at once
-        result = tunnel_broker.bridge(ws, broker, stopping=_closed_by_administrator(tunnel_id))
+        result = tunnel_broker.bridge(ws, broker, stopping=_closed_by_administrator(tunnel_id, auth_session))
         with app.app_context():
             worker_remote.ended(tunnel_id, ok=True, up=result["up"], down=result["down"])
             db.release_thread_connection()

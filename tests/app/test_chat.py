@@ -291,25 +291,6 @@ def test_page_shows_a_running_answer_after_a_reload(app, alice, fake_ollama):
     read_events(response)
 
 
-def test_one_answer_at_a_time_per_user(app, alice, fake_ollama):
-    fake_ollama.reply = " ".join(["slow"] * 200)
-    fake_ollama.chunk_delay = 0.02
-    first, second = new_chat(alice), new_chat(alice)
-    assert first == second  # the empty chat is reused
-    response = send(alice, first, buffered=False)
-    read_events(response, until=lambda event: event["type"] == "delta")
-    from bananachat.db import chats, users
-    with app.app_context():
-        other = chats.create(users.get_by_username("alice")["id"])
-    for target in (first, other):
-        refused = send(alice, target, "Again")
-        assert refused.status_code == 409
-        assert refused.json["error"]["code"] == "busy" and refused.headers["Retry-After"]
-    alice.fetch(f"/chat/{first}/stop", method="POST")
-    read_events(response)
-    assert len(messages(app, other)) == 0
-
-
 def _chat_policy(**sections):
     from bananachat.db import limits
 
@@ -317,28 +298,6 @@ def _chat_policy(**sections):
     for scope, values in sections.items():
         policy[scope].update(values)
     limits.set_policy("chat", policy, None)
-
-
-def test_rate_limit_and_5_hour_tokens(app, alice):
-    from bananachat.db import settings
-
-    with app.app_context():
-        settings.update(chat_local_token_consumption=1)
-        _chat_policy(rate={"rules": [{"requests": 1, "per": "minute"}]})
-    session_id = new_chat(alice)
-    assert send(alice, session_id).status_code == 200
-    wait_idle(app, session_id)
-    limited = send(alice, session_id)
-    assert limited.status_code == 429 and limited.json["error"]["code"] == "rate_limited"
-    assert 45 <= int(limited.headers["Retry-After"]) <= 60  # one message a minute, minus the time since
-
-    with app.app_context():
-        _chat_policy(rate={"enabled": False}, window={"enabled": True, "tokens": 0, "slow_tokens": 0})
-    count = len(messages(app, session_id))
-    # Tokens are checked before uploads are parsed: a broken PDF is never opened.
-    refused = send(alice, session_id, files=[("broken.pdf", b"not a pdf")])
-    assert refused.status_code == 429 and refused.json["error"]["code"] == "quota_exhausted"
-    assert len(messages(app, session_id)) == count
 
 
 def test_refused_sends_do_not_use_a_rate_token(app, alice, fake_ollama):

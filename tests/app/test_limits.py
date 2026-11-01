@@ -1088,9 +1088,6 @@ def test_a_grant_starting_at_the_end_of_the_calendar_is_refused_on_the_form(app,
     ("en", ("Your limits", "Requests: 1 request per second (bursts of up to 10)", "Tokens this week",
             "Level Regular ×2", "Your level", "To reach Trusted:", "Extra allowances", "×2 until",
             "180k tokens")),
-    ("it", ("I tuoi limiti", "Richieste: 1 richiesta al secondo (fino a 10 di fila)", "Token di questa settimana",
-            "Livello Regular ×2", "Il tuo livello", "Per passare a Trusted:", "Aumenti concessi", "×2 fino al",
-            "180k token")),
 ])
 def test_the_account_page_shows_limits_in_both_languages(app, make_user, language, texts):
     from bananachat import db

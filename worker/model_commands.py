@@ -33,7 +33,12 @@ def valid_name(name) -> bool:
     if not isinstance(name, str) or not NAME_RE.fullmatch(name) or ".." in name or "//" in name:
         return False
     first, _, rest = name.partition("/")
-    return not (rest and ("." in first or ":" in first) and first.lower() not in REGISTRIES)
+    if rest and ("." in first or ":" in first) and first.lower() not in REGISTRIES:
+        return False
+    # Ollama takes whatever precedes the last two "/"-separated parts as the registry, dotted or not.
+    path = name.rsplit(":", 1)[0] if name.rfind(":") > name.rfind("/") else name
+    parts = path.split("/")
+    return len(parts) <= 2 or "/".join(parts[:-2]).lower() in REGISTRIES
 
 
 class ModelCommands:

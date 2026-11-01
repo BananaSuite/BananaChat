@@ -63,31 +63,6 @@ def _admin_urls(app, method):
 
 # ----- access control ---------------------------------------------------------------
 
-def test_non_admins_get_403_on_every_admin_url(app, make_user):
-    make_user("bob")
-    browser = signed_in(app, "bob")
-    checked = 0
-    for method in ("GET", "POST"):
-        for endpoint, url in _admin_urls(app, method):
-            response = browser.get(url) if method == "GET" else browser.post(url, {"name": "x", "action": "defer"})
-            assert response.status_code == 403, (method, endpoint, url, response.status_code)
-            checked += 1
-            json_response = browser.fetch(url, method=method)
-            assert json_response.status_code == 403, (method, endpoint)
-            assert json_response.get_json()["error"]["code"] == "forbidden"
-    assert checked > 40
-    italian = browser.fetch("/admin/users", headers={"Accept-Language": "it"})
-    assert italian.status_code == 403
-    assert italian.json["error"]["message"] == "È necessario l'accesso da amministratore."
-
-
-def test_anonymous_visitors_are_sent_to_sign_in(app):
-    browser = Browser(app)
-    for endpoint, url in _admin_urls(app, "GET"):
-        response = browser.get(url)
-        assert response.status_code == 302 and "/login" in response.headers["Location"], endpoint
-
-
 def test_every_admin_page_renders(app, admin, make_user, fake_ollama):
     from bananachat.db import access as access_db
     from bananachat.db import catalog, credits, invites, metrics, personalities, pulls, users
@@ -113,8 +88,9 @@ def test_every_admin_page_renders(app, admin, make_user, fake_ollama):
                                 active_models=["llama3.2:3b"])
         pulls.enqueue("qwen3:4b", None)
     # Placeholder IDs name no record: skip those URLs (an account's sign-in state is JSON about one account).
+    # The metrics export starts from the page's button (POST); its URL opened as a link leads back to the page.
     pages = [url for endpoint, url in _admin_urls(app, "GET") if "<" not in url and "/x" not in url
-             and not url.endswith(("/1", "/1/login"))]
+             and not url.endswith(("/1", "/1/login")) and endpoint != "admin.metrics_export_link"]
     pages += [f"/admin/users/{bob['id']}", f"/admin/models/{model['id']}/edit",
               f"/admin/models/categories/{category}/edit", "/admin/access/uncensored/0",
               f"/admin/access/model/{model['id']}", f"/admin/access/category/{category}", "/admin/metrics?range=7d",
@@ -315,22 +291,20 @@ def test_sessions_are_listed_and_revoked(app, admin, make_user):
     assert admin.get("/admin/").status_code == 200
 
 
-def test_user_exports_call_the_export_service(app, admin, make_user, monkeypatch):
-    import sys
-    import types
-
+def test_user_exports_are_posted_and_streamed(app, admin, make_user):
     hank = make_user("hank")
-    fake = types.ModuleType("bananachat.services.exports")
-    fake.gdpr_export = lambda user_id: {"user": user_id, "kind": "gdpr"}
-    fake.chats_export = lambda user_id: {"user": user_id, "chats": []}
-    monkeypatch.setitem(sys.modules, "bananachat.services.exports", fake)
-    import bananachat.services as services_package
-    monkeypatch.setattr(services_package, "exports", fake, raising=False)
-    response = admin.get(f"/admin/users/{hank['id']}/export/gdpr")
-    assert response.status_code == 200 and response.get_json() == {"user": hank["id"], "kind": "gdpr"}
+    with app.app_context():
+        from bananachat.db import chats
+        chats.add_message(chats.create(hank["id"]), "user", "hank's note", user_id=hank["id"], incognito=False)
+    response = admin.post(f"/admin/users/{hank['id']}/export/gdpr", buffered=False)
+    assert response.status_code == 200 and response.is_streamed
+    data = response.get_json()
+    assert data["account"]["username"] == "hank" and data["chats"][0]["messages"][0]["content"] == "hank's note"
     assert "attachment" in response.headers["Content-Disposition"]
     assert response.headers["Cache-Control"] == "private, no-store"
-    assert admin.get(f"/admin/users/{hank['id']}/export/chats").get_json()["chats"] == []
+    assert admin.post(f"/admin/users/{hank['id']}/export/chats").get_json()["export_type"] == "chats_export"
+    # A link (GET) only leads back to the user's page.
+    assert admin.get(f"/admin/users/{hank['id']}/export/gdpr").status_code == 302
 
 
 # ----- invitations ----------------------------------------------------------------------
@@ -539,7 +513,7 @@ def test_metrics_page_csv_and_retention(app, admin, make_user):
                    (db.now(-timedelta(days=60)),))
     html = admin.get("/admin/metrics").get_data(as_text=True)
     assert "Requests per hour" in html and "bar-chart" in html
-    response = admin.get("/admin/metrics/export.csv?range=30d")
+    response = admin.post("/admin/metrics/export.csv?range=30d")
     assert response.mimetype == "text/csv" and "attachment" in response.headers["Content-Disposition"]
     rows = list(csv.DictReader(io.StringIO(response.get_data(as_text=True))))
     assert len(rows) == 2

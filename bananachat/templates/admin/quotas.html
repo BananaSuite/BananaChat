@@ -97,7 +97,7 @@
       <summary><span id="community-title">Community consent{% if community_open %} <span class="badge">{{ community_open }} open</span>{% endif %}</span>{{ icon("chevron-down") }}</summary>
       <form method="post" action="{{ url_for('admin.quotas_community') }}" class="stack" id="community" aria-labelledby="community-title">
         {{ csrf() }}
-        <p class="muted small mb-0">Users may submit requests for a community vote. Supporters contribute part of their own allowance in the same service or model; approved increases and contributions last for the same period. Administrators may decide any request, including those left pending after voting closes.{% if community_open %} {{ community_open }} request{{ "s" if community_open != 1 }} open for voting now.{% endif %}</p>
+        <p class="muted small mb-0">Users may submit requests for a community vote. Supporters contribute part of their own allowance in the same service or model; approved increases and contributions last for the same period. Administrators may decide any request, including those left pending after voting closes. Temporary unlimited use is never put to a vote: only an administrator can grant it.{% if community_open %} {{ community_open }} request{{ "s" if community_open != 1 }} open for voting now.{% endif %}</p>
         {{ toggle("community_quota_enabled", "Let the community approve requests", community.enabled, "Off requires administrator approval and stops counting existing votes.") }}
         <fieldset class="admin-fieldset stack-sm">
           <legend class="label">Eligible request types</legend>

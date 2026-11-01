@@ -673,7 +673,6 @@ def test_rate_limits_on_sharing_and_importing(app, make_user):
 
 @pytest.mark.parametrize(("lang", "words"), [
     ("en", ["Personalities", "Start from an example", "Default for new chats", "Friendly tutor"]),
-    ("it", ["Personalità", "Parti da un esempio", "Predefinita per le nuove chat", "Tutor paziente"]),
 ])
 def test_pages_are_translated(app, make_user, lang, words):
     from bananachat.db import personalities

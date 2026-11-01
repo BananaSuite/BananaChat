@@ -200,6 +200,9 @@
           {% if api_token_count %}
           <label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>{{ t("account.revoke_api_tokens", count=api_token_count) }}</span></label>
           {% endif %}
+          {% if share_link_count %}
+          <label class="check"><input type="checkbox" name="revoke_share_links" value="1" checked><span>{{ t("account.revoke_share_links", count=share_link_count) }}</span></label>
+          {% endif %}
           <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("account.change_password") }}</button></div>
         </form>
       </section>
@@ -231,6 +234,9 @@
             {{ csrf() }}
             {% if api_token_count %}
             <label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>{{ t("account.revoke_api_tokens", count=api_token_count) }}</span></label>
+            {% endif %}
+            {% if share_link_count %}
+            <label class="check"><input type="checkbox" name="revoke_share_links" value="1" checked><span>{{ t("account.revoke_share_links", count=share_link_count) }}</span></label>
             {% endif %}
             <button type="submit" class="btn btn-danger btn-sm">{{ t("account.sessions_revoke_others") }}</button>
           </form>
@@ -389,7 +395,7 @@
           {% if community.enabled and community.kinds %}
           <div class="field">
             <label class="check"><input type="checkbox" name="community" value="1"{% if not is_draft or draft.prefill or draft.community == "1" %} checked{% endif %}><span>{{ t("account.quota_community") }}</span></label>
-            <span class="hint">{{ t("account.quota_community_hint", window=t("time.hours", count=community.hours), min=community.min_supporters, count=community.min_supporters) }}{% if community.kinds | length < 5 %} {{ t("account.quota_community_kinds", kinds=community_kinds_text) }}{% endif %}</span>
+            <span class="hint">{{ t("account.quota_community_hint", window=t("time.hours", count=community.hours), min=community.min_supporters, count=community.min_supporters) }}{% if community.kinds | length < 5 %} {{ t("account.quota_community_kinds", kinds=community_kinds_text) }}{% endif %}{% if "temporary" in community.kinds %} {{ t("account.quota_community_unlimited") }}{% endif %}</span>
           </div>
           {% endif %}
           <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("account.quota_submit") }}</button></div>

@@ -21,6 +21,7 @@ import unicodedata
 from collections.abc import Iterable, Mapping
 
 from bananachat import db
+from bananachat.numbers import ascii_int
 from bananachat.db import personalities as store
 from bananachat.i18n import translate
 from bananachat.services.access import AccessContext, usable_models
@@ -251,7 +252,8 @@ def parse_import(data: bytes) -> dict:
         raise Invalid("personality.import_too_large", size=MAX_IMPORT_BYTES // 1024)
     try:
         document = json.loads(data.decode("utf-8-sig"), parse_constant=_reject_constant)
-    except (UnicodeDecodeError, ValueError, RecursionError):
+        json.dumps(document, ensure_ascii=False).encode("utf-8")  # lone surrogates ("\ud800") cannot be stored
+    except (UnicodeError, ValueError, RecursionError):
         raise Invalid("personality.import_invalid") from None
     if not isinstance(document, dict) or document.get("format") != EXPORT_FORMAT:
         raise Invalid("personality.import_invalid")
@@ -326,9 +328,8 @@ def usable(user, personality_id, context: AccessContext | None = None):
     """The personality if *user* may apply it to a chat now (their own or a featured one), else None."""
     if not personality_id:
         return None
-    try:
-        personality_id = int(personality_id)
-    except (TypeError, ValueError):
+    personality_id = ascii_int(personality_id, 18)  # an SQLite integer, never one that overflows
+    if personality_id is None:
         return None
     context = context or AccessContext.load(user)
     if not context.allows("custom_personality"):

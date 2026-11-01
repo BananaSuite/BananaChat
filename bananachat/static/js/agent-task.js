@@ -139,7 +139,8 @@ function laneFor(agent) {
   if (lane) return lane;
   const list = el("ol", { class: "timeline lane-timeline" });
   const badge = el("span", { class: "badge" });
-  const title = el("strong", { class: "lane-title" });
+  // An older lane may show up through its steps only (the views carry the newest lanes).
+  const title = el("strong", { class: "lane-title", text: t("agents.subagent", { n: agent }) });
   const count = el("span", { class: "lane-count muted" });
   const report = el("div", { class: "lane-report", hidden: true });
   const details = el("details", { class: "lane-steps" }, el("summary", { text: t("agents.lane_show_steps") }), list);
@@ -371,7 +372,7 @@ function fileSize(size) {
   return t("agents.size_mb", { value: decimal(size / 1024 / 1024) });
 }
 
-async function loadWorkspace(path, { quiet = false } = {}) {
+async function loadWorkspace(path, { quiet = false, retried = false } = {}) {
   const note = $("workspace-note");
   try {
     const result = await api(`${urls.workspace}?path=${encodeURIComponent(path)}`);
@@ -412,6 +413,11 @@ async function loadWorkspace(path, { quiet = false } = {}) {
     }
     if (!state.task.workspace_until) note.textContent = "";
   } catch (error) {
+    // One workspace read per person at a time: another one (a refresh, another tab) was still running.
+    if (error instanceof ApiError && error.status === 429 && error.code === "busy" && !retried) {
+      setTimeout(() => loadWorkspace(path, { quiet, retried: true }), 2000);
+      return;
+    }
     if (quiet) return;
     if (error instanceof ApiError && error.code === "no_workspace") {
       state.task.workspace = false;

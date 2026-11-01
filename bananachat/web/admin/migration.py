@@ -8,7 +8,10 @@ The archive is streamed while it is compressed, so memory use stays small
 whatever the size of the database; the snapshot lives in a private temporary
 directory under the instance directory and is removed afterwards. It holds
 every account's password hash and chats, so it needs a recent confirmation
-(:mod:`._reauth`).
+(:mod:`._reauth`). It takes its download place before the snapshot
+(``security.download_first``), so a refused export is neither copied nor
+audited. It stops (the archive ends cut short) once the session that started it
+has ended or its account is suspended, deleted or no longer an administrator.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from pathlib import Path
 
 from flask import Response, current_app, flash, render_template
 
-from bananachat import db
+from bananachat import db, security
 from bananachat.security import admin_required
 
 from . import _reauth, bp
@@ -120,6 +123,7 @@ def _remove_stale_exports(instance_dir: Path, max_age: float = 6 * 3600) -> None
 
 @bp.post("/migration/export", endpoint="migration_export")
 @admin_required
+@security.download_first
 def export():
     import sqlite_snapshot
 
@@ -149,9 +153,18 @@ def export():
                            "schema_version": schema_version}, indent=2).encode("utf-8")
     audit("migration_export", "database", {"schema_version": schema_version, "bytes": snapshot.stat().st_size})
 
+    allowed = security.requester_check(admin=True)
+
     def generate():
+        checked = time.monotonic()
         try:
-            yield from tar_gz_stream([("bananachat.db", snapshot), ("export_meta.json", metadata)])
+            for piece in tar_gz_stream([("bananachat.db", snapshot), ("export_meta.json", metadata)]):
+                now = time.monotonic()
+                if now - checked >= security.DOWNLOAD_CHECK_SECONDS:
+                    if not allowed():
+                        return
+                    checked = now
+                yield piece
         finally:
             cleanup()
 

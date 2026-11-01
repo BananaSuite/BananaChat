@@ -164,6 +164,18 @@ function kindLabel(kind) {
   return (KIND_KEYS[kind] ? t(KIND_KEYS[kind]) : kind || "file").toUpperCase();
 }
 
+/** Ask once more for an image the server was too busy to send (it sends a few files per person at a time). */
+function retryOnce(image) {
+  image.addEventListener("error", () => {
+    if (image.dataset.retried) return;
+    image.dataset.retried = "1";
+    const url = new URL(image.src, location.href);
+    url.searchParams.set("retry", "1");
+    setTimeout(() => { image.src = url.toString(); }, 1500 + Math.random() * 1500);
+  });
+  return image;
+}
+
 function attachmentList(items) {
   const list = el("ul", { class: "attachment-list" });
   const images = items.filter((item) => item.kind === "image" && item.url);
@@ -171,7 +183,7 @@ function attachmentList(items) {
     if (item.kind === "image" && item.url) {
       list.append(el("li", { class: "attachment-image" },
         el("a", { href: item.url, target: "_blank", rel: "noopener" },
-          el("img", { src: item.url, alt: item.filename, loading: "lazy" }))));
+          retryOnce(el("img", { src: item.url, alt: item.filename, loading: "lazy" })))));
     } else {
       const name = el("span", { class: "truncate", text: item.filename });
       const body = item.url ? el("a", { href: item.url, class: "file-chip-link" }, name) : name;
@@ -1034,8 +1046,18 @@ const runSearch = debounce(async (query) => {
     sidebar.more.hidden = !state.sidebarNext;
     return;
   }
+  const url = `${data.urls.search}?q=${encodeURIComponent(query)}`;
   try {
-    const result = await api(`${data.urls.search}?q=${encodeURIComponent(query)}`);
+    let result;
+    try {
+      result = await api(url);
+    } catch (error) {
+      // The server stops the previous search for this one; if that took too long, ask once more.
+      if (error.code !== "search_running" || serial !== searchSerial) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (error.data?.error?.retry_after || 2)));
+      if (serial !== searchSerial) return;
+      result = await api(url);
+    }
     if (serial !== searchSerial) return;
     sidebar.results.replaceChildren(...result.results.map(buildSidebarItem));
     sidebar.results.hidden = false;

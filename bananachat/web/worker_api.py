@@ -118,10 +118,35 @@ def poll():
     text = request.args.get("models", "").strip()
     if text:
         models = remote.parse_models([name.strip() for name in text.split(",") if name.strip()])
-    job = remote.poll(g.worker, models, wait=remote.LONG_POLL_SECONDS)
+    job = remote.poll(g.worker, models, wait=0, reserve=_reply_place)
+    if job is None:
+        # Waiting holds a server thread: it takes one of the places long requests share
+        # (security.long_request), so polls never use up the threads kept for short requests, and at most
+        # a share of those places (security.POLL_SHARE), so idle workers never use up the streams' places.
+        with security.long_request_place(poll=True) as waiting:
+            if waiting:
+                job = remote.poll(g.worker, models, wait=remote.LONG_POLL_SECONDS, reserve=_reply_place)
     if job is None:
         return "", 204
     return jsonify(job)
+
+
+def _reply_place(size: int):
+    """The place a job's reply of up to *size* bytes is sent from, or None to leave the job pending for now.
+
+    A large reply is written after the view returns, so it takes a place first (security.take_reply_place,
+    one per worker) and keeps it until the reply is closed (security.hold_large_response)."""
+    security.release_download_place()  # an earlier attempt's, if any
+    if size <= security.LARGE_BODY:
+        return _no_place
+    release = security.take_reply_place("worker:" + g.worker["id"])
+    if release is not None:
+        g.download_place = release
+    return release
+
+
+def _no_place() -> None:
+    pass
 
 
 @bp.post("/jobs/<job_id>/chunk", endpoint="chunk")
@@ -145,11 +170,16 @@ def fail(job_id):
 # ----- remote access and model commands ----------------------------------------------------------------------
 
 @bp.get("/remote/poll", endpoint="remote_poll")
-@security.long_request
 def remote_poll():
     if not worker_remote.enabled():
         return _error("Remote access to workers is off on this server.", 404)
-    sessions = worker_remote.poll(g.worker, wait=worker_remote.LONG_POLL_SECONDS)
+    sessions = worker_remote.poll(g.worker, wait=0)
+    if not sessions:
+        # Waiting holds a thread: it takes one of the places job polls share (security.POLL_SHARE),
+        # so idle workers' polls of either kind never use up the places streams need.
+        with security.long_request_place(poll=True) as waiting:
+            if waiting:
+                sessions = worker_remote.poll(g.worker, wait=worker_remote.LONG_POLL_SECONDS)
     if not sessions:
         return "", 204
     return jsonify({"sessions": sessions})

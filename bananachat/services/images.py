@@ -31,7 +31,7 @@ from bananachat import db
 from bananachat.db import catalog, credits, tokens, users
 from bananachat.i18n import translate
 from bananachat.numbers import ascii_int
-from bananachat.services import api_usage, background, comfyui, limits, queue
+from bananachat.services import api_usage, background, comfyui, event_pump, limits, queue, supervisor
 from bananachat.services.access import AccessContext, is_image_model, usable_models
 from bananachat.services.completions import sanitize_backend_message
 from bananachat.services.upstream import Cancelled, CancelToken
@@ -198,6 +198,11 @@ class _Heartbeat:
             db.close_thread_connection()
 
 
+def _continues(last, event) -> bool:
+    """Only the latest queue position or progress state matters to a reader that has read neither."""
+    return type(last) is type(event) and isinstance(event, (Queued, Progress))
+
+
 # ----- the job --------------------------------------------------------------------
 
 class ImageJob:
@@ -222,6 +227,7 @@ class ImageJob:
         self.cancel = CancelToken()
         self._iterator = None
         self._buffer: list = []
+        self._pump: event_pump.EventPump | None = None
 
     def _say(self, key: str, **params) -> str:
         return translate(self.lang, key, **params)
@@ -236,6 +242,12 @@ class ImageJob:
             return
 
     def events(self):
+        if self._pump is not None:
+            yield from self._pump.drain()
+            return
+        yield from self._events()
+
+    def _events(self):
         while self._buffer:
             yield self._buffer.pop(0)
         if self._iterator is None:
@@ -252,8 +264,17 @@ class ImageJob:
             raise ImageError("Image generation failed.", 500, "server_error")
         return result
 
+    def detach(self) -> None:
+        """Run the rest in a thread of its own; :meth:`events` then reads what it produced (as
+        ``CompletionRun.detach``: a client that stops reading must not hold the queue place)."""
+        if self._pump is None:
+            self._pump = event_pump.EventPump(current_app._get_current_object(), self._events(), cancel=self.cancel,
+                                              merge=_continues, name="image").start()
+
     def close(self) -> None:
-        if self._iterator is not None:
+        if self._pump is not None:
+            self._pump.close()
+        elif self._iterator is not None:
             self._iterator.close()
 
     # implementation -------------------------------------------------------------
@@ -300,8 +321,34 @@ class ImageJob:
         user = users.get(self.user["id"])
         if user is None or users.is_suspended(user):
             raise ImageError(self._say("images.error_suspended"), 403, "account_suspended")
-        if self.token_id is not None and not any(row["id"] == self.token_id for row in tokens.list_for(user["id"])):
+        if self.token_id is not None and not tokens.is_live(self.token_id, user["id"]):
             raise ImageError(self._say("images.error_token_revoked"), 401, "invalid_api_key")
+        # The wait can be long: access, the catalog and the model's lock are read afresh, as for text answers.
+        # Token limits are not checked again, since the reservation already counts this image against them.
+        model = catalog.get(self.model["id"])
+        name = self.model["ollama_name"]
+        if model is None or not is_image_model(model, self.config.images_enabled):
+            raise ImageError(self._say("images.error_model_unavailable", model=name), 503, "model_unavailable",
+                             retry_after=60, param="model")
+        if not AccessContext.load(user).can_use(model, "api"):
+            raise ImageError(self._say("images.error_model_forbidden", model=name), 403, "model_not_allowed",
+                             param="model")
+        with limits.snapshot(fresh=True):
+            refusal = limits.model_refusal(limits.model_limits(user, model, usage=False), consume_tokens=False)
+        if refusal is not None:
+            raise ImageError(refusal.message(self.lang), refusal.status, refusal.code, retry_after=refusal.retry_after)
+        self.model = model
+
+    def _account_check(self, renew: bool) -> str | None:
+        """Supervisor watch: a reason to cancel once the account is suspended or deleted, or the API token the
+        request came with is revoked or expires."""
+        if not renew:
+            return None
+        if users.suspended_or_gone(self.user["id"]):
+            return "account suspended"
+        if self.token_id is not None and not tokens.is_live(self.token_id, self.user["id"]):
+            return "token revoked"
+        return None
 
     def _run(self):
         began = time.monotonic()
@@ -310,11 +357,14 @@ class ImageJob:
         reservation = self._reserve()
         finalized = False
         wait_ms = 0
+        # The generation stops when the account is suspended or deleted meanwhile.
+        watch_key = f"image:{reservation or id(self)}"
+        supervisor.register_watch(watch_key, self.cancel, self._account_check)
         try:
             priority = queue.priority_for(self.user, api=True)
             with _Heartbeat(reservation, self.config.image_credit_reservation_heartbeat):
                 try:
-                    with queue.Slot(priority, owner_key=f"user:{self.user['id']}:image") as slot:
+                    with queue.Slot(priority, owner_key=queue.account_key(self.user["id"])) as slot:
                         for position in slot.positions(timeout=self.config.comfyui_queue_timeout, cancel=self.cancel):
                             yield Queued(position)
                         wait_ms = slot.wait_ms
@@ -331,6 +381,12 @@ class ImageJob:
                 except queue.QueueTimeout as error:
                     raise ImageError(self._queue_text(error, "images.error_queue_timeout"), 503, "queue_timeout",
                                      retry_after=10) from None
+                except Cancelled:
+                    if self.cancel.reason == "account suspended":
+                        raise ImageError(self._say("images.error_suspended"), 403, "account_suspended") from None
+                    if self.cancel.reason == "token revoked":
+                        raise ImageError(self._say("images.error_token_revoked"), 401, "invalid_api_key") from None
+                    raise
             mime = detect_mime(data)
             if mime is None:
                 raise ImageError(self._say("images.error_not_image"), 502, "upstream_error")
@@ -342,6 +398,7 @@ class ImageJob:
             yield ImageResult(base64.b64encode(data).decode("ascii"), mime, self.model, self.width, self.height,
                               self.cost, wait_ms, duration_ms, int(time.time()))
         finally:
+            supervisor.unregister_watch(watch_key, self.cancel)
             if not finalized:
                 self.cancel.cancel("abandoned")
                 try:
@@ -372,6 +429,10 @@ class ImageJob:
             raise ImageError(self._say("images.error_failed", reason=sanitize_backend_message(str(error))), 502,
                              "upstream_error") from None
         except Cancelled:
+            if self.cancel.reason == "account suspended":
+                raise ImageError(self._say("images.error_suspended"), 403, "account_suspended") from None
+            if self.cancel.reason == "token revoked":
+                raise ImageError(self._say("images.error_token_revoked"), 401, "invalid_api_key") from None
             raise ImageError(self._say("images.error_cancelled"), 503, "cancelled") from None
         return data
 

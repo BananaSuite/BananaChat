@@ -49,7 +49,6 @@ def test_unset_means_no_networks(which):
     assert getattr(Config(), attribute) == ()
 
 
-@pytest.mark.parametrize("which", SETTINGS)
 @pytest.mark.parametrize("value,reason", [
     ("0.0.0.0/0", "every address"), ("::/0", "every address"),
     ("8.8.8.0/24", "not a private network"), ("10.0.0.0/7", "not a private network"),
@@ -60,13 +59,13 @@ def test_unset_means_no_networks(which):
     ("10.0.0.1/8", "not an IP address or network"), ("10.0.0.0/33", "not an IP address or network"),
     ("fd00::%eth0/64", "not an IP address or network"), ("10.0.0.0/8 192.168.0.0/16", "not an IP address"),
 ])
-def test_invalid_or_public_networks_are_refused_with_a_warning(which, value, reason):
-    name, attribute, _ = SETTINGS[which]
-    config = _load(**{name: f"{value},192.168.10.0/24"})
-    # The entry is left out; the valid one next to it still applies.
-    assert getattr(config, attribute) == ("192.168.10.0/24",)
-    [warning] = config.warnings
-    assert name in warning and repr(value) in warning and reason in warning
+def test_invalid_or_public_networks_are_refused_with_a_warning(value, reason):
+    for name, attribute, _ in SETTINGS.values():
+        config = _load(**{name: f"{value},192.168.10.0/24"})
+        # The entry is left out; the valid one next to it still applies.
+        assert getattr(config, attribute) == ("192.168.10.0/24",)
+        [warning] = config.warnings
+        assert name in warning and repr(value) in warning and reason in warning
 
 
 @pytest.mark.parametrize("which", SETTINGS)
@@ -115,11 +114,11 @@ def test_plain_http_to_another_machine_is_refused_by_default():
         checkpoint_agent.validate_base_url("http://10.1.2.3:8190")
 
 
-@pytest.mark.parametrize("networks", [(), LAN, ("0.0.0.0/0",)])
 @pytest.mark.parametrize("url", ["https://gpu.example.org", "https://8.8.8.8:8443", "https://10.1.2.3",
                                  "https://[2001:db8::1]"])
-def test_https_is_always_accepted(url, networks):
-    assert checkpoint_agent.validate_base_url(url, insecure_networks=networks) == url
+def test_https_is_always_accepted(url):
+    for networks in ((), LAN, ("0.0.0.0/0",)):
+        assert checkpoint_agent.validate_base_url(url, insecure_networks=networks) == url
 
 
 @pytest.mark.parametrize("networks", [("0.0.0.0/0",), ("::/0",), ("8.0.0.0/8",), ("not a network",),

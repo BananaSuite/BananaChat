@@ -147,8 +147,8 @@ amount per five hours; see [Architecture → Limits](architecture.md#limits).
 | `BC_PROXY_HOPS` | `1` | Number of trusted proxies in front of the application (1–5). |
 | `BC_SECURE_COOKIES` | same as `BC_PROXY_MODE` | Send the session cookie over HTTPS only, named with the `__Host-` prefix (`__Host-bc_session`) so other subdomains of the same domain cannot set it. A warning is logged when proxy mode is on but secure cookies are off. |
 | `BC_SESSION_COOKIE_NAME` | `bc_session` | Session cookie name (change it when sharing a domain). Do not include `__Host-`: it is added for secure cookies. |
-| `BC_LOGIN_ATTEMPTS_PER_MINUTE` | `60` | Sign-in requests per client address (an IPv4 address or an IPv6 /64) and minute. A browser that signed in to the account before has its own allowance. |
-| `BC_LOGIN_FAILURES_PER_ADDRESS` | `20` | Failed sign-ins per client address in 15 minutes before that address is paused. Browsers that signed in to the account before are not affected, so strangers on a shared network (a school or office NAT, mobile CGNAT, a VPN) cannot lock their owners out. Raise it when many people share one public address. |
+| `BC_LOGIN_ATTEMPTS_PER_MINUTE` | `60` | Sign-in requests per client address (an IPv4 address or an IPv6 /64) and minute. A browser that signed in to the account before has its own allowance; such browsers together get ten times this per address. |
+| `BC_LOGIN_FAILURES_PER_ADDRESS` | `20` | Failed sign-ins per client address in 15 minutes before that address is paused. Browsers that signed in to the account before are counted apart (ten times this per address), so strangers on a shared network (a school or office NAT, mobile CGNAT, a VPN) cannot lock their owners out. Raise it when many people share one public address. |
 | `BC_LOGIN_FAILURES_PER_ACCOUNT` | `10` | Failed sign-ins per account in 15 minutes (counted apart for each browser that signed in to it before). Successful sign-ins never count. |
 | `BC_SIGNUPS_PER_HOUR` | `30` | Accounts created per client address and hour. Raise it when many people sign up from one network. |
 | `BC_SIGNUP_FAILURES_PER_HOUR` | `20` | Failed sign-up attempts (wrong invitation code, taken name) per client address and hour. |
@@ -195,6 +195,10 @@ amount per five hours; see [Architecture → Limits](architecture.md#limits).
 | `BC_MAX_NUM_CTX` | `32768` | Upper limit on the context window users and API clients may request. |
 | `BC_MIN_FREE_MEMORY_MB` | `256` | With a local Ollama (see `BC_INFERENCE_LOCAL`), wait for this much free RAM before starting a request (0 disables). |
 | `BC_HTTP_THREADS` | `16` | Threads per Gunicorn process (8–64). Four of them are always kept free of generating requests so health checks and pages stay responsive; the rest bound how many answers one process streams at once. `BC_WORKERS` sets the number of processes (default 2). |
+| `BC_DOWNLOAD_THREADS` | `8` | Threads per process, on top of `BC_HTTP_THREADS`, for large responses (files, attachments, exports, chat downloads, pages over 64 KB), which hold a thread for as long as their reader takes. At most this many are written at once per process (503 with Retry-After beyond), at most a quarter of them for one person or address (429). A worker's job over 64 KB takes one (or a long-request place when none is left) before it is claimed, one per worker at a time. |
+| `BC_WRITE_TIMEOUT` | `120` | Seconds a response may wait for a client that stopped reading it (0–3600, `0` waits forever) before Gunicorn gives up and frees the thread. Answers never wait for the client: a streamed chat, API, playground or image answer keeps generating, ends at `BC_GENERATION_TIMEOUT` and frees its inference place whether or not anyone reads it. |
+| `BC_BODY_STALL_TIMEOUT` | `20` | Seconds a request body may stop arriving (0–600, `0` turns both body limits off) before the request ends with `408` and its server thread is freed. A client sending a body very slowly otherwise holds a thread (AUDIT.md LC1-1). |
+| `BC_BODY_MIN_KBPS` | `32` | Slowest accepted upload speed in KB/s (0–100000, `0` allows any speed): a body may take 10 seconds plus its size at this speed in total (a body of unknown length, 2 minutes). The generated Caddyfile's `read_body 2m` still applies on top. |
 | `BC_INFERENCE_OUTAGE_MODE` | `shutdown` | For a remote Ollama that stops answering: `shutdown` keeps the site up with a banner and pauses sending until it is back; `fallback` switches to `BC_INFERENCE_FALLBACK_URL` and shows an informational banner. `fallback` without a fallback URL is reported and runs as `shutdown`. |
 | `BC_INFERENCE_FALLBACK_URL` | empty | Backend used in `fallback` mode: an `http(s)` URL you choose explicitly (there is no default, so a web server never falls back to whatever listens on its own port 11434). Only chat and model lists use it; model downloads and deletions always go to `BC_OLLAMA_URL`. |
 | `BC_INFERENCE_FALLBACK_API_KEY` | empty | Bearer token sent to the fallback, under the same HTTPS-or-loopback rule. The compute token (`BC_OLLAMA_API_KEY`) is never sent to the fallback. |
@@ -221,6 +225,7 @@ amount per five hours; see [Architecture → Limits](architecture.md#limits).
 | `BC_CHAT_MAX_EXTRACTED_CHARS` | `200000` | Text kept from one document. |
 | `BC_CHAT_MAX_SESSION_ATTACHMENT_MB` | `40` | Total attachments per chat, counted as stored: a document counts the text extracted from it (a small compressed PDF can hold far more), an image its stored size. |
 | `BC_CHAT_MAX_ACCOUNT_ATTACHMENT_MB` | `1024` | Total attachments one account may store across its chats, counted as stored (as above); deleted chats count until they are erased. Administrators are exempt. |
+| `BC_CHAT_MAX_ACCOUNT_TEXT_MB` | `1024` | Total message text (questions and answers) one account may store across its chats, with the copies of its no-history chats kept for administrators; deleted chats count until they are erased. A message over it is refused (413 `storage_limit`). Administrators are exempt. |
 | `BC_CHAT_MAX_CONTEXT_CHARS` | `300000` | History characters sent to the model. |
 | `BC_CHAT_MAX_CONTEXT_IMAGES` | `8` | Images sent to the model. |
 | `BC_CHAT_MAX_HISTORY_MESSAGES` | `100` | Messages sent to the model. |
@@ -267,6 +272,7 @@ See [cloud sessions](agents.md).
 | `BC_AGENTS_RUNNER_INSECURE_NETWORKS` | empty | Comma-separated private networks (CIDR, or single addresses) where plain HTTP to the runner is accepted. See [plain HTTP on private networks](#plain-http-on-private-networks). |
 | `BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE` | `0` | Deprecated alias: `1` adds Tailscale's ranges to `BC_AGENTS_RUNNER_INSECURE_NETWORKS` and also accepts MagicDNS names ending in `.ts.net`. |
 | `BC_AGENTS_MAX_UPLOAD_MB` | `20` | Largest upload (files or an archive) copied into a task's workspace (1–200). |
+| `BC_AGENTS_MAX_STORED_UPLOAD_MB` | `100` | Files one account added to cloud-session tasks that the web server keeps until they are copied into a sandbox (never below `BC_AGENTS_MAX_UPLOAD_MB`). A start with files over it gets 413 `storage_limit`. Administrators are exempt. |
 | `BC_AGENTS_GIT_PROXY` | `0` | Send Git repository downloads through `HTTPS_PROXY` (the proxy is asked to connect to the address BananaChat checked). Hosts and limits are set in Admin → Cloud sessions. |
 
 ## Plain HTTP on private networks

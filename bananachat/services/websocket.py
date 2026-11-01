@@ -73,7 +73,7 @@ def limit_sends(sock, seconds: float = SEND_TIMEOUT_SECONDS) -> None:
 
 
 def accept_key(key: str) -> str:
-    return base64.b64encode(hashlib.sha1(key.encode("ascii") + GUID).digest()).decode("ascii")  # noqa: S324
+    return base64.b64encode(hashlib.sha1(key.encode("ascii") + GUID, usedforsecurity=False).digest()).decode("ascii")
 
 
 class WebSocket:

@@ -161,7 +161,7 @@ sudo bananachat source check
 sudo bananachat update
 ```
 
-The installed updater prepares the new code, backs everything up, starts it and checks `/health` before letting users back in; if anything fails it restores the old code together with the old database. On first start the database is upgraded in place (the current release uses schema version 27). New optional settings are listed in [configuration](configuration.md) and in the [changelog](../CHANGELOG.md). After updating, reload open browser tabs. For a manual installation, take a complete backup before starting the new release and restore its matching code and database if you roll back.
+The installed updater prepares the new code, backs everything up, starts it and checks `/health` before letting users back in; if anything fails it restores the old code together with the old database. On first start the database is upgraded in place (the current release uses schema version 29). New optional settings are listed in [configuration](configuration.md) and in the [changelog](../CHANGELOG.md). After updating, reload open browser tabs. For a manual installation, take a complete backup before starting the new release and restore its matching code and database if you roll back.
 
 Web and compute servers update independently, each with its own timer; if a release needs an order, UPGRADING.md says so.
 

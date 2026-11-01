@@ -101,6 +101,18 @@ error, including its reset timestamp when available. Errors before any output
 may try another available account. Errors after text or thinking starts end
 that answer without replaying it on another subscription.
 
+A failed attempt rests its account for five minutes, except when the failure
+cannot be the account's: raise `subscription_pool.RequestRejected` for a request
+that no account can answer (too long, not text, text that is not valid
+Unicode); it ends the request and rests nothing. An adapter that sets
+`reports_cli_start = True` and calls `subscription_pool.cli_started()` just
+before it starts the provider's process is never rested for failures before
+that point (a temporary file, a sandbox, input it cannot encode). An error with
+`timed_out = True` (`subscription_cli.ConnectorTimeout`) ends the request
+without trying another account, so a request too long for the time allowed
+rests at most one account, and none once output was streamed. The API refuses
+text with lone surrogates with 400 `invalid_text` before any of this.
+
 ## Quotas and scheduling
 
 Internal budgets use input plus output tokens, one five-hour window and an
@@ -209,7 +221,9 @@ profile that is signed in with an API key rather than a subscription.
 
 Codex has no option to start without tools, so its connector disables the
 shell, file editing, web search, image viewing and MCP servers in its
-configuration and stops an answer the moment any tool activity appears.
+configuration and stops an answer the moment any tool activity appears. The
+request is refused without resting the account, since the prompt asked for the
+tool.
 `codex exec` delivers each answer whole, so Codex replies appear at once rather
 than streaming.
 

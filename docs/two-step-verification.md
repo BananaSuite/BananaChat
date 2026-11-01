@@ -24,7 +24,10 @@ password manager). Someone who learns the password still cannot sign in.
 - Each app code works once. Wrong codes are counted per account and browser:
   after 10 wrong codes in 5 minutes, or 50 in a day, that browser waits. A
   browser that signed in to the account before has an allowance of its own,
-  so someone who knows the password cannot lock its owner out.
+  so someone who knows the password cannot lock its owner out. Only browsers
+  that signed in after two-step verification was last turned on, off or reset
+  and after the account last signed out everywhere count as known, and all of
+  them together have at most 200 wrong codes a day.
 
 ## For administrators
 
@@ -52,8 +55,10 @@ verification:
 
 - downloading the database export (Admin → Backup & migration);
 - resetting another account's password or two-step verification;
-- changing a role, creating an administrator account or an administrator
-  invitation;
+- changing a role, creating an account (its password keeps working) or an
+  invitation of any kind (whoever holds the code makes an account that keeps
+  working, and invitations made one after another would add up to opening
+  sign-up);
 - suspending, reinstating or deleting an administrator;
 - registering a worker (its token keeps working, and the worker reads the
   prompts sent to it);
@@ -73,7 +78,10 @@ Signing in counts as a confirmation, and a confirmation lasts ten minutes in
 that browser; the forms show the extra field only when it is needed.
 Confirmations and failed attempts are recorded in the audit log
 (`admin.reauth`, `admin.reauth_failed`); after 10 wrong attempts in 15 minutes
-the account waits.
+the account waits. A wrong password counts together with passwords typed on
+the account page (changing the password or two-step verification, deleting
+chats or the account): 10 in 15 minutes and 50 a day in all. A wrong code
+counts towards the account's code limits at sign-in, per day too.
 
 ## Storage and moving servers
 

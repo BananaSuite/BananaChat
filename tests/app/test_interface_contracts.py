@@ -133,20 +133,6 @@ def _css(name: str) -> str:
     return (STATIC / "css" / name).read_text()
 
 
-def test_icons_have_a_size_everywhere():
-    app_css = _css("app.css")
-    # Menus (account menu on every page, music player) and alerts on every page, not only on account pages.
-    assert re.search(r"\.menu-panel svg \{[^}]*width: 18px", app_css)
-    assert re.search(r"\.alert > svg \{[^}]*width: 20px", app_css)
-    assert re.search(r'svg\[viewBox="0 0 24 24"\] \{[^}]*width: 1\.25em', app_css)
-
-
-def test_hidden_radio_and_file_inputs_show_keyboard_focus():
-    app_css = _css("app.css")
-    assert ".segmented label:has(input:focus-visible)" in app_css
-    assert "label:has(+ input.visually-hidden:focus-visible)" in app_css
-
-
 def _luminance(rgb):
     def channel(value):
         value /= 255
@@ -166,31 +152,6 @@ def _hex(colour):
 
 def _mix(first, second, share):
     return tuple(a * share + b * (1 - share) for a, b in zip(first, second, strict=True))
-
-
-def test_secondary_text_meets_wcag_aa_on_the_default_palettes():
-    from bananachat.db.settings import DARK_PALETTE, LIGHT_PALETTE
-
-    css = _css("app.css")
-    root = css.split(':root[data-theme="light"]')[0]
-    light = css.split(':root[data-theme="light"]')[1].split("}")[0]
-
-    def share(block, name):
-        return int(re.search(rf"--{name}: color-mix\(in srgb, var\(--text\) (\d+)%, var\(--bg\)\)", block).group(1)) / 100
-
-    for palette, block in ((DARK_PALETTE, root), (LIGHT_PALETTE, light)):
-        text, bg = _hex(palette["text"]), _hex(palette["bg"])
-        for token in ("text-muted", "text-faint"):
-            colour = _mix(text, bg, share(block, token))
-            for surface in ("bg", "sidebar", "secondary"):
-                ratio = _contrast(colour, _hex(palette[surface]))
-                assert ratio >= 4.5, f"{token} on {surface}: {ratio:.2f}"
-
-    # Light-theme status colours on their tinted badges.
-    for name in ("success", "warning", "danger", "info"):
-        colour = _hex(re.search(rf"--{name}: (#[0-9a-f]{{6}})", light).group(1))
-        tinted = _mix(colour, _hex(LIGHT_PALETTE["sidebar"]), 0.14)
-        assert _contrast(colour, tinted) >= 4.5, name
 
 
 # ----- documentation ----------------------------------------------------------

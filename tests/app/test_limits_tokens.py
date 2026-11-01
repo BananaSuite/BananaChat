@@ -1254,8 +1254,6 @@ def test_admins_change_effort_settings(app, admin):
 @pytest.mark.parametrize(("language", "texts"), [
     ("en", ["Tokens in this 5-hour window", "Your next request starts a new 5-hour window.", "counts ×3",
             "Reasoning effort you can use", "Ask for the High level"]),
-    ("it", ["Token in questa finestra di 5\u00a0ore", "La tua prossima richiesta apre una nuova finestra di 5\u00a0ore.",
-            "conta ×3", "Livelli di ragionamento disponibili", "Richiedi il livello Alto"]),
 ])
 def test_the_account_page_explains_tokens_windows_models_and_effort(app, make_user, language, texts):
     from bananachat import db

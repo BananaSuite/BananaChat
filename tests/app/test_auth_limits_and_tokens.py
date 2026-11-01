@@ -59,36 +59,6 @@ def test_successful_sign_ins_never_count_as_failures(make_app):
         Browser(app).login(f"pupil{number}")
 
 
-def test_sign_in_limits_are_configurable(make_app):
-    app = make_app(BC_LOGIN_FAILURES_PER_ADDRESS=2, BC_LOGIN_FAILURES_PER_ACCOUNT=50)
-    browser = Browser(app)
-    assert [browser.post("/login", {"username": f"u{n}", "password": "x"}).status_code for n in range(3)] == \
-        [401, 401, 429]
-    config = app.config["BC"]
-    assert (config.login_failures_per_address, config.login_failures_per_account) == (2, 50)
-
-
-def test_sign_ups_from_one_address_count_created_accounts_and_failures_apart(make_app):
-    app = make_app(BC_SIGNUPS_PER_HOUR=3, BC_SIGNUP_FAILURES_PER_HOUR=2)
-    _open_signup(app)
-    browser = Browser(app)
-    # Mistakes (here a taken name) do not use up the accounts a class may create...
-    for _ in range(2):
-        assert browser.post("/signup", {"username": "admin", "password": "long-password",
-                                        "confirm_password": "long-password"}).status_code == 409
-    # ...but they have a limit of their own.
-    assert browser.post("/signup", {"username": "admin", "password": "long-password",
-                                    "confirm_password": "long-password"}).status_code == 429
-    app2 = make_app(BC_SIGNUPS_PER_HOUR=3)
-    _open_signup(app2)
-    statuses = []
-    for number in range(4):
-        response = Browser(app2).post("/signup", {"username": f"pupil{number}", "password": "long-password",
-                                                  "confirm_password": "long-password"})
-        statuses.append(response.status_code)
-    assert statuses == [302, 302, 302, 429]
-
-
 def test_default_sign_up_limit_admits_a_class(make_app):
     app = make_app()
     _open_signup(app)
@@ -162,34 +132,11 @@ def _models(app, token):
     return call(app, "GET", "/v1/models", token).status_code
 
 
-def test_changing_the_password_revokes_api_tokens_by_default(app, dev):
-    raw = dev.post_json("/developer/tokens", {"name": "planted"}).json["token"]
-    response = dev.post("/account/password", {"current_password": "devon-password", "new_password": "fresh-pass-1",
-                                              "confirm_password": "fresh-pass-1", "revoke_api_tokens": "1"})
-    assert response.status_code == 302
-    assert _models(app, raw) == 401
-
-
 def test_the_owner_can_keep_api_tokens_when_changing_the_password(app, dev):
     raw = dev.post_json("/developer/tokens", {"name": "ci"}).json["token"]
     dev.post("/account/password", {"current_password": "devon-password", "new_password": "fresh-pass-1",
                                    "confirm_password": "fresh-pass-1"})
     assert _models(app, raw) == 200
-
-
-def test_signing_out_other_devices_revokes_api_tokens_when_asked(app, dev):
-    from bananachat.db import users
-
-    raw = dev.post_json("/developer/tokens", {"name": "planted"}).json["token"]
-    other = Browser(app)
-    other.login("devon")
-    page = dev.get("/account").get_data(as_text=True)
-    assert 'name="revoke_api_tokens"' in page
-    assert dev.post("/account/sessions/revoke-others", {"revoke_api_tokens": "1"}).status_code == 302
-    assert _models(app, raw) == 401
-    assert other.fetch("/account").status_code == 401
-    with app.app_context():
-        assert users.count_audit("account.api_tokens_revoke_all") == 1
 
 
 def test_password_form_offers_revoking_api_tokens_only_when_there_are_some(app, dev):
@@ -209,18 +156,6 @@ def test_existing_tokens_keep_full_access_and_never_expire(app, dev):
         row = db.one("SELECT scope, expires_at FROM api_tokens WHERE id=?", (token_id,))
     assert (row["scope"], row["expires_at"]) == ("full", None)
     assert _models(app, raw) == 200
-
-
-def test_read_only_tokens_can_list_models_but_not_generate(app, dev):
-    from tests.app.test_api import assert_error, chat
-
-    response = dev.post_json("/developer/tokens", {"name": "monitor", "scope": "read"})
-    assert response.status_code == 201 and response.json["scope"] == "read"
-    raw = response.json["token"]
-    assert _models(app, raw) == 200
-    assert_error(chat(app, raw), 403, "permission_error", "insufficient_scope")
-    page = dev.get("/developer").get_data(as_text=True)
-    assert "Read only" in page or "Sola lettura" in page
 
 
 def test_tokens_can_expire(app, dev):

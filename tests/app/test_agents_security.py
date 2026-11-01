@@ -234,7 +234,7 @@ def test_the_download_limit_holds_across_processes(env, runner, fake_ollama):
         assert agents_db.claim_download(env.user["id"])  # released after the download
         # A lease left by a process that died expires.
         db.execute("UPDATE runtime_state SET updated_at=? WHERE key=?",
-                   (time.time() - agents_db.DOWNLOAD_LEASE_SECONDS - 1, f"agents:download:{env.user['id']}"))
+                   (time.time() - agents_db.TRANSFER_LEASE_SECONDS - 1, f"agents:transfer:{env.user['id']}"))
     assert env.browser.get(f"/agents/{task_id}/workspace/archive").status_code == 200
 
 

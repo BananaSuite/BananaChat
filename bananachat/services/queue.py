@@ -8,7 +8,9 @@ compute server or a worker PC; at most ``BC_MAX_CONCURRENT`` running) and
 worker that went away never hold up hosted ones (nor the other way round). In
 its lane a request runs when the lane has a free place and it is the first
 waiting row in (priority, arrival) order whose owner has nothing running in
-that lane (at most three requests per owner and lane). Rows carry a heartbeat
+that lane (at most three requests per owner and lane). An account's chat, API,
+playground and image requests share one owner (:func:`account_key`), so an
+account has one running request per lane whatever it uses. Rows carry a heartbeat
 renewed by the supervisor; rows of crashed processes expire after
 ``LEASE_SECONDS`` and are removed. A worker process that exits frees its rows
 at once (:func:`release_process`), and the gunicorn master lets those of a
@@ -16,7 +18,7 @@ worker that died expire within seconds (:func:`expire_process`).
 
 Usage::
 
-    with queue.Slot(queue.PRIORITY_CHAT, owner_key=f"user:{uid}") as slot:
+    with queue.Slot(queue.PRIORITY_CHAT, owner_key=queue.account_key(uid)) as slot:
         slot.wait(timeout=120, cancel=token, on_position=report)
         ... run inference ...
 """
@@ -57,6 +59,12 @@ _held_lock = threading.Lock()
 
 LANES = ("local", "hosted")
 HOSTED_BACKENDS = ("external", "claude", "codex")
+
+
+def account_key(user_id) -> str:
+    """The owner key of an account's chat, API and image requests: one running place (and three admitted
+    requests) per account and lane, not per surface."""
+    return f"user:{user_id}"
 
 
 class QueueFull(RuntimeError):
@@ -117,6 +125,7 @@ class Slot:
             raise ValueError("Unknown queue lane.")
         self.priority = priority
         self.lane = lane
+        self._owner = owner_key
         # One running request per owner and lane (the unique index on running owner keys): a hosted request of an
         # account does not wait for its local one.
         self.owner_key = f"{owner_key}:hosted" if owner_key and lane == "hosted" else owner_key
@@ -162,6 +171,22 @@ class Slot:
                 db.execute("UPDATE inference_queue SET model_name=? WHERE req_id=?", (model, self.request_id))
             except Exception:  # noqa: BLE001 - informational; the lease expires on its own
                 db.close_thread_connection()
+
+    def move(self, lane: str, model: str | None = None) -> None:
+        """Give up this place and queue in *lane* under a new one, for a fallback to a model of the other kind:
+        it must wait for that lane's cap, its free-memory check and the owner's place there. Wait for admission
+        with :meth:`positions` again. Raises QueueFull."""
+        if lane not in LANES:
+            raise ValueError("Unknown queue lane.")
+        self.release()
+        self.lane = lane
+        self.owner_key = f"{self._owner}:hosted" if self._owner and lane == "hosted" else self._owner
+        self.model = model
+        self.request_id = uuid.uuid4().hex
+        self.running = False
+        self.enqueued_at = time.time()
+        self.started_at = None
+        self.__enter__()
 
     def release(self) -> None:
         if not self._entered:

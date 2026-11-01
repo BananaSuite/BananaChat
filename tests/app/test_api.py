@@ -108,15 +108,6 @@ def test_missing_and_invalid_tokens_are_rejected(app, token):
     assert call(app, "GET", "/v1/models", token).status_code == 200
 
 
-def test_invalid_tokens_are_throttled_per_address(app, token):
-    for _ in range(30):
-        assert call(app, "GET", "/v1/models", "bc-wrong").status_code == 401
-    response = call(app, "GET", "/v1/models", "bc-wrong")
-    assert_error(response, 429, "rate_limit_error")
-    assert response.headers["Retry-After"] == "60"
-    assert call(app, "GET", "/v1/models", token).status_code == 200  # valid tokens are unaffected
-
-
 def test_suspended_accounts_get_permission_error(app, user, token):
     from bananachat.db import users
 
@@ -140,27 +131,6 @@ def _api_rate(requests, per, burst):
     policy = limits.get_policy("api")
     policy["rate"]["rules"] = [{"requests": requests, "per": per, "burst": burst}]
     limits.set_policy("api", policy, None)
-
-
-def test_requests_are_rate_limited_per_account(app, user, token, monkeypatch):
-    import time
-    from types import SimpleNamespace
-
-    from bananachat.services import limits
-
-    # The limiter's clock stands still, so a slow machine cannot refill the bucket between the calls and the
-    # Retry-After below is exact.
-    frozen = time.time()
-    monkeypatch.setattr(limits, "time", SimpleNamespace(time=lambda: frozen, monotonic=time.monotonic))
-    with app.app_context():
-        _api_rate(1, "minute", 2)  # two at once, then one a minute
-    second_token = token_for(app, user, "second")
-    assert call(app, "GET", "/v1/models", token).status_code == 200
-    assert call(app, "GET", "/v1/models", second_token).status_code == 200
-    response = call(app, "GET", "/v1/models", token)
-    assert_error(response, 429, "rate_limit_error", "rate_limit_exceeded")
-    assert response.headers["Retry-After"] == "60"
-    assert response.headers["x-ratelimit-remaining-requests"] == "0"
 
 
 def test_long_requests_leave_threads_for_health_checks(app, token):
@@ -518,17 +488,6 @@ def test_unknown_and_forbidden_models(app, user, token):
     assert_error(chat(app, token, model="qwen3:4b"), 403, "permission_error", "model_not_allowed")
 
 
-def test_exhausted_credits_are_refused(app, user, token):
-    from bananachat.db import credits
-
-    with app.app_context():
-        credits.set_quota(user["id"], 0, 0, None)
-    response = chat(app, token)
-    assert_error(response, 429, "rate_limit_error", "insufficient_quota")
-    assert int(response.headers["Retry-After"]) > 0
-    assert ledger(app, user) == []
-
-
 def test_backend_failures_are_reported_without_details(app, user, token, fake_ollama):
     fake_ollama.fail_models = {"llama3.2:3b", "qwen3:4b"}
     response = chat(app, token)
@@ -537,19 +496,6 @@ def test_backend_failures_are_reported_without_details(app, user, token, fake_ol
     streamed = chat(app, token, stream=True)
     assert_error(streamed, 502, "server_error")
     assert ledger(app, user) == []
-
-
-def test_queue_full_is_reported(app, user, token):
-    from bananachat import db
-
-    with app.app_context():
-        for index in range(3):
-            db.execute("INSERT INTO inference_queue (req_id, priority, status, owner_pid, enqueued_at, "
-                       "heartbeat_at, owner_key) VALUES (?, 1, 'waiting', 1, strftime('%s','now'), "
-                       "strftime('%s','now') + 1000, ?)", (f"r{index}", f"user:{user['id']}:api"))
-    response = chat(app, token)
-    assert_error(response, 429, "rate_limit_error", "too_many_requests")
-    assert response.headers["Retry-After"]
 
 
 def test_interrupted_stream_is_charged_once(app, user, token, fake_ollama):

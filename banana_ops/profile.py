@@ -239,7 +239,7 @@ def caddy_global(email, cloudflare_proxy, client_ip):
     if cloudflare_proxy:
         # TLS-ALPN-01 can never pass Cloudflare's proxy, and Caddy picks challenges at random.
         lines.append("\tcert_issuer acme {\n\t\tdisable_tlsalpn_challenge\n\t}\n")
-    lines.append(f"\tservers {{\n\t\ttimeouts {{\n\t\t\tread_header 10s\n\t\t\tread_body 5m\n\t\t\tidle {IDLE_TIMEOUT}\n\t\t}}\n")
+    lines.append(f"\tservers {{\n\t\ttimeouts {{\n\t\t\tread_header 10s\n\t\t\tread_body 2m\n\t\t\tidle {IDLE_TIMEOUT}\n\t\t}}\n")
     if client_ip:
         lines.append(f"\t\ttrusted_proxies static {CLOUDFLARE_RANGES}\n\t\tclient_ip_headers CF-Connecting-IP\n")
     lines.append("\t}\n}\n")
@@ -271,7 +271,7 @@ def caddyfile(settings, *, email="", cloudflare_proxy=False, client_ip=True):
     if settings["mode"] == "hosting":
         portal = settings["portal_domain"]
         site = Path(settings["root"]) / "site"
-        return ("# Managed by BananaSuite\n{\n\tservers {\n\t\ttimeouts {\n\t\t\tread_header 10s\n\t\t\tread_body 5m\n\t\t\tidle 2m\n\t\t}\n\t}\n\ton_demand_tls {\n"
+        return ("# Managed by BananaSuite\n{\n\tservers {\n\t\ttimeouts {\n\t\t\tread_header 10s\n\t\t\tread_body 2m\n\t\t\tidle 2m\n\t\t}\n\t}\n\ton_demand_tls {\n"
                 f"\t\task http://127.0.0.1:{port}/internal/domains/authorize\n\t}}\n}}\n\n"
                 f"{domain} {{\n\troot * {site}\n\tfile_server {{\n\t\thide .git .env\n\t}}\n}}\n\n"
                 f"{portal} {{\n\treverse_proxy 127.0.0.1:{port}\n}}\n\n"

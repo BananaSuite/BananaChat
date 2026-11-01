@@ -37,7 +37,7 @@
           <input type="password" id="new-password2" name="confirm_password" required minlength="{{ min_password }}" maxlength="1024" autocomplete="new-password">
         </div>
       </div>
-      {{ reauth_field("new-user-reauth", needed_for="to create an administrator") }}
+      {{ reauth_field("new-user-reauth") }}
       <div class="form-actions"><button type="submit" class="btn btn-primary">Create account</button></div>
     </form>
   </details>

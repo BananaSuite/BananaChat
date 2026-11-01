@@ -36,6 +36,8 @@ FAILURE_WINDOW = 15 * 60
 # Always confirmed: endpoint -> why.
 ALWAYS = {
     "admin.migration_export": "a copy of every account's data",
+    "admin.user_create": "the new account, with a password the session chose, outlives the session",
+    "admin.invite_create": "whoever holds the code makes an account that outlives the session",
     "admin.user_password": "takes over the account",
     "admin.user_two_step_reset": "turns off the account's second sign-in step",
     "admin.workers_register": "issues a lasting worker token; the worker reads the prompts routed to it",
@@ -51,8 +53,6 @@ ALWAYS = {
 }
 # Confirmed in one case: endpoint -> when.
 WHEN = {
-    "admin.user_create": "for an administrator account",
-    "admin.invite_create": "for an administrator invitation",
     "admin.user_role": "when the role changes",
     "admin.user_suspend": "when the account is an administrator",
     "admin.user_unsuspend": "when the account is an administrator",
@@ -117,6 +117,15 @@ EXEMPT = {
         # Asks a worker to listen for sessions sooner; opening one is confirmed (admin.workers_remote_session).
         "admin.workers_remote_arm",
     ),
+    # One account at a time, as the user, chat and no-history pages already show it (a copy of every
+    # account's data, admin.migration_export, is confirmed).
+    "Downloads one account's data": (
+        "admin.user_export",
+    ),
+    # The request records behind the metrics page (who, which model, tokens, times; no prompts or answers).
+    "Downloads the request metrics the metrics page shows": (
+        "admin.metrics_export",
+    ),
     "Site content, appearance and features": (
         "admin.settings_palette_reset", "admin.database_check", "admin.personality_create",
         "admin.personality_featured_create", "admin.personality_featured_update", "admin.personality_publish",
@@ -152,10 +161,14 @@ def refusal(secret: str | None = None) -> str | None:
     if not secret:
         return ("Confirm it is you first: enter your password, or a code from your authenticator app, with this "
                 "change.")
+    too_many = "Too many wrong confirmations. Wait a few minutes and try again."
     attempt = users.reserve([(f"reauth-fail:{user['id']}", FAILURES)], FAILURE_WINDOW)
     if attempt is None:
-        return "Too many wrong confirmations. Wait a few minutes and try again."
+        return too_many
     method = _check(user, secret)
+    if method is _TOO_MANY:
+        users.release(attempt)
+        return too_many
     if method is None:
         audit("reauth_failed", user["username"])
         return "That password or code is not correct. Nothing was changed."
@@ -173,7 +186,26 @@ def confirmed() -> bool:
     return problem is None
 
 
+_TOO_MANY = "too many"
+
+
 def _check(user, secret: str) -> str | None:
-    if totp.looks_like_code(secret) and two_step.verify_app_code(user["id"], secret):
-        return "totp"
-    return "password" if security.verify_password(user["password"], secret) else None
+    """``"totp"`` or ``"password"``, None when wrong, :data:`_TOO_MANY` when the account's budget is used up.
+
+    Codes count against the account's two-step budget of the sign-in (per day too), passwords against
+    the budget every password confirmation shares (``security.confirm_password``).
+    """
+    code_attempt = None
+    if totp.looks_like_code(secret) and two_step.enabled(user["id"]):
+        code_attempt = two_step.reserve_code_attempt(user)
+        if code_attempt is None:
+            return _TOO_MANY
+        if two_step.verify_app_code(user["id"], secret):
+            users.release(code_attempt)
+            return "totp"
+    confirmed = security.confirm_password(user, secret)
+    if confirmed is None:
+        return _TOO_MANY
+    if confirmed:
+        users.release(code_attempt)
+    return "password" if confirmed else None

@@ -146,6 +146,17 @@ fails before answering, enforces the response size and the generation
 deadline, and yields `Queued`, `Started`, `Delta` and `Finished` events.
 Callers persist the result and charge the usage (`db.credits.charge`).
 
+Answers never wait on the client's connection. Chat runs generate in a thread
+of their own; streamed API, playground and Images-page answers hand the rest
+of their work to one (`CompletionRun.detach`, `ImageJob.detach`,
+`services.event_pump`) once they are admitted, and the response only drains
+what it produced. A client that stops reading therefore cannot keep a queue
+place past the generation deadline, and the response thread itself is freed
+after `BC_WRITE_TIMEOUT` (`bananachat.write_timeout`, installed in
+`gunicorn.conf.py`). Request bodies have a deadline too: one that stalls for
+`BC_BODY_STALL_TIMEOUT` seconds or arrives slower than `BC_BODY_MIN_KBPS` is
+ended with `408` (`bananachat.read_timeout`).
+
 Whether Ollama runs on this machine is one property, `config.ollama_is_local`
 (`BC_INFERENCE_LOCAL`, else: an API key or a non-loopback URL means a remote
 compute server). Everything that looks at the host itself (free memory before
@@ -161,7 +172,11 @@ requests wait in the *local* lane (`BC_MAX_CONCURRENT`); hosted models
 (`BC_MAX_CONCURRENT_HOSTED`). Each lane has its own depth, positions and
 running slots, so requests stuck on an unreachable model server or worker
 never hold up an answer from a provider that is up, and the outage gate
-(`services.status`) pauses only what needs the local server.
+(`services.status`) pauses only what needs the local server. A fallback to a
+model of the other lane (a local model after a hosted one failed) gives up its
+place and waits for one in that lane, within what is left of the queue
+timeout, so it never runs past that lane's cap, the free-memory check or the
+account's place there; when it gets none, the next fallback is tried.
 
 `services.supervisor` runs one thread per process that renews queue and chat
 leases and applies Stop requests; `services.background` runs periodic jobs in
@@ -331,6 +346,13 @@ unit of earlier releases). Storage lives in `db/limits.py`, decisions in
   follow the policy; a custom value also switches that limit on for the
   account), model locks, tier and tier lock, speed (`slow`, `normal`,
   `fast`), dynamic exemption, effort gating off, and usage-reset times.
+* **Holds**: text answers are charged when they end, so an API or playground
+  answer that leaves the queue checks the pool and holds what it may cost
+  (estimated prompt + `num_predict`, × the model's weight, at most what is
+  left) in one transaction (`CompletionRun._authorize`, `credits.hold_answer`).
+  Holds live in `image_credit_reservations` with the image reservations, count
+  as used, are renewed by the supervisor and are replaced by the charge (or
+  expire like an abandoned image reservation when their process died).
 * **Windows** (`limit_windows`, per account and scope `pool:<pool>` or
   `model:<id>`): `credits.charge` (and image reservations) open the 5-hour
   and weekly windows of the pool (when the model counts towards it) and of the
@@ -462,7 +484,14 @@ supporters' pledges get `starts_at`/`ends_at`, which `limits.effective` and
 `limits.model_limits` subtract from their limits (reason `renounced`). An
 administrator's decision, a cancellation or the `community-quota` job closing
 expired voting release unapplied pledges (`released_at`); a closed request
-stays pending for administrators.
+stays pending for administrators. The kinds offered are `community_kinds`; effort
+and rate requests cost supporters nothing (no tokens to renounce), so they are
+left out unless an administrator lists them (default `window,weekly,temporary`
+since migration 29). A temporary request for unlimited use is never
+offered to the community (`community.offered(..., unlimited=True)`, and
+`voting_open`/`apply` refuse such rows from earlier releases): it lifts every
+token limit, which no pledge can cover, so only an administrator can grant it.
+Temporary token increases need pledges like 5-hour ones.
 
 **Quota fallback** (`limits.quota_fallback`, chat only): a model chosen by
 name that is blocked for the account switches to a usable candidate, the same

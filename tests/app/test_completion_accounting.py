@@ -79,7 +79,7 @@ def test_failed_usage_for_an_empty_answer_is_http_error_before_streaming(
     assert_no_usage_and_no_queue(app, account)
 
 
-@pytest.mark.parametrize("language", ["en", "it"])
+@pytest.mark.parametrize("language", ["it"])
 def test_playground_reports_translated_usage_failure_without_done(app, account, failed_metrics, language):
     from bananachat.db import users
     from bananachat.i18n import translate

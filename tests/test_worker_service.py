@@ -15,6 +15,13 @@ import pytest
 from worker import service
 
 
+
+@pytest.fixture(autouse=True)
+def _private_home(monkeypatch, tmp_path):
+    """Installers write settings under the home folder: never the real one, never the checkout."""
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('APPDATA', str(tmp_path / 'AppData'))
+
 def test_windows_task_uses_current_user_and_consistent_controls(monkeypatch):
     calls = []
     temporary = []

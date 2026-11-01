@@ -1,5 +1,5 @@
 {% extends "admin/_layout.html" %}
-{% from "admin/_macros.html" import header, when, empty %}
+{% from "admin/_macros.html" import header, csrf, when, empty %}
 {% from "partials/icons.html" import icon %}
 {% block title %}Metrics{% endblock %}
 {% block admin_content %}
@@ -46,7 +46,10 @@
     </select>
     <noscript><button type="submit" class="btn">Show</button></noscript>
   </form>
-  <a class="btn" href="{{ url_for('admin.metrics_export', range=range_key) }}" download>{{ icon("download") }}Export CSV</a>
+  <form method="post" action="{{ url_for('admin.metrics_export', range=range_key) }}">
+    {{ csrf() }}
+    <button type="submit" class="btn">{{ icon("download") }}Export CSV</button>
+  </form>
 {% endcall %}
 
 <section class="grid grid-4 admin-stats mb-3" aria-label="Totals for {{ range_label | lower }}">

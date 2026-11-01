@@ -14,7 +14,7 @@ from bananachat.services import two_step
 
 from . import _reauth, bp
 from ._helpers import audit, back, fail, me, user_or_404
-from .users import revoke_api_tokens_if_asked
+from .users import revoke_api_tokens_if_asked, stop_share_links_if_asked
 
 
 @bp.before_request
@@ -49,4 +49,5 @@ def reset(user_id):
     flash(f"Two-step verification was reset for {user['username']}, who was signed out everywhere. They can sign "
           "in with their password alone and set it up again.", "success")
     revoke_api_tokens_if_asked(user)
+    stop_share_links_if_asked(user)
     return back("admin.user_detail", user_id=user_id)

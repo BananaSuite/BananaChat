@@ -8,14 +8,16 @@ Administration -> Workers -> Maintenance access.
 
   python bananachat_connect.py login https://chat.example.org     save the server and an access key
   python bananachat_connect.py list                                workers, their addresses and services
-  python bananachat_connect.py proxy HOST PORT                     for ssh's ProxyCommand (stdin/stdout)
-  python bananachat_connect.py forward HOST:PORT [--local [ADDR:]PORT]
+  python bananachat_connect.py proxy HOST PORT [--worker NAME]     for ssh's ProxyCommand (stdin/stdout)
+  python bananachat_connect.py forward HOST:PORT [--local [ADDR:]PORT] [--worker NAME]
                                                                    a local port that reaches HOST:PORT
   python bananachat_connect.py socks [--listen ADDR:PORT]          a SOCKS5 proxy for every worker
   python bananachat_connect.py shell WORKER                        the worker's built-in terminal, here
 
 HOST is a worker's address in the server's virtual network (see ``list``),
-``<name>.bc``, or an address of a network a worker shares. Examples:
+``<name>.bc``, or an address of a network a worker shares. When several
+workers share a network containing HOST, the server refuses to choose: name
+the worker with --worker. The worker that answered is always shown. Examples:
 
   ssh -o ProxyCommand="python bananachat_connect.py proxy %h %p" user@10.77.0.2
   python bananachat_connect.py forward 10.77.0.2:5900 --local 15900   # then a VNC viewer on localhost:15900
@@ -44,15 +46,31 @@ import threading
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
-VERSION = "1.7.3"
+VERSION = "1.7.6"
 CONFIG = os.path.join(os.path.expanduser("~"), ".config", "bananachat-connect.json")
 TEXT, BINARY, CLOSE, PING, PONG, CONTINUATION = 0x1, 0x2, 0x8, 0x9, 0xA, 0x0
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_MESSAGE = 4 * 1024 * 1024
 
 
+def clean(text, limit=500) -> str:
+    """*text* from the server or a worker, safe to print in a terminal: printable characters only (no escape
+    sequences that could set the clipboard or redraw earlier lines), at most *limit* of them."""
+    return "".join(char for char in str(text) if char.isprintable())[:limit]
+
+
+def _object(payload: bytes) -> dict:
+    """A JSON object received from the session, or {} for anything else."""
+    try:
+        value = json.loads(payload.decode("utf-8", "replace"))
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 class Problem(Exception):
-    pass
+    def __init__(self, message=""):
+        super().__init__(clean(message))
 
 
 # ----- settings -----------------------------------------------------------------------------------------------
@@ -138,6 +156,7 @@ class WebSocket:
         self.buffer = bytearray(buffered)
         self.lock = threading.Lock()
         self.closed = False
+        self.worker = ""
 
     def _exact(self, size: int) -> bytes:
         while len(self.buffer) < size:
@@ -246,7 +265,7 @@ def open_socket(server: str, key: str, path: str) -> WebSocket:
         except (ValueError, KeyError, TypeError):
             message = f"HTTP {status}"
         raise Problem(message)
-    accept = base64.b64encode(hashlib.sha1(nonce.encode("ascii") + GUID).digest()).decode("ascii")  # noqa: S324
+    accept = base64.b64encode(hashlib.sha1(nonce.encode("ascii") + GUID, usedforsecurity=False).digest()).decode("ascii")
     if not any(line.lower().startswith("sec-websocket-accept:") and line.split(":", 1)[1].strip() == accept
                for line in headers):
         raise Problem("The server did not accept the WebSocket.")
@@ -254,10 +273,27 @@ def open_socket(server: str, key: str, path: str) -> WebSocket:
     return WebSocket(sock, rest)
 
 
-def open_session(server: str, key: str, host: str, port: int, *, quiet: bool = False) -> WebSocket:
-    """Create a session and return its WebSocket once the worker joined it."""
-    session = request(server, key, "POST", "/remote/v1/sessions", {"host": host, "port": port})["session"]
+def find_worker(server: str, key: str, name: str) -> dict:
+    """A worker of ``/remote/v1/workers`` by name, ``<name>.bc``, virtual address or id."""
+    data = request(server, key, "GET", "/remote/v1/workers")
+    name = name.lower().removesuffix(".bc")
+    worker = next((item for item in data.get("workers", []) if name in (item["slug"], item.get("address"),
+                                                                         item["id"], item["name"].lower())), None)
+    if worker is None:
+        raise Problem(f"No worker called {name!r}.")
+    return worker
+
+
+def open_session(server: str, key: str, host: str, port: int, *, quiet: bool = False,
+                 worker: Optional[str] = None) -> WebSocket:
+    """Create a session (through *worker*, a worker id, when given) and return its WebSocket once the worker
+    joined it. ``ws.worker`` names the worker that answered."""
+    body = {"host": host, "port": port}
+    if worker:
+        body["worker"] = worker
+    session = request(server, key, "POST", "/remote/v1/sessions", body)["session"]
     ws = open_socket(server, key, f"/remote/v1/sessions/{session['id']}/ws")
+    ws.worker = session["worker"]
     while True:
         try:
             kind, payload = ws.receive()
@@ -265,10 +301,11 @@ def open_session(server: str, key: str, host: str, port: int, *, quiet: bool = F
             raise Problem("The session closed before the worker joined it.") from None
         if kind != TEXT:
             raise Problem("Unexpected data before the session opened.")
-        message = json.loads(payload.decode("utf-8", "replace"))
+        message = _object(payload)
         if message.get("type") == "status" and message.get("state") == "connected":
             if not quiet:
-                print(f"Connected to {session['worker']} ({session['host']}:{session['port']}).", file=sys.stderr)
+                print(f"Connected to {clean(session['worker'])} ({clean(session['host'])}:{clean(session['port'])}).",
+                      file=sys.stderr)
             return ws
         if message.get("type") == "status" and message.get("state") == "failed":
             raise Problem(message.get("message") or "The worker did not connect.")
@@ -285,12 +322,9 @@ def relay(ws: WebSocket, read, write, close_input=lambda: None) -> None:
                 if kind == BINARY:
                     write(payload)
                 elif kind == TEXT:
-                    try:
-                        message = json.loads(payload.decode("utf-8", "replace"))
-                    except ValueError:
-                        continue
+                    message = _object(payload)
                     if message.get("type") == "error":
-                        print(message.get("message"), file=sys.stderr)
+                        print(clean(message.get("message")), file=sys.stderr)
         except (EOFError, OSError):
             pass
         finally:
@@ -319,7 +353,7 @@ def cmd_login(args) -> int:
     key = os.environ.get("BANANACHAT_CONNECT_KEY") or getpass.getpass("Access key (Administration -> Workers): ").strip()
     data = request(server, key, "GET", "/remote/v1/workers")
     save_settings(server, key)
-    print(f"Saved. {len(data.get('workers', []))} worker(s) on {server}; network {data.get('subnet')}.")
+    print(f"Saved. {len(data.get('workers', []))} worker(s) on {server}; network {clean(data.get('subnet'))}.")
     return 0
 
 
@@ -338,13 +372,15 @@ def cmd_list(_args) -> int:
                 parts.append("network " + ", ".join(remote["subnets"]))
             reach = ", ".join(parts) or "nothing allowed"
         state = "online" if item.get("online") else "offline"
-        print(f"{item.get('address') or '-':<15} {item['slug'] + '.bc':<28} {state:<8} {reach}")
+        print(f"{clean(item.get('address') or '-'):<15} {clean(item['slug']) + '.bc':<28} {state:<8} {clean(reach)}")
     return 0
 
 
 def cmd_proxy(args) -> int:
     server, key = load_settings()
-    ws = open_session(server, key, args.host, args.port, quiet=True)
+    worker = find_worker(server, key, args.worker)["id"] if args.worker else None
+    # Not quiet: ssh shows the helper's stderr, so the administrator sees which worker answered.
+    ws = open_session(server, key, args.host, args.port, worker=worker)
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
 
@@ -407,10 +443,11 @@ def cmd_forward(args) -> int:
         raise Problem("Give the worker's address, e.g. 10.77.0.2:5900.")
     local = args.local or str(port + 10000 if port + 10000 <= 65535 else 0)
     listen = _address(local if ":" in local else f"127.0.0.1:{local}", "127.0.0.1")
+    worker = find_worker(server, key, args.worker)["id"] if args.worker else None
 
     def handle(connection):
         try:
-            ws = open_session(server, key, host, port)
+            ws = open_session(server, key, host, port, worker=worker)
         except Problem as error:
             print(f"Session refused: {error}", file=sys.stderr)
             connection.close()
@@ -452,7 +489,7 @@ def cmd_socks(args) -> int:
                 connection.close()
                 return
             connection.sendall(b"\x05\x00\x00\x01" + bytes(6))
-            print(f"{host}:{port} connected", file=sys.stderr)
+            print(f"{host}:{port} connected through {clean(ws.worker)}", file=sys.stderr)
             _pipe_socket(ws, connection)
         except (Problem, OSError, IndexError):
             connection.close()
@@ -464,18 +501,13 @@ def cmd_socks(args) -> int:
 
 def cmd_shell(args) -> int:
     server, key = load_settings()
-    data = request(server, key, "GET", "/remote/v1/workers")
-    name = args.worker.lower().removesuffix(".bc")
-    worker = next((item for item in data.get("workers", []) if name in (item["slug"], item.get("address"),
-                                                                         item["id"], item["name"].lower())), None)
-    if worker is None:
-        raise Problem(f"No worker called {args.worker!r}.")
+    worker = find_worker(server, key, args.worker)
     session = request(server, key, "POST", "/remote/v1/sessions",
                       {"worker": worker["id"], "kind": "shell", "host": "shell", "port": 1})["session"]
     ws = open_socket(server, key, f"/remote/v1/sessions/{session['id']}/ws")
     while True:
         kind, payload = ws.receive()
-        message = json.loads(payload.decode("utf-8", "replace")) if kind == TEXT else {}
+        message = _object(payload) if kind == TEXT else {}
         if message.get("state") == "connected":
             break
         if message.get("state") == "failed" or message.get("type") == "error":
@@ -509,9 +541,11 @@ def main(argv: Optional[list] = None) -> int:
     proxy = commands.add_parser("proxy", help="connect stdin/stdout to HOST:PORT (ssh ProxyCommand)")
     proxy.add_argument("host")
     proxy.add_argument("port", type=int)
+    proxy.add_argument("--worker", help="the worker to go through, when several share HOST's network")
     forward = commands.add_parser("forward", help="listen locally and forward to HOST:PORT")
     forward.add_argument("target", metavar="HOST:PORT")
     forward.add_argument("--local", help="[ADDRESS:]PORT to listen on (default: the port + 10000 on 127.0.0.1)")
+    forward.add_argument("--worker", help="the worker to go through, when several share HOST's network")
     socks = commands.add_parser("socks", help="a SOCKS5 proxy for every worker and shared network")
     socks.add_argument("--listen", default="127.0.0.1:1080")
     shell = commands.add_parser("shell", help="open a worker's built-in terminal here")

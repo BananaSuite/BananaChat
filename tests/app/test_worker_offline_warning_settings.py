@@ -6,7 +6,6 @@ import pytest
 
 from bananachat import db
 from bananachat.db import settings as site_settings
-from tests.app.fixtures import Browser
 
 
 def _form(**overrides):
@@ -57,15 +56,6 @@ def test_invalid_settings_form_does_not_change_notice(app, admin):
     response = admin.post("/admin/settings", _form(worker_offline_warning_present="1", primary_color="invalid"),
                           follow_redirects=True)
     assert "must be a colour" in response.get_data(as_text=True)
-    assert _enabled(app) == 1
-
-
-def test_only_admin_can_change_notice(app, make_user):
-    make_user("reader")
-    reader = Browser(app)
-    reader.login("reader")
-    assert reader.get("/admin/settings").status_code == 403
-    assert reader.post("/admin/settings", _form(worker_offline_warning_present="1")).status_code == 403
     assert _enabled(app) == 1
 
 

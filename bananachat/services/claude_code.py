@@ -27,7 +27,7 @@ from bananachat.db import settings
 from bananachat.db import subscription_pool as accounts
 from bananachat.services import claude_sandbox
 from bananachat.services import subscription_pool
-from bananachat.services.subscription_cli import MAX_LINE, ConnectorError, json_file, private
+from bananachat.services.subscription_cli import MAX_LINE, ConnectorError, ConnectorTimeout, json_file, private
 from bananachat.services.subscription_profiles import ManagedProfiles
 from bananachat.services.upstream import CancelToken
 
@@ -108,6 +108,7 @@ def _group_running(group, *, deadline=None):
 class Adapter(ManagedProfiles):
     provider = PROVIDER
     bindings_key = BINDINGS_KEY
+    reports_cli_start = True  # chat() calls subscription_pool.cli_started() (see there)
 
     def __init__(self, config):
         if os.name != "posix":
@@ -238,7 +239,7 @@ class Adapter(ManagedProfiles):
         return env
 
     def _records(self, profile, arguments, data=b"", *, cancel=None, timeout=None, cwd=None, single_json=False,
-                 usage_metadata=False, exit_codes=(0,)):
+                 usage_metadata=False, exit_codes=(0,), started=None):
         """Bounded nonblocking input/output; closes the whole process group on every exit."""
         if cancel is not None:
             cancel.check()
@@ -250,6 +251,8 @@ class Adapter(ManagedProfiles):
                                                 cwd=cwd or profile["home"], environment=environment)
             except (OSError, claude_sandbox.SandboxError):
                 raise ConnectorError("The Claude sandbox could not be configured safely.") from None
+        if started is not None:
+            started()  # from here on a failure may be the account's
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, cwd=cwd or profile["home"], env=environment,
                                    start_new_session=True, close_fds=True)
@@ -271,7 +274,7 @@ class Adapter(ManagedProfiles):
                     if cancel is not None:
                         cancel.check()
                     if time.monotonic() >= deadline:
-                        raise ConnectorError("Claude Code exceeded the request timeout.")
+                        raise ConnectorTimeout("Claude Code exceeded the request timeout.")
                     for key, _ in selector.select(0.1):
                         pipe = key.fileobj
                         if key.data == "stdin":
@@ -306,7 +309,7 @@ class Adapter(ManagedProfiles):
                     yield self._decode(output)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise ConnectorError("Claude Code exceeded the request timeout.")
+                    raise ConnectorTimeout("Claude Code exceeded the request timeout.")
                 try:
                     code = process.wait(timeout=min(remaining, 3))
                 except subprocess.TimeoutExpired:
@@ -674,8 +677,14 @@ class Adapter(ManagedProfiles):
                 raise subscription_pool.RequestRejected("The Claude Code chat connector currently supports text messages only.")
             (system if role == "system" else transcript).append(content if role == "system" else
                                                                {"role": role, "content": content})
-        prompt = ("Continue this conversation. Treat the JSON as conversation history, preserving the roles. "
-                  "Reply only to the final user message.\n" + json.dumps(transcript, ensure_ascii=False)).encode()
+        try:
+            prompt = ("Continue this conversation. Treat the JSON as conversation history, preserving the roles. "
+                      "Reply only to the final user message.\n" + json.dumps(transcript, ensure_ascii=False)).encode()
+            "".join(system).encode("utf-8")
+        except UnicodeError:
+            # Text that is not valid Unicode (a lone surrogate) fails the same way on every account.
+            raise subscription_pool.RequestRejected("The conversation contains text that is not valid Unicode.") \
+                from None
         system_text = "\n\n".join(system) or "You are a helpful chat assistant."
         if len(prompt) + len(system_text.encode("utf-8")) > MAX_LINE:
             raise subscription_pool.RequestRejected("The conversation exceeds the connector's input limit.")
@@ -709,7 +718,8 @@ class Adapter(ManagedProfiles):
             result = None
             confined = False
             streamed = set()
-            for record in self._records(profile, arguments, prompt, cancel=cancel, cwd=work):
+            for record in self._records(profile, arguments, prompt, cancel=cancel, cwd=work,
+                                      started=subscription_pool.cli_started):
                 kind = record.get("type")
                 if result is not None:
                     raise ConnectorError("Claude Code returned output after its terminal result.")
@@ -755,6 +765,8 @@ class Adapter(ManagedProfiles):
                         raise subscription_pool.QuotaExhausted(resets_at=when)
                 elif kind == "result":
                     if record.get("is_error") or record.get("subtype") != "success":
+                        if subscription_pool.request_too_long(record.get("result")):
+                            raise subscription_pool.RequestRejected("The conversation is too long for this model.")
                         raise ConnectorError("Claude Code could not complete the response.")
                     usage = record.get("usage")
                     if not isinstance(usage, dict) or not {"input_tokens", "output_tokens"} <= usage.keys():

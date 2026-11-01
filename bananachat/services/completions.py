@@ -35,9 +35,10 @@ from dataclasses import dataclass, field
 from flask import current_app
 
 from bananachat import db
-from bananachat.db import catalog, runs, tokens, users
+from bananachat.db import catalog, credits, runs, tokens, users
 from bananachat.i18n import translate
-from bananachat.services import api_usage, background, inference, limits, model_lifecycle, queue, supervisor
+from bananachat.services import (api_usage, background, event_pump, inference, limits, model_lifecycle, queue,
+                                  supervisor)
 from bananachat.services.access import AccessContext
 from bananachat.services.upstream import MAX_CONTEXT_IMAGE_BYTES, Cancelled, CancelToken
 
@@ -222,11 +223,21 @@ def _decoding_owner() -> str | None:
     return f"user:{user['id']}"
 
 
+def _text(value: str, param: str) -> str:
+    """*value*, unless it is not valid Unicode: JSON can carry lone surrogates ("\\ud800"), which no model
+    server or provider can be sent (and which would otherwise fail on every subscription account in turn)."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise _bad("Text must be valid Unicode (it contains a lone surrogate).", param, "invalid_text") from None
+    return value
+
+
 def _content(message: dict, role: str, index: int, config, images: list) -> str:
     content = message.get("content")
     param = f"messages[{index}].content"
     if isinstance(content, str):
-        return content
+        return _text(content, param)
     if content is None and role == "assistant":
         return ""
     if not isinstance(content, list):
@@ -241,7 +252,7 @@ def _content(message: dict, role: str, index: int, config, images: list) -> str:
             text = part.get("text")
             if not isinstance(text, str):
                 raise _bad("A text part needs a 'text' string.", part_param)
-            texts.append(text)
+            texts.append(_text(text, part_param))
         elif kind == "image_url":
             if role != "user":
                 raise _bad("Only user messages can contain images.", part_param)
@@ -281,6 +292,7 @@ def parse_chat_request(body, config=None) -> ChatParams:
         model = "auto"
     if not isinstance(model, str) or not model.strip() or len(model) > MAX_MODEL_NAME:
         raise _bad("'model' must be a model id from /v1/models or 'auto'.", "model")
+    _text(model, "model")
 
     raw_messages = body.get("messages")
     if not isinstance(raw_messages, list) or not raw_messages:
@@ -349,6 +361,8 @@ def parse_chat_request(body, config=None) -> ChatParams:
             isinstance(item, str) and 0 < len(item) <= MAX_STOP_CHARS for item in stop):
         raise _bad(f"'stop' must be a string or up to {MAX_STOP_SEQUENCES} non-empty strings "
                    f"of at most {MAX_STOP_CHARS} characters.", "stop")
+    for item in stop:
+        _text(item, "stop")
 
     effort = body.get("reasoning_effort")
     if effort is not None:
@@ -398,6 +412,8 @@ class CompletionRun:
     a final ``Finished``). A request that fails raises :class:`CompletionError`
     instead of yielding ``Finished``. Closing the iterator early (the client
     disconnected) cancels the generation and charges what was produced.
+    Streamed responses call :meth:`detach` first, so the answer does not wait
+    on a client that stops reading (``services.event_pump``).
 
     Limit refusals are worded in *lang* (the playground passes the reader's language; the API keeps English).
     """
@@ -423,8 +439,10 @@ class CompletionRun:
         self._settled = False
         self._iterator = None
         self._buffer: list = []
+        self._pump: event_pump.EventPump | None = None
         self._wait_ms = 0
         self._lease: str | None = None  # its completion_leases row once a model started (see the module docstring)
+        self._hold: int | None = None  # the allowance held while the answer runs (credits.hold_answer)
         self._done = threading.Event()  # settled, or given up to recovery (see shutdown)
 
         context = AccessContext.load(user)
@@ -460,7 +478,7 @@ class CompletionRun:
         self.request = inference.TextRequest(
             user=user, model=model, messages=messages, options=options, request_type=request_type,
             priority=queue.priority_for(user, api=True),
-            owner_key=f"user:{user['id']}:api", fallbacks=fallbacks, think=think, effort=self.effort,
+            owner_key=queue.account_key(user["id"]), fallbacks=fallbacks, think=think, effort=self.effort,
             authorize=self._authorize, prepare=self._for_model)
 
     def _for_model(self, model) -> tuple[list, dict]:
@@ -485,13 +503,16 @@ class CompletionRun:
         user = users.get(self.user["id"])
         if user is None or users.is_suspended(user):
             self.refusal = CompletionError("This account is suspended.", 403, "account_suspended")
-        elif self.token_id is not None and not _token_active(user["id"], self.token_id):
+        elif self.token_id is not None and not tokens.is_live(self.token_id, user["id"]):
             self.refusal = CompletionError("The API token was revoked.", 401, "invalid_api_key")
         elif not AccessContext.load(user).can_use(model, "api"):
             self.refusal = CompletionError(f"You do not have access to '{model['ollama_name']}'.", 403,
                                            "model_not_allowed", param="model")
         else:
-            with limits.snapshot(fresh=True):
+            # The check and the hold on the allowance in one transaction: answers admitted at the same time must
+            # not all spend the same remaining tokens (they are charged only when they end).
+            with db.transaction(), limits.snapshot(fresh=True):
+                self._release_hold()  # a fallback: the previous attempt's hold must not refuse it
                 try:
                     # A fallback with no explicit think value uses its own
                     # default; that level must still be unlocked now.
@@ -503,11 +524,45 @@ class CompletionRun:
                     admission = limits.admit(user, "api", model, take_rate=self._admitted)
                     if not admission.allowed:
                         self.refusal = _admission_error(admission, model, self.lang)
+                    else:
+                        self._take_hold(admission.budget, model)
         return self.refusal.message if self.refusal else None
+
+    def _take_hold(self, budget, model) -> None:
+        """Hold what the answer may cost (its prompt and longest output, × the model's weight) of what is left."""
+        if budget is None or budget.unlimited:
+            return  # administrators, and models that do not count toward the pool
+        weight = limits.charge_terms(model["id"])[0]
+        wanted = (inference.estimate_prompt(self.request.messages)
+                  + int(self.request.options.get("num_predict") or 0)) * weight
+        tokens = min(wanted, budget.regular_left)
+        if tokens > 0:
+            self._hold = credits.hold_answer(self.user["id"], tokens, model_id=model["id"], token_id=self.token_id)
+            hold = self._hold
+            supervisor.register_watch(f"hold:{hold}", self.cancel, lambda renew: self._renew_hold(hold, renew))
+
+    @staticmethod
+    def _renew_hold(hold: int, renew: bool) -> None:
+        if renew:
+            credits.touch_reservation(hold)  # else it expires like an abandoned image reservation
+        return None
+
+    def _release_hold(self) -> None:
+        """Give the held allowance back (joins the caller's transaction: the charge replaces it)."""
+        hold, self._hold = self._hold, None
+        if hold is not None:
+            supervisor.unregister_watch(f"hold:{hold}", self.cancel)
+            credits.refund_reservation(hold)
 
     # iteration -------------------------------------------------------------
     def events(self):
         """Events not yet consumed, including those read by :meth:`prime`."""
+        if self._pump is not None:
+            yield from self._pump.drain()
+            return
+        yield from self._events()
+
+    def _events(self):
         while self._buffer:
             yield self._buffer.pop(0)
         if self._iterator is None:
@@ -523,8 +578,21 @@ class CompletionRun:
             if isinstance(event, until):
                 return
 
+    def detach(self) -> None:
+        """Generate the rest of the answer in a thread of its own; :meth:`events` then reads what it produced.
+
+        The answer then keeps its deadline and gives up its queue place without waiting for the client to read
+        it (a client that stops reading a stream would otherwise hold both for as long as it stays connected).
+        """
+        if self._pump is None:
+            self._pump = event_pump.EventPump(
+                current_app._get_current_object(), self._events(), cancel=self.cancel, merge=inference.continues,
+                join=inference.joined, name=self.request_type).start()
+
     def close(self) -> None:
-        if self._iterator is not None:
+        if self._pump is not None:
+            self._pump.close()
+        elif self._iterator is not None:
             self._iterator.close()
 
     def _run(self):
@@ -593,12 +661,17 @@ class CompletionRun:
                         raise
 
     def _interruption(self) -> CompletionError | None:
-        """Why this process interrupted the answer itself: it is exiting, or its lease was recovered elsewhere."""
+        """Why this process interrupted the answer itself: it is exiting, its lease was recovered elsewhere, or
+        its account was suspended or its API token revoked."""
         if self.cancel.reason == "shutdown":
             return CompletionError("The server restarted while answering; what was produced so far was charged. "
                                    "Send the request again.", 503, "server_restarting", retry_after=5)
         if self.cancel.reason == "lease lost":
             return CompletionError("The answer was interrupted.", 503, "interrupted", retry_after=5)
+        if self.cancel.reason == "account suspended":
+            return CompletionError("This account is suspended.", 403, "account_suspended")
+        if self.cancel.reason == "token revoked":
+            return CompletionError("The API token was revoked.", 401, "invalid_api_key")
         return None
 
     def _problem(self, finished: inference.Finished) -> CompletionError | None:
@@ -662,10 +735,18 @@ class CompletionRun:
         supervisor.register_watch(self._watch_key, self.cancel, self._checkpoint)
 
     def _checkpoint(self, renew: bool) -> str | None:
-        """Supervisor watch: renew the lease with what the answer would be charged if it ended now."""
+        """Supervisor watch: renew the lease with what the answer would be charged if it ended now.
+
+        The answer stops when its account is suspended (or deleted) meanwhile, or the API token it came with is
+        revoked or expires.
+        """
         lease = self._lease
         if not renew or lease is None or self._settled:
             return None
+        if users.suspended_or_gone(self.user["id"]):
+            return "account suspended"
+        if self.token_id is not None and not tokens.is_live(self.token_id, self.user["id"]):
+            return "token revoked"
         tokens_in, tokens_out = self._usage_if_interrupted()
         if runs.checkpoint_completion(lease, model_id=self.model["id"], tokens_in=tokens_in, tokens_out=tokens_out):
             return None
@@ -691,6 +772,12 @@ class CompletionRun:
     def _release(self) -> None:
         if self._lease is not None:
             supervisor.unregister_watch(self._watch_key, self.cancel)
+        if self._hold is not None:
+            try:
+                self._release_hold()
+            except Exception:  # noqa: BLE001 - the hold then expires (credits.purge_expired_reservations)
+                log.warning("Could not release the allowance held for a %s answer", self.request_type, exc_info=True)
+                db.close_thread_connection()
         with _active_lock:
             _active.discard(self)
         self._done.set()
@@ -701,7 +788,7 @@ class CompletionRun:
             return
         if not self._admitted or self.model is None:
             self._settled = True
-            return
+            return  # _release gives back a hold taken by an attempt that never started
         produced = self.produced
         completed = finished is not None and finished.state == "completed"
         if completed:
@@ -718,6 +805,7 @@ class CompletionRun:
             "stopped" if produced else "error")
         try:
             with db.transaction():  # the charge and the end of the lease together (see the module docstring)
+                self._release_hold()  # the charge replaces the held allowance
                 if self._lease is not None and not runs.close_completion(self._lease):
                     # This process stopped renewing the lease for too long: another one charged its last record.
                     log.warning("A %s answer was already charged by recovery", self.request_type)
@@ -739,10 +827,6 @@ class CompletionRun:
             raise CompletionError(translate(self.lang, "errors.storage_unavailable"), 503,
                                   "storage_unavailable", retry_after=5) from None
         self._settled = True
-
-
-def _token_active(user_id: str, token_id) -> bool:
-    return any(row["id"] == token_id for row in tokens.list_for(user_id))
 
 
 # ----- this process's answers ------------------------------------------------------

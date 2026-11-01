@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import csv
 import io
+import time
 from datetime import datetime, timedelta, timezone
 
 from flask import Response, current_app, render_template, request, stream_with_context
 
-from bananachat import db
+from bananachat import db, security
 from bananachat.db import metrics as metrics_db
 from bananachat.security import admin_required
 from bananachat.services import metrics as metrics_service  # noqa: F401  (registers the background jobs)
 
 from . import bp
-from ._helpers import audit
+from ._helpers import audit, back
 
 RANGES = {"24h": (timedelta(hours=24), "hour", "Last 24 hours"),
           "7d": (timedelta(days=7), "day", "Last 7 days"),
@@ -23,7 +24,7 @@ CHART_WIDTH, CHART_HEIGHT = 720, 180
 
 
 def _range():
-    key = request.args.get("range", "24h")
+    key = request.values.get("range", "24h")
     if key not in RANGES:
         key = "24h"
     span, bucket, label = RANGES[key]
@@ -92,8 +93,9 @@ def _cell(value):
     return value
 
 
-@bp.get("/metrics/export.csv", endpoint="metrics_export")
+@bp.post("/metrics/export.csv", endpoint="metrics_export")
 @admin_required
+@security.download_first
 def export():
     key, span, _bucket, _label = _range()
     since = db.now(-span)
@@ -101,13 +103,22 @@ def export():
     columns = ["id", "created_at", "request_type", "status", "model_id", "model_name", "user_id", "username",
                "tokens_in", "tokens_out", "duration_ms", "queue_wait_ms", "usage_estimated"]
 
+    allowed = security.requester_check(admin=True)
+
     def generate():
         buffer = io.StringIO()
         writer = csv.writer(buffer)
         writer.writerow(columns)
+        checked = time.monotonic()
         for index, row in enumerate(metrics_db.iter_requests(since), 1):
             writer.writerow([_cell(row[column]) for column in columns])
             if index % 500 == 0:
+                # Stops (the file ends cut short) once the requester may no longer read it.
+                now = time.monotonic()
+                if now - checked >= security.DOWNLOAD_CHECK_SECONDS:
+                    if not allowed():
+                        return
+                    checked = now
                 yield buffer.getvalue()
                 buffer.seek(0)
                 buffer.truncate()
@@ -118,3 +129,10 @@ def export():
     response.headers["Content-Disposition"] = f'attachment; filename="request-metrics-{key}-{stamp}.csv"'
     response.headers["Cache-Control"] = "private, no-store"
     return response
+
+
+@bp.get("/metrics/export.csv", endpoint="metrics_export_link")
+@admin_required
+def export_page():
+    # The export starts from the metrics page's button (POST), never from a link.
+    return back("admin.metrics", range=_range()[0])

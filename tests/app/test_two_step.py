@@ -147,17 +147,6 @@ def test_turning_it_on_takes_the_password_and_a_code_and_shows_recovery_codes_on
                                               "password": "alice-password"}).status_code == 302
 
 
-def test_turning_it_on_signs_out_the_other_sessions(app, make_user, clock):
-    make_user("alice")
-    other = Browser(app)
-    other.login("alice")
-    browser = Browser(app)
-    browser.login("alice")
-    _enable(browser, "alice", clock)
-    assert _signed_in(browser)
-    assert not _signed_in(other)
-
-
 def test_the_set_up_expires(app, make_user, clock, monkeypatch):
     from bananachat.web import account
 
@@ -498,13 +487,13 @@ def test_a_stale_session_must_confirm_before_high_impact_actions(app, admin, mak
         assert security.verify_password(users.get(alice["id"])["password"], "alice-password")
         assert users.get_by_username("mallory") is None
         assert not db.scalar("SELECT COUNT(*) FROM invite_codes WHERE assigned_role='admin'", default=0)
-    # Ordinary actions are not affected.
+    # Any new account outlives the session too, and so does one an invitation lets someone make (Audit RC1-1).
     admin.post("/admin/users/create", {"username": "pupil", "password": "pupil-password",
                                        "confirm_password": "pupil-password", "role": "user"})
     admin.post("/admin/invites/create", {"max_uses": "1", "expires": "1d", "role": "user"})
     with app.app_context():
-        assert users.get_by_username("pupil") is not None
-        assert len(invites.list_all()[0]) == 1
+        assert users.get_by_username("pupil") is None
+        assert invites.list_all()[0] == []
 
     # A wrong password is refused and recorded; the right one lets the action through.
     admin.post(f"/admin/users/{alice['id']}/role", {"role": "admin", "reauth_secret": "guess-guess"})

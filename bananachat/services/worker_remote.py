@@ -381,15 +381,18 @@ def _key_valid(row, now: float) -> bool:
                                                                      "suspended_until": row["owner_suspended_until"]})
 
 
-def still_allowed(row) -> bool:
+def still_allowed(row, *, auth_session: str | None = None) -> bool:
     """Whether whoever opened a session may still use it: its access key is still valid, or the administrator who
-    opened it in the browser still is one (not demoted, suspended or deleted)."""
+    opened it in the browser still is one (not demoted, suspended or deleted) and is still signed in with
+    *auth_session*, the login session (hash) whose WebSocket carries it: signing out, "sign out everywhere", a
+    revoked session or a password change end the session too."""
     from bananachat.db import users
 
     if row["access_key_id"]:
         return _key_valid(store.key_by_id(row["access_key_id"]), time.time())
     user = users.get(row["created_by"]) if row["created_by"] else None
-    return user is not None and user["role"] == "admin" and not users.is_suspended(user)
+    return user is not None and user["role"] == "admin" and not users.is_suspended(user) \
+        and auth_session is not None and store.login_session_live(auth_session, user["id"])
 
 
 def opened(tunnel_id: str) -> None:
@@ -467,8 +470,8 @@ def overview(config=None) -> list[dict]:
 def resolve(host: str, port: int, config=None):
     """The worker and target for an address the connect helper was asked to reach.
 
-    *host* is a worker's virtual address, ``<name>.bc`` (or its name or id), or an address in a network a worker
-    shares. Returns ``(worker id, kind, host, port)``; raises :class:`RemoteError`.
+    *host* is a worker's virtual address, ``<name>.bc`` (or its name or id), or an address in a network exactly
+    one worker shares. Returns ``(worker id, kind, host, port)``; raises :class:`RemoteError`.
     """
     host = (host or "").strip().lower().rstrip(".")
     workers = overview(config)
@@ -483,9 +486,17 @@ def resolve(host: str, port: int, config=None):
         address = ipaddress.ip_address(host)
     except ValueError:
         raise RemoteError(f"No worker is called {host!r}.") from None
-    for item in sorted(workers, key=lambda item: not item["online"]):
-        if any(address in ipaddress.ip_network(network) for network in item["remote"].get("subnets", [])):
-            return item["id"], kind_for_port(port), str(address), port
+    # Each worker's owner chooses the networks it shares, so one worker may claim another's (a covering or a
+    # narrower network, or simply the same 192.168.1.0/24): an address that more than one worker shares, online
+    # or not, is never given to either of them, or a worker could receive sessions meant for another's network.
+    matches = [item for item in workers
+               if any(address in ipaddress.ip_network(network) for network in item["remote"].get("subnets", []))]
+    if len(matches) > 1:
+        names = ", ".join(sorted(item["name"] for item in matches))
+        raise RemoteError(f"{host} is in networks shared by more than one worker ({names}). "
+                          "Choose the worker: --worker NAME.")
+    if matches:
+        return matches[0]["id"], kind_for_port(port), str(address), port
     raise RemoteError(f"No worker shares a network containing {host}.")
 
 

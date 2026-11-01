@@ -199,7 +199,7 @@ def connect(base_url: str, path: str, headers: Optional[Dict[str, str]] = None, 
         if status != 101:
             body = rest[:600].decode("utf-8", "replace").strip()
             raise WebSocketError(f"HTTP {status}{': ' + body if body else ''}", status)
-        expected = base64.b64encode(hashlib.sha1(key.encode("ascii") + GUID).digest()).decode("ascii")  # noqa: S324
+        expected = base64.b64encode(hashlib.sha1(key.encode("ascii") + GUID, usedforsecurity=False).digest()).decode("ascii")
         if received.get("sec-websocket-accept") != expected or received.get("upgrade", "").lower() != "websocket":
             raise WebSocketError("The server did not accept the WebSocket.")
         sock.settimeout(None)

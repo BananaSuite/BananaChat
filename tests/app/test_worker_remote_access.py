@@ -681,6 +681,7 @@ def test_the_socks_proxy_of_the_connect_helper_reaches_a_worker_by_its_virtual_a
 
 def test_a_session_ends_when_its_administrator_loses_the_role(remote_app, make_user):
     from bananachat import db
+    from bananachat.db import users
     from bananachat.db import worker_remote as store
     from bananachat.services import worker_remote
     from bananachat.web import _tunnels
@@ -689,18 +690,19 @@ def test_a_session_ends_when_its_administrator_loses_the_role(remote_app, make_u
     _heartbeat(remote_app, token, {"enabled": True, "services": [{"kind": "ssh", "port": 22}]})
     other = make_user("dora", role="admin")
     with remote_app.app_context():
+        signed_in = users.session_hash(users.create_session(other["id"], 30))
         browser = worker_remote.create_session(worker_id, "ssh", "127.0.0.1", 22, created_by=other["id"])
         key_id, _token = worker_remote.create_key(_admin_user(remote_app), "", 1)
         helper = worker_remote.create_session(worker_id, "ssh", "127.0.0.1", 22, access_key_id=key_id)
     with remote_app.test_request_context():
-        browser_check = _tunnels._closed_by_administrator(browser["id"])
+        browser_check = _tunnels._closed_by_administrator(browser["id"], signed_in)
         helper_check = _tunnels._closed_by_administrator(helper["id"])
         assert not browser_check() and not helper_check()
     with remote_app.app_context():
         db.execute("UPDATE users SET role='user' WHERE id=?", (other["id"],))
         worker_remote.revoke_key(key_id)
     with remote_app.test_request_context():
-        assert _tunnels._closed_by_administrator(browser["id"])()
+        assert _tunnels._closed_by_administrator(browser["id"], signed_in)()
         assert _tunnels._closed_by_administrator(helper["id"])()
     with remote_app.app_context():
         row = store.tunnel(browser["id"])

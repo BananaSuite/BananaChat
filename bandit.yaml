@@ -1,0 +1,10 @@
+# bandit -c bandit.yaml -r bananachat compute worker banana_ops banana_backup sqlite_migrations.py sqlite_runtime.py sqlite_snapshot.py -ll
+#
+# B608 (SQL built from strings) is skipped: every one of its hits builds
+# column lists, placeholders ("?, ?, ?") or WHERE fragments from names checked
+# against an allow-list in the same function (db/settings.COLUMNS,
+# external_providers.save, catalog.EDITABLE_FIELDS ...) or written in the code;
+# values always go through "?" parameters (docs/architecture.md, "Storage").
+# Triaged in the security audit (AUDIT.md, "Static analysis"). Other checks
+# that are intentional are marked inline with "# nosec <id> - <reason>".
+skips: [B608]

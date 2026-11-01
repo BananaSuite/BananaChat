@@ -82,6 +82,9 @@
             {% if api_token_count %}
             <label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>{{ t("account.revoke_api_tokens", count=api_token_count) }}</span></label>
             {% endif %}
+            {% if share_link_count %}
+            <label class="check"><input type="checkbox" name="revoke_share_links" value="1" checked><span>{{ t("account.revoke_share_links", count=share_link_count) }}</span></label>
+            {% endif %}
             <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("two_step.enable") }}</button></div>
           </form>
         </li>

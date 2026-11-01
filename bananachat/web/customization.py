@@ -164,8 +164,16 @@ def _write_background(encoded: bytes, config) -> str:
 
 def replace_background(user_id: str, upload_data: bytes) -> str:
     """Store a new background for *user_id* and delete the previous one. Returns the new file name."""
+    from bananachat.services import attachments
+
     config = _config()
-    encoded = process_background(upload_data, config)
+    try:
+        # Decoding a large image takes hundreds of MB: one at a time per account, a few per process,
+        # as chat images (raises AttachmentBusy).
+        with attachments.decoding_image(f"user:{user_id}"):
+            encoded = process_background(upload_data, config)
+    except attachments.AttachmentBusy:
+        raise BackgroundRejected("chat.file_busy", 503) from None
     filename = _write_background(encoded, config)
     try:
         with db.transaction():
@@ -369,6 +377,10 @@ def upload_background():
     try:
         filename = replace_background(user["id"], data)
     except BackgroundRejected as problem:
+        if problem.status == 503:
+            response = security.json_error(_t(problem.key), 503, "busy")
+            response.headers["Retry-After"] = "5"
+            return response
         code = "too_large" if problem.status == 413 else "invalid_image"
         return security.json_error(_t(problem.key, **problem.params), problem.status, code)
     prefs = users.get_preferences(user["id"])

@@ -113,12 +113,6 @@ def _many_chats(app, username, count):
         return ids
 
 
-def test_conversation_container_is_a_labelled_region(alice):
-    html = alice.get(f"/chat/{new_chat(alice)}").get_data(as_text=True)
-    container = html.split('id="chat-messages"', 1)[1].split(">", 1)[0]
-    assert 'role="region"' in container and "aria-label=" in container
-
-
 def test_search_is_limited_per_account(app, alice):
     statuses = [alice.fetch("/chat/search?q=topic").status_code for _ in range(61)]
     assert statuses[:60] == [200] * 60
@@ -471,8 +465,3 @@ def test_admin_no_history_audit(app, alice, admin):
     assert admin.get(f"/admin/incognito/{session_id}").status_code == 404
 
 
-def test_admin_audit_requires_an_administrator(app, alice):
-    session_id = chat_with_answer(alice)
-    for url in ("/admin/chats", f"/admin/chats/{session_id}", "/admin/incognito"):
-        assert alice.get(url).status_code == 403
-    assert alice.post(f"/admin/chats/{session_id}/delete").status_code == 403

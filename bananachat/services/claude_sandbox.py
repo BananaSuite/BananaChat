@@ -55,7 +55,7 @@ def profile_paths(profiles, *, uid, forbidden=(), keys=("home", "config_dir")):
     paths = []
     forbidden = [Path(path).resolve() for path in forbidden]
     forbidden += [Path(path) for path in ("/usr", "/etc", "/bin", "/lib", "/lib64", "/proc", "/dev", "/run",
-                                          "/tmp", "/home", "/root")]  # noqa: S108 - refused as a profile location
+                                          "/tmp", "/home", "/root")]  # noqa: S108  # nosec B108 - refused as a profile location
     for name, profile in profiles.items():
         if not isinstance(profile, dict):
             raise SandboxError("Invalid private account profile.")
@@ -91,7 +91,7 @@ def managed_root(value, *, uid, forbidden=(), sandboxed=True):
         return path
     forbidden = [Path(item).resolve() for item in forbidden]
     forbidden += [Path(item) for item in ("/usr", "/etc", "/bin", "/lib", "/lib64", "/proc", "/dev", "/run",
-                                          "/tmp", "/home", "/root")]  # noqa: S108 - refused as a profile location
+                                          "/tmp", "/home", "/root")]  # noqa: S108  # nosec B108 - refused as a profile location
     if len(path.parts) < 3 or any(path.is_relative_to(other) or other.is_relative_to(path) for other in forbidden):
         raise SandboxError("Keep the signed-in profiles outside application storage, source and system directories.")
     for parent in path.parents:
@@ -200,7 +200,7 @@ def command(binary, profile, arguments, *, cwd, environment):
                 if info.st_uid != 0 or info.st_mode & 0o022:
                     raise SandboxError("Keep extra certificate trust below root-owned, non-writable parent directories.")
             result += ["--ro-bind", str(path), str(path)]
-    result += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]  # noqa: S108 - a fresh, private tmpfs
+    result += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]  # noqa: S108  # nosec B108 - a fresh, private tmpfs
     # Recheck each invocation. A nested config remains part of the enclosing
     # home mount even if changed after this check; never resolve and bind it to
     # a different host directory at launch time.

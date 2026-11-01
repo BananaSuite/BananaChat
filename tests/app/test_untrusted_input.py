@@ -108,10 +108,20 @@ def test_background_upload_limit_applies_before_the_body_is_read(make_app):
                                              content_type="multipart/form-data")
     assert response.status_code == 413
 
-    larger = make_app(background_image_max_mb=8).test_client()
+    from bananachat import security
+    from bananachat.db import users
+    from tests.app.fixtures import Browser
+
+    app = make_app(background_image_max_mb=8)
+    with app.test_request_context():
+        users.create("painter", security.hash_password("painter-password"), role="user")
+    signed_in = Browser(app)
+    signed_in.login("painter")
     body = {"file": (io.BytesIO(b"x" * (5 * 1024 * 1024)), "big.png")}
-    response = larger.post("/api/preferences/background", data=body, content_type="multipart/form-data")
-    assert response.status_code == 400  # within the configured limit: refused by the CSRF check instead
+    response = signed_in.client.post("/api/preferences/background", data=body, content_type="multipart/form-data")
+    # Within the configured limit for a signed-in account: refused by the CSRF check instead (no token sent).
+    # An anonymous caller never gets the larger limit (AUDIT.md F-1).
+    assert response.status_code == 400
 
 
 # ----- PDF attachments -----------------------------------------------------------------------------
@@ -155,7 +165,7 @@ def test_pdf_extraction_is_bounded_in_time(monkeypatch):
 
 # ----- invitations -------------------------------------------------------------------------------------
 
-def test_administrator_invitations_stop_working_when_their_creator_is_no_longer_an_administrator(app, make_user):
+def test_invitations_stop_working_when_their_creator_is_no_longer_an_administrator(app, make_user):
     from bananachat.db import invites, users
 
     from datetime import datetime, timedelta, timezone
@@ -167,12 +177,12 @@ def test_administrator_invitations_stop_working_when_their_creator_is_no_longer_
         user_code = invites.create(rogue["id"], max_uses=0, assigned_role="user")
         assert invites.find_usable(admin_code) and invites.find_usable(user_code)
         users.set_role(rogue["id"], "user")
-        assert invites.find_usable(admin_code) is None
-        assert invites.find_usable(user_code)
+        # Whatever role they give (audit C1-7).
+        assert invites.find_usable(admin_code) is None and invites.find_usable(user_code) is None
         users.set_role(rogue["id"], "admin")
-        assert invites.find_usable(admin_code)
+        assert invites.find_usable(admin_code) and invites.find_usable(user_code)
         users.delete(rogue["id"])
-        assert invites.find_usable(admin_code) is None and invites.find_usable(user_code)
+        assert invites.find_usable(admin_code) is None and invites.find_usable(user_code) is None
 
 
 # ----- access log ---------------------------------------------------------------------------------------

@@ -7,14 +7,50 @@ name, so keep it at the repository root.
 import os
 import re
 import signal
+import socket
 import threading
 import time
 
+from gunicorn import util as _gunicorn_util
 from gunicorn.glogging import Logger
 
 from bananachat.config import load_config
 
 _config = load_config(load_secret=False)
+
+
+def close_without_waiting(sock, timeout=2.0, max_drain=65536):
+    """``gunicorn.util.close_graceful`` that never waits for the client.
+
+    Gunicorn 26 closes every finished connection on the worker's main loop, the one that accepts new
+    connections, and lingers up to *timeout* seconds reading until the client closes its side: a few
+    clients that never do stopped the worker from accepting anything. This sends FIN, reads only
+    what already arrived (so unread request data does not turn the close into a reset that cuts the
+    response short) and closes.
+    """
+    try:
+        try:
+            sock.shutdown(socket.SHUT_WR)
+        except OSError:
+            return
+        drained = 0
+        try:
+            sock.setblocking(False)
+            while drained < max_drain:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                drained += len(data)
+        except OSError:  # nothing more has arrived (BlockingIOError) or the client is gone
+            pass
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+_gunicorn_util.close_graceful = close_without_waiting
 
 
 def _bind_host(host: str) -> str:
@@ -27,7 +63,9 @@ bind = f"{_bind_host(_config.host)}:{_config.port}"
 # workload: most requests wait on the model, not on Python.
 workers = int(os.environ.get("BC_WORKERS", "2"))
 worker_class = "gthread"
-threads = _config.http_threads
+# Large responses (files, exports, long pages) get BC_DOWNLOAD_THREADS threads of their own, never more at once
+# (bananachat.security.hold_large_response), so slow readers cannot hold the threads for everything else.
+threads = _config.http_threads + _config.download_threads
 
 # Create the database and secret key once, before forking.
 preload_app = True
@@ -40,11 +78,13 @@ errorlog = "-"
 loglevel = "info"
 # Never log query strings (they may carry invitation codes) or share-link tokens.
 access_log_format = '%(h)s "%(m)s %(U)s %(H)s" %(s)s %(B)s %(M)sms "%(a)s"'
-_SHARE_TOKEN = re.compile(r"^(/share/)[^/]+")
+# Chat and personality share links carry their token in the path (also when a client doubles the slashes).
+_SHARE_TOKEN = re.compile(r"^(/+share/+|/+personalities/+shared/+)[^/]+")
 
 
 class AccessLogger(Logger):
-    """Replaces the token of ``/share/<token>`` paths in the access log: it grants access to a chat."""
+    """Replaces the token of ``/share/<token>`` and ``/personalities/shared/<token>`` paths in the access log: it
+    grants access to a chat or a personality."""
 
     def atoms(self, resp, req, environ, request_time):
         atoms = super().atoms(resp, req, environ, request_time)
@@ -121,7 +161,10 @@ timeout = 120
 # about this long to finish; answers still generating are then stopped, saved
 # and charged for what they produced (see _hand_over).
 graceful_timeout = 60
-keepalive = 5
+# One request per connection: answers to requests pipelined on a kept-alive connection that the client
+# reads slowly would fill its buffers and hold a thread each, however small. The reverse proxy on the same
+# host reconnects at almost no cost.
+keepalive = 0
 # Workers are replaced after this many requests, but never sooner than
 # _MIN_WORKER_SECONDS after they started, so cheap requests that anyone can
 # send cannot force replacements (which cut long answers short). Answers keep
@@ -165,8 +208,14 @@ def post_fork(server, worker):
 
 def post_worker_init(worker):
     from bananachat.app import start_background_services
+    from bananachat.read_timeout import guard as guard_reads
+    from bananachat.write_timeout import guard
 
     start_background_services(worker.wsgi)
+    # Gunicorn has no write timeout: free the thread of a client that stops reading a stream or a download.
+    worker.wsgi = guard(worker.wsgi, _config.write_timeout)
+    # Nor does it have a read deadline: free the thread of a client that sends a request body very slowly.
+    worker.wsgi = guard_reads(worker.wsgi, _config.body_stall_timeout, _config.body_min_kbps)
     _hand_over_before_the_master_kills(worker)
 
 

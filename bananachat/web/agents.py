@@ -37,6 +37,12 @@ from bananachat.services.agents import settings as agent_settings
 bp = Blueprint("agents", __name__, url_prefix="/agents")
 
 EVENTS_LIMIT = 300
+PAGE_LIMIT = 1000
+STEP_TEXT_BYTES = 1024 * 1024  # text of the steps in the page or one events answer (at least one step)
+PAGE_LANES = 64               # newest sub-agent lanes in the page and the admin view (8 runs at most)
+EVENTS_LANES = 16             # newest lanes in one events answer: this run and the last (at most 8 a run)
+LANE_SUMMARY_CHARS = 4000     # of a lane's report in these views (the full one is in its finish step)
+UPLOADS_PER_HOUR = 30         # uploads to a workspace per person (each holds a runner archive slot)
 
 
 def _t(key, **params):
@@ -78,8 +84,14 @@ def step_view(row, lang: str) -> dict:
 
 
 def lane_view(row) -> dict:
+    """A row of ``agents_db.recent_lanes``."""
+    summary = row["summary"] or ""
     return {"agent": row["agent"], "title": row["title"], "status": row["status"], "steps_used": row["steps_used"],
-            "summary": row["summary"], "instructions": row["instructions"]}
+            "summary": summary + "\u2026" if row["clipped"] else summary}
+
+
+def lane_views(task_id: str, limit: int) -> list[dict]:
+    return [lane_view(row) for row in agents_db.recent_lanes(task_id, limit=limit, summary_chars=LANE_SUMMARY_CHARS)]
 
 
 def task_view(task, lang: str, *, settings=None) -> dict:
@@ -107,12 +119,12 @@ def task_view(task, lang: str, *, settings=None) -> dict:
 
 
 def events_payload(task, *, after: int, lang: str) -> dict:
-    rows = agents_db.steps(task["id"], after=after, limit=EVENTS_LIMIT)
+    rows, more = agents_db.step_page(task["id"], after=after, limit=EVENTS_LIMIT, max_bytes=STEP_TEXT_BYTES)
     return {
         "task": task_view(task, lang),
         "steps": [step_view(row, lang) for row in rows],
-        "lanes": [lane_view(row) for row in agents_db.lanes(task["id"])],
-        "more": len(rows) >= EVENTS_LIMIT,
+        "lanes": lane_views(task["id"], EVENTS_LANES),
+        "more": more,
     }
 
 
@@ -121,6 +133,15 @@ def events_payload(task, *, after: int, lang: str) -> dict:
 def _access_state(user) -> str:
     """The same audience decision used by starts, follow-ups and execution."""
     return agent_settings.access_state(user)
+
+
+def _may_use_agents(user) -> bool:
+    """Whether *user* may use cloud sessions now: only they may send these views a large body."""
+    try:
+        service.check_access(user)
+    except service.AgentError:
+        return False
+    return True
 
 
 @bp.app_context_processor
@@ -188,7 +209,7 @@ def index():
 
 @bp.post("", endpoint="create")
 @security.login_required
-@security.body_limit(lambda config: config.agents_max_upload_bytes + 1024 * 1024)
+@security.body_limit(lambda config: config.agents_max_upload_bytes + 1024 * 1024, serves=_may_use_agents)
 def create():
     user = security.current_user()
     blocked = status.guard()
@@ -216,13 +237,15 @@ def task(task_id):
     user = security.current_user()
     row = _owned(task_id)
     lang = g.lang
-    rows = agents_db.steps(row["id"], limit=1000)
+    # The rest (more steps, or long ones) comes from the events poll, a megabyte at a time; lanes are the
+    # newest ones, the poll updating those of this run and the last.
+    rows, more = agents_db.step_page(row["id"], limit=PAGE_LIMIT, max_bytes=STEP_TEXT_BYTES)
     access = _access_state(user)
     data = {
         "task": task_view(row, lang),
         "steps": [step_view(step, lang) for step in rows],
-        "lanes": [lane_view(lane) for lane in agents_db.lanes(row["id"])],
-        "more": len(rows) >= 1000,
+        "lanes": lane_views(row["id"], PAGE_LANES),
+        "more": more,
         "can_send": access == "ok",
         "urls": {
             "index": url_for("agents.index"),
@@ -326,7 +349,7 @@ def workspace_file(task_id):
 
 @bp.get("/<task_id>/workspace/archive", endpoint="workspace_archive")
 @security.login_required
-@security.long_request
+@security.download_first
 def workspace_archive(task_id):
     """One download per person at a time (every process): the archive is fetched from the runner into a
     temporary file first, so a slow browser never holds one of the runner's two archive slots."""
@@ -341,14 +364,19 @@ def workspace_archive(task_id):
         with app.app_context():
             agents_db.release_download(user_id, token)
 
-    try:
-        spool = service.fetch_archive(row, renew=lambda: agents_db.renew_download(user_id, token))
-    except service.AgentError as error:
-        release()
-        return _error_response(error)
-    except BaseException:
-        release()
-        raise
+    # Fetching from the runner holds a long-request place; sending the spooled file only the download place.
+    with security.long_request_place() as placed:
+        if not placed:
+            release()
+            return security.server_busy()
+        try:
+            spool = service.fetch_archive(row, renew=lambda: agents_db.renew_download(user_id, token))
+        except service.AgentError as error:
+            release()
+            return _error_response(error)
+        except BaseException:
+            release()
+            raise
     size = spool.seek(0, 2)
     spool.seek(0)
 
@@ -375,6 +403,7 @@ def workspace_archive(task_id):
 
 @bp.get("/<task_id>/workspace/patch", endpoint="workspace_patch")
 @security.login_required
+@security.download_first
 @security.long_request
 def workspace_patch(task_id):
     """The changes to the imported repository as a Git patch (Git runs in the sandbox, never here).
@@ -404,13 +433,26 @@ def workspace_patch(task_id):
 
 @bp.post("/<task_id>/workspace/upload", endpoint="workspace_upload")
 @security.login_required
-@security.body_limit(lambda config: config.agents_max_upload_bytes + 1024 * 1024)
+@security.body_limit(lambda config: config.agents_max_upload_bytes + 1024 * 1024, serves=_may_use_agents)
 def workspace_upload(task_id):
+    """One upload per person at a time (every process) and :data:`UPLOADS_PER_HOUR`: each holds one of the
+    runner's two archive slots, which every person's task starts, Git imports and downloads share."""
     user = security.current_user()
     row = _owned(task_id)
     try:
         service.check_access(user)
-        count = service.upload_to_workspace(row, request.files.getlist("files"))
     except service.AgentError as error:
         return _error_response(error)
+    token = agents_db.claim_upload(user["id"])
+    if token is None:
+        return _error_response(service.AgentError("agents.error_upload_busy", 429, "busy", retry_after=30))
+    try:
+        if not security.allow("agents-upload", UPLOADS_PER_HOUR, 3600, key=user["id"]):
+            return security.too_many_requests(600)
+        count = service.upload_to_workspace(row, request.files.getlist("files"),
+                                            before_each=lambda: agents_db.renew_upload(user["id"], token))
+    except service.AgentError as error:
+        return _error_response(error)
+    finally:
+        agents_db.release_upload(user["id"], token)
     return jsonify({"ok": True, "count": count})

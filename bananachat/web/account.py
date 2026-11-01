@@ -4,23 +4,24 @@ sessions, personal data, quota and access requests, and account deletion.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import sqlite3
 import time
 from datetime import datetime, timezone
 
-from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, session, url_for
+from flask import (Blueprint, abort, current_app, flash, g, redirect, render_template, request, session,
+                   stream_with_context, url_for)
 
 from bananachat import PRODUCT_NAME, db, security, totp
 from bananachat.db import access as access_db
-from bananachat.db import catalog, credits, tokens, users
+from bananachat.db import catalog, chats, credits, tokens, users
 from bananachat.db import limits as limits_db
 from bananachat.formatting import local_time, parse_amount, tokens_text
 from bananachat.i18n import DECIMAL_COMMA, translate, translate_html
 from bananachat.services import community, exports, limits, two_step
 from bananachat.services.access import AccessContext, is_image_model, is_text_model
+from bananachat.services.agents import service as agents_service
 
 bp = Blueprint("account", __name__)
 log = logging.getLogger("bananachat.account")
@@ -29,7 +30,24 @@ USE_CASE_MIN, USE_CASE_MAX = 10, 2000
 QUOTA_REASON_MIN, QUOTA_REASON_MAX = 5, 1000
 QUOTA_REQUEST_MAX = credits.REQUEST_TOKENS_MAX
 EXPORTS_PER_HOUR = 10
+# One export per account at a time: the mark is renewed while the download goes on and removed when it
+# ends; it expires EXPORT_RUNNING_SECONDS after a server stopped without removing it.
+EXPORT_RUNNING_KEY = "account-export-running:user:"
+EXPORT_RUNNING_SECONDS = 15 * 60
+EXPORT_RENEW_SECONDS = 60
+# Characters handed to the server at a time (at most 64 KiB of UTF-8, one write: see bananachat.write_timeout),
+# so the mark is renewed at least every BC_WRITE_TIMEOUT seconds, however slowly the client reads.
+EXPORT_PIECE_CHARS = 16 * 1024
+# How often a running export checks that whoever started it may still read it (session, suspension, role).
+EXPORT_CHECK_SECONDS = 1.0
 REQUESTABLE_SCOPES = ("category", "model")
+# Signing one device out is never refused (the owner must always be able to end a stranger's session), but each
+# one only costs a sign-in and the audit log is kept for good: past this many in the window, an account's further
+# ones go to the application log instead of the audit log.
+SESSION_REVOKE_AUDITS, SESSION_REVOKE_AUDIT_SECONDS = 20, 900
+# Signing out everywhere else is never refused either (a 429 there would let whoever holds a session in the account,
+# a stolen cookie included, use up the owner's budget and keep their own session); only its audit rows are budgeted.
+SESSIONS_REVOKE_AUDITS, SESSIONS_REVOKE_AUDIT_SECONDS = 10, 900
 
 
 def _t(key, **params):
@@ -323,7 +341,7 @@ def _page(draft: dict | None = None):
         sessions=_sessions(user["id"]),
         two_step_state=two_step.state(user["id"]),
         two_step_required=two_step.required(user),
-        api_token_count=tokens.count_active(user["id"]),
+        api_token_count=tokens.count_active(user["id"]), share_link_count=chats.count_shared(user["id"]),
         access=access,
         requestable=[{"value": f"{scope}:{resource_id}", "label": gate.label,
                       "kind": _t(f"account.scope_kind_{scope}")}
@@ -479,8 +497,7 @@ def change_password():
     user = security.current_user()
     current = request.form.get("current_password") or ""
     new = request.form.get("new_password") or ""
-    if not security.verify_password(user["password"], current):
-        flash(_t("account.password_wrong"), "error")
+    if not _password_confirmed(user, current):
         return _back("password")
     problem = security.password_problem(new, request.form.get("confirm_password") or "")
     if problem:
@@ -494,10 +511,20 @@ def change_password():
                            expected_password=user["password"])
     except users.AuthenticationChanged:
         return _authentication_changed()
+    security.renew_device_cookie(user["id"])
     users.audit(user, "account.password_change", user["id"], ip_address=security.client_ip())
     flash(_t("account.password_changed"), "success")
     _revoke_api_tokens_if_asked(user)
+    _stop_share_links_if_asked(user)
     return _back("password")
+
+
+def _password_confirmed(user, password: str) -> bool:
+    """Check the password typed to confirm an action (counted with every other confirmation); says why not."""
+    confirmed = security.confirm_password(user, password)
+    if not confirmed:
+        flash(_t("account.password_wrong" if confirmed is False else "auth.too_many_attempts"), "error")
+    return bool(confirmed)
 
 
 def _revoke_api_tokens_if_asked(user) -> None:
@@ -515,6 +542,21 @@ def _revoke_api_tokens_if_asked(user) -> None:
         flash(_t("account.api_tokens_revoked", count=revoked), "success")
 
 
+def _stop_share_links_if_asked(user) -> None:
+    """Take the account's chat share links offline when the form asked to (ticked by default).
+
+    Like an API token, a share link made from a stolen session keeps working after that session ends, and it
+    shows every later message of the chat.
+    """
+    if request.form.get("revoke_share_links") != "1":
+        return
+    stopped = chats.revoke_all_shares(user["id"])
+    if stopped:
+        users.audit(user, "account.share_links_revoke_all", user["id"], {"count": stopped},
+                    ip_address=security.client_ip())
+        flash(_t("account.share_links_revoked", count=stopped), "success")
+
+
 @bp.post("/account/sessions/<id_hash>/revoke", endpoint="revoke_session")
 @security.login_required
 def revoke_session(id_hash):
@@ -527,7 +569,12 @@ def revoke_session(id_hash):
         flash(_t("auth.signed_out"), "info")
         return redirect(url_for("auth.login"))
     if users.revoke_session(user["id"], id_hash):
-        users.audit(user, "account.session_revoke", user["id"], ip_address=security.client_ip())
+        if security.allow("account-session-revoke-audit", SESSION_REVOKE_AUDITS, SESSION_REVOKE_AUDIT_SECONDS,
+                          key="user:" + user["id"]):
+            users.audit(user, "account.session_revoke", user["id"], ip_address=security.client_ip())
+        else:
+            log.info("Session of user %s ended without an audit entry: more than %d in %d seconds",
+                     user["id"], SESSION_REVOKE_AUDITS, SESSION_REVOKE_AUDIT_SECONDS)
         flash(_t("account.session_revoked"), "success")
     else:
         flash(_t("account.session_not_found"), "error")
@@ -540,10 +587,16 @@ def revoke_other_sessions():
     user = security.current_user()
     current = security.current_session_hash()
     if current:
-        users.revoke_sessions(user["id"], except_hash=current)
-        users.audit(user, "account.sessions_revoke_others", user["id"], ip_address=security.client_ip())
+        users.revoke_sessions(user["id"], except_hash=current, keep_devices=True)
+        if security.allow("account-sessions-audit", SESSIONS_REVOKE_AUDITS, SESSIONS_REVOKE_AUDIT_SECONDS,
+                          key="user:" + user["id"]):
+            users.audit(user, "account.sessions_revoke_others", user["id"], ip_address=security.client_ip())
+        else:
+            log.info("User %s signed out everywhere else without an audit entry: more than %d in %d seconds",
+                     user["id"], SESSIONS_REVOKE_AUDITS, SESSIONS_REVOKE_AUDIT_SECONDS)
     flash(_t("account.sessions_revoked"), "success")
     _revoke_api_tokens_if_asked(user)
+    _stop_share_links_if_asked(user)
     return _back("sessions")
 
 
@@ -585,7 +638,7 @@ def two_step_page():
     secret = "" if state else _enrolment_secret()
     issuer = g.settings.get("site_name") or PRODUCT_NAME
     return render_template("account/two_step.html", user=user, state=state, secret=secret,
-                           required=two_step.required(user), api_token_count=tokens.count_active(user["id"]),
+                           required=two_step.required(user), api_token_count=tokens.count_active(user["id"]), share_link_count=chats.count_shared(user["id"]),
                            qr=two_step.provisioning_qr(secret, user["username"], issuer) if secret else "")
 
 
@@ -610,8 +663,9 @@ def two_step_change():
     action = request.form.get("action", "")
     if action not in TWO_STEP_ACTIONS:
         abort(400)
-    if not security.verify_password(user["password"], request.form.get("password") or ""):
-        return _two_step_back("account.password_wrong")
+    confirmed = security.confirm_password(user, request.form.get("password") or "")
+    if not confirmed:
+        return _two_step_back("account.password_wrong" if confirmed is False else "auth.too_many_attempts")
     code = (request.form.get("code") or "")[:128]
     current = security.current_session_hash()
     if action == "enable":
@@ -631,10 +685,13 @@ def two_step_change():
             return _authentication_changed()
         if codes is None:
             return _two_step_back("two_step.already_on", "info")
+        # Device cookies issued before end with the other sessions; this browser just gave a code.
+        security.renew_device_cookie(user["id"])
         session.pop(ENROLMENT_KEY, None)
         users.audit(user, "account.two_step_enable", user["id"], ip_address=security.client_ip())
         flash(_t("two_step.enabled"), "success")
         _revoke_api_tokens_if_asked(user)
+        _stop_share_links_if_asked(user)
         return _show_codes(codes)
     if not two_step.enabled(user["id"]):
         return _two_step_back("two_step.not_on")
@@ -656,6 +713,7 @@ def two_step_change():
         users.audit(user, "account.two_step_codes_renew", user["id"], {"method": method}, security.client_ip())
         flash(_t("two_step.renewed"), "success")
         return _show_codes(codes)
+    security.renew_device_cookie(user["id"])
     users.audit(user, "account.two_step_disable", user["id"], {"method": method}, security.client_ip())
     flash(_t("two_step.disabled"), "success")
     return redirect(url_for("account.index", _anchor="two-step"))
@@ -663,36 +721,89 @@ def two_step_change():
 
 # ----- personal data --------------------------------------------------------
 
-def _download(payload: dict, kind: str):
-    user = security.current_user()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", user["username"])
-    body = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-    response = current_app.response_class(body, mimetype="application/json")
-    response.headers["Content-Disposition"] = f'attachment; filename="bananachat-{kind}-{safe_name}-{stamp}.json"'
+def download_export(kind: str, user, filename: str):
+    """Stream the ``"data"`` or ``"chats"`` export of *user*, one export per account at a time.
+
+    Returns None while another export of the account is still being written. As a large
+    response it holds a download place while it streams (security.hold_large_response).
+    The download stops (the file ends cut short) once the browser session that started it
+    has ended, or its account is suspended, deleted or, for another account's export, no
+    longer an administrator.
+    """
+    held = users.reserve([(EXPORT_RUNNING_KEY + user["id"], 1, EXPORT_RUNNING_SECONDS)], EXPORT_RUNNING_SECONDS)
+    if held is None:
+        return None
+    app = current_app._get_current_object()
+    allowed = security.requester_check(admin=security.current_user()["id"] != user["id"])
+
+    def body():
+        renewed = checked = time.monotonic()
+        try:
+            for chunk in exports.stream(kind, user["id"]):
+                for start in range(0, len(chunk), EXPORT_PIECE_CHARS):
+                    now = time.monotonic()
+                    if now - checked >= EXPORT_CHECK_SECONDS:
+                        if not allowed():
+                            return
+                        checked = now
+                    if now - renewed >= EXPORT_RENEW_SECONDS:
+                        users.renew(held)
+                        renewed = now
+                    yield chunk[start:start + EXPORT_PIECE_CHARS]
+        finally:
+            users.release(held)
+
+    def release():
+        # Also when the download ends before it started.
+        with app.app_context():
+            users.release(held)
+
+    try:
+        response = current_app.response_class(stream_with_context(body()), mimetype="application/json")
+    except BaseException:
+        release()
+        raise
+    response.call_on_close(release)
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     response.headers["Cache-Control"] = "private, no-store"
     return response
 
 
-def _export(kind: str, build):
+def _export(kind: str):
     user = security.current_user()
+    if users.count_hits(EXPORT_RUNNING_KEY + user["id"], EXPORT_RUNNING_SECONDS):
+        return security.too_many_requests(30)
     if not security.allow("account-export", EXPORTS_PER_HOUR, 3600, key="user:" + user["id"]):
         return security.too_many_requests(600)
-    payload = build(user["id"])
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", user["username"])
+    response = download_export(kind, user, f"bananachat-{kind}-{safe_name}-{stamp}.json")
+    if response is None:
+        return security.too_many_requests(30)
     users.audit(user, "account.export", user["id"], {"kind": kind}, security.client_ip())
-    return _download(payload, kind)
+    return response
 
 
-@bp.route("/account/export/gdpr", methods=["GET", "POST"], endpoint="export_data")
+@bp.post("/account/export/gdpr", endpoint="export_data")
 @security.login_required
+@security.download_first
 def export_data():
-    return _export("data", exports.gdpr_export)
+    return _export("data")
 
 
-@bp.route("/account/export/chats", methods=["GET", "POST"], endpoint="export_chats")
+@bp.post("/account/export/chats", endpoint="export_chats")
 @security.login_required
+@security.download_first
 def export_chats():
-    return _export("chats", exports.chats_export)
+    return _export("chats")
+
+
+@bp.get("/account/export/gdpr")
+@bp.get("/account/export/chats")
+@security.login_required
+def export_page():
+    # Exports start from the account page's buttons (POST), never from a link.
+    return _back("data")
 
 
 @bp.post("/account/chats/delete-all", endpoint="delete_chats")
@@ -700,8 +811,7 @@ def export_chats():
 @security.rate_limit("account-danger", 10, 900, per_user=True)
 def delete_chats():
     user = security.current_user()
-    if not security.verify_password(user["password"], request.form.get("password") or ""):
-        flash(_t("account.password_wrong"), "error")
+    if not _password_confirmed(user, request.form.get("password") or ""):
         return _back("data")
     try:
         from bananachat.db import chats as chats_db
@@ -731,12 +841,13 @@ def delete_account():
     if (request.form.get("confirm_username") or "").strip() != user["username"]:
         flash(_t("account.delete_username_mismatch"), "error")
         return _back("delete")
-    if not security.verify_password(user["password"], request.form.get("password") or ""):
-        flash(_t("account.password_wrong"), "error")
+    if not _password_confirmed(user, request.form.get("password") or ""):
         return _back("delete")
     background_name = users.get_preferences(user["id"])["background_image"]
     try:
         with users.verified_credentials(user["id"], user["password"], security.current_session_hash()):
+            # Read under the lock: a task started meanwhile is deleted with the account.
+            workspaces = agents_service.workspaces_of_user(user["id"])
             users.audit(user, "account.delete", user["id"], {"username": user["username"]}, security.client_ip())
             users.delete(user["id"])
     except users.AuthenticationChanged:
@@ -744,6 +855,8 @@ def delete_account():
     except ValueError:
         flash(_t("account.delete_last_admin"), "error")
         return _back("delete")
+    # The rows are gone with the account; their sandboxes and stored uploads go now.
+    agents_service.discard_workspaces(workspaces)
     if background_name:
         from bananachat.web.customization import remove_background_file
         remove_background_file(background_name)

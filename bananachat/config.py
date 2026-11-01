@@ -178,6 +178,7 @@ class Config:
     chat_max_image_dimension: int = 2048
     chat_max_session_attachment_bytes: int = 40 * 1024 * 1024
     chat_max_account_attachment_bytes: int = 1024 * 1024 * 1024
+    chat_max_account_text_bytes: int = 1024 * 1024 * 1024
     chat_max_context_chars: int = 300_000
     chat_max_context_images: int = 8
     chat_max_message_bytes: int = 100 * 1024
@@ -196,6 +197,13 @@ class Config:
     ollama_model_dir: str = ""
     min_free_disk_gb: float = 2.0
     http_threads: int = 16
+    # Threads on top of http_threads for large responses read slowly (security.hold_large_response).
+    download_threads: int = 8
+    # Seconds a response write may wait for a client that stopped reading (0: forever); see bananachat.write_timeout.
+    write_timeout: int = 120
+    # A request body that stalls this many seconds, or arrives slower than body_min_kbps, ends the request (0: off).
+    body_stall_timeout: int = 20
+    body_min_kbps: int = 32
     max_concurrent: int = 4
     # Requests to hosted models (external providers, Claude, Codex) at the same time; they use no local capacity.
     max_concurrent_hosted: int = 16
@@ -262,6 +270,7 @@ class Config:
     agents_runner_insecure_networks: tuple[str, ...] = ()
     agents_runner_allow_insecure_tailscale: bool = False
     agents_max_upload_bytes: int = 20 * 1024 * 1024
+    agents_max_stored_upload_bytes: int = 100 * 1024 * 1024
 
     warnings: tuple[str, ...] = field(default=(), compare=False)
 
@@ -498,6 +507,7 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         outage_mode = "shutdown"
     checkpoint_agent_tailscale = r.flag("BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE", False)
     agents_runner_tailscale = r.flag("BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE", False)
+    agents_max_upload_bytes = r.integer("BC_AGENTS_MAX_UPLOAD_MB", 20, 1, 200) * 1024 * 1024
 
     config = Config(
         host=r.text("BC_HOST", "127.0.0.1") or "127.0.0.1",
@@ -539,6 +549,7 @@ def load_config(environ=None, *, load_secret=True) -> Config:
             chat_max_request_bytes, r.integer("BC_CHAT_MAX_SESSION_ATTACHMENT_MB", 40, 1, 4096) * 1024 * 1024),
         chat_max_account_attachment_bytes=r.integer("BC_CHAT_MAX_ACCOUNT_ATTACHMENT_MB", 1024, 1, 1_048_576)
         * 1024 * 1024,
+        chat_max_account_text_bytes=r.integer("BC_CHAT_MAX_ACCOUNT_TEXT_MB", 1024, 1, 1_048_576) * 1024 * 1024,
         chat_max_context_chars=r.integer("BC_CHAT_MAX_CONTEXT_CHARS", 300_000, 1000, 5_000_000),
         chat_max_context_images=r.integer("BC_CHAT_MAX_CONTEXT_IMAGES", 8, 1, 64),
         chat_max_response_bytes=r.integer("BC_CHAT_MAX_RESPONSE_KB", 1024, 16, 8192) * 1024,
@@ -555,6 +566,10 @@ def load_config(environ=None, *, load_secret=True) -> Config:
                                 or str(Path("~/.ollama/models").expanduser())),
         min_free_disk_gb=r.number("BC_MIN_FREE_DISK_GB", 2, 0, 100_000),
         http_threads=r.integer("BC_HTTP_THREADS", 16, 8, 64),
+        download_threads=r.integer("BC_DOWNLOAD_THREADS", 8, 1, 32),
+        write_timeout=r.integer("BC_WRITE_TIMEOUT", 120, 0, 3600),
+        body_stall_timeout=r.integer("BC_BODY_STALL_TIMEOUT", 20, 0, 600),
+        body_min_kbps=r.integer("BC_BODY_MIN_KBPS", 32, 0, 100_000),
         max_concurrent=max_concurrent,
         max_concurrent_hosted=r.integer("BC_MAX_CONCURRENT_HOSTED", 16, 1, 256),
         max_queue_depth=r.integer("BC_MAX_QUEUE_DEPTH", 50, max_concurrent, 1000),
@@ -613,7 +628,10 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         agents_runner_insecure_networks=_insecure_networks(r, "BC_AGENTS_RUNNER_INSECURE_NETWORKS",
                                                            agents_runner_tailscale),
         agents_runner_allow_insecure_tailscale=agents_runner_tailscale,
-        agents_max_upload_bytes=r.integer("BC_AGENTS_MAX_UPLOAD_MB", 20, 1, 200) * 1024 * 1024,
+        agents_max_upload_bytes=agents_max_upload_bytes,
+        # Never below one start's uploads, or a start of the largest allowed size could not be stored.
+        agents_max_stored_upload_bytes=max(agents_max_upload_bytes, r.integer(
+            "BC_AGENTS_MAX_STORED_UPLOAD_MB", 100, 1, 1_048_576) * 1024 * 1024),
     )
     if load_secret:
         secret = load_secret_key(config.instance_dir, env, development=config.is_development, warnings=r.warnings)

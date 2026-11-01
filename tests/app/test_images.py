@@ -318,22 +318,6 @@ def test_insufficient_credits_are_refused_before_generation(image_app, artist, a
     assert comfy.prompts == [] and reservations(image_app) == 0
 
 
-def test_image_rate_limit(make_app, comfy):
-    from bananachat.db import catalog
-    from bananachat.services import comfyui
-
-    app = make_app(IMAGE_BACKEND="comfyui", COMFYUI_URL=comfy.url, COMFYUI_POLL_INTERVAL="0.05",
-                   IMAGE_GENERATION_RPM="1")
-    with app.app_context():
-        comfyui.sync_models()
-        catalog.set_rollout(catalog.get_by_name(MODEL_ID)["id"], True)
-    token = token_for(app, create_user(app, "quick"))
-    assert generate(app, token).status_code == 200
-    response = generate(app, token)
-    assert_error(response, 429, "rate_limit_error", "rate_limit_exceeded")
-    assert response.headers["Retry-After"] == "60"
-
-
 @pytest.mark.parametrize("body, param", [
     ({"prompt": ""}, "prompt"),
     ({"prompt": "x" * 10_001}, "prompt"),

@@ -21,11 +21,19 @@ log = logging.getLogger("bananachat.auth")
 # an IPv6 /64) and per account; the limits are BC_LOGIN_* and BC_SIGNUP* settings.
 FAILURE_WINDOW = 15 * 60
 SIGNUP_WINDOW = 3600
+# A browser known to the account (its device cookie) has budgets of its own,
+# but its address still counts it, against limits this many times higher: a
+# client cannot multiply them by collecting device cookies.
+KNOWN_BROWSER_ADDRESS_FACTOR = 10
 # Accounts with two-step verification answer a code after the password. The
 # sign-in waits in the session cookie for a few minutes, bound to the password
 # and the two-step set-up (wrong codes are counted by two_step.check_code).
 TWO_STEP_PENDING_KEY = "two_step_pending"
 TWO_STEP_PENDING_SECONDS = 5 * 60
+# A sign-in with a recovery code is never refused for this, but renewing the codes (confirmed with one of them)
+# hands out ten more and the audit log is kept for good: past this many in the window, an account's further
+# recovery-code sign-ins go to the application log instead of the audit log (as with sign-outs, MC1-3).
+RECOVERY_CODE_AUDITS, RECOVERY_CODE_AUDIT_SECONDS = 10, 900
 
 
 def _t(key, **params):
@@ -101,8 +109,7 @@ def login():
     # A browser that has signed in to this account before is counted apart from
     # everyone else at its address (a school or office NAT, a VPN exit), so
     # strangers there can neither lock it out nor use up its request rate.
-    source = f"device:{user['id']}:{device}" if device else security.client_key()
-    if not security.allow("login", config.login_attempts_per_minute, 60, key=source):
+    if not _allow_attempt(user, device):
         return security.too_many_requests()
 
     if not security.form_looks_human():
@@ -112,7 +119,10 @@ def login():
     account_key = (f"login-fail-device:{user['id']}:{device}" if device
                    else "login-fail-user:" + username.lower())
     limits = [(account_key, config.login_failures_per_account)]
-    if not device:
+    if device:
+        limits.append(("login-fail-ip-known:" + security.client_key(),
+                       config.login_failures_per_address * KNOWN_BROWSER_ADDRESS_FACTOR))
+    else:
         limits.append(("login-fail-ip:" + security.client_key(), config.login_failures_per_address))
     # The attempt is counted before the password is checked, atomically with the
     # limit check, so parallel guesses cannot all pass it. It stays counted as a
@@ -161,6 +171,15 @@ def login():
     # Signed with the current password hash (rehashed above if needed).
     security.set_device_cookie(response, fresh)
     return response
+
+
+def _allow_attempt(user, device: str | None) -> bool:
+    """Count a sign-in request: per known browser and its address, or per address."""
+    config = current_app.config["BC"]
+    if not device:
+        return security.allow("login", config.login_attempts_per_minute, 60)
+    return (security.allow("login", config.login_attempts_per_minute, 60, key=f"device:{user['id']}:{device}")
+            and security.allow("login-known", config.login_attempts_per_minute * KNOWN_BROWSER_ADDRESS_FACTOR, 60))
 
 
 def _start_session(user, method: str) -> None:
@@ -227,10 +246,7 @@ def two_step_code():
     if request.method == "GET":
         return _render("auth/two_step.html")
 
-    config = current_app.config["BC"]
-    device = security.device_cookie_nonce(user)
-    if not security.allow("login", config.login_attempts_per_minute, 60,
-                          key=f"device:{user['id']}:{device}" if device else security.client_key()):
+    if not _allow_attempt(user, security.device_cookie_nonce(user)):
         return security.too_many_requests()
     try:
         method = two_step.check_code(user, request.form.get("code"))
@@ -250,7 +266,12 @@ def two_step_code():
             return redirect(url_for("auth.login"))
         _start_session(fresh, "password+" + method)
     if method == "recovery_code":
-        users.audit(fresh, "auth.two_step_recovery_code_used", fresh["id"], ip_address=security.client_ip())
+        if security.allow("auth-recovery-code-audit", RECOVERY_CODE_AUDITS, RECOVERY_CODE_AUDIT_SECONDS,
+                          key="user:" + fresh["id"]):
+            users.audit(fresh, "auth.two_step_recovery_code_used", fresh["id"], ip_address=security.client_ip())
+        else:
+            log.info("User %s signed in with a recovery code without an audit entry: more than %d in %d seconds",
+                     fresh["id"], RECOVERY_CODE_AUDITS, RECOVERY_CODE_AUDIT_SECONDS)
         left = (two_step.state(fresh["id"]) or {}).get("codes_left", 0)
         flash(_t("two_step.recovery_used", count=left), "warning")
     response = redirect(_landing(fresh, security.safe_next_url(state.get("next"))))

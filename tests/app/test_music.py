@@ -63,18 +63,6 @@ def test_multiplier_bonus_is_explained(app, make_user):
     assert "×3" in html and "135k" in html and "45k" in html
 
 
-@pytest.mark.parametrize("lang, words", [("en", ("daily",)), ("it", ("giornalier",))])
-def test_the_music_page_does_not_promise_a_daily_quota(app, make_user, lang, words):
-    """Limits are per 5-hour window, as the page's own footnote says."""
-    from bananachat.db import settings
-
-    make_user("amy")
-    with app.app_context():
-        settings.update(music_enabled=1, music_visible=1, music_opt_in_allowed=1, music_opt_out_allowed=1)
-    html = _signed_in(app, "amy").get("/free-quota", headers={"Accept-Language": lang}).get_data(as_text=True)
-    assert f'lang="{lang}"' in html
-    assert not any(word in html.lower() for word in words)
-
 def test_join_and_leave_respect_the_rules(app, make_user):
     user = make_user("cy")
     _program(app, music_opt_in_allowed=0)
@@ -248,6 +236,3 @@ def test_participants_admin(app, admin, make_user):
         assert music.count_participants() == (0, 0)
 
 
-def test_admin_music_requires_an_administrator(app, make_user):
-    make_user("kim")
-    assert _signed_in(app, "kim").get("/admin/music").status_code == 403

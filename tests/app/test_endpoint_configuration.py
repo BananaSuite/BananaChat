@@ -14,20 +14,19 @@ BAD_URLS = ("http://[", "https://host:bad", "https://host:65536", "https://host:
             "https://host/#fragment", "https://host/é", "https://host:", "https://host\\other")
 
 
-@pytest.mark.parametrize("name,attribute", [("BC_OLLAMA_URL", "ollama_url"),
-                                           ("BC_COMFYUI_URL", "comfyui_url"),
-                                           ("BC_INFERENCE_FALLBACK_URL", "inference_fallback_url")])
 @pytest.mark.parametrize("url", BAD_URLS)
-def test_invalid_backend_urls_disable_the_endpoint_without_crashing(name, attribute, url):
-    config = load_config({name: url, "BC_OLLAMA_API_KEY": "synthetic-secret",
-                          "BC_INFERENCE_FALLBACK_API_KEY": "synthetic-secret"}, load_secret=False)
-    assert getattr(config, attribute) == ""
-    assert any(name in warning for warning in config.warnings)
-    assert "synthetic-secret" not in " ".join(config.warnings)
-    if name == "BC_OLLAMA_URL":
-        assert config.ollama_api_key == "" and not config.ollama_is_local
-    elif name == "BC_INFERENCE_FALLBACK_URL":
-        assert config.inference_fallback_api_key == ""
+def test_invalid_backend_urls_disable_the_endpoint_without_crashing(url):
+    for name, attribute in (("BC_OLLAMA_URL", "ollama_url"), ("BC_COMFYUI_URL", "comfyui_url"),
+                            ("BC_INFERENCE_FALLBACK_URL", "inference_fallback_url")):
+        config = load_config({name: url, "BC_OLLAMA_API_KEY": "synthetic-secret",
+                              "BC_INFERENCE_FALLBACK_API_KEY": "synthetic-secret"}, load_secret=False)
+        assert getattr(config, attribute) == "", name
+        assert any(name in warning for warning in config.warnings)
+        assert "synthetic-secret" not in " ".join(config.warnings)
+        if name == "BC_OLLAMA_URL":
+            assert config.ollama_api_key == "" and not config.ollama_is_local
+        elif name == "BC_INFERENCE_FALLBACK_URL":
+            assert config.inference_fallback_api_key == ""
 
 
 @pytest.mark.parametrize("url", ["http://[", "https://host:bad", "https://host:65536",

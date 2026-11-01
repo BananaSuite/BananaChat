@@ -16,7 +16,12 @@ lease, so the run (in whichever process) still charges what it generated.
 
 from __future__ import annotations
 
+import math
 import secrets
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
 
 from bananachat import db
 
@@ -92,17 +97,121 @@ def list_for_user(user_id: str, *, limit: int = 30, before: tuple[str, str] | No
         f"FROM chat_sessions s WHERE {where} ORDER BY s.updated_at DESC, s.id DESC LIMIT ?", (*params, limit))
 
 
+# A search compares the phrase with every message of the account (up to BC_CHAT_MAX_ACCOUNT_TEXT_MB): no index
+# serves a match inside words, and a crafted phrase ("aaa...ab" against runs of "a") makes LIKE compare most of
+# it again at every position. So a search is stopped after SEARCH_SECONDS, and each process runs SEARCHES at a
+# time, an account one at a time. The sidebar searches as you type, so an account's newest search stops its
+# previous one and waits up to REPLACE_SECONDS for its place. A search over the caps is refused at once.
+# The places are few, so an account may also spend only SEARCH_BUDGET_SECONDS of search time a minute, in
+# all processes together: keeping every place taken needs many accounts, not two.
+SEARCH_SECONDS = 2.0
+SEARCHES = 2
+REPLACE_SECONDS = 1.0
+SEARCH_BUDGET_SECONDS = 10.0
+# The stop is checked every _CHECK_STEPS VM steps. A message takes about six, one of them the LIKE of the whole
+# message, which cannot be stopped halfway (up to chat_max_response_bytes for an answer, 8 MiB at most; a crafted
+# non-ASCII or escaped phrase costs about 0.4 s per MiB), so a stopped search runs on for at most that one
+# comparison; checking every step would make ordinary searches of many short messages 8x slower.
+_CHECK_STEPS = 5
+_BUDGET_STEP = 0.1  # time spent is counted in rate-limit events of this many seconds, rounded up
+_searching: dict[str, threading.Event] = {}  # accounts searching now in this process -> stop their search
+_newest: dict[str, object] = {}  # accounts with a search waiting for its place -> the newest one
+_searching_lock = threading.Condition()
+
+
+class SearchBusy(Exception):
+    """Every search place of this process is taken, or (``own``) the account's previous search did not stop."""
+
+    def __init__(self, *, own: bool):
+        super().__init__("own search running" if own else "search places taken")
+        self.own = own
+
+
+class SearchTooSlow(Exception):
+    """The search was stopped after ``SEARCH_SECONDS``."""
+
+
+class SearchReplaced(Exception):
+    """A newer search of the same account stopped this one."""
+
+
+class SearchBudgetSpent(Exception):
+    """The account has spent its ``SEARCH_BUDGET_SECONDS`` of the last minute."""
+
+
+@contextmanager
+def _search_place(user_id: str):
+    """Take a search place; yields the event that a newer search of the account sets to stop this one."""
+    me = object()
+    stop = threading.Event()
+    with _searching_lock:
+        _newest[user_id] = me
+        _searching_lock.notify_all()  # an older search waiting for the place gives up
+        try:
+            previous = _searching.get(user_id)
+            if previous is not None:
+                previous.set()
+                if not _searching_lock.wait_for(
+                        lambda: user_id not in _searching or _newest.get(user_id) is not me, REPLACE_SECONDS):
+                    raise SearchBusy(own=True)
+                if _newest.get(user_id) is not me:
+                    raise SearchReplaced()
+            if len(_searching) >= SEARCHES:
+                raise SearchBusy(own=False)
+            _searching[user_id] = stop
+        finally:
+            if _newest.get(user_id) is me:
+                del _newest[user_id]
+    try:
+        yield stop
+    finally:
+        with _searching_lock:
+            if _searching.get(user_id) is stop:
+                del _searching[user_id]
+            _searching_lock.notify_all()
+
+
 def search(user_id: str, text: str, *, limit: int = 30):
-    """Search every normal chat of the user by title and message text."""
+    """Search every normal chat of the user by title and message text.
+
+    Raises :class:`SearchBusy` or :class:`SearchBudgetSpent` without searching, :class:`SearchReplaced`,
+    :class:`SearchTooSlow`, or :class:`SearchBudgetSpent` when the rest of the budget ran out.
+    """
+    from bananachat.db import users
+
     pattern = _like(text)
-    return db.query(
-        "SELECT s.id, s.title, s.updated_at, s.shared_token IS NOT NULL AS shared, "
-        "(SELECT substr(m.content, max(1, instr(lower(m.content), lower(?)) - 60), 180) FROM chat_messages m "
-        " WHERE m.session_id=s.id AND m.content LIKE ? ESCAPE '\\' ORDER BY m.id DESC LIMIT 1) AS snippet "
-        f"FROM chat_sessions s WHERE {_LISTED} AND (s.title LIKE ? ESCAPE '\\' OR EXISTS "
-        "(SELECT 1 FROM chat_messages m WHERE m.session_id=s.id AND m.content LIKE ? ESCAPE '\\')) "
-        "ORDER BY s.updated_at DESC, s.id DESC LIMIT ?",
-        (text, pattern, user_id, pattern, pattern, limit))
+    budget_key = "chat-search-time:user:" + user_id
+    with _search_place(user_id) as stop:
+        # Whole events, not seconds: 10 - 99 * 0.1 is just under 0.1 in floating point.
+        left = round(SEARCH_BUDGET_SECONDS / _BUDGET_STEP) - users.count_hits(budget_key, 60)
+        if left <= 0:
+            raise SearchBudgetSpent()
+        by_budget = left < round(SEARCH_SECONDS / _BUDGET_STEP)
+        seconds = left * _BUDGET_STEP if by_budget else SEARCH_SECONDS
+        connection = db.conn()
+        started = time.monotonic()
+        deadline = started + seconds
+        connection.set_progress_handler(lambda: int(stop.is_set() or time.monotonic() >= deadline), _CHECK_STEPS)
+        try:
+            return db.query(
+                "SELECT s.id, s.title, s.updated_at, s.shared_token IS NOT NULL AS shared, "
+                "(SELECT substr(m.content, max(1, instr(lower(m.content), lower(?)) - 60), 180) "
+                " FROM chat_messages m WHERE m.session_id=s.id AND m.content LIKE ? ESCAPE '\\' "
+                " ORDER BY m.id DESC LIMIT 1) AS snippet "
+                f"FROM chat_sessions s WHERE {_LISTED} AND (s.title LIKE ? ESCAPE '\\' OR EXISTS "
+                "(SELECT 1 FROM chat_messages m WHERE m.session_id=s.id AND m.content LIKE ? ESCAPE '\\')) "
+                "ORDER BY s.updated_at DESC, s.id DESC LIMIT ?",
+                (text, pattern, user_id, pattern, pattern, limit))
+        except sqlite3.OperationalError:
+            # "interrupted" by the handler
+            if stop.is_set():
+                raise SearchReplaced() from None
+            if time.monotonic() >= deadline:
+                raise (SearchBudgetSpent() if by_budget else SearchTooSlow()) from None
+            raise
+        finally:
+            connection.set_progress_handler(None, 0)
+            users.record_hits(budget_key, math.ceil((time.monotonic() - started) / _BUDGET_STEP))
 
 
 def count_for_user(user_id: str) -> int:
@@ -157,6 +266,18 @@ def revoke_share(session_id: str, *, block: bool = False) -> None:
                    "WHERE id=?", (db.now(), session_id))
     else:
         db.execute("UPDATE chat_sessions SET shared_token=NULL WHERE id=?", (session_id,))
+
+
+def count_shared(user_id: str) -> int:
+    """How many of the account's chats have a live share link."""
+    return db.scalar("SELECT COUNT(*) FROM chat_sessions WHERE user_id=? AND shared_token IS NOT NULL "
+                     "AND deleted_at IS NULL", (user_id,), 0)
+
+
+def revoke_all_shares(user_id: str) -> int:
+    """Take every share link of the account's chats offline; returns how many there were."""
+    return db.execute("UPDATE chat_sessions SET shared_token=NULL WHERE user_id=? AND shared_token IS NOT NULL",
+                      (user_id,)).rowcount
 
 
 def allow_share(session_id: str) -> bool:
@@ -249,32 +370,85 @@ def get_message(session_id: str, message_id: int):
                   "WHERE m.id=? AND m.session_id=?", (message_id, session_id))
 
 
-def message_page(session_id: str, *, before: int | None = None, limit: int = 50):
-    """The newest *limit* messages (older than *before*), oldest first, and whether more exist."""
+def message_page(session_id: str, *, before: int | None = None, limit: int = 50, max_bytes: int | None = None):
+    """The newest *limit* messages (older than *before*), oldest first, and whether more exist.
+
+    With *max_bytes*, the page also stops once its messages hold that much text (at least one message), so
+    a chat of long messages is shown a few at a time; their sizes are read first, without the text.
+    """
     params: list = [session_id]
     where = "m.session_id=?"
     if before is not None:
         where += " AND m.id<?"
         params.append(before)
+    if max_bytes is None:
+        rows = db.query(f"SELECT {MESSAGE_COLUMNS} FROM chat_messages m LEFT JOIN ai_models a ON a.id=m.model_id "
+                        f"WHERE {where} ORDER BY m.id DESC LIMIT ?", (*params, limit + 1))
+        more = len(rows) > limit
+        return list(reversed(rows[:limit])), more
+    sizes = db.query(f"SELECT m.id, {_text_bytes('m.content')} AS size FROM chat_messages m WHERE {where} "
+                     "ORDER BY m.id DESC LIMIT ?", (*params, limit + 1))
+    chosen, total = [], 0
+    for row in sizes[:limit]:
+        if chosen and total + (row["size"] or 0) > max_bytes:
+            break
+        chosen.append(row["id"])
+        total += row["size"] or 0
+    if not chosen:
+        return [], False
+    marks = ",".join("?" for _ in chosen)
     rows = db.query(f"SELECT {MESSAGE_COLUMNS} FROM chat_messages m LEFT JOIN ai_models a ON a.id=m.model_id "
-                    f"WHERE {where} ORDER BY m.id DESC LIMIT ?", (*params, limit + 1))
-    more = len(rows) > limit
-    return list(reversed(rows[:limit])), more
+                    f"WHERE m.id IN ({marks}) ORDER BY m.id", tuple(chosen))
+    return list(rows), len(sizes) > len(chosen)
 
 
-def messages_after(session_id: str, after: int, *, limit: int = 50):
+def messages_after(session_id: str, after: int, *, limit: int = 50, max_bytes: int | None = None):
+    """Messages newer than *after*, oldest first; with *max_bytes*, only as many as hold that much text (at least
+    one): the caller asks again from the last one it got."""
+    if max_bytes is None:
+        return db.query(f"SELECT {MESSAGE_COLUMNS} FROM chat_messages m LEFT JOIN ai_models a ON a.id=m.model_id "
+                        "WHERE m.session_id=? AND m.id>? ORDER BY m.id LIMIT ?", (session_id, after, limit))
+    sizes = db.query(f"SELECT m.id, {_text_bytes('m.content')} AS size FROM chat_messages m "
+                     "WHERE m.session_id=? AND m.id>? ORDER BY m.id LIMIT ?", (session_id, after, limit))
+    chosen, total = [], 0
+    for row in sizes:
+        if chosen and total + (row["size"] or 0) > max_bytes:
+            break
+        chosen.append(row["id"])
+        total += row["size"] or 0
+    if not chosen:
+        return []
+    marks = ",".join("?" for _ in chosen)
     return db.query(f"SELECT {MESSAGE_COLUMNS} FROM chat_messages m LEFT JOIN ai_models a ON a.id=m.model_id "
-                    "WHERE m.session_id=? AND m.id>? ORDER BY m.id LIMIT ?", (session_id, after, limit))
+                    f"WHERE m.id IN ({marks}) ORDER BY m.id", tuple(chosen))
 
 
-def iter_message_batches(session_id: str, *, batch: int = 200):
-    """All messages in order as lists of up to *batch*; messages added meanwhile are not included."""
+def iter_message_batches(session_id: str, *, batch: int = 200, max_bytes: int | None = None):
+    """All messages in order as lists of up to *batch*; messages added meanwhile are not included.
+
+    With *max_bytes*, a list holds only as many messages as hold that much text (at least one), so a reader
+    that keeps one list while it streams holds a bounded amount of memory however large the chat is.
+    """
     last = db.scalar("SELECT MAX(id) FROM chat_messages WHERE session_id=?", (session_id,), 0)
     cursor = 0
     while cursor < last:
-        rows = db.query(f"SELECT {MESSAGE_COLUMNS} FROM chat_messages m LEFT JOIN ai_models a ON a.id=m.model_id "
-                        "WHERE m.session_id=? AND m.id>? AND m.id<=? ORDER BY m.id LIMIT ?",
-                        (session_id, cursor, last, batch))
+        if max_bytes is None:
+            rows = db.query(f"SELECT {MESSAGE_COLUMNS} FROM chat_messages m LEFT JOIN ai_models a ON a.id=m.model_id "
+                            "WHERE m.session_id=? AND m.id>? AND m.id<=? ORDER BY m.id LIMIT ?",
+                            (session_id, cursor, last, batch))
+        else:
+            sizes = db.query(f"SELECT m.id, {_text_bytes('m.content')} AS size FROM chat_messages m "
+                             "WHERE m.session_id=? AND m.id>? AND m.id<=? ORDER BY m.id LIMIT ?",
+                             (session_id, cursor, last, batch))
+            chosen, total = [], 0
+            for row in sizes:
+                if chosen and total + (row["size"] or 0) > max_bytes:
+                    break
+                chosen.append(row["id"])
+                total += row["size"] or 0
+            marks = ",".join("?" for _ in chosen)
+            rows = db.query(f"SELECT {MESSAGE_COLUMNS} FROM chat_messages m LEFT JOIN ai_models a ON a.id=m.model_id "
+                            f"WHERE m.id IN ({marks}) ORDER BY m.id", tuple(chosen)) if chosen else []
         if not rows:
             return
         yield rows
@@ -359,6 +533,29 @@ def account_attachment_bytes(user_id: str) -> int:
     return db.scalar(f"SELECT COALESCE(SUM({_STORED}), 0) FROM chat_sessions s "
                      "JOIN chat_messages m ON m.session_id=s.id JOIN chat_attachments t ON t.message_id=m.id "
                      "WHERE s.user_id=?", (user_id,), 0)
+
+
+_TEXT_BYTES: list[str] = []
+
+
+def _text_bytes(column: str) -> str:
+    """SQL for the UTF-8 size of *column*; ``octet_length`` (SQLite 3.43+) reads it without the text."""
+    if not _TEXT_BYTES:
+        try:
+            db.scalar("SELECT octet_length('a')")
+            _TEXT_BYTES.append("octet_length({})")
+        except sqlite3.OperationalError:
+            _TEXT_BYTES.append("length(CAST({} AS BLOB))")
+    return _TEXT_BYTES[0].format(column)
+
+
+def account_text_bytes(user_id: str) -> int:
+    """Message text stored for a user: their chats' messages (deleted chats until they are erased) and the copies
+    of their no-history chats kept for administrators."""
+    return db.scalar(f"SELECT COALESCE(SUM({_text_bytes('m.content')}), 0) FROM chat_sessions s "
+                     "JOIN chat_messages m ON m.session_id=s.id WHERE s.user_id=?", (user_id,), 0) + \
+        db.scalar(f"SELECT COALESCE(SUM({_text_bytes('content')}), 0) FROM incognito_audit WHERE user_id=?",
+                  (user_id,), 0)
 
 
 def has_images(session_id: str) -> bool:
@@ -519,11 +716,37 @@ def audit_session_count(*, user_id: str | None = None) -> int:
     return db.scalar(f"SELECT COUNT(DISTINCT session_id) FROM incognito_audit {where}", params, 0)
 
 
-def audit_entries(session_id: str):
-    return db.query(
+def audit_entries(session_id: str, *, before: int | None = None, limit: int = 500, max_bytes: int = 4 * 1024 * 1024):
+    """A no-history chat's newest audit copies (older than *before*), oldest first, and whether earlier ones exist.
+
+    Like :func:`message_page`, the page stops at *limit* entries or once they hold *max_bytes* of text (at least
+    one entry); their sizes are read first, without the text.
+    """
+    params: list = [session_id]
+    where = "session_id=?"
+    if before is not None:
+        where += " AND id<?"
+        params.append(before)
+    sizes = db.query(f"SELECT id, {_text_bytes('content')} AS size FROM incognito_audit WHERE {where} "
+                     "ORDER BY id DESC LIMIT ?", (*params, limit + 1))
+    chosen, total = [], 0
+    for row in sizes[:limit]:
+        if chosen and total + (row["size"] or 0) > max_bytes:
+            break
+        chosen.append(row["id"])
+        total += row["size"] or 0
+    if not chosen:
+        return [], False
+    marks = ",".join("?" for _ in chosen)
+    rows = db.query(
         "SELECT ia.*, u.username, a.display_name AS model_name FROM incognito_audit ia "
         "JOIN users u ON u.id=ia.user_id LEFT JOIN ai_models a ON a.id=ia.model_id "
-        "WHERE ia.session_id=? ORDER BY ia.id", (session_id,))
+        f"WHERE ia.id IN ({marks}) ORDER BY ia.id", tuple(chosen))
+    return list(rows), len(sizes) > len(chosen)
+
+
+def has_audit_entries(session_id: str) -> bool:
+    return db.one("SELECT 1 FROM incognito_audit WHERE session_id=? LIMIT 1", (session_id,)) is not None
 
 
 def audit_entry(entry_id: int):

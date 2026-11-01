@@ -25,6 +25,7 @@ import json
 import logging
 import math
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -175,7 +176,57 @@ class QuotaExhausted(Exception):
 
 
 class RequestRejected(RuntimeError):
-    """The request itself cannot be answered (too long, not text, an unsupported effort): no account is at fault."""
+    """The request itself cannot be answered (too long, not text, an unsupported effort): no account is at fault.
+
+    ``spent`` marks a rejection after the provider read the prompt and worked on it (Codex tried a tool).
+    """
+
+    def __init__(self, message: str, *, spent: bool = False):
+        super().__init__(message)
+        self.spent = spent
+
+
+class RejectedAfterSending(RuntimeError):
+    """A request that failed once the provider's process had the prompt and worked on it (Codex tried a tool, or
+    the process ran out of time before any output): the prompt used the account's allowance, so it is recorded on
+    the account and charged as an interrupted request."""
+
+
+_attempts = threading.local()
+
+
+_TOO_LONG = re.compile(r"prompt is too long|context window|context_length_exceeded|maximum context length", re.I)
+
+
+def request_too_long(message) -> bool:
+    """Whether a provider's error message says the request itself is too long for the model."""
+    return isinstance(message, str) and _TOO_LONG.search(message) is not None
+
+
+def _may_rest_for(provider: str, user_id: str | None) -> bool:
+    """Whether a failure of *user_id*'s request may rest an account: once per person and provider per
+    ``COOLDOWN_ERROR``, across processes, so nobody can rest the pool one account at a time."""
+    if not user_id:
+        return True
+    key, now = f"subscription:rested-by:{provider}:{user_id}", time.time()
+    with db.transaction():
+        row = db.one("SELECT updated_at FROM runtime_state WHERE key=?", (key,))
+        if row is not None and now - float(row["updated_at"] or 0) < COOLDOWN_ERROR.total_seconds():
+            return False
+        db.execute("INSERT INTO runtime_state (key, value, updated_at) VALUES (?, '1', ?) ON CONFLICT(key) "
+                   "DO UPDATE SET updated_at=excluded.updated_at", (key, now))
+    return True
+
+
+def cli_started() -> None:
+    """Adapters call this just before they start the provider's process for a chat attempt.
+
+    Until then nothing has reached the account: a failure (input it cannot encode, a temporary file, a sandbox
+    that cannot be set up) says nothing about the account, so :func:`chat_stream` does not rest it.
+    """
+    attempt = getattr(_attempts, "current", None)
+    if attempt is not None:
+        attempt["started"] = True
 
 
 class AdmissionChanged(Exception):
@@ -208,7 +259,8 @@ def _check_provider(provider: str) -> str:
 
 def _slot(provider: str) -> dict:
     return _transports.setdefault(_check_provider(provider),
-                                  {"reporter": None, "chat": None, "discovery": None, "accepts_cancel": False})
+                                  {"reporter": None, "chat": None, "discovery": None, "accepts_cancel": False,
+                                   "reports_start": False})
 
 
 def reset_transport(provider: str | None = None) -> None:
@@ -280,6 +332,9 @@ def register_site_chat(provider: str, handler) -> None:
         slot["accepts_cancel"] = accepts_cancel
     else:
         slot["accepts_cancel"] = False
+    # Adapters that call cli_started() (reports_cli_start = True) let the pool tell the account's failures from
+    # the request's or this server's own; for the others every failure counts as the account's, as before.
+    slot["reports_start"] = getattr(getattr(handler, "__self__", None), "reports_cli_start", False) is True
     slot["chat"] = handler
     _pool_cache.pop(provider, None)
 
@@ -1140,7 +1195,7 @@ class _AccountUsage:
 
 
 def chat_stream(provider: str, model_name: str, messages: list[dict], *, options: dict | None = None,
-                account_id: int | None = None, cancel=None):
+                account_id: int | None = None, cancel=None, user_id: str | None = None):
     """Stream through one exclusively leased account at a time.
 
     Only adapter-discovered models and fresh, positive configured/provider
@@ -1178,6 +1233,7 @@ def chat_stream(provider: str, model_name: str, messages: list[dict], *, options
     tried = set()
     last_error = f"{LABELS[provider]} is currently at capacity. Try again shortly."
     capacity_unavailable = True
+    rested_for_failure = False
     while True:
         lease = _claim_waiting(provider, descriptor, tried, account_id, cancel)
         if lease is None:
@@ -1188,6 +1244,8 @@ def chat_stream(provider: str, model_name: str, messages: list[dict], *, options
         tried.add(account["id"])
         usage = _AccountUsage(lease, messages, provider, descriptor["family"])
         stream = None
+        attempt = {"started": False}
+        outer, _attempts.current = getattr(_attempts, "current", None), attempt
 
         with lease:
             try:
@@ -1214,6 +1272,9 @@ def chat_stream(provider: str, model_name: str, messages: list[dict], *, options
             except RequestRejected as error:
                 # The same request fails on every account; resting them all would only take the pool offline.
                 lease.require_active()
+                if error.spent and attempt["started"]:
+                    usage.interrupted = True  # settled below, with the estimated prompt
+                    raise RejectedAfterSending(str(error)) from None
                 raise RuntimeError(str(error)) from None
             except AdmissionChanged:
                 lease.require_active()
@@ -1236,19 +1297,44 @@ def chat_stream(provider: str, model_name: str, messages: list[dict], *, options
                 # Preserve a failed/malformed transport as a provider failure,
                 # even when all other accounts are subsequently unavailable.
                 capacity_unavailable = False
+                started = attempt["started"] or not slot["reports_start"]
+                # A request that runs out of time would run out of time on every account: one rest at most.
+                timed_out = getattr(error, "timed_out", False) is True
+                # The provider read the prompt and worked on it for the whole time allowed: charged as an
+                # interrupted request, like a tool attempt, whether or not the account is rested below.
+                spent = timed_out and attempt["started"] and not usage.produced
                 if getattr(error, "requires_quarantine", False) is True:
                     # An adapter that cannot prove process/socket shutdown must never release this account
                     # back into the serving pool.
                     if not store.quarantine(account["id"], lease.lease_id):
                         cancel.cancel("Subscription account lease lost")
                         cancel.check()
+                elif not started:
+                    pass  # it failed before the provider's process ran: nothing says the account is at fault
+                elif timed_out and usage.produced:
+                    pass  # the account answered; the answer was longer than the time allowed
+                elif rested_for_failure or not _may_rest_for(provider, user_id):
+                    # A second account failing the same request points at the request (too long for the
+                    # model, refused content), as does a person whose requests already rested one lately:
+                    # resting every account would take the pool offline.
+                    log.warning("%s account %s also failed (%s): not trying more accounts for this request",
+                                LABELS[provider], account["id"], type(error).__name__)
+                    if spent:
+                        usage.interrupted = True
+                        raise RejectedAfterSending("The adapter could not answer.") from None
+                    raise RuntimeError("The adapter could not answer.") from None
                 else:
                     lease.rest(_now() + COOLDOWN_ERROR, "The adapter request failed.")
+                    rested_for_failure = True
                 log.warning("%s account %s failed (%s)", LABELS[provider], account["id"], type(error).__name__)
                 last_error = str(error) if isinstance(error, _StreamError) else "The adapter could not answer."
-                if usage.produced or usage.settled:
+                if spent:
+                    usage.interrupted = True
+                    raise RejectedAfterSending(last_error) from None
+                if usage.produced or usage.settled or timed_out:
                     raise RuntimeError(last_error) from None
             finally:
+                _attempts.current = outer
                 try:
                     if stream is not None and hasattr(stream, "close"):
                         stream.close()
@@ -1280,7 +1366,7 @@ def effort_for(think, effort: str | None = None) -> str | None:
 
 
 def stream_chunks(provider: str, model_name: str, messages: list[dict], *, options: dict | None = None,
-                  think=None, effort: str | None = None, cancel=None):
+                  think=None, effort: str | None = None, cancel=None, user_id: str | None = None):
     """Validated adapter records as inference chunks, preserving explicit completion and usage."""
     from bananachat.services.ollama import Chunk
     from bananachat.services.upstream import Cancelled, UpstreamError
@@ -1295,7 +1381,7 @@ def stream_chunks(provider: str, model_name: str, messages: list[dict], *, optio
     if level is not None:
         options["effort"] = level
     prompt = completion = None
-    stream = chat_stream(provider, model_name, messages, options=options, cancel=cancel)
+    stream = chat_stream(provider, model_name, messages, options=options, cancel=cancel, user_id=user_id)
     try:
         for item in stream:
             if "tokens_in" in item:
@@ -1312,6 +1398,8 @@ def stream_chunks(provider: str, model_name: str, messages: list[dict], *, optio
         raise
     except CapacityUnavailable as error:
         raise UpstreamError(str(error), status=503, code=error.code, kind="capacity") from None
+    except RejectedAfterSending as error:
+        raise UpstreamError(str(error), sent=True) from None
     except RuntimeError as error:
         raise UpstreamError(str(error)) from None
     finally:

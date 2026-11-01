@@ -83,7 +83,7 @@ def test_streaming_and_timeouts_suit_cloudflare():
     assert "\t\tflush_interval -1\n" in text
     # Cloudflare reuses idle origin connections for 900 s.
     assert "idle 16m" in text and "idle 2m" not in text
-    assert "read_header 10s" in text and "read_body 5m" in text and "write" not in text.replace("read_body", "")
+    assert "read_header 10s" in text and "read_body 2m" in text and "write" not in text.replace("read_body", "")
 
 
 def test_tls_alpn_is_disabled_only_behind_cloudflare():

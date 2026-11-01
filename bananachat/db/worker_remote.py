@@ -71,6 +71,12 @@ def clear_virtual_ips_outside(addresses) -> int:
 
 # ----- tunnels ------------------------------------------------------------------------------------------------
 
+def login_session_live(id_hash: str, user_id: str) -> bool:
+    """Whether the browser login session *id_hash* of *user_id* still exists (not signed out or revoked)."""
+    return db.one("SELECT 1 FROM auth_sessions WHERE id_hash=? AND user_id=? AND expires_at>?",
+                  (id_hash, user_id, db.now())) is not None
+
+
 def insert_tunnel(tunnel_id: str, worker_id: str, kind: str, host: str, port: int, now: float, *,
                   created_by: str | None, access_key_id: str | None, client_ip: str | None) -> None:
     db.execute("INSERT INTO worker_tunnels (id, worker_id, kind, target_host, target_port, status, created_by, "

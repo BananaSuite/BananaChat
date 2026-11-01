@@ -7,7 +7,10 @@ described in :mod:`bananachat.services.chat`.
 
 from __future__ import annotations
 
+import logging
+import math
 import re
+import time
 import unicodedata
 from urllib.parse import quote
 
@@ -28,9 +31,29 @@ from bananachat.services.access import AccessContext
 
 bp = Blueprint("chat", __name__)
 
+log = logging.getLogger("bananachat.chat")
+
 SIDEBAR_PAGE = 30
 MESSAGE_PAGE = 50
 SHARED_PAGE = 200
+# Message text one page shows at most (escaped as HTML it can grow several times); more behind "show earlier".
+PAGE_TEXT_BYTES = 1024 * 1024
+# Views of share links per address and minute (anyone with the link may open it).
+SHARED_VIEWS_PER_MINUTE = 60
+# Markdown downloads of a whole chat (each sends every message): per address for share links, per account for
+# the owner's own chats, as the account exports are limited.
+SHARED_DOWNLOADS_PER_HOUR = 30
+CHAT_DOWNLOADS_PER_HOUR = 60
+# Audit entries for new share links, per account (as for sign-outs, MC1-3): the log is never purged, and making
+# and stopping a link in a loop would otherwise write a row each time. Further links go to the application log.
+SHARE_AUDITS, SHARE_AUDIT_SECONDS = 10, 900
+DOWNLOAD_RETRY_AFTER = 600
+# A message's PDF is rendered on every download, and an answer of many short lines takes over a second at the
+# default answer limit: an account may spend PDF_BUDGET_SECONDS a minute rendering, in all processes together,
+# counted in events of _PDF_STEP seconds (each PDF counts at least one), and renders two at a time per process
+# (its download places, security.download_first).
+PDF_BUDGET_SECONDS = 10.0
+_PDF_STEP = 0.1
 _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
 
@@ -129,8 +152,14 @@ def _disposition(filename: str, fallback: str) -> str:
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(clean, safe='')}"
 
 
-def _export(session):
-    """The conversation as Markdown, streamed in batches."""
+def _export(session, still_allowed):
+    """The conversation as Markdown, streamed in batches (a large response: security.hold_large_response).
+
+    Each batch holds at most PAGE_TEXT_BYTES of message text (or one message), as the chat pages do, so a
+    reader that stops reading pins a bounded amount of memory, however large the chat is. Between batches,
+    at most every security.DOWNLOAD_CHECK_SECONDS, *still_allowed()* is asked again; the file ends cut short
+    once it fails (signed out, suspended, share link revoked).
+    """
     site = g.settings.get("site_name") or "BananaChat"
     title = chat_service.display_title(session["title"], g.lang)
     you, assistant = _t("chat.you"), _t("chat.assistant")
@@ -139,7 +168,12 @@ def _export(session):
 
     def generate():
         yield f"# {title}\n\n_{_t('chat.export_note', site=site, date=db.now()[:16] + ' UTC')}_\n\n"
-        for rows in chats.iter_message_batches(session_id):
+        checked = time.monotonic()
+        for rows in chats.iter_message_batches(session_id, max_bytes=PAGE_TEXT_BYTES):
+            if time.monotonic() - checked >= security.DOWNLOAD_CHECK_SECONDS:
+                if not still_allowed():
+                    return
+                checked = time.monotonic()
             files = chats.attachments_for(row["id"] for row in rows)
             for row in rows:
                 who = you if row["role"] == "user" else (row["model_name"] or assistant)
@@ -217,7 +251,7 @@ def session_page(session_id):
     user = g.user
     config = current_app.config["BC"]
     context = AccessContext.load(user)
-    rows, has_more = chats.message_page(session_id, limit=MESSAGE_PAGE)
+    rows, has_more = chats.message_page(session_id, limit=MESSAGE_PAGE, max_bytes=PAGE_TEXT_BYTES)
     status = runs.status(session_id)
     sidebar = chats.list_for_user(user["id"], limit=SIDEBAR_PAGE)
     personality_allowed = context.allows("custom_personality")
@@ -302,7 +336,9 @@ def status(session_id):
     session = _owned(session_id)
     state = runs.status(session_id)
     after = _int_arg("after")
-    rows = chats.messages_after(session_id, after) if after is not None else []
+    # Enough for the run it follows: one message and its longest answer.
+    budget = current_app.config["BC"].chat_max_message_bytes + current_app.config["BC"].chat_max_response_bytes
+    rows = chats.messages_after(session_id, after, max_bytes=max(PAGE_TEXT_BYTES, budget)) if after is not None else []
     return _json({
         "generating": state["active"], "state": state["state"], "error": state["error"],
         "stopping": state["stopping"], "partial": state["partial"] if (state["active"] or state["stale"]) else "",
@@ -322,7 +358,8 @@ def stop(session_id):
 @login_required
 def messages(session_id):
     _owned(session_id)
-    rows, has_more = chats.message_page(session_id, before=_int_arg("before"), limit=MESSAGE_PAGE)
+    rows, has_more = chats.message_page(session_id, before=_int_arg("before"), limit=MESSAGE_PAGE,
+                                        max_bytes=PAGE_TEXT_BYTES)
     return _json({"messages": messages_json(rows, session_id), "has_more": has_more})
 
 
@@ -384,6 +421,13 @@ def share(session_id):
         token = chats.share(session_id)
     except chats.ShareBlocked:  # an administrator stopped sharing it (moderation)
         return security.json_error(_t("chat.error_share_blocked"), 403, "share_blocked")
+    if token != session.get("shared_token"):
+        # A new link: a lasting way into the chat, so the owner can see when and from where it was made.
+        if security.allow("chat-share-audit", SHARE_AUDITS, SHARE_AUDIT_SECONDS, key="user:" + g.user["id"]):
+            users.audit(g.user, "chat.share_created", session_id, ip_address=security.client_ip())
+        else:
+            log.info("User %s made a share link without an audit entry: more than %d in %d seconds",
+                     g.user["id"], SHARE_AUDITS, SHARE_AUDIT_SECONDS)
     return _json({"ok": True, "shared": True, "url": url_for("chat.shared", token=token, _external=True)})
 
 
@@ -392,7 +436,10 @@ def share(session_id):
 @bp.get("/chat/<session_id>/download", endpoint="download")
 @login_required
 def download(session_id):
-    return _export(_owned(session_id))
+    session = _owned(session_id)
+    if not security.allow("chat-download", CHAT_DOWNLOADS_PER_HOUR, 3600, key="user:" + g.user["id"]):
+        return security.too_many_requests(DOWNLOAD_RETRY_AFTER)
+    return _export(session, security.requester_check(admin=False))
 
 
 @bp.get("/chat/<session_id>/attachments/<attachment_id>", endpoint="attachment")
@@ -415,12 +462,20 @@ def attachment(session_id, attachment_id):
 
 @bp.get("/chat/<session_id>/messages/<int:message_id>/pdf", endpoint="message_pdf")
 @login_required
+@security.download_first
 def message_pdf(session_id, message_id):
     session = _owned(session_id)
     row = chats.get_message(session_id, message_id)
     if row is None or row["role"] != "assistant":
         abort(404)
-    pdf = attachments.render_pdf(row["content"], chat_service.display_title(session["title"], g.lang))
+    budget_key = "message-pdf-time:user:" + g.user["id"]
+    if users.count_hits(budget_key, 60) >= round(PDF_BUDGET_SECONDS / _PDF_STEP):
+        return security.too_many_requests(10)
+    started = time.monotonic()
+    try:
+        pdf = attachments.render_pdf(row["content"], chat_service.display_title(session["title"], g.lang))
+    finally:
+        users.record_hits(budget_key, max(1, math.ceil((time.monotonic() - started) / _PDF_STEP)))
     return Response(pdf, mimetype="application/pdf", headers={
         "Content-Disposition": _disposition(f"response-{message_id}.pdf", "response.pdf"),
         "Cache-Control": "private, no-store"})
@@ -436,7 +491,23 @@ def search():
         return _json({"results": []})
     if not security.allow("chat-search", 60, 60, key="user:" + g.user["id"]):
         return security.too_many_requests()
-    rows = chats.search(g.user["id"], text)
+    try:
+        rows = chats.search(g.user["id"], text)
+    except chats.SearchBusy as busy:
+        if not busy.own:
+            return security.server_busy()
+        # The account's previous search did not stop in time: the page asks again after retry_after.
+        response = security.json_error(_t("chat.search_running"), 429, "search_running", retry_after=2)
+        response.headers["Retry-After"] = "2"
+        return response
+    except chats.SearchBudgetSpent:
+        response = security.json_error(_t("chat.search_budget"), 429, "search_budget")
+        response.headers["Retry-After"] = "10"
+        return response
+    except chats.SearchReplaced:  # the page shows only its newest search
+        return security.json_error(_t("chat.search_replaced"), 409, "search_replaced")
+    except chats.SearchTooSlow:
+        return security.json_error(_t("chat.search_too_slow"), 503, "search_too_slow")
     return _json({"results": [_session_json(row) for row in rows]})
 
 
@@ -470,8 +541,11 @@ def _public(response):
 
 @bp.get("/share/<token>", endpoint="shared")
 def shared(token):
+    if not security.allow("share-view", SHARED_VIEWS_PER_MINUTE, 60):
+        return _public(security.too_many_requests(60))
     session = _shared_or_404(token)
-    rows, has_more = chats.message_page(session["id"], before=_int_arg("before"), limit=SHARED_PAGE)
+    rows, has_more = chats.message_page(session["id"], before=_int_arg("before"), limit=SHARED_PAGE,
+                                        max_bytes=PAGE_TEXT_BYTES)
     html = render_template("chat/shared.html", session=session,
                            title=chat_service.display_title(session["title"], g.lang),
                            messages=messages_json(rows, None), has_more=has_more,
@@ -482,7 +556,18 @@ def shared(token):
 
 @bp.get("/share/<token>/download", endpoint="shared_download")
 def shared_download(token):
-    return _public(_export(_shared_or_404(token)))
+    if not security.allow("share-download", SHARED_DOWNLOADS_PER_HOUR, 3600):
+        return _public(security.too_many_requests(DOWNLOAD_RETRY_AFTER))
+    session = _shared_or_404(token)
+
+    def still_shared() -> bool:
+        current = chats.by_share_token(token)
+        if current is None or current["id"] != session["id"]:
+            return False
+        owner = users.get(current["user_id"])
+        return owner is not None and not users.is_suspended(owner)
+
+    return _public(_export(session, still_shared))
 
 
 # Registered after the routes so the view exists when this runs.

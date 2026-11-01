@@ -46,12 +46,12 @@ def _observe(provider, reports):
     return subscription_pool.refresh_quota(provider)[provider]
 
 
-@pytest.mark.parametrize("percent", range(1, 101))
-def test_every_whole_percentage_cap_stops_exactly_at_its_share(percent):
-    left = (100 - percent) / 100  # the figure the usage readers derive from the provider's used percentage
-    assert subscription_pool._capped(left, percent) == 0.0
-    if percent > 1:
-        assert subscription_pool._capped((101 - percent) / 100, percent) > 0.0
+def test_every_whole_percentage_cap_stops_exactly_at_its_share():
+    for percent in range(1, 101):
+        left = (100 - percent) / 100  # the figure the usage readers derive from the provider's used percentage
+        assert subscription_pool._capped(left, percent) == 0.0, percent
+        if percent > 1:
+            assert subscription_pool._capped((101 - percent) / 100, percent) > 0.0, percent
 
 
 def test_a_request_the_adapter_rejects_rests_no_account(app, provider):

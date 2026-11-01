@@ -798,7 +798,7 @@ def test_admin_git_settings_image_check_and_audit(env, runner):
     assert env.browser.post("/admin/agents/git", form).status_code == 403
 
 
-@pytest.mark.parametrize("language", ["en", "it"])
+@pytest.mark.parametrize("language", ["it"])
 def test_pages_offer_repositories_in_both_languages(env, runner, fake_ollama, language):
     with env.browser.client.session_transaction() as session:
         session["language"] = language

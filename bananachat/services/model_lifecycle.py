@@ -22,6 +22,7 @@ from flask import current_app
 from filelock import FileLock, Timeout
 
 from bananachat import db
+from bananachat.numbers import ascii_int
 from bananachat.db import catalog, users
 from bananachat.db import model_lifecycle as lifecycle_db
 from bananachat.db import pulls as pulls_db
@@ -767,7 +768,8 @@ def recheck_failing(config=None, current: dict | None = None) -> list[tuple[str,
 def _check_replacement(model, replacement_id):
     if replacement_id in (None, "", 0):
         return None
-    replacement = catalog.get(int(replacement_id))
+    replacement_id = ascii_int(replacement_id, 18)
+    replacement = catalog.get(replacement_id) if replacement_id is not None else None
     if replacement is None:
         raise ValueError("The replacement model no longer exists.")
     if replacement["id"] == model["id"]:

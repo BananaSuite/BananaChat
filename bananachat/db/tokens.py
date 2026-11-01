@@ -34,6 +34,12 @@ def list_for(user_id: str):
                     f"WHERE user_id=? AND {_LIVE} ORDER BY id DESC", (user_id, db.now()))
 
 
+def is_live(token_id: int, user_id: str) -> bool:
+    """Whether the account's token is still usable (neither revoked nor expired)."""
+    return db.scalar(f"SELECT COUNT(*) FROM api_tokens WHERE id=? AND user_id=? AND {_LIVE}",
+                     (token_id, user_id, db.now()), 0) == 1
+
+
 def count_active(user_id: str) -> int:
     return db.scalar(f"SELECT COUNT(*) FROM api_tokens WHERE user_id=? AND {_LIVE}", (user_id, db.now()), 0)
 

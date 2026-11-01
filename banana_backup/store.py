@@ -18,6 +18,10 @@ from .git import Git, OVERHEAD, PART_BYTES, SNAPSHOT, check_private, location
 DEFAULT_SCHEDULE = {"enabled": False, "interval_minutes": 1440}
 # How far ahead of this server's clock a snapshot ID may be dated and still count (another server's clock).
 FUTURE_SKEW = timedelta(days=1)
+# Unauthenticated snapshot branches one retention or upload run reads before it stops looking: each costs a
+# fetch of up to a snapshot's size, and anyone who can push may make thousands. Retention by a release from
+# before authentication left at most --keep (30) of them in a series.
+MAX_UNVERIFIED = 40
 
 
 def _snapshot_order(identifier):
@@ -54,6 +58,12 @@ def _next_snapshot(previous):
     if times:
         now = max(now, max(times) + timedelta(microseconds=1))
     return now.strftime("%Y%m%dT%H%M%S.%fZ") + "-" + secrets.token_hex(4)
+
+
+def _too_many_unverified():
+    return (f"More than {MAX_UNVERIFIED} of the newest snapshot branches are not authenticated with this series' "
+            "recovery key, so older snapshots were not read. Check who pushed them to the backup repository, and "
+            "delete them there.")
 
 
 def _staging(size):
@@ -234,7 +244,7 @@ class Store:
         index for another snapshot) is simply "not authenticated".
         """
         try:
-            index = json.loads(git.run("cat-file", "blob", git.index(self.prefix(config) + identifier, sha)))
+            index = json.loads(git.run("cat-file", "blob", git.index(self.prefix(config) + identifier, sha), bounded=True))
             if (not isinstance(index, dict) or index.get("schema") != 1
                     or any(index.get(key) != value for key, value in self.context(config, identifier).items())):
                 return None
@@ -253,12 +263,21 @@ class Store:
         outlives the snapshot itself, which retention deletes in time. An
         index without it (development builds) counts as its own start. None
         when no snapshot in *heads* is authenticated.
+
+        Refused when more than MAX_UNVERIFIED unauthenticated snapshots come
+        before the answer: their date would otherwise be taken for the
+        series' start, and anyone who can push makes such branches.
         """
         now = datetime.now(timezone.utc)
-        oldest = None
+        oldest, unverified = None, 0
         for name in sorted((name for name in heads if _plausible(name, now)), key=_snapshot_order, reverse=True):
             index = self._authenticated_index(git, config, name, heads[name])
             if index is None:
+                unverified += 1
+                if unverified > MAX_UNVERIFIED:
+                    if oldest is None:
+                        raise ValueError(_too_many_unverified())
+                    return oldest
                 continue
             since = index.get("authenticated_since")
             if isinstance(since, str) and _plausible(since, now) and _snapshot_order(since) <= _snapshot_order(name):
@@ -389,7 +408,9 @@ class Store:
         that are not authenticated but newer (made before snapshots were
         authenticated, or by someone else) are kept, uncounted, until enough
         authenticated ones replace them. IDs dated in the future or that are
-        no dates are neither counted nor deleted. Both are reported.
+        no dates are neither counted nor deleted. Both are reported. Past
+        MAX_UNVERIFIED unauthenticated snapshots, the older ones are not read
+        and nothing more is deleted.
         """
         removed, warnings, unverified = [], [], []
         now = datetime.now(timezone.utc)
@@ -404,6 +425,9 @@ class Store:
         # payloads are not kept reachable through its Git ancestry.
         for name in sorted((name for name in heads if _plausible(name, now)), key=_snapshot_order, reverse=True):
             if counted < keep:
+                if len(unverified) >= MAX_UNVERIFIED:
+                    warnings.append(_too_many_unverified() + " Retention deleted nothing older.")
+                    break
                 if self._authenticated(git, config, name, heads[name]):
                     counted += 1
                 else:

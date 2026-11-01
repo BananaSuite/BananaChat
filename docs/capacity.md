@@ -37,8 +37,9 @@ What the run shows:
   stop buttons and administration stay fast while every other thread streams
   an answer. Requests over that cap get an immediate HTTP 503 with
   `Retry-After: 5` instead of waiting.
-- An account may have three requests admitted at once (one running); further
-  ones get HTTP 429.
+- An account may have three requests admitted at once (one running) in each
+  queue lane, whether they are chat, API, playground or image requests;
+  further ones get HTTP 429.
 - The ledger had one row per successful request (75) and none for refused
   ones; the SQLite integrity check passed.
 - The two Gunicorn processes used about 286 MiB resident after the run,
@@ -91,6 +92,41 @@ place at once. History pages, context length, output length, buffered stream
 data and remote worker chunks are all bounded. Request rates apply per
 account and service, shared by all of the account's API keys, regardless of
 address.
+
+Chat search has no index (it matches inside words), so it reads every message
+of the account. A search stops after 2 seconds (HTTP 503 `search_too_slow`),
+and each web process runs two at a time, one per account (503 `server_busy`).
+A message is compared as a whole, so a stopped search first finishes the
+message it is comparing. A crafted phrase can take about 0.4 seconds per MiB of
+message, so at the default 1 MiB answer limit a search ends within about 2.4
+seconds, and with `BC_CHAT_MAX_RESPONSE_KB=8192` within about 5.2 seconds (the
+time counts against the budget below).
+The sidebar searches as you type, so an account's new search stops its previous
+one and takes its place (the stopped one answers 409 `search_replaced`; 429
+`search_running` only if it did not stop within a second, and the page then
+asks once more). An account may spend 10 seconds a minute searching, in all
+processes together (each search counts at least a tenth of a second); past that
+its searches answer 429 `search_budget` without running. A quick search costs
+milliseconds, so 60 a minute stay within it; on a history near the 1 GiB
+default an ordinary search takes about a second, so about eight a minute run in
+full. The places are shared: accounts that keep sending searches that run to the
+2-second stop can still take them, and then other users' searches answer 503
+`server_busy` (the rest of the site is unaffected). With the budget that takes
+about twelve accounts per web process (two places, 60 seconds a minute each, 10
+seconds per account), about 24 for the default two processes; with 8 MiB
+answers each search can run on about 3 seconds past its stop, so about nine per
+process. Disable such accounts (or close sign-up)
+if it happens.
+
+An answer's PDF is rendered on every download, and its cost grows with the
+number of lines: an ordinary answer at the default 1 MiB limit takes about a
+tenth of a second, one made of a million short lines about one to two seconds
+(roughly eight times that with `BC_CHAT_MAX_RESPONSE_KB=8192`). The download
+takes one of the account's download places before it is rendered (two per web
+process by default, 429 beyond them, 503 `server_busy` when the process has
+none left), and an account may spend 10 seconds a minute rendering PDFs, in
+all processes together (each PDF counts at least a tenth of a second); past
+that its downloads answer 429 with `Retry-After: 10` without rendering.
 
 Answers and usage are committed before success is reported. An interrupted
 answer keeps what was written. Fallback switches to another permitted model

@@ -57,7 +57,7 @@
         <span class="hint" id="invite-code-hint">12-32 letters, digits or hyphens, hard to guess (codes can be tried on the sign-up page). Leave empty for a random code.</span>
       </div>
     </div>
-    {{ reauth_field("invite-reauth", needed_for="for an administrator invitation") }}
+    {{ reauth_field("invite-reauth") }}
     <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Create invitation</button></div>
   </form>
 </section>

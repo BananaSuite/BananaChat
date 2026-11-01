@@ -1,5 +1,185 @@
 # Changelog
 
+## 1.7.6 — 2026-10-30
+
+Two database migrations (`v28_device_epoch`, `v29_community_kinds`, schema version 29).
+
+### Security: slow request bodies
+
+- A request body that stops arriving for `BC_BODY_STALL_TIMEOUT` seconds (new, default 20), or that comes in
+  slower than `BC_BODY_MIN_KBPS` (new, default 32), ends with `408` and frees its server thread, so clients
+  sending bodies very slowly can no longer hold the request threads (`0` turns the limits off).
+
+### Security: accounts and sign-in
+
+- Device cookies (a browser that signed in before has sign-in and code limits
+  of its own) now belong to the account's current two-step set-up and
+  sign-out: turning two-step verification on, off or resetting it, changing
+  the password, a suspension and *Sign out everywhere* retire them. Cookies
+  collected while two-step verification was off can no longer multiply the
+  number of codes someone with the password may try, and all known browsers
+  together have at most 200 wrong codes a day. A browser keeps its device
+  cookie when it signs in again.
+- Known browsers still count towards their address, with ten times the
+  `BC_LOGIN_ATTEMPTS_PER_MINUTE` and `BC_LOGIN_FAILURES_PER_ADDRESS` limits, and
+  an account keeps at most 50 login sessions (signing in once more ends the
+  one used least recently).
+- Passwords typed to confirm something (account page, administrator
+  confirmation) share one limit per account, 10 per 15 minutes and 50 a day;
+  wrong authenticator codes given as an administrator confirmation count
+  towards the account's sign-in code limits.
+- Suspending an account stops its chat and API answers, image generations and
+  agent tasks that are already running, as deleting it does.
+- Creating an account or an invitation from the administration pages now asks
+  for the administrator's recent confirmation, as opening sign-up to everyone
+  does: the account, or the one an invitation lets someone make, keeps working
+  after a borrowed session ends.
+- An account export that is already downloading stops (the file ends cut
+  short) when the browser session that started it ends (signing out,
+  *Sign out everywhere*, a password change), or that account is suspended or
+  deleted; an administrator's export of another account also stops when the
+  administrator is no longer one.
+- The database export (Migration page) and the metrics CSV export that are
+  already downloading stop the same way: when the browser session that
+  started them ends, or the administrator is suspended, deleted or no longer
+  an administrator.
+- Deleting an account deletes its cloud-session sandboxes and stored uploads
+  at once (and, from the administration page, its background image). The
+  cleanup jobs remove sandboxes and stored uploads of tasks that no longer
+  exist.
+- Invitations stop working when their creator is no longer an administrator
+  (demoted or deleted), whatever role they give; a timed suspension of the
+  creator that has ended no longer holds them back.
+- Dates at the edge of the calendar in administration forms are refused
+  instead of failing with an error page.
+- Personal data and chat exports (account page and administration) are
+  written as they are downloaded, so memory stays small whatever the account
+  stores; one export per account runs at a time, and they start only from the
+  page buttons (POST).
+- Large responses (attachments, files, exports, chat downloads, long pages)
+  are written by threads of their own, `BC_DOWNLOAD_THREADS` (new, default 8)
+  on top of `BC_HTTP_THREADS`, at most a quarter of them for one person or address,
+  so slow readers cannot take the threads that answer pages, health checks and
+  answers. Chat pages and share links show at most 1 MB of message text at a
+  time (the rest behind "show earlier"); share links answer 60 views a minute
+  per address.
+- Markdown downloads of a chat answer 30 an hour per address from a share link
+  and 60 an hour per account for the owner's own chats (429 beyond).
+- A Markdown download of a chat reads at most 1 MB of message text at a time
+  (or one message), as the chat pages do, so a reader that stops reading no
+  longer keeps up to 200 whole messages in the server's memory.
+- The database export (Administration › Backup & migration) takes its
+  download place first: a refused export (429 or 503) no longer copies the
+  database or adds an audit entry.
+- The administrator's no-history audit page of a chat shows at most 4 MB of
+  copied text at a time, the newest entries first (the rest behind "Show
+  earlier entries").
+- Nobody can grow the audit log (kept for good) at will: *Sign out
+  everywhere else* and signing one device out from the account page always
+  work, but past 10 and 20 respectively in 15 minutes an account's further
+  ones are written to the application log instead of the audit log (refusing
+  them would let a stolen session stop the owner from signing it out), and
+  stopping a personality's share link is recorded only when a link was
+  shared.
+- Signing in with a two-step recovery code always works, but past 10 in 15
+  minutes an account's further ones are written to the application log instead
+  of the audit log (renewing the codes with one of them gave ten more each time).
+- Message text has an account storage limit, `BC_CHAT_MAX_ACCOUNT_TEXT_MB`
+  (new, default 1024), like attachments: the account's chats and the copies of
+  its no-history chats kept for administrators; a message over it is refused
+  with 413 `storage_limit`. Administrators are exempt.
+
+### Security: answers, limits and workers
+
+- An image request that waited in the queue is refused (403, nothing charged)
+  when the model was locked for the account, unpublished or taken off its
+  access meanwhile, as text answers are.
+- Streamed answers (API, playground, images) keep generating, are charged and
+  free their inference place whether or not the client reads them; a client
+  that stops reading for `BC_WRITE_TIMEOUT` seconds (new, default 120, 0 off)
+  is disconnected, also on the web chat stream.
+- A running API answer holds what it may cost until it ends, so answers
+  running at the same time cannot together spend more than the allowance.
+- An account's chat answers, API and playground answers and images share one
+  place in the inference queue (one running and three admitted per account
+  and lane, as documented) instead of one per kind, so one account can no
+  longer take three local inference places at once.
+- A local model answering after a hosted model failed (and the other way
+  round) waits for a place in its own queue lane, so fallbacks no longer run
+  past `BC_MAX_CONCURRENT`, the `BC_MIN_FREE_MEMORY_MB` check or the
+  account's local place.
+- Temporary unlimited requests on the community board always wait for an
+  administrator, and effort and rate requests (which cost supporters nothing)
+  are offered to the community only when an administrator lists them.
+- Invalid Unicode in a request is refused with 400 `invalid_text`; one failing
+  request rests at most one Claude or Codex subscription account.
+- A worker's reported prompt usage is capped by the server's own estimate;
+  worker job long-polls count against the long-request places.
+- An address that several workers' networks contain is refused for helper
+  sessions (name the worker with `--worker`); the helper always says which
+  worker answered. Browser terminal and VNC sessions end with the sign-in that
+  opened them.
+- Workspace uploads to cloud sessions are one at a time per person and 30 an
+  hour; a busy runner makes a task wait instead of dropping its files.
+- Files added to cloud-session starts are kept on the web server only until
+  they are copied into the sandbox, or for a day when a run could not copy
+  them; `BC_AGENTS_MAX_STORED_UPLOAD_MB` (new, default 100) limits what one
+  account has waiting, so starting and stopping tasks cannot fill the disk.
+- The cloud-session workspace browser reads one folder or file at a time per
+  person (all tabs together) and 60 a minute, answering 429 with
+  `Retry-After` beyond that; the sandbox runner lets one sandbox run at most
+  `BC_SANDBOX_MAX_EXECS_PER_SANDBOX` engine operations (new; by default its
+  share of `BC_SANDBOX_MAX_EXECS`, at least 2). Browsing a workspace from many
+  tabs no longer makes other people's agent commands fail as "busy". Git
+  imports keep their 120-second limit against slow servers. Model downloads
+  check the registry host the way Ollama reads names.
+- Chat search stops after 2 seconds (503 `search_too_slow`; it first
+  finishes the message it is comparing, so about 5 seconds with 8 MiB
+  answers) and each web process runs two at a time, one per account (503
+  `server_busy`), so crafted
+  phrases over a large history cannot keep every request thread and CPU core
+  busy. An account's new search stops its previous one (409
+  `search_replaced`), so searching as you type still shows the last query.
+  An account may search for 10 seconds a minute (429 `search_budget`), so a
+  couple of accounts cannot keep the search places taken for everyone.
+- An answer's PDF download takes one of the account's download places before
+  it is rendered (two at a time per web process), and an account may spend 10
+  seconds a minute rendering PDFs (429 with `Retry-After` beyond that), so
+  answers made of many short lines cannot keep a CPU core busy.
+- A worker's job over 64 KB takes a download place (or, with none left, a
+  long-request place) before it is claimed, and keeps it until the worker has
+  read it, one at a time per worker: a worker that reads its jobs slowly can
+  no longer hold every server thread. Without a place the job waits for the
+  next poll (no protocol change). A non-streamed `/v1` or remote-access answer
+  over 64 KB keeps its long-request place until it has been read.
+- Backups and rollback packages store hard-linked files as copies (packages
+  of earlier releases still restore).
+- Uploads and retention refuse a snapshot index over 128 KiB in the backup
+  repository without downloading it, so a branch pushed there with a huge
+  index can no longer make every backup run load it into memory.
+- Backup uploads and `backups prune` fetch each snapshot they examine into a
+  repository of their own, removed straight after, and read at most 40
+  unauthenticated snapshot branches per run: branches pushed by someone else
+  no longer pile up their objects on disk or make a run take hours. An upload
+  behind more than 40 of them stops with an error naming the cause.
+- Backup commands read Git's listings of the backup repository (snapshot
+  trees, branches) only up to their limits, and snapshot trees are no longer
+  listed recursively: a branch of a few KB whose folders repeat one another
+  can no longer make `backups run`, `verify` or `restore` load gigabytes.
+- The worker tunnel relay (`BC_WORKER_REMOTE_ACCESS=1`) waits for at most 128
+  connections that have not proven the installation key yet, closing any
+  more at once, and gives each 10 seconds for the whole challenge: another
+  local user can no longer make it start one thread per connection.
+- Downloaded files (attachments, exports) are served with
+  `Content-Security-Policy: default-src 'none'; sandbox`.
+- The metrics CSV export starts only from the button on **Administration →
+  Metrics** (POST); a refused one (no download place free) is not audited.
+- The access log hides the token of personality share links
+  (`/personalities/shared/[token]`), as it does for chat share links, also
+  when the client doubles the slashes.
+- filelock 4.2.1, pypdf 6.21.2 and, for installing, setuptools 84.2.1
+  (published vulnerabilities).
+
 ## 1.7.3 — 2026-10-24
 
 ### Claude and Codex subscriptions: sign in from the administration page

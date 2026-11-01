@@ -43,6 +43,7 @@ import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
@@ -68,6 +69,7 @@ RUNNER_RETRIES = 3
 RUNNER_BACKOFF = (1.0, 4.0, 10.0)
 RUNNER_FAILURES_TO_STOP = 4                # consecutive tool calls the runner could not serve
 SANDBOX_WAIT_SECONDS = 180
+RUNNER_BUSY_BACKOFF = 2.0                  # seconds, growing per attempt (at most 15) while the runner is busy
 MAX_PAUSE_SECONDS = 3600
 PAUSE_POLL_SECONDS = 5.0
 MAX_SANDBOX_RESETS = 2
@@ -370,7 +372,10 @@ class TaskRun:
             try:
                 self._execute()
             except LeaseLost:
-                log.warning("Agent task %s was taken over by another process", self.task_id)
+                if agents_db.get(self.task_id) is None:
+                    self._discard_deleted()
+                else:
+                    log.warning("Agent task %s was taken over by another process", self.task_id)
             except Exception:  # noqa: BLE001 - the outcome must still be recorded
                 log.exception("Agent task %s failed", self.task_id)
                 try:
@@ -422,6 +427,16 @@ class TaskRun:
             self._end(stop.state, error=text)
 
     # ----- ending ---------------------------------------------------------------------------
+    def _discard_deleted(self) -> None:
+        """The task was deleted while it ran (by its owner, or with the account): nothing of it may stay."""
+        log.info("Agent task %s was deleted while it ran", self.task_id)
+        if self.sandbox_id and self.runner is not None:
+            try:
+                self.runner.delete(self.sandbox_id)
+            except runner_mod.RunnerError as error:
+                log.warning("Could not delete the sandbox of deleted task %s: %s", self.task_id, error)
+        uploads.discard(self.task_id)
+
     def _end(self, state: str, *, summary: str = "", error: str = "") -> None:
         keep = self.settings.keep_workspace_minutes
         if keep and self.sandbox_id and self.runner is not None and self.sandbox_dirty and not self.remove_sandbox:
@@ -495,6 +510,10 @@ class TaskRun:
         if reason == "lease lost":
             return LeaseLost()
         if reason == "stopped by admin":
+            # Suspending or deleting an account also stops its tasks this way; say why, as the step check would.
+            user = users.get(self.user["id"])
+            if user is None or users.is_suspended(user):
+                return StopRun("stopped", "agents.stop_account")
             return StopRun("stopped", "agents.stopped_admin")
         return StopRun("stopped", "agents.stopped")
 
@@ -505,6 +524,36 @@ class TaskRun:
     def _sleep(self, seconds: float) -> None:
         if self.cancel.wait(seconds):
             raise self._stop_for_cancel()
+
+    @contextmanager
+    def _transfer(self):
+        """Hold the owner's runner transfer (``db.agents.claim_transfer``) for the block: a person holds
+        one of the runner's archive slots at a time, whether a task start or a download or an upload of
+        the workspace. Waits for it like a busy runner (:data:`SANDBOX_WAIT_SECONDS`), then raises
+        :class:`runner.RunnerError` ``busy``. Yields a function to call right before each runner call: it
+        renews the lease, and when the lease ran out during a long wait it takes it again or raises
+        ``busy`` (which :meth:`_runner_call` waits on), so the copy never runs without it."""
+        user_id = self.user["id"]
+        since, waits = time.monotonic(), 0
+        while (token := agents_db.claim_transfer(user_id)) is None:
+            if time.monotonic() - since > SANDBOX_WAIT_SECONDS:
+                raise runner_mod.RunnerError("Another transfer of this person is still running.", 503, code="busy")
+            waits += 1
+            self._sleep(min(15.0, RUNNER_BUSY_BACKOFF * waits))
+        held = [token]
+
+        def keep() -> None:
+            if agents_db.renew_transfer(user_id, held[0]):
+                return
+            again = agents_db.claim_transfer(user_id)
+            if again is None:
+                raise runner_mod.RunnerError("Another transfer of this person is running.", 503, code="busy")
+            held[0] = again
+
+        try:
+            yield keep
+        finally:
+            agents_db.release_transfer(user_id, held[0])
 
     def _checkpoint(self, agent: int) -> None:
         """Everything a step needs before it calls the model; after waiting for the model's rate, all of it again."""
@@ -821,7 +870,7 @@ class TaskRun:
             if self.sandbox_resets > MAX_SANDBOX_RESETS:
                 raise StopRun("failed", "agents.stop_sandbox_lost")
             waited_since = time.monotonic()
-            announced = False
+            announced = reclaimed = False
             attempt = 0
             while True:
                 self._assert_authorized(check_quota=True)
@@ -834,6 +883,13 @@ class TaskRun:
                         raise StopRun("failed", "agents.stop_sandbox_error", error=str(error)[:200]) from None
                     if time.monotonic() - waited_since > SANDBOX_WAIT_SECONDS:
                         raise StopRun("failed", "agents.stop_no_sandbox") from None
+                    if error.status == 429 and error.code == "capacity" and not reclaimed:
+                        # Every place holds a sandbox: a running task comes before a finished one's workspace
+                        # kept for downloads. One try at most per start, freed or not: if that does not help,
+                        # more won't, and nobody else's workspace goes.
+                        reclaimed = True
+                        if self._reclaim_kept_sandbox():
+                            continue
                     if not announced and error.capacity:
                         announced = True
                         self._step(kind="notice", content=message("agents.notice_waiting_sandbox"))
@@ -849,6 +905,28 @@ class TaskRun:
                 raise LeaseLost()
             self.sandbox_id = sandbox_id
             return sandbox_id
+
+    def _reclaim_kept_sandbox(self) -> bool:
+        """Free the runner place of the kept workspace due to go first (a finished task's, kept for
+        downloads): otherwise one person's finished tasks could hold every place for their keep time and
+        nobody else's task could start. Whether one was freed."""
+        row = agents_db.take_kept_sandbox()
+        if row is None:
+            return False
+        try:
+            self.runner.delete(row["sandbox_id"])
+        except runner_mod.RunnerError as error:
+            if not error.not_found and not error.gone:
+                log.warning("Could not reclaim kept sandbox of task %s: %s", row["id"], error)
+                try:
+                    gone = not self.runner.exists(row["sandbox_id"])  # the reaper may have deleted it meanwhile
+                except runner_mod.RunnerError:
+                    gone = False
+                if not gone:
+                    agents_db.give_back_kept_sandbox(row)  # its owner's while it exists, due for removal now
+                return False
+        log.info("Reclaimed the kept workspace of task %s for task %s", row["id"], self.task_id)
+        return True
 
     def _sandbox_lost(self, sandbox_id: str) -> None:
         with self._sandbox_lock:
@@ -876,13 +954,18 @@ class TaskRun:
                         self.task_id, error)
             self.remove_sandbox = True
 
-    def _runner_call(self, function, *, idempotent: bool, is_exec: bool = False, path: str | None = None):
+    def _runner_call(self, function, *, idempotent: bool, is_exec: bool = False, path: str | None = None,
+                     wait_for_room: bool = False, before_call=None):
         """Call the runner for the current sandbox (created on first use), serialised per task.
 
         Transient failures are retried with backoff when repeating is harmless
-        (idempotent calls, or requests that never reached the runner).
+        (idempotent calls, or requests that never reached the runner). With
+        *wait_for_room*, a runner whose transfer slots are all taken (503 ``busy``)
+        is waited for like sandbox capacity, up to :data:`SANDBOX_WAIT_SECONDS`:
+        other people's uploads must not make a task's own files or repository fail.
         """
         attempt = 0
+        busy_since, busy_waits = None, 0
         with self.workspace_lock:
             while True:
                 self._assert_authorized(check_quota=True)
@@ -893,6 +976,8 @@ class TaskRun:
                 if is_exec:
                     self.exec_in_flight += 1
                 try:
+                    if before_call is not None:
+                        before_call()  # after any wait for a sandbox: e.g. renew the person's transfer
                     return function(sandbox_id, child)
                 except Cancelled:
                     if self.cancel.cancelled:
@@ -909,6 +994,12 @@ class TaskRun:
                     if error.status == 404:
                         raise tools.ToolError(f"No such file or directory: {path}" if path else
                                               "No such file or directory.") from None
+                    if wait_for_room and error.status == 503 and error.code == "busy":
+                        busy_since = time.monotonic() if busy_since is None else busy_since
+                        if time.monotonic() - busy_since < SANDBOX_WAIT_SECONDS:
+                            busy_waits += 1
+                            self._sleep(min(15.0, RUNNER_BUSY_BACKOFF * busy_waits))
+                            continue
                     retry = (error.transient and (idempotent or error.unsent)) or error.code == "busy"
                     if retry and attempt < RUNNER_RETRIES:
                         attempt += 1
@@ -979,9 +1070,11 @@ class TaskRun:
             staging = gitrepo.STAGING_PREFIX + secrets.token_hex(8)
             target = f"{tools.WORKSPACE}/{source.directory}"
             try:
-                unpacked = self._runner_call(
-                    lambda sandbox_id, cancel: self.runner.put_archive(sandbox_id, data, kind="tar", path=staging,
-                                                                       cancel=cancel), idempotent=True)
+                with self._transfer() as keep:
+                    unpacked = self._runner_call(
+                        lambda sandbox_id, cancel: self.runner.put_archive(sandbox_id, data, kind="tar",
+                                                                           path=staging, cancel=cancel),
+                        idempotent=True, wait_for_room=True, before_call=keep)
                 data = b""  # release the archive before the import script runs
                 result = self.exec(gitrepo.import_command(staging, target, f"Imported {source.label}"),
                                    gitrepo.IMPORT_TIMEOUT)
@@ -1004,25 +1097,50 @@ class TaskRun:
             gitrepo.clear_request(self.task_id)
 
     def _push_uploads(self) -> None:
+        """Copy the files stored with the task into the sandbox.
+
+        A file the runner refuses (an invalid archive, say) is dropped with an error notice. When the runner
+        cannot take them now (still busy after waiting, or unreachable), or the run stops, the files not copied
+        yet stay stored and the next run of the task copies them, if it starts within
+        ``uploads.KEEP_UNCOPIED`` after this one ended (``service.purge_stored_uploads``); copied files are
+        deleted at once.
+        """
         items = uploads.pending(self.task_id)
         if not items:
             return
-        copied = 0
+        counts = [0, 0]  # copied or refused for good, copied
         try:
-            for item in items:
+            with self._transfer() as renew:
+                self._copy_uploads(items, renew, counts)
+        except runner_mod.RunnerError as error:
+            log.warning("Agent task %s: uploads could not be copied yet: %s", self.task_id, error)
+            self._step(kind="error", content=message("agents.notice_upload_kept_day", error=str(error)[:200]))
+        finally:
+            uploads.retain(self.task_id, items[counts[0]:])
+        if counts[1]:
+            self._step(kind="notice", content=message("agents.notice_uploaded", count=counts[1]))
+
+    def _copy_uploads(self, items, renew, counts) -> None:
+        """Copy *items* in turn, *renew* (the transfer) right before each runner call; *counts* is
+        ``[done, copied]``: copied, or refused for good, and copied."""
+        for item in items:
+            try:
                 data = item["path"].read_bytes()
                 if item["kind"] in ("zip", "tar"):
                     self._runner_call(lambda sandbox_id, cancel, data=data, kind=item["kind"]:
-                                      self.runner.put_archive(sandbox_id, data, kind=kind), idempotent=True)
+                                      self.runner.put_archive(sandbox_id, data, kind=kind, cancel=cancel),
+                                      idempotent=True, wait_for_room=True, before_call=renew)
                 else:
-                    self.write(f"{tools.WORKSPACE}/{item['name']}", data)
-                copied += 1
-            self._step(kind="notice", content=message("agents.notice_uploaded", count=copied))
-        except (runner_mod.RunnerError, tools.ToolError, OSError) as error:
-            log.warning("Agent task %s: uploads could not be copied: %s", self.task_id, error)
-            self._step(kind="error", content=message("agents.notice_upload_failed", error=str(error)[:200]))
-        finally:
-            uploads.discard(self.task_id)
+                    self._runner_call(lambda sandbox_id, cancel, data=data, name=item["name"]:
+                                      self.runner.write(sandbox_id, f"{tools.WORKSPACE}/{name}", data,
+                                                        cancel=cancel),
+                                      idempotent=True, path=f"{tools.WORKSPACE}/{item['name']}",
+                                      wait_for_room=True, before_call=renew)
+                counts[1] += 1
+            except (tools.ToolError, OSError) as error:
+                log.warning("Agent task %s: an upload could not be copied: %s", self.task_id, error)
+                self._step(kind="error", content=message("agents.notice_upload_failed", error=str(error)[:200]))
+            counts[0] += 1
 
     # ----- swarms ---------------------------------------------------------------------------------
     def _delegate(self, agent: int, arguments: dict) -> tools.Result:

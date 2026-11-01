@@ -254,6 +254,12 @@ def set_role(user_id: str, role: str) -> None:
 
 
 def suspend(user_id: str, until: datetime | None = None) -> None:
+    """Suspend an account: its sessions end, and the answers and agent tasks it runs are asked to stop.
+
+    As for :func:`delete`, the run, in whichever process, sees the request at its next supervisor tick.
+    """
+    from bananachat.db import agents as agents_db
+
     with db.transaction():
         current = get(user_id)
         if current is None:
@@ -264,6 +270,8 @@ def suspend(user_id: str, until: datetime | None = None) -> None:
         db.execute("UPDATE users SET suspended=1, suspended_until=?, last_suspension_at=? WHERE id=?",
                    (db.timestamp(until) if until else None, db.now(), user_id))
         revoke_sessions(user_id)
+        _stop_streams(user_id)
+        agents_db.request_stop_for_user(user_id)
 
 
 def unsuspend(user_id: str) -> None:
@@ -279,6 +287,12 @@ def is_suspended(user) -> bool:
     if user["suspended_until"] and until is None:
         return True
     return until is None or until > datetime.now(timezone.utc)
+
+
+def suspended_or_gone(user_id: str) -> bool:
+    """True when the account was deleted or is suspended: work it started must stop."""
+    user = get(user_id)
+    return user is None or is_suspended(user)
 
 
 def lift_expired_suspension(user) -> bool:
@@ -303,9 +317,14 @@ def delete(user_id: str) -> None:
             return
         if current["role"] == "admin" and not current["suspended"] and count_active_admins() <= 1:
             raise ValueError("The last administrator cannot be deleted.")
-        db.execute("UPDATE active_streams SET stop_requested=1 WHERE user_id=? OR session_id IN "
-                   "(SELECT id FROM chat_sessions WHERE user_id=?)", (user_id, user_id))
+        _stop_streams(user_id)
         db.execute("DELETE FROM users WHERE id=?", (user_id,))
+
+
+def _stop_streams(user_id: str) -> None:
+    """Ask the account's running chat answers to stop (their leases name the account or one of its chats)."""
+    db.execute("UPDATE active_streams SET stop_requested=1 WHERE user_id=? OR session_id IN "
+               "(SELECT id FROM chat_sessions WHERE user_id=?)", (user_id, user_id))
 
 
 def touch_login(user_id: str) -> None:
@@ -318,14 +337,26 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+# Live login sessions per account; signing in once more ends the one used least recently.
+MAX_SESSIONS_PER_ACCOUNT = 50
+
+
 def create_session(user_id: str, days: int, *, user_agent: str = "", ip_address: str = "") -> str:
-    """Start a login session; returns the raw token for the cookie."""
+    """Start a login session; returns the raw token for the cookie.
+
+    An account keeps at most :data:`MAX_SESSIONS_PER_ACCOUNT` sessions: the ones used least recently end.
+    """
     token = secrets.token_urlsafe(32)
-    db.execute(
-        "INSERT INTO auth_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, user_agent, ip_address) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (_hash(token), user_id, db.now(), db.now(), db.now(timedelta(days=days)), user_agent[:300], ip_address[:64]),
-    )
+    with db.transaction():
+        db.execute(
+            "INSERT INTO auth_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, user_agent, "
+            "ip_address) VALUES (?,?,?,?,?,?,?)",
+            (_hash(token), user_id, db.now(), db.now(), db.now(timedelta(days=days)), user_agent[:300],
+             ip_address[:64]),
+        )
+        db.execute("DELETE FROM auth_sessions WHERE user_id=? AND id_hash NOT IN (SELECT id_hash FROM auth_sessions "
+                   "WHERE user_id=? AND expires_at>? ORDER BY last_seen_at DESC, rowid DESC LIMIT ?)",
+                   (user_id, user_id, db.now(), MAX_SESSIONS_PER_ACCOUNT))
     return token
 
 
@@ -417,11 +448,19 @@ def revoke_session(user_id: str, id_hash: str) -> bool:
         return removed
 
 
-def revoke_sessions(user_id: str, *, except_hash: str | None = None) -> None:
-    """End the account's login sessions (all, or all but one), including previous-release cookies."""
+def revoke_sessions(user_id: str, *, except_hash: str | None = None, keep_devices: bool = False) -> None:
+    """End the account's login sessions (all, or all but one), including previous-release cookies.
+
+    The account's device cookies stop counting too (``security.device_cookie_nonce``): every caller
+    is a security event (a new password, a suspension, a two-step change). With *keep_devices* (signing
+    out everywhere else, which needs no password) they keep counting: a device cookie grants no access,
+    only its browser's own budget of failed sign-ins, and retiring them from a stolen session would put
+    the owner's browsers in the budget strangers can fill.
+    """
     with db.transaction():
         # Those cookies carry no session token; a new session version retires them.
-        db.execute("UPDATE users SET session_version=session_version+1 WHERE id=?", (user_id,))
+        db.execute("UPDATE users SET session_version=session_version+1"
+                   + ("" if keep_devices else ", device_epoch=NULL") + " WHERE id=?", (user_id,))
         if except_hash:
             db.execute("DELETE FROM auth_sessions WHERE user_id=? AND id_hash<>?", (user_id, except_hash))
         else:
@@ -432,6 +471,14 @@ def mark_session_verified(id_hash: str | None) -> None:
     """Record that this login session just proved its password or code (see :func:`session_verified_within`)."""
     if id_hash:
         db.execute("UPDATE auth_sessions SET verified_at=? WHERE id_hash=?", (db.now(), id_hash))
+
+
+def session_alive(id_hash: str | None, user_id: str) -> bool:
+    """True while the login session *id_hash* of *user_id* exists and has not expired."""
+    if not id_hash:
+        return False
+    return bool(db.one("SELECT 1 FROM auth_sessions WHERE id_hash=? AND user_id=? AND expires_at>?",
+                       (id_hash, user_id, db.now())))
 
 
 def session_verified_within(id_hash: str | None, seconds: int) -> bool:
@@ -485,11 +532,26 @@ def reserve(limits, window_seconds: int) -> list[int] | None:
                 for key, *_ in limits]
 
 
+def renew(hit_ids) -> None:
+    """Count events recorded by :func:`reserve` from now (a mark held while something runs)."""
+    hit_ids = [int(hit_id) for hit_id in hit_ids or ()]
+    if hit_ids:
+        db.execute(f"UPDATE rate_limit_hits SET hit_at=? WHERE id IN ({','.join('?' * len(hit_ids))})",
+                   (db.now(), *hit_ids))
+
+
 def release(hit_ids) -> None:
     """Forget events recorded by :func:`reserve` (the attempt turned out not to count)."""
     hit_ids = [int(hit_id) for hit_id in hit_ids or ()]
     if hit_ids:
         db.execute(f"DELETE FROM rate_limit_hits WHERE id IN ({','.join('?' * len(hit_ids))})", tuple(hit_ids))
+
+
+def record_hits(key: str, count: int) -> None:
+    """Record *count* events for *key* at once (time spent, counted in steps)."""
+    if count > 0:
+        with db.transaction():
+            db.executemany("INSERT INTO rate_limit_hits (key, hit_at) VALUES (?, ?)", [(key, db.now())] * count)
 
 
 def count_hits(key: str, window_seconds: int) -> int:

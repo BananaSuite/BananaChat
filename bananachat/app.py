@@ -11,6 +11,7 @@ from datetime import timedelta
 
 from flask import Flask, Request, g, render_template, request, session
 from flask.json.provider import DefaultJSONProvider
+from werkzeug.routing import IntegerConverter
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -27,8 +28,12 @@ DEFAULT_BODY_LIMIT = 2 * 1024 * 1024
 log = logging.getLogger("bananachat")
 
 
+class InvalidJSONText(ValueError):
+    """A JSON document carrying text that is not valid Unicode (a lone surrogate)."""
+
+
 class _RequestJSONProvider(DefaultJSONProvider):
-    """Reject non-finite numbers and documents too deep for request handlers."""
+    """Reject non-finite numbers, invalid Unicode and documents too deep for request handlers."""
 
     @staticmethod
     def _invalid_constant(value):
@@ -59,8 +64,22 @@ class _RequestJSONProvider(DefaultJSONProvider):
             elif isinstance(item, (dict, list)):
                 if len(frames) > 64:
                     raise ValueError("JSON is nested too deeply")
-                frames.append(iter(item.values() if isinstance(item, dict) else item))
+                frames.append(iter([*item.keys(), *item.values()] if isinstance(item, dict) else item))
+            elif isinstance(item, str) and not item.isascii():
+                # JSON escapes can carry lone surrogates ("\ud800"), which nothing can store or send on.
+                try:
+                    item.encode("utf-8")
+                except UnicodeEncodeError:
+                    raise InvalidJSONText("JSON text must be valid Unicode") from None
         return result
+
+
+class _SqliteInt(IntegerConverter):
+    """``<int:...>`` limited to what SQLite stores (64-bit signed)."""
+
+    def __init__(self, map, *args, **kwargs):
+        kwargs.setdefault("max", 2 ** 63 - 1)
+        super().__init__(map, *args, **kwargs)
 
 
 class _Request(Request):
@@ -132,6 +151,8 @@ def create_app(config: Config | None = None, *, testing: bool = False) -> Flask:
     from bananachat.services import subscription_extension, subscription_pool
     subscription_extension.configure(app)
     subscription_pool.ensure_registered()
+    # Every <int:...> id is an SQLite integer: a larger one answers 404 instead of overflowing in a query.
+    app.url_map.converters["int"] = _SqliteInt
     register_blueprints(app)
     # Never hand a connection opened here to forked worker processes.
     db.close_thread_connection()
@@ -173,6 +194,25 @@ def _announce_setup(config: Config) -> None:
 
 # ----- request lifecycle ----------------------------------------------------
 
+# Blueprints that authenticate their own bearer tokens before reading a body (and skip CSRF).
+_TOKEN_BLUEPRINTS = frozenset({"api_v1", "worker_api", "remote_api"})
+
+
+def _may_send_large_body(view=None) -> bool:
+    """Whether this request may use its view's larger body limit: before CSRF reads a form, only callers the
+    view can serve get it (a signed-in account, an administrator for administration pages, or a bearer
+    token checked by its own blueprint); anyone else is held to the default limit."""
+    if request.blueprint in _TOKEN_BLUEPRINTS:
+        return True
+    user = security.current_user()
+    if user is None:
+        return False
+    if user["role"] != "admin" and (request.endpoint or "").startswith("admin."):
+        return False
+    serves = getattr(view, "body_limit_serves", None)
+    return serves is None or bool(serves(user))
+
+
 def _install_hooks(app: Flask) -> None:
     @app.before_request
     def prepare_request():
@@ -182,14 +222,14 @@ def _install_hooks(app: Flask) -> None:
         limit = getattr(view, "body_limit", None)
         if callable(limit):
             limit = limit(app.config["BC"])
-        if limit:
-            request.max_content_length = limit
-            request.max_form_memory_size = limit
 
         if request.endpoint in ("static", "static_legacy"):
             return None
         g.settings = site_settings.get()
-        security.load_current_user()
+        security.load_current_user()  # reads no body
+        if limit and (limit <= DEFAULT_BODY_LIMIT or _may_send_large_body(view)):
+            request.max_content_length = limit
+            request.max_form_memory_size = limit
         g.lang = _language()
 
         if not g.settings.get("setup_done") and request.endpoint not in ("auth.setup", "core.health",
@@ -207,11 +247,13 @@ def _install_hooks(app: Flask) -> None:
 
     @app.after_request
     def secure_response(response):
+        response = security.hold_large_response(response)
         _security_headers(response)
         return response
 
     @app.teardown_request
     def release_database(_error=None):
+        security.release_download_place()
         db.release_thread_connection()
 
 
@@ -239,6 +281,9 @@ def _security_headers(response) -> None:
         "manifest-src 'self'; worker-src 'self' blob:"
     )
     headers = response.headers
+    if "Content-Disposition" in headers:
+        # A file (attachment, export): opened on its own it runs nothing and gets no origin.
+        csp = "default-src 'none'; sandbox"
     headers.setdefault("Content-Security-Policy", csp)
     headers.setdefault("X-Content-Type-Options", "nosniff")
     headers.setdefault("X-Frame-Options", "DENY")

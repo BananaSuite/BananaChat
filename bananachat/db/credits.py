@@ -322,6 +322,22 @@ def reserve_image(user, tokens: float, *, ttl_seconds: float, model_id=None, tok
         return cursor.lastrowid
 
 
+def hold_answer(user_id: str, tokens: float, *, model_id=None, token_id=None):
+    """Hold *tokens* (counted) of the API pool for an answer that is about to run; returns the reservation id.
+
+    Text answers are charged when they end, so concurrent answers admitted on the same remaining allowance
+    would together spend more than it. The caller checks the budget and holds in one transaction; the hold
+    counts as used (like an image reservation, in the same table) until :func:`refund_reservation` in the
+    transaction that charges the answer, or until it expires when its process died.
+    """
+    stamp = db.now()
+    cursor = db.execute(
+        "INSERT INTO image_credit_reservations (user_id, token_id, model_id, credits_reserved, is_slow, created_at, "
+        "updated_at) VALUES (?,?,?,?,?,?,?)",
+        (user_id, token_id, model_id, tokens_to_credits(tokens), 0, stamp, stamp))
+    return cursor.lastrowid
+
+
 def purge_expired_reservations(ttl_seconds: float) -> int:
     """Delete reservations not refreshed within *ttl_seconds* (their request died without a refund)."""
     return db.execute("DELETE FROM image_credit_reservations WHERE COALESCE(updated_at, created_at)<?",
@@ -513,7 +529,8 @@ def submit_request(user_id: str, tokens: int | None = None, slow: int | None = N
         if target is not None:
             values["model_id"] = target["id"]
         status = "approved" if automatic else "pending"
-        community = bool(community) and not automatic and community_service.offered(kind, settings)
+        community = bool(community) and not automatic and community_service.offered(
+            kind, settings, unlimited=bool(values["grant_unlimited"]))
         community_until = db.now(timedelta(hours=community_service.settings(settings)["hours"])) \
             if community else None
         # The credit columns are what earlier releases read.

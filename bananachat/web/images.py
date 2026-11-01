@@ -90,10 +90,17 @@ def generate():
             job.close()
         return _error(error)
     if "text/event-stream" in (request.headers.get("Accept") or ""):
+        job.detach()  # the image must not wait for a client that stops reading
         response = Response(stream_with_context(_events(job)), mimetype="text/event-stream")
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Accel-Buffering"] = "no"
         return response
+    # The JSON answer carries the image (large): its download place is taken before the image is made and
+    # charged, so a busy server refuses the request, not the finished image.
+    refused = security.take_download_place()
+    if refused is not None:
+        job.close()
+        return refused
     try:
         result = job.run()
     except ImageError as error:

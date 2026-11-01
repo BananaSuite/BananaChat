@@ -1,4 +1,4 @@
-"""Pieces the Claude Code and Codex transports share: their error type and the operator's private files."""
+"""Pieces the Claude Code and Codex transports share: their error types and the operator's private files."""
 
 from __future__ import annotations
 
@@ -12,6 +12,13 @@ MAX_LINE = 1024 * 1024
 
 class ConnectorError(RuntimeError):
     """A credential-free error safe to show in the administrator interface."""
+
+
+class ConnectorTimeout(ConnectorError):
+    """The provider's process ran out of time: the request's length, not necessarily the account (see
+    ``subscription_pool.chat_stream``)."""
+
+    timed_out = True
 
 
 def private(path, *, directory=False):

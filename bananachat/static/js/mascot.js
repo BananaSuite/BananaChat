@@ -5,7 +5,7 @@
 // (Customise): the button's data-mascot-motion, -shades and -konami say which are on, read at every use so the
 // customise page can change them live.
 //
-// Ported from BananaWiki mascot 9556dd7e9f88 (bananawiki/core/mascot.py and bananawiki/core/static/mascot/
+// Ported from BananaWiki mascot 14d63ec44444 (bananawiki/core/mascot.py and bananawiki/core/static/mascot/
 // in that tree). When those change, BananaWiki's scripts/make_icons.py fails until the change is ported here
 // and recorded with its --ported option.
 import { t, toast } from "./core.js";

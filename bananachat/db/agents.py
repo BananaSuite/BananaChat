@@ -14,6 +14,7 @@ import secrets
 import time
 
 from bananachat import db
+from bananachat.db.chats import _text_bytes
 
 LEASE_SECONDS = 60
 ACTIVE_STATES = ("queued", "running", "paused")
@@ -163,6 +164,21 @@ def request_stop(task_id: str, *, by_admin: bool = False) -> bool:
                       (STOP_BY_ADMIN if by_admin else STOP_BY_OWNER, task_id)).rowcount == 1
 
 
+def request_stop_for_user(user_id: str) -> list[str]:
+    """Every active task of the account is asked to stop, as by an administrator (a suspension)."""
+    with db.transaction():
+        rows = db.query("SELECT id FROM agent_tasks WHERE user_id=? AND status IN ('queued', 'running', 'paused') "
+                        "AND owner_token IS NOT NULL", (user_id,))
+        db.execute("UPDATE agent_tasks SET stop_requested=? WHERE user_id=? AND status IN ('queued', 'running', "
+                   "'paused') AND owner_token IS NOT NULL", (STOP_BY_ADMIN, user_id))
+    return [row["id"] for row in rows]
+
+
+def workspaces_of_user(user_id: str):
+    """``id`` and ``sandbox_id`` of every task of the account (to clean up after deleting it)."""
+    return db.query("SELECT id, sandbox_id FROM agent_tasks WHERE user_id=?", (user_id,))
+
+
 def request_stop_all() -> list[str]:
     """The administrator's kill switch: every active task is asked to stop."""
     with db.transaction():
@@ -285,6 +301,28 @@ def steps(task_id: str, *, after: int = 0, limit: int = 500, agent: int | None =
                     (task_id, agent, after, limit))
 
 
+STEP_TEXT_COLUMNS = ("content", "thinking", "tool_args", "tool_calls", "tool_result")
+
+
+def step_page(task_id: str, *, after: int = 0, limit: int = 500, max_bytes: int):
+    """Steps after *after*, oldest first, holding at most *max_bytes* of text (at least one step), and whether
+    more exist: the caller asks again from the last one it got. Sizes are read first, without the text."""
+    size = " + ".join(f"COALESCE({_text_bytes(column)}, 0)" for column in STEP_TEXT_COLUMNS)
+    sizes = db.query(f"SELECT id, {size} AS size FROM agent_steps WHERE task_id=? AND id>? ORDER BY id LIMIT ?",
+                     (task_id, after, limit + 1))
+    chosen, total = [], 0
+    for row in sizes[:limit]:
+        if chosen and total + row["size"] > max_bytes:
+            break
+        chosen.append(row["id"])
+        total += row["size"]
+    if not chosen:
+        return [], False
+    marks = ",".join("?" for _ in chosen)
+    rows = db.query(f"SELECT * FROM agent_steps WHERE id IN ({marks}) ORDER BY id", tuple(chosen))
+    return list(rows), len(sizes) > len(chosen)
+
+
 def recent_steps(task_id: str, agent: int, limit: int):
     """The last *limit* steps of one agent, oldest first (for rebuilding its conversation)."""
     rows = db.query("SELECT * FROM agent_steps WHERE task_id=? AND agent=? ORDER BY id DESC LIMIT ?",
@@ -321,6 +359,16 @@ def update_lane(task_id: str, agent: int, *, status: str | None = None, steps_us
 
 def lanes(task_id: str):
     return db.query("SELECT * FROM agent_lanes WHERE task_id=? ORDER BY agent", (task_id,))
+
+
+def recent_lanes(task_id: str, *, limit: int, summary_chars: int):
+    """The newest *limit* lanes, oldest first, for the views: without the instructions (the lane's first
+    step holds them) and with ``summary`` cut to *summary_chars* (``clipped`` says so; the full report
+    stays in the lane's ``finish`` step)."""
+    rows = db.query("SELECT agent, title, status, steps_used, substr(summary, 1, ?) AS summary, "
+                    "length(summary) > ? AS clipped FROM agent_lanes WHERE task_id=? ORDER BY agent DESC LIMIT ?",
+                    (summary_chars, summary_chars, task_id, limit))
+    return list(reversed(rows))
 
 
 # ----- follow-up messages -------------------------------------------------------------
@@ -360,6 +408,43 @@ def expired_sandboxes(now: str, limit: int = 50):
                     "AND sandbox_expires_at IS NOT NULL AND sandbox_expires_at<=? LIMIT ?", (now, limit))
 
 
+def take_kept_sandbox():
+    """Take the kept workspace (a finished task's, kept for downloads) that would be removed first off its task,
+    in one step, so a follow-up starting that task meanwhile keeps it: its ``id``, ``sandbox_id`` and
+    ``sandbox_expires_at``, or None."""
+    with db.transaction():
+        row = db.one("SELECT id, sandbox_id, sandbox_expires_at FROM agent_tasks WHERE sandbox_id IS NOT NULL "
+                     "AND owner_token IS NULL AND sandbox_expires_at IS NOT NULL ORDER BY sandbox_expires_at, id "
+                     "LIMIT 1")
+        if row is None or not db.execute(
+                "UPDATE agent_tasks SET sandbox_id=NULL, sandbox_expires_at=NULL WHERE id=? AND sandbox_id=? "
+                "AND owner_token IS NULL", (row["id"], row["sandbox_id"])).rowcount:
+            return None
+    return row
+
+
+def expire_sandbox_now(task_id: str, sandbox_id: str) -> bool:
+    """Mark the kept *sandbox_id* of *task_id* for removal now, unless the task moved on meanwhile (another
+    sandbox, or a run of its own)."""
+    return db.execute("UPDATE agent_tasks SET sandbox_expires_at=? WHERE id=? AND sandbox_id=? AND owner_token IS NULL",
+                      (db.now(), task_id, sandbox_id)).rowcount == 1
+
+
+def forget_sandbox(sandbox_id: str) -> None:
+    """The runner no longer has *sandbox_id*: no task without a run of its own names it any more."""
+    db.execute("UPDATE agent_tasks SET sandbox_id=NULL, sandbox_expires_at=NULL WHERE sandbox_id=? "
+               "AND owner_token IS NULL", (sandbox_id,))
+
+
+def give_back_kept_sandbox(row) -> None:
+    """Return a workspace :func:`take_kept_sandbox` took, when the runner could not delete it: to its task (if
+    nothing gave the task another sandbox or a run meanwhile), due for removal now, so the reaper deletes it
+    within a minute. Never with its old keep time: meanwhile the reaper may have deleted it, or recovery may
+    have decided it goes now."""
+    db.execute("UPDATE agent_tasks SET sandbox_id=?, sandbox_expires_at=? WHERE id=? AND sandbox_id IS NULL "
+               "AND owner_token IS NULL", (row["sandbox_id"], db.now(), row["id"]))
+
+
 def known_sandboxes() -> dict[str, str]:
     """Sandbox id -> task id for every task that still has one."""
     return {row["sandbox_id"]: row["id"] for row in
@@ -378,36 +463,75 @@ def delete_if_old(task_id: str, cutoff: str) -> bool:
     return db.execute(f"DELETE FROM agent_tasks WHERE id=? AND {_OLD}", (task_id, cutoff)).rowcount == 1
 
 
-# ----- workspace archive downloads (one per person, across processes) -----------------------
-# A lease in runtime_state, renewed while the download runs; a process that dies lets it expire.
+# ----- workspace transfers (one per person, across processes) ------------------------------
+# Downloads, patches and uploads each hold one of the runner's two archive slots, so a person holds at
+# most one of them at a time: one lease in runtime_state, renewed while the transfer runs; a process
+# that dies lets it expire. It outlasts the runner's longest transfer (an archive: 300 s, plus slack),
+# which may come before the first byte or the first renewal.
 
-DOWNLOAD_LEASE_SECONDS = 120
+TRANSFER_LEASE_SECONDS = 360
+DOWNLOAD_LEASE_SECONDS = UPLOAD_LEASE_SECONDS = TRANSFER_LEASE_SECONDS  # older names
 
 
-def _download_key(user_id: str) -> str:
-    return f"agents:download:{user_id}"
+def _transfer_key(user_id: str) -> str:
+    return f"agents:transfer:{user_id}"
 
 
-def claim_download(user_id: str) -> str | None:
-    """Start a download for *user_id*: a token, or None while another one (any process) is running."""
+def claim_transfer(user_id: str) -> str | None:
+    """Start a transfer for *user_id*: a token, or None while another one (any process) is running."""
     token = secrets.token_hex(16)
-    key, now = _download_key(user_id), time.time()
+    key, now = _transfer_key(user_id), time.time()
     with db.transaction():
         row = db.one("SELECT updated_at FROM runtime_state WHERE key=?", (key,))
-        if row is not None and now - float(row["updated_at"] or 0) < DOWNLOAD_LEASE_SECONDS:
+        if row is not None and now - float(row["updated_at"] or 0) < TRANSFER_LEASE_SECONDS:
             return None
         db.execute("INSERT INTO runtime_state (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE "
                    "SET value=excluded.value, updated_at=excluded.updated_at", (key, json.dumps(token), now))
     return token
 
 
-def renew_download(user_id: str, token: str) -> None:
-    db.execute("UPDATE runtime_state SET updated_at=? WHERE key=? AND value=?",
-               (time.time(), _download_key(user_id), json.dumps(token)))
+def renew_transfer(user_id: str, token: str) -> bool:
+    """Keep *user_id*'s lease while the transfer holding *token* is still running; False when it was lost."""
+    return db.execute("UPDATE runtime_state SET updated_at=? WHERE key=? AND value=?",
+                      (time.time(), _transfer_key(user_id), json.dumps(token))).rowcount == 1
 
 
-def release_download(user_id: str, token: str) -> None:
-    db.execute("DELETE FROM runtime_state WHERE key=? AND value=?", (_download_key(user_id), json.dumps(token)))
+def release_transfer(user_id: str, token: str) -> None:
+    db.execute("DELETE FROM runtime_state WHERE key=? AND value=?", (_transfer_key(user_id), json.dumps(token)))
+
+
+claim_download = claim_upload = claim_transfer
+renew_download = renew_upload = renew_transfer
+release_download = release_upload = release_transfer
+
+
+# ----- workspace reads (the file browser: a few at a time per person, across processes) -------------------
+# Each read of a workspace (a folder listing, a file shown or downloaded) is an engine operation on the
+# runner. A lease outlasts the longest read (the runner client's 60 s plus its 30 s of slack); a process
+# that dies lets it expire.
+
+READ_LEASE_SECONDS = 120
+
+
+def claim_workspace_read(user_id: str, at_once: int) -> tuple[str, str] | None:
+    """Start a workspace read for *user_id*: ``(key, token)`` for :func:`release_workspace_read`, or None
+    while *at_once* of them (any process) are running."""
+    token, now = secrets.token_hex(16), time.time()
+    with db.transaction():
+        for index in range(max(1, at_once)):
+            key = f"agents:read:{user_id}:{index}"
+            row = db.one("SELECT updated_at FROM runtime_state WHERE key=?", (key,))
+            if row is not None and now - float(row["updated_at"] or 0) < READ_LEASE_SECONDS:
+                continue
+            db.execute("INSERT INTO runtime_state (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO "
+                       "UPDATE SET value=excluded.value, updated_at=excluded.updated_at", (key, json.dumps(token), now))
+            return key, token
+    return None
+
+
+def release_workspace_read(lease: tuple[str, str]) -> None:
+    key, token = lease
+    db.execute("DELETE FROM runtime_state WHERE key=? AND value=?", (key, json.dumps(token)))
 
 
 # ----- tool-calling capability of models ------------------------------------------------

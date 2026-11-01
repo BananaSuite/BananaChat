@@ -71,6 +71,8 @@ def change_capacity_at_open(monkeypatch, provider, reason):
     observation = subscription_observation(provider)
     if reason != "busy":
         pool.register_site_reporter(name, lambda: {"account_reports": {str(account_id): dict(observation)}})
+    else:
+        monkeypatch.setattr(pool, "BUSY_WAIT_SECONDS", 0.5)  # how long the account stays busy is not the point
     original = inference._open_stream
     opened = []
 

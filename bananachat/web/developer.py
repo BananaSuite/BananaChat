@@ -322,6 +322,7 @@ def playground_send():
         run = CompletionRun(user, params, request_type="playground", lang=g.lang)
         # Until queued or answering: a request that fails at once gets a plain JSON error.
         run.prime(until=(inference.Queued, inference.Delta, inference.Finished))
+        run.detach()  # the answer must not wait for a client that stops reading
     except CompletionError as error:
         if run is not None:
             run.close()

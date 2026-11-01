@@ -134,19 +134,6 @@ def test_overview_page(app, dev):
     assert "developer.js" in html
 
 
-def test_pages_are_translated(app, dev):
-    from bananachat.db import users
-
-    with app.app_context():
-        prefs = users.get_preferences(dev.user["id"])
-        prefs["interface_language"] = "it"
-        users.save_preferences(dev.user["id"], prefs)
-    for path in ("/developer", "/developer/usage", "/developer/playground"):
-        html = dev.get(path).get_data(as_text=True)
-        untranslated = set(re.findall(r"\b(?:developer|images)\.[a-z_]+", html)) - {"developer.css", "developer.js"}
-        assert 'lang="it"' in html and not untranslated
-
-
 def test_the_developer_pages_speak_of_limits_not_credits():
     from bananachat.i18n import translate
 

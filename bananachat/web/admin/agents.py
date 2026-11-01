@@ -20,7 +20,7 @@ from bananachat.services.access import is_text_model
 from bananachat.services.agents import gitfetch, service
 from bananachat.services.agents import runner as runner_mod
 from bananachat.services.agents import settings as agent_settings
-from bananachat.web.agents import lane_view, render_text, step_view
+from bananachat.web.agents import PAGE_LANES, STEP_TEXT_BYTES, lane_views, render_text, step_view
 
 from . import bp
 from ._helpers import FormError, audit, back, flag, integer, me, page, text
@@ -234,14 +234,14 @@ def _task_or_404(task_id: str):
 def task_detail(task_id):
     task = _task_or_404(task_id)
     after = ascii_int(request.args.get("after", ""), 18) or 0
-    rows = agents_db.steps(task["id"], after=after, limit=500)
+    rows, more = agents_db.step_page(task["id"], after=after, limit=500, max_bytes=STEP_TEXT_BYTES)
     steps = [step_view(row, "en") for row in rows]
     return render_template(
         "admin/agent_task.html", section="agents", task=task, steps=steps,
-        lanes=[lane_view(row) for row in agents_db.lanes(task["id"])], active=service.is_active(task),
+        lanes=lane_views(task["id"], PAGE_LANES), active=service.is_active(task),
         stale=task["status"] in agents_db.ACTIVE_STATES and agents_db.is_stale(task),
         error=render_text(task["error"], "en"), notice=render_text(task["notice"], "en"),
-        next_after=rows[-1]["id"] if len(rows) >= 500 else None, total_steps=agents_db.step_count(task["id"]),
+        next_after=rows[-1]["id"] if more else None, total_steps=agents_db.step_count(task["id"]),
         pending=agents_db.pending_messages(task["id"]))
 
 

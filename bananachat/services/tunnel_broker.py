@@ -21,6 +21,9 @@ the broker on its port after it stopped:
 2. the broker answers ``BCT2 <broker nonce> <HMAC("broker", client nonce, broker nonce)>``;
 3. the process checks it and sends ``<role> <session> <HMAC(role, session, broker nonce, client nonce)>``;
 4. the broker answers ``OK`` once both sides of the session are there.
+
+At most ``MAX_GREETINGS`` connections may be in steps 1-3 at once (others are
+closed at once), and each has ``GREETING_SECONDS`` for all of them.
 """
 
 from __future__ import annotations
@@ -47,6 +50,8 @@ PAIR_SECONDS = 60            # how long one side waits for the other
 ANNOUNCE_SECONDS = 15
 STALE_SECONDS = 60
 MAX_PAIRS = 64
+MAX_GREETINGS = 2 * MAX_PAIRS  # connections still proving the key; any more are closed at once
+GREETING_SECONDS = 10        # for the whole challenge, however slowly its bytes arrive
 MAX_FRAME = 1024 * 1024
 KEEPALIVE_SECONDS = 25       # below Cloudflare's 100 s idle limit for WebSockets
 CHECK_SECONDS = 2            # how often an idle relay checks whether it should stop
@@ -73,9 +78,15 @@ def _mac(key: bytes, *parts: str) -> str:
     return hmac.new(key, ":".join(parts).encode("ascii"), hashlib.sha256).hexdigest()
 
 
-def _line(sock, limit: int = 200) -> bytes:
+def _line(sock, limit: int = 200, deadline: float | None = None) -> bytes:
+    """One line of at most *limit* bytes; with *deadline* (``time.monotonic()``), all of it must arrive by then."""
     line = bytearray()
     while not line.endswith(b"\n") and len(line) < limit:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout("the greeting took too long")
+            sock.settimeout(remaining)
         chunk = sock.recv(1)
         if not chunk:
             break
@@ -97,6 +108,8 @@ class Broker:
         self.lock = threading.Lock()
         self.waiting: dict[str, dict[str, tuple[socket.socket, threading.Event]]] = {}
         self.pairs = 0
+        # Only pairs count against MAX_PAIRS, so connections that have not proven the key yet are bounded here.
+        self.greetings = threading.BoundedSemaphore(MAX_GREETINGS)
 
     def close(self) -> None:
         try:
@@ -124,17 +137,24 @@ class Broker:
                 if stopping():
                     break
                 raise
-            threading.Thread(target=self._handle, args=(connection,), name="bananachat-tunnel-join",
-                             daemon=True).start()
+            if not self.greetings.acquire(blocking=False):
+                _close(connection)
+                continue
+            try:
+                threading.Thread(target=self._handle, args=(connection,), name="bananachat-tunnel-join",
+                                 daemon=True).start()
+            except RuntimeError:  # no thread to be had: drop this one, keep serving
+                self.greetings.release()
+                _close(connection)
 
     def _hello(self, connection) -> tuple[str, str] | None:
-        connection.settimeout(10)
-        greeting = _GREETING.fullmatch(_line(connection))
+        deadline = time.monotonic() + GREETING_SECONDS
+        greeting = _GREETING.fullmatch(_line(connection, deadline=deadline))
         if greeting is None:
             return None
         theirs, mine = greeting.group(1).decode("ascii"), os.urandom(16).hex()
         connection.sendall(f"BCT2 {mine} {_mac(self.key, 'broker', theirs, mine)}\n".encode("ascii"))
-        join = _JOIN.fullmatch(_line(connection))
+        join = _JOIN.fullmatch(_line(connection, deadline=deadline))
         if join is None:
             return None
         role, session_id, sent = (part.decode("ascii") for part in join.groups())
@@ -147,6 +167,8 @@ class Broker:
             hello = self._hello(connection)
         except OSError:
             hello = None
+        finally:
+            self.greetings.release()
         if hello is None:
             _close(connection)
             return

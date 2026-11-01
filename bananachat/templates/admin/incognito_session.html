@@ -15,6 +15,9 @@
     <button type="submit" class="btn btn-danger">{{ icon("trash") }}Delete all entries</button>
   </form>
 </header>
+{% if earlier or before %}
+<div class="alert alert-info">{{ icon("info") }}<p>{% if before %}Showing {{ messages | length }} earlier entries. {% else %}Only the latest {{ messages | length }} entries are shown. {% endif %}{% if earlier %}<a href="{{ url_for('admin.incognito_session', session_id=session_id, before=messages[0].id) }}">Show earlier entries</a>{% endif %}{% if earlier and before %} · {% endif %}{% if before %}<a href="{{ url_for('admin.incognito_session', session_id=session_id) }}">Show the latest entries</a>{% endif %}</p></div>
+{% endif %}
 <div class="page-narrow">
   <div class="chat-messages read-only">
     {% for m in messages %}

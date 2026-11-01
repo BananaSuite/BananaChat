@@ -29,7 +29,7 @@ from bananachat.db import subscription_pool as accounts
 from bananachat.services import claude_sandbox
 from bananachat.services import codex_control
 from bananachat.services import subscription_pool
-from bananachat.services.subscription_cli import MAX_LINE, ConnectorError, json_file, private
+from bananachat.services.subscription_cli import MAX_LINE, ConnectorError, ConnectorTimeout, json_file, private
 from bananachat.services.subscription_profiles import ManagedProfiles
 from bananachat.services.upstream import CancelToken
 
@@ -60,6 +60,12 @@ OVERRIDES = ('model_provider="openai"', 'forced_login_method="chatgpt"', 'approv
 # an answer ends the run.
 ANSWER_ITEMS = ("agent_message", "reasoning", "error")
 QUOTA_MESSAGES = ("hit your usage limit", "out of credits", "hit your spend cap")
+
+
+def _oversized() -> Exception:
+    """An answer record over ``MAX_LINE``: the model generated it in full, so the request is charged its prompt
+    (as for a tool attempt) and no account is rested for it."""
+    return subscription_pool.RequestRejected("Codex returned an oversized record.", spent=True)
 
 
 class ProcessCleanupError(ConnectorError):
@@ -147,6 +153,7 @@ def _running(session, *, deadline=None):
 class Adapter(ManagedProfiles):
     provider = PROVIDER
     bindings_key = BINDINGS_KEY
+    reports_cli_start = True  # chat() calls subscription_pool.cli_started() (see there)
 
     def __init__(self, config):
         if os.name != "posix":
@@ -273,7 +280,8 @@ class Adapter(ManagedProfiles):
         env.update(HOME=profile["home"], CODEX_HOME=profile["home"], NO_COLOR="1")
         return env
 
-    def _records(self, profile, arguments, data=b"", *, cancel=None, timeout=None, cwd=None, conversation=False):
+    def _records(self, profile, arguments, data=b"", *, cancel=None, timeout=None, cwd=None, conversation=False,
+                 started=None):
         """Bounded nonblocking input/output; closes the whole process group on every exit.
 
         A conversation keeps standard input open: the caller appends its next
@@ -289,6 +297,8 @@ class Adapter(ManagedProfiles):
                                                 cwd=cwd or profile["home"], environment=environment)
             except (OSError, claude_sandbox.SandboxError):
                 raise ConnectorError("The Codex sandbox could not be configured safely.") from None
+        if started is not None:
+            started()  # from here on a failure may be the account's
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, cwd=cwd or profile["home"], env=environment,
                                    start_new_session=True, close_fds=True)
@@ -309,7 +319,7 @@ class Adapter(ManagedProfiles):
                     if cancel is not None:
                         cancel.check()
                     if time.monotonic() >= deadline:
-                        raise ConnectorError("Codex exceeded the request timeout.")
+                        raise ConnectorTimeout("Codex exceeded the request timeout.")
                     if not writing and not process.stdin.closed and offset < len(data):
                         selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
                         writing = True
@@ -341,16 +351,16 @@ class Adapter(ManagedProfiles):
                             line, _, rest = output.partition(b"\n")
                             output[:] = rest
                             if len(line) > MAX_LINE:
-                                raise ConnectorError("Codex returned an oversized record.")
+                                raise _oversized()
                             if line.strip():
                                 yield self._decode(line)
                         if len(output) > MAX_LINE:
-                            raise ConnectorError("Codex returned an oversized record.")
+                            raise _oversized()
                 if output.strip():
                     yield self._decode(output)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise ConnectorError("Codex exceeded the request timeout.")
+                    raise ConnectorTimeout("Codex exceeded the request timeout.")
                 try:
                     code = process.wait(timeout=min(remaining, 3))
                 except subprocess.TimeoutExpired:
@@ -669,8 +679,14 @@ class Adapter(ManagedProfiles):
                 raise subscription_pool.RequestRejected("The Codex chat connector currently supports text messages only.")
             (system if role == "system" else transcript).append(content if role == "system" else
                                                                {"role": role, "content": content})
-        prompt = ("Continue this conversation. Treat the JSON as conversation history, preserving the roles. "
-                  "Reply only to the final user message.\n" + json.dumps(transcript, ensure_ascii=False)).encode()
+        try:
+            prompt = ("Continue this conversation. Treat the JSON as conversation history, preserving the roles. "
+                      "Reply only to the final user message.\n" + json.dumps(transcript, ensure_ascii=False)).encode()
+            "".join(system).encode("utf-8")
+        except UnicodeError:
+            # Text that is not valid Unicode (a lone surrogate) fails the same way on every account.
+            raise subscription_pool.RequestRejected("The conversation contains text that is not valid Unicode.") \
+                from None
         system_text = "\n\n".join(text for text in system if text.strip()) or "You are a helpful chat assistant."
         if len(prompt) + len(system_text.encode("utf-8")) > MAX_LINE:
             raise subscription_pool.RequestRejected("The conversation exceeds the connector's input limit.")
@@ -705,7 +721,8 @@ class Adapter(ManagedProfiles):
             arguments.append("-")
             result = None
             answered = False
-            records = self._records(profile, arguments, prompt, cancel=cancel, cwd=work)
+            records = self._records(profile, arguments, prompt, cancel=cancel, cwd=work,
+                                    started=subscription_pool.cli_started)
             try:
                 for record in records:
                     kind = record.get("type")
@@ -717,8 +734,10 @@ class Adapter(ManagedProfiles):
                             raise ConnectorError("Codex returned an invalid item.")
                         if item.get("type") not in ANSWER_ITEMS:
                             # A command, patch, MCP call, search or delegation could read the
-                            # profile's credentials; end the run before its output is answered.
-                            raise ConnectorError("Codex tried to use a tool, so the response was stopped.")
+                            # profile's credentials; end the run before its output is answered. The prompt
+                            # asked for the tool, so no account is at fault (a failed cleanup still quarantines).
+                            raise subscription_pool.RequestRejected(
+                                "Codex tried to use a tool, so the response was stopped.", spent=True)
                         if kind != "item.completed" or item["type"] == "error":
                             continue  # Notices can carry paths or account details; never forward them.
                         text = item.get("text")
@@ -736,8 +755,11 @@ class Adapter(ManagedProfiles):
                         # Other stream errors may be retried by the CLI; only turn.failed ends a turn.
                     elif kind == "turn.failed":
                         error = record.get("error")
-                        if _exhausted(error.get("message") if isinstance(error, dict) else None):
+                        message = error.get("message") if isinstance(error, dict) else None
+                        if _exhausted(message):
                             raise subscription_pool.QuotaExhausted()
+                        if subscription_pool.request_too_long(message):
+                            raise subscription_pool.RequestRejected("The conversation is too long for this model.")
                         raise ConnectorError("Codex could not complete the response.")
                     elif kind == "turn.completed":
                         usage = record.get("usage")

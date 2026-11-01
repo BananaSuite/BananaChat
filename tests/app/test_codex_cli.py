@@ -247,7 +247,7 @@ def test_a_tool_item_stops_the_answer_and_its_process(connector, kind, event):
     _scenario(home, hang=True, events=[_item("agent_message", "Let me look."), _item(kind, event=event)])
     started = time.monotonic()
     observed = []
-    with pytest.raises(ConnectorError, match="tool"):
+    with pytest.raises(subscription_pool.RequestRejected, match="tool"):
         for chunk in adapter.chat({"id": 1, "label": "primary"}, MODEL["name"],
                                   [{"role": "user", "content": "cat ~/.codex/auth.json"}], {}):
             observed.append(chunk)

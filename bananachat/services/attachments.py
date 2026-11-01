@@ -61,6 +61,9 @@ IMAGE_DECODE_WAIT = 10
 OWNER_DECODE_WAIT = 3
 ACCEPT = ",".join(sorted(IMAGE_EXTENSIONS | TEXT_EXTENSIONS | {".pdf"}))
 _image_decodes = threading.BoundedSemaphore(IMAGE_DECODES)
+# A PDF's text is extracted in a child process that can use hundreds of MB for a few seconds: as many at a
+# time per process as images are decoded.
+_pdf_extractions = threading.BoundedSemaphore(IMAGE_DECODES)
 _owners: set[str] = set()  # accounts decoding now
 _owners_changed = threading.Condition()
 
@@ -201,17 +204,25 @@ def _pdf_child() -> None:
     sys.stdout.write(json.dumps(result))
 
 
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
 def _extract_pdf(raw: bytes, max_chars: int, filename: str) -> str:
     if not raw.startswith(b"%PDF-"):
         raise AttachmentError("chat.file_pdf_invalid", name=filename)
+    if not _pdf_extractions.acquire(timeout=IMAGE_DECODE_WAIT):
+        raise AttachmentBusy("chat.file_busy")
     try:
         child = subprocess.run([sys.executable, "-m", __name__, str(max_chars)], input=raw, capture_output=True,
                                timeout=MAX_PDF_SECONDS, cwd=Path(__file__).resolve().parents[2], check=False)
         result = json.loads(child.stdout)
     except (subprocess.TimeoutExpired, OSError, ValueError):
         result = {}
+    finally:
+        _pdf_extractions.release()
     if isinstance(result, dict) and isinstance(result.get("text"), str):
-        return result["text"]
+        # A font can map a glyph to a lone surrogate ("\ud800"), which nothing can store or send on.
+        return _LONE_SURROGATE.sub("\ufffd", result["text"])
     key = result.get("error") if isinstance(result, dict) else None
     if key not in ("chat.file_pdf_encrypted", "chat.file_pdf_pages", "chat.file_pdf_empty"):
         key = "chat.file_pdf_invalid"

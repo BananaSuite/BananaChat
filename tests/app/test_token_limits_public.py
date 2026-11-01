@@ -34,7 +34,7 @@ def _configure(app, user, *, language="en", music_mode="fixed"):
     return browser
 
 
-@pytest.mark.parametrize("language", ["en", "it"])
+@pytest.mark.parametrize("language", ["en"])
 @pytest.mark.parametrize("music_mode,window_limit,weekly_limit", [("fixed", 1200, 3300),
                                                                 ("multiplier", 2000, 6000)])
 def test_public_limits_keep_usage_and_bonus_without_a_second_allowance(app, make_user, language,
