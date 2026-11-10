@@ -842,7 +842,7 @@ def test_temporary_extra_tokens_need_a_5_hour_limit(app, admin, make_user):
         credits.resolve_request(outcome["id"], _admin_id(app), False)
     page = _signed_in(app, "tempo").get("/account").get_data(as_text=True).replace("&#34;", '"')
     assert '"extra_pools": ["api"]' in page
-    assert "only unlimited use can be requested" in page
+    assert "Only unlimited use can be requested" in page
     # Administrators cannot create an extra-token grant that would do nothing either.
     response = admin.post("/admin/quotas/grants", {
         "target": "user", "username": "tempo", "pool": "chat", "scope": "window", "kind": "extra", "amount": "5k",
@@ -908,7 +908,7 @@ def test_admins_edit_policies_with_validation_and_audit(app, admin):
     response = admin.post("/admin/quotas/policy/chat", {**form, "rule_requests_0": "0"}, follow_redirects=True)
     assert "must be between" in response.get_data(as_text=True)
     response = admin.post("/admin/quotas/policy/chat", form, follow_redirects=True)
-    assert "Chat: limits saved" in response.get_data(as_text=True)
+    assert "Chat limits saved." in response.get_data(as_text=True)
     assert admin.post("/admin/quotas/policy/images", form).status_code == 404
     with app.app_context():
         policy = limits.get_policy("chat")
@@ -939,7 +939,7 @@ def test_admins_manage_one_accounts_limits(app, admin, make_user):
         _charge(user["id"], 12_000, at=datetime.now(timezone.utc) - timedelta(seconds=5))
     response = admin.post(base + "/custom", {"pool": "api", "window_tokens": "90k", "window_slow_tokens": "",
                                              "weekly_tokens": ""}, follow_redirects=True)
-    assert "custom limits of mia saved" in response.get_data(as_text=True)
+    assert "limits for mia saved." in response.get_data(as_text=True)
     response = admin.post(base + "/custom", {"pool": "api", "rule_requests_0": "2", "rule_per_0": "week"},
                           follow_redirects=True)
     assert "second, minute, hour or day" in response.get_data(as_text=True)
@@ -1085,7 +1085,7 @@ def test_a_grant_starting_at_the_end_of_the_calendar_is_refused_on_the_form(app,
 # ----- the account page --------------------------------------------------------------------------------
 
 @pytest.mark.parametrize(("language", "texts"), [
-    ("en", ("Your limits", "Requests: 1 request per second (bursts of up to 10)", "Tokens this week",
+    ("en", ("Usage", "Requests: 1 request per second (bursts of up to 10)", "Tokens this week",
             "Level Regular ×2", "Your level", "To reach Trusted:", "Extra allowances", "×2 until",
             "180k tokens")),
 ])
@@ -1136,7 +1136,7 @@ def test_the_api_refuses_used_up_weekly_tokens_until_the_week_ends(app, make_use
     assert response.status_code == 429
     error = response.json["error"]
     assert error["code"] == "insufficient_quota" and error["type"] == "rate_limit_error"
-    assert "this week's tokens" in error["message"] and "UTC" in error["message"]
+    assert "weekly token limit" in error["message"].lower() and "UTC" in error["message"]
     ends = started + timedelta(days=7)
     assert abs(int(response.headers["Retry-After"]) - (ends - datetime.now(timezone.utc)).total_seconds()) < 60
     assert response.headers["x-ratelimit-limit-requests"] == "10"
@@ -1152,8 +1152,8 @@ def test_chat_explains_weekly_exhaustion(app, make_user):
         _charge(user["id"], 1000, request_type="chat")
         budget = credits.budget(user, "chat")
         assert budget.weekly_exhausted
-        assert chat.quota_message(budget, "en").startswith("You have used this week's tokens. They come back at")
-        assert chat.quota_message(budget, "it").startswith("Hai usato i token di questa settimana")
+        assert chat.quota_message(budget, "en").startswith("Weekly token limit reached. Tokens return at")
+        assert chat.quota_message(budget, "it").startswith("Limite settimanale di token raggiunto")
 
 
 def test_personal_data_exports_include_limits(app, make_user):

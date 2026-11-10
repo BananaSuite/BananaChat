@@ -205,7 +205,7 @@ def test_a_deletion_that_waits_for_no_request_says_when_it_happens(app, admin, f
     _hold_request(app, "qwen3:4b")
     admin.post(f"/admin/models/{qwen['id']}/delete-server", {"when_idle": "1"})
     page = admin.get(f"/admin/models/{qwen['id']}/edit").get_data(as_text=True)
-    assert "waiting for 1 running request to finish" in page
+    assert "deleted when 1 running request finishes" in page
     execute(app, "DELETE FROM inference_queue")
     page = admin.get(f"/admin/models/{qwen['id']}/edit").get_data(as_text=True)
     assert "waiting for 0 running requests" not in page and "deleted within a minute" in page
@@ -431,12 +431,12 @@ def test_administrators_still_see_unreviewed_models_in_their_pickers_marked_as_n
     page = admin.get(f"/chat/{new_chat(admin)}", headers={"Accept-Language": "en"}).get_data(as_text=True)
     models = {item["name"]: item for item in
               json.loads(page.split('id="page-data">')[1].split("</script>")[0])["models"]}
-    assert "qwen3:4b" in models and models["qwen3:4b"]["description"].startswith("New — not reviewed")
+    assert "qwen3:4b" in models and models["qwen3:4b"]["description"].startswith("New, not reviewed")
     assert not models["llama3.2:3b"]["description"].startswith("New")
     playground = admin.get("/developer/playground", headers={"Accept-Language": "en"}).get_data(as_text=True)
     data = json.loads(playground.split('id="page-data">')[1].split("</script>")[0])
-    assert any(item["id"] == "qwen3:4b" and "new — not reviewed" in item["name"] for item in data["models"])
-    assert "New — not reviewed" in admin.get("/developer", headers={"Accept-Language": "en"}).get_data(as_text=True)
+    assert any(item["id"] == "qwen3:4b" and "new, not reviewed" in item["name"] for item in data["models"])
+    assert "New, not reviewed" in admin.get("/developer", headers={"Accept-Language": "en"}).get_data(as_text=True)
     with app.app_context():
         admin_token = tokens.create(_user_id(app, "admin"), "admin script")[1]
         make_user("carol")

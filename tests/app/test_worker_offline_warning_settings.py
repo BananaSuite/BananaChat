@@ -28,7 +28,7 @@ def test_admin_can_disable_and_enable_notice_with_audited_changes(app, admin):
     html = admin.get("/admin/settings").get_data(as_text=True)
     assert 'name="worker_offline_warning_enabled" value="1" checked' in html
     assert 'name="worker_offline_warning_present" value="1"' in html
-    assert "Users can hide it for 24 hours" in html
+    assert "Users can hide the warning for 24 hours" in html
     response = admin.post("/admin/settings", _form(worker_offline_warning_present="1"))
     assert response.status_code == 302
     assert _enabled(app) == 0

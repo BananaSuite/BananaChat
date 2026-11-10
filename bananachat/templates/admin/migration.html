@@ -2,44 +2,47 @@
 {% from "admin/_macros.html" import header, csrf %}
 {% from "admin/_reauth.html" import reauth_field with context %}
 {% from "partials/icons.html" import icon %}
-{% block title %}Backup &amp; migration{% endblock %}
+{% block title %}Backup and restore{% endblock %}
 {#- A command that wraps only between its arguments (never after a "--"), with a copy button. -#}
 {% macro command(text) -%}
-<pre><code>{% for part in text.split(" ") %}<span class="nowrap">{{ part }}</span>{% if not loop.last %} {% endif %}{% endfor %}</code></pre><button type="button" class="btn btn-sm btn-ghost" data-copy="{{ text }}" aria-label="Copy: {{ text }}">{{ icon("copy") }}<span>Copy</span></button>
+<pre><code>{% for part in text.split(" ") %}<span class="nowrap">{{ part }}</span>{% if not loop.last %} {% endif %}{% endfor %}</code></pre><button type="button" class="btn btn-sm btn-ghost" data-copy="{{ text }}" aria-label="Copy: {{ text }}">Copy</button>
 {%- endmacro %}
 {% block admin_content %}
-{{ header("Backup & migration", "Keep copies of your data and move the installation to another server.") }}
+{{ header("Settings") }}
+<nav class="tabs" aria-label="Settings">
+  <a href="{{ url_for('admin.settings') }}#general">General</a>
+  <a href="{{ url_for('admin.settings') }}#sign-in">Sign-in</a>
+  <a href="{{ url_for('admin.settings') }}#maintenance">Maintenance</a>
+  <a href="{{ url_for('admin.settings') }}#appearance">Appearance</a>
+  <a href="{{ url_for('admin.migration') }}" aria-current="page">Backup and restore</a>
+</nav>
 
-<div class="grid grid-2">
-  <section class="settings-section stack" aria-labelledby="backup-title">
-    <h2 id="backup-title">{{ icon("shield") }} Backups</h2>
-    <p class="muted small">Backups are made on the server with the management tool, which briefly pauses the site so the copy is consistent. Run these commands in a terminal on the server:</p>
-    <dl class="command-list">
-      <dt>A complete local backup (with model files)</dt>
-      <dd class="command-copy">{{ command("sudo bananachat backup") }}</dd>
-      <dt>A small backup without model files</dt>
-      <dd class="command-copy">{{ command("sudo bananachat backup --exclude-model-weights --output /root/chat-data.tar.gz") }}</dd>
-      <dt>Restore a backup</dt>
-      <dd class="command-copy">{{ command("sudo bananachat restore /root/chat-data.tar.gz") }}</dd>
-    </dl>
-    <p class="muted small">Encrypted, scheduled backups to a private GitHub or Forgejo repository are also available (<code>sudo bananachat backups configure</code>, then <code>sudo bananachat backups enable</code>); see <em>docs/backups.md</em>. Keep an offline copy of the recovery key. Backups without model files record which models were installed: after a restore, the <a href="{{ url_for('admin.models') }}#recovery">Models</a> page offers to download them again.</p>
-  </section>
+<section class="settings-section stack" aria-labelledby="backup-title">
+  <h2 id="backup-title">Backups</h2>
+  <p class="muted small">Run these on the server. The site pauses for a moment while a backup is made.</p>
+  <dl class="command-list">
+    <dt>Full backup, with model files</dt>
+    <dd class="command-copy">{{ command("sudo bananachat backup") }}</dd>
+    <dt>Backup without model files</dt>
+    <dd class="command-copy">{{ command("sudo bananachat backup --exclude-model-weights --output /root/chat-data.tar.gz") }}</dd>
+    <dt>Restore a backup</dt>
+    <dd class="command-copy">{{ command("sudo bananachat restore /root/chat-data.tar.gz") }}</dd>
+  </dl>
+  <p class="muted small">For encrypted, scheduled backups to a private GitHub or Forgejo repository, run <code>sudo bananachat backups configure</code>, then <code>sudo bananachat backups enable</code>. See <em>docs/backups.md</em>. Keep an offline copy of the recovery key. After a restore without model files, <a href="{{ url_for('admin.models') }}#recovery">Models</a> offers to download them again.</p>
+</section>
 
-  <section class="settings-section stack" aria-labelledby="export-title">
-    <h2 id="export-title">{{ icon("download") }} Database export</h2>
-    <p class="muted small">Downloads a consistent copy of the database ({{ database_size | filesize if database_size is not none else "size unknown" }}, schema version {{ schema_version }}) as a <code>.tar.gz</code> file. Use it to move the accounts, chats and settings of an older installation to a new managed server:</p>
-    <div class="command-copy">{{ command("sudo bananachat restore --legacy-database /root/bananachat_export.tar.gz") }}</div>
-    <div class="alert alert-warning">{{ icon("alert") }}<div>
-      <p><strong>The file contains every account, password hash and chat.</strong> Store and transfer it as securely as the server itself, and delete it when you are done.</p>
-      <p>It does not include model files, uploaded audio, the secret key or the server configuration; copy those separately while the service is stopped.</p>
-      <p>Without the secret key, accounts that use two-step verification sign in on the new server with a recovery code and set it up again.</p>
-    </div></div>
-    <form method="post" action="{{ url_for('admin.migration_export') }}" class="stack" data-confirm="Download a copy of the whole database? It contains private data of every user.">
-      {{ csrf() }}
-      {{ reauth_field("export-reauth") }}
-      <div><button type="submit" class="btn btn-primary">{{ icon("download") }}Download database export</button></div>
-    </form>
-    <p class="hint">Importing through the browser is not possible: a restore must stop every server process, which only the management tool can do safely.</p>
-  </section>
-</div>
+<section class="settings-section stack" aria-labelledby="export-title">
+  <h2 id="export-title">Database export</h2>
+  <p class="muted small">A copy of the database ({{ database_size | filesize if database_size is not none else "size unknown" }}, schema version {{ schema_version }}) for moving an older installation to a new managed server:</p>
+  <div class="command-copy">{{ command("sudo bananachat restore --legacy-database /root/bananachat_export.tar.gz") }}</div>
+  <div class="alert alert-warning">{{ icon("alert") }}<div>
+    <p><strong>The file contains every account, password hash and chat.</strong> Keep it as secure as the server and delete it when you are done.</p>
+    <p>The export does not include model files, uploaded audio, the secret key or the server configuration. Without the secret key, accounts with two-step verification sign in with a recovery code and set it up again.</p>
+  </div></div>
+  <form method="post" action="{{ url_for('admin.migration_export') }}" class="stack" data-confirm="Download a copy of the whole database? It contains private data of every user.">
+    {{ csrf() }}
+    {{ reauth_field("export-reauth") }}
+    <div><button type="submit" class="btn btn-primary">Download database export</button></div>
+  </form>
+</section>
 {% endblock %}

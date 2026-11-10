@@ -22,8 +22,8 @@ sudo npm install -g @openai/codex          # or the native binary from github.co
 sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py --allow-bwrap-userns
 ```
 
-Then open **Administration → Models → Codex**, **Add an account** with the
-profile **New private profile** and click **Sign in**. The server runs the
+Then open **Administration → Models → Providers → Codex**, add an account with
+the profile **New profile**, click **Add account**, then **Sign in**. The server runs the
 official `codex login --device-auth` in the account's own profile and shows a
 link (`https://auth.openai.com/codex/device`) and a one-time code: open the
 link, sign in with the ChatGPT account whose subscription this account should
@@ -89,7 +89,7 @@ profiles signed in on the server's command line.
    `/opt/bananachat/config/app.env`, then run `sudo bananachat restart`, which
    validates the manifest and grants the service write access to the profile
    directories only. An unset extension leaves Codex disconnected.
-6. In **Administration → Models → Codex**, add an account for each profile.
+6. In **Administration → Models → Providers → Codex**, add an account for each profile.
    Choose its profile, priority, five-hour token budget, optional weekly budget
    and, if wanted, caps at a share of the subscription's own five-hour, weekly
    and per-family allowance. Click **Check login**, then **Refresh models** and

@@ -31,10 +31,10 @@ On a managed installation (Ubuntu or Debian), as root:
    need for that (see [Sandbox on Ubuntu](subscription-router.md#sandbox-on-ubuntu)).
    Run it again after updating the CLI. It signs nothing in and reads no
    credential.
-2. Open **Administration → Models → Claude**. The **Setup** checklist says what
+2. Open **Administration → Models → Providers → Claude**. The **Setup** checklist says what
    is still missing and how to fix it.
-3. **Add an account** with the profile **New private profile** and click
-   **Sign in** (it asks for your password or authenticator code first). The
+3. Add an account with the profile **New profile**, click **Add account**,
+   then **Sign in** (it asks for your password or authenticator code first). The
    server runs the official `claude auth login --claudeai` in that account's
    own profile and shows its link. Open it, sign in with the Claude
    subscription that account should use and approve; the page then shows a
@@ -123,7 +123,7 @@ manifest and private profiles made from the page can be combined.
    profiles and permit Bubblewrap's user, mount, PID, IPC, UTS and cgroup
    namespaces. An unset extension leaves Claude disconnected.
    Manifest changes require restarting all application workers.
-6. In **Administration → Models → Claude**, add an account for each profile you
+6. In **Administration → Models → Providers → Claude**, add an account for each profile you
    want to use. Choose its profile, priority, five-hour token budget and optional
    weekly budget, and, if wanted, caps at a share of the subscription's own
    allowance: a percentage of the five-hour window, of the weekly window, and

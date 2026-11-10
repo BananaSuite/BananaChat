@@ -71,7 +71,7 @@
           <img class="two-step-qr" src="{{ qr }}" alt="{{ t('two_step.qr_alt') }}" width="200" height="200">
           <p class="mb-0">{{ t("two_step.manual_key") }}</p>
           <p class="mb-0 row"><code class="mono two-step-key" id="two-step-key">{{ secret | batch(4) | map("join") | join(" ") }}</code>
-            <button type="button" class="btn btn-sm" data-copy="{{ secret }}">{{ icon("copy") }}{{ t("two_step.copy_key") }}</button></p>
+            <button type="button" class="btn btn-sm" data-copy="{{ secret }}">{{ t("two_step.copy_key") }}</button></p>
         </li>
         <li>
           <p>{{ t("two_step.step_confirm") }}</p>

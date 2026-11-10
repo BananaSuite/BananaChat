@@ -2,41 +2,41 @@
 {% from "partials/icons.html" import icon %}
 {% from "chat/_message.html" import message with context %}
 {% set section = "chats" %}
-{% block title %}Chat audit{% endblock %}
+{% block title %}Chat · {{ "Untitled chat" if untitled else session.title }}{% endblock %}
 {% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/chat.css') }}">{% endblock %}
 {% block admin_content %}
-<p class="breadcrumb"><a href="{{ url_for('admin.chats') }}">{{ icon("chevron-left") }}Chat audit</a></p>
-<header class="page-header">
+<p class="breadcrumb"><a href="{{ url_for('admin.chats') }}">{{ icon("chevron-left") }}Chats</a></p>
+<header class="page-header admin-header">
   <div>
     <h1>{{ "Untitled chat" if untitled else session.title }}</h1>
     <p>
       <span class="nowrap">{{ session.username }} ·</span> <span class="nowrap">created {{ session.created_at | datetime }} ·</span> <span class="nowrap">updated {{ session.updated_at | datetime }}</span>
       {% if session.deleted_at %}<span class="badge badge-danger">Deleted {{ session.deleted_at | datetime }}</span>{% endif %}
-      {% if session.is_incognito %}<span class="badge badge-info">No history</span>{% endif %}
-      {% if session.shared_token %}<span class="badge badge-primary">Shared</span>{% endif %}
+      {% if session.is_incognito %}<span class="badge">No history</span>{% endif %}
+      {% if session.shared_token %}<span class="badge">Shared</span>{% endif %}
       {% if session.share_blocked_at %}<span class="badge badge-warning" title="Since {{ session.share_blocked_at | datetime }}">Sharing blocked</span>{% endif %}
     </p>
   </div>
   <div class="row">
     {% if session.shared_token %}
-    <form method="post" action="{{ url_for('admin.chat_unshare', session_id=session.id) }}" data-confirm="Stop sharing this chat? Its public link stops working and its owner cannot share it again until you allow it; the chat itself is kept." data-confirm-label="Stop sharing">
+    <form method="post" action="{{ url_for('admin.chat_unshare', session_id=session.id) }}" data-confirm="Stop sharing this chat? The link stops working and the owner cannot share it again until you allow it." data-confirm-label="Stop sharing">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn">{{ icon("share") }}Stop sharing</button>
+      <button type="submit" class="btn">Stop sharing</button>
     </form>
     {% elif session.share_blocked_at and not session.deleted_at %}
     <form method="post" action="{{ url_for('admin.chat_allow_share', session_id=session.id) }}" data-confirm="Let the owner share this chat again? Nothing is shared until they choose to." data-confirm-label="Allow sharing">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn">{{ icon("share") }}Allow sharing</button>
+      <button type="submit" class="btn">Allow sharing</button>
     </form>
     {% elif not session.is_incognito and not session.deleted_at %}
-    <form method="post" action="{{ url_for('admin.chat_unshare', session_id=session.id) }}" data-confirm="Block sharing of this chat? It is not shared now, and its owner cannot share it until you allow it; the chat itself is kept." data-confirm-label="Block sharing">
+    <form method="post" action="{{ url_for('admin.chat_unshare', session_id=session.id) }}" data-confirm="Block sharing of this chat? The owner cannot share it until you allow it." data-confirm-label="Block sharing">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn">{{ icon("share") }}Block sharing</button>
+      <button type="submit" class="btn">Block sharing</button>
     </form>
     {% endif %}
     <form method="post" action="{{ url_for('admin.chat_delete', session_id=session.id) }}" data-confirm="Permanently delete this chat and its messages? This cannot be undone." data-confirm-label="Delete" data-confirm-danger>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn btn-danger">{{ icon("trash") }}Delete permanently</button>
+      <button type="submit" class="btn btn-danger">Delete permanently</button>
     </form>
   </div>
 </header>
@@ -46,7 +46,7 @@
 <div class="page-narrow">
   <div class="chat-messages read-only">
     {% for m in messages %}{{ message(m, session.username or "User", "Assistant", {"stopped": "Stopped before the end.", "failed": "The answer failed.", "interrupted": "Interrupted (server stopped)."}) }}{% else %}
-    <p class="empty">This chat has no messages.</p>
+    <p class="admin-empty">This chat has no messages.</p>
     {% endfor %}
   </div>
 </div>

@@ -14,55 +14,39 @@
 </fieldset>
 {%- endmacro %}
 {% block content %}
-<div class="page customize-page">
+<div class="page page-narrow customize-page">
   <header class="page-header">
-    <div>
-      <h1>{{ t("customize.title") }}</h1>
-      <p>{{ t("customize.subtitle") }}</p>
-    </div>
+    <h1>{{ t("customize.title") }}</h1>
     <div class="row">
       <p class="save-status mb-0" id="save-status" role="status" aria-live="polite"></p>
-      <button type="button" class="btn btn-danger btn-sm" id="reset-all">{{ icon("refresh") }}{{ t("customize.reset_all") }}</button>
+      <button type="button" class="btn btn-sm" id="reset-all">{{ t("customize.reset_all") }}</button>
     </div>
   </header>
   <noscript><div class="alert alert-warning mb-2">{{ t("customize.needs_javascript") }}</div></noscript>
-
-  <nav class="customize-toc" aria-label="{{ t('customize.title') }}">
-    <div class="section-nav" data-section-nav>
-      <a href="#appearance">{{ t("customize.appearance") }}</a>
-      <a href="#reading">{{ t("customize.reading") }}</a>
-      <a href="#easter-eggs">{{ t("customize.eggs") }}</a>
-      <a href="#preview-title">{{ t("customize.preview") }}</a>
-      <a href="#more-appearance">{{ t("customize.more_options") }}</a>
-    </div>
-  </nav>
 
   <div class="customize-layout">
     <form id="prefs-form" class="section-stack" novalidate>
       <section class="settings-section stack" id="appearance" aria-labelledby="appearance-title">
         <h2 id="appearance-title">{{ t("customize.appearance") }}</h2>
         <div class="preference-grid">
-          {{ choice("theme_mode", [("default", t("customize.theme_default")), ("dark", t("customize.theme_dark")), ("light", t("customize.theme_light"))], prefs.theme_mode, t("customize.theme"), t("customize.theme_hint")) }}
+          {{ choice("theme_mode", [("default", t("customize.theme_default")), ("dark", t("customize.theme_dark")), ("light", t("customize.theme_light"))], prefs.theme_mode, t("customize.theme")) }}
           <div class="field">
             <label for="interface_language">{{ t("customize.language") }}</label>
-            <select id="interface_language" name="interface_language" aria-describedby="language-hint">
+            <select id="interface_language" name="interface_language">
               <option value="default"{% if prefs.interface_language == "default" %} selected{% endif %}>{{ t("customize.language_default") }}</option>
               {% for code, name in language_names.items() %}
               <option value="{{ code }}" lang="{{ code }}"{% if prefs.interface_language == code %} selected{% endif %}>{{ name }}</option>
               {% endfor %}
             </select>
-            <span class="hint" id="language-hint">{{ t("customize.language_hint") }}</span>
           </div>
         </div>
-        <div class="preference-grid">
-          <div class="motion-preference">
-            <label class="switch">
-              <input type="checkbox" name="bm_mode" value="1"{% if bm_mode %} checked{% endif %}{% if not bm_mode_switchable %} disabled{% endif %} aria-describedby="bm-mode-hint">
-              <span class="track" aria-hidden="true"></span>
-              <span>{{ t("customize.bm_mode") }}</span>
-            </label>
-            <p class="hint mt-0" id="bm-mode-hint">{{ t("customize.bm_mode_hint") }}{% if not bm_mode_switchable %} {{ t("customize.bm_mode_everyone") if settings.bm_mode_global else t("customize.bm_mode_admin_only") }}{% endif %}</p>
-          </div>
+        <div class="motion-preference">
+          <label class="switch">
+            <input type="checkbox" name="bm_mode" value="1"{% if bm_mode %} checked{% endif %}{% if not bm_mode_switchable %} disabled{% endif %} aria-describedby="bm-mode-hint">
+            <span class="track" aria-hidden="true"></span>
+            <span>{{ t("customize.bm_mode") }}</span>
+          </label>
+          <p class="hint mt-0" id="bm-mode-hint">{{ t("customize.bm_mode_hint") }}{% if not bm_mode_switchable %} {{ t("customize.bm_mode_everyone") if settings.bm_mode_global else t("customize.bm_mode_admin_only") }}{% endif %}</p>
         </div>
       </section>
 
@@ -86,34 +70,15 @@
         <div class="preference-grid">
           <div class="motion-preference">
             <label class="switch">
-              <input type="checkbox" name="reduce_motion" value="1"{% if prefs.reduce_motion %} checked{% endif %} aria-describedby="motion-hint">
+              <input type="checkbox" name="reduce_motion" value="1"{% if prefs.reduce_motion %} checked{% endif %}>
               <span class="track" aria-hidden="true"></span>
               <span>{{ t("customize.reduce_motion") }}</span>
             </label>
-            <p class="hint mt-0" id="motion-hint">{{ t("customize.reduce_motion_hint") }}</p>
           </div>
           <div class="field">
             <label for="sidebar_width">{{ t("customize.sidebar_width") }} <output for="sidebar_width" id="sidebar_width_value">{{ prefs.sidebar_width }} px</output></label>
             <input type="range" id="sidebar_width" name="sidebar_width" min="200" max="420" step="10" value="{{ prefs.sidebar_width }}">
           </div>
-        </div>
-      </section>
-
-      <section class="settings-section stack" id="easter-eggs" aria-labelledby="easter-eggs-title">
-        <h2 id="easter-eggs-title">{{ t("customize.eggs") }}</h2>
-        <p class="hint mt-0">{{ t("customize.eggs_hint") }}</p>
-        <div class="preference-grid">
-          {% for egg in ["mascot_motion", "mascot_shades", "konami"] %}
-          {%- set offered = settings.get("easter_" ~ egg, 1) %}
-          <div class="motion-preference">
-            <label class="switch">
-              <input type="checkbox" name="egg_{{ egg }}" value="1"{% if prefs["egg_" ~ egg] %} checked{% endif %}{% if not offered %} disabled{% endif %} aria-describedby="egg-{{ egg }}-hint">
-              <span class="track" aria-hidden="true"></span>
-              <span>{{ t("customize.egg_" ~ egg) }}</span>
-            </label>
-            <p class="hint mt-0" id="egg-{{ egg }}-hint">{{ t("customize.egg_" ~ egg ~ "_hint") if offered else t("customize.egg_site_off") }}</p>
-          </div>
-          {% endfor %}
         </div>
       </section>
 
@@ -134,14 +99,10 @@
       </section>
 
       <section class="customize-options" id="more-appearance" aria-labelledby="more-appearance-title">
-        <div class="customize-options-heading">
-          <h2 id="more-appearance-title">{{ t("customize.more_options") }}</h2>
-          <p class="hint">{{ t("customize.more_options_hint") }}</p>
-        </div>
+        <h2 class="customize-options-heading" id="more-appearance-title">{{ t("customize.more_options") }}</h2>
         <details class="customize-extra" id="highlighting">
           <summary><span id="semantic-title">{{ t("customize.semantic") }}</span>{{ icon("chevron-down") }}</summary>
           <div class="customize-extra-body stack">
-            <p class="hint mt-0">{{ t("customize.semantic_hint") }}</p>
             <div class="semantic-grid">
               {% for key in ["bold", "italic", "code", "link", "heading"] %}
               {{ choice("semantic_" ~ key, [(0, t("customize.off")), (1, t("customize.subtle")), (2, t("customize.strong"))], prefs["semantic_" ~ key], t("customize.semantic_" ~ key)) }}
@@ -153,9 +114,9 @@
         <details class="customize-extra" id="colours">
           <summary><span id="colours-title">{{ t("customize.colours") }}</span>{{ icon("chevron-down") }}</summary>
           <div class="customize-extra-body stack">
-            <p class="hint mt-0">{{ t("customize.colours_hint") }}</p>
             <fieldset class="choice-group">
               <legend>{{ t("customize.presets") }}</legend>
+              <p class="hint">{{ t("customize.colours_hint") }}</p>
               <div class="preset-grid">
                 {% for name in presets %}
                 <button type="button" class="preset" data-preset="{{ name }}" aria-pressed="false">
@@ -192,12 +153,29 @@
               <img id="background-image" src="{{ background_url or '' }}" alt="{{ t('customize.background_current') }}">
             </div>
             <div class="row">
-              <label class="btn" for="background-file">{{ icon("image") }}{{ t("customize.background_choose") }}</label>
+              <label class="btn" for="background-file">{{ t("customize.background_choose") }}</label>
               <input type="file" id="background-file" class="visually-hidden" accept="image/png,image/jpeg,image/webp,image/gif">
-              <button type="button" class="btn btn-ghost" id="background-remove"{% if not background_url %} hidden{% endif %}>{{ icon("trash") }}{{ t("customize.background_remove") }}</button>
+              <button type="button" class="btn btn-ghost" id="background-remove"{% if not background_url %} hidden{% endif %}>{{ t("customize.background_remove") }}</button>
             </div>
           </div>
         </details>
+      </section>
+
+      <section class="settings-section stack" id="easter-eggs" aria-labelledby="easter-eggs-title">
+        <h2 id="easter-eggs-title">{{ t("customize.eggs") }}</h2>
+        <div class="preference-grid">
+          {% for egg in ["mascot_motion", "mascot_shades", "konami"] %}
+          {%- set offered = settings.get("easter_" ~ egg, 1) %}
+          <div class="motion-preference">
+            <label class="switch">
+              <input type="checkbox" name="egg_{{ egg }}" value="1"{% if prefs["egg_" ~ egg] %} checked{% endif %}{% if not offered %} disabled aria-describedby="egg-{{ egg }}-hint"{% endif %}>
+              <span class="track" aria-hidden="true"></span>
+              <span>{{ t("customize.egg_" ~ egg) }}</span>
+            </label>
+            {% if not offered %}<p class="hint mt-0" id="egg-{{ egg }}-hint">{{ t("customize.egg_site_off") }}</p>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
       </section>
     </form>
   </div>

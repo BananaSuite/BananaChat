@@ -1,0 +1,11 @@
+{#- Tabs of the Activity area: metrics, the audit log, chats, no-history chats and the error log. -#}
+{% from "admin/_macros.html" import tabs %}
+{%- set current = {"admin.metrics": "metrics", "admin.audit": "audit", "admin.chats": "chats",
+                   "admin.incognito": "incognito", "admin.errors": "errors"}.get(request.endpoint, "") -%}
+{{ tabs("Activity", [
+  ("metrics", url_for("admin.metrics"), "Metrics", None),
+  ("audit", url_for("admin.audit"), "Audit log", None),
+  ("chats", url_for("admin.chats"), "Chats", None),
+  ("incognito", url_for("admin.incognito"), "No-history chats", None),
+  ("errors", url_for("admin.errors"), "Errors", None),
+], current) }}

@@ -73,7 +73,7 @@ def client_bridge(tunnel_id: str, *, status_messages: bool, auth_session: str | 
     if not websocket.requested(request.environ):
         return error("Expected a WebSocket.", 400)
     if not tunnel_broker.take_slot(config.worker_tunnels_per_process, config.http_threads):
-        response = error("The server is relaying as many sessions as it can; try again shortly.", 503, "busy")
+        response = error("Too many relayed sessions. Try again shortly.", 503, "busy")
         response.headers["Retry-After"] = "5"
         return response
     app = current_app._get_current_object()
@@ -97,7 +97,7 @@ def client_bridge(tunnel_id: str, *, status_messages: bool, auth_session: str | 
         if not tunnel_broker.wait_paired(broker):
             if status_messages:
                 try:
-                    _status(ws, "failed", "The worker did not connect. Is it online, and has its owner allowed this?")
+                    _status(ws, "failed", "The worker did not connect. Check that it is online and that its owner allowed this.")
                 except websocket.WebSocketError:
                     pass
             ws.close(1011, "the worker did not connect")

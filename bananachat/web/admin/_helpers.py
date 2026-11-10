@@ -74,7 +74,7 @@ def tokens(name: str, *, label: str, maximum: int = limits_db.TOKENS_MAX, option
         raise FormError(f"{label} is required.")
     value = parse_amount(raw)
     if value is None:
-        raise FormError(f"{label}: write a number of tokens such as 50000, 50k or 1.5M.")
+        raise FormError(f"{label}: enter a number of tokens, such as 50000, 50k or 1.5M.")
     if not 0 <= value <= maximum:
         raise FormError(f"{label} must be between 0 and {maximum:,} tokens.")
     return int(round(value))

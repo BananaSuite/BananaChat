@@ -119,7 +119,7 @@ with db.transaction():                                        # BEGIN IMMEDIATE 
   (`site_settings.easter_<egg>`) and a personal one (`egg_<egg>` preference);
   `db.users.easter_eggs()` combines them into the mascot button's
   `data-mascot-*` attributes, which the script reads at every use, so the
-  Customise page can switch them live. A new easter egg gets both switches.
+  Appearance page can switch them live. A new easter egg gets both switches.
 
 ## Service status
 
@@ -323,7 +323,7 @@ unit of earlier releases). Storage lives in `db/limits.py`, decisions in
 `services/limits.py`.
 
 * **Pool policies** (`limit_policy`, one JSON document per pool,
-  edited in Admin → Limits → Services) hold three limits: `rate` (a list of
+  edited in Admin → Limits → General) hold three limits: `rate` (a list of
   rules `N requests per second | minute | hour | day` with a burst; all must
   pass), `window` (one token allowance per **5-hour window**) and `weekly`
   (tokens per rolling week, off by default). Each has `enabled`; `dynamic`

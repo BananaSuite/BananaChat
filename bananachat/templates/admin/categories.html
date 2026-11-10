@@ -4,7 +4,7 @@
 {% block title %}Model categories{% endblock %}
 {% block admin_content %}
 {% set scope_labels = {"chat": "Chat only", "api": "API only", "both": "Chat and API"} %}
-{{ header("Models", "Group models into categories (for example “Coding” or “Staff only”) and control who may use each group on the Access page.") }}
+{{ header("Models") }}
 {% include "admin/_models_tabs.html" %}
 
 <section class="settings-section mb-3" aria-labelledby="new-category-title">
@@ -12,7 +12,7 @@
   <form method="post" action="{{ url_for('admin.category_create') }}" class="stack">
     {{ csrf() }}
     {% include "admin/_category_fields.html" %}
-    <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Create category</button></div>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Create category</button></div>
   </form>
 </section>
 
@@ -36,7 +36,7 @@
         <td class="actions">
           <a class="btn btn-sm" href="{{ url_for('admin.access_detail', scope='category', resource_id=row.id) }}" aria-label="Access rules for {{ row.name }}">{{ icon("shield") }}<span class="action-label">Access</span></a>
           <a class="btn btn-sm" href="{{ url_for('admin.category_edit', category_id=row.id) }}" aria-label="Edit {{ row.name }}">{{ icon("edit") }}<span class="action-label">Edit</span></a>
-          <form method="post" action="{{ url_for('admin.category_delete', category_id=row.id) }}" data-confirm="Delete the category {{ row.name }}? Models stay in the catalogue; access rules for this category are removed." data-confirm-danger>
+          <form method="post" action="{{ url_for('admin.category_delete', category_id=row.id) }}" data-confirm="Delete the category {{ row.name }}? Its access rules are removed. Models stay in the catalogue." data-confirm-danger>
             {{ csrf() }}<button type="submit" class="btn btn-sm btn-danger" aria-label="Delete {{ row.name }}">{{ icon("trash") }}</button>
           </form>
         </td>
@@ -46,6 +46,6 @@
   </table>
 </div>
 {% else %}
-{{ empty("layers", "No categories", "Categories are optional. Create one to group models.") }}
+{{ empty("layers", "No categories yet.") }}
 {% endif %}
 {% endblock %}

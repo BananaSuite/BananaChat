@@ -38,19 +38,22 @@
 </section>
 {%- endmacro %}
 
-{% call header("Metrics", "Requests and inference-server load. Data is kept for " ~ retention_days ~ " days.") %}
+{{ header("Activity") }}
+{% include "admin/_activity_tabs.html" %}
+<div class="toolbar mb-2">
   <form method="get" action="{{ url_for('admin.metrics') }}" class="row" aria-label="Time range">
     <label for="range" class="visually-hidden">Time range</label>
     <select id="range" name="range" data-autosubmit>
       {% for key, value in ranges.items() %}<option value="{{ key }}"{% if key == range_key %} selected{% endif %}>{{ value[2] }}</option>{% endfor %}
     </select>
     <noscript><button type="submit" class="btn">Show</button></noscript>
+    <span class="small muted">Kept for {{ retention_days }} days</span>
   </form>
   <form method="post" action="{{ url_for('admin.metrics_export', range=range_key) }}">
     {{ csrf() }}
-    <button type="submit" class="btn">{{ icon("download") }}Export CSV</button>
+    <button type="submit" class="btn">Export CSV</button>
   </form>
-{% endcall %}
+</div>
 
 <section class="grid grid-4 admin-stats mb-3" aria-label="Totals for {{ range_label | lower }}">
   <div class="stat"><span class="stat-label">Requests</span><span class="stat-value">{{ summary.requests | number }}</span><span class="small muted">{{ summary.errors | number }} failed or stopped</span></div>
@@ -67,7 +70,7 @@
   {% if chart.total %}
   <figure class="chart">
     <svg viewBox="0 0 {{ chart.width }} {{ chart.height }}" class="bar-chart" role="img" aria-labelledby="chart-title chart-desc" preserveAspectRatio="none">
-      <desc id="chart-desc">{{ chart.total | number }} requests in total; the busiest {{ "hour" if range_key == "24h" else "day" }} had {{ chart.peak | number }}. The table below lists every value.</desc>
+      <desc id="chart-desc">{{ chart.total | number }} requests in total. The busiest {{ "hour" if range_key == "24h" else "day" }} had {{ chart.peak | number }}. The table below lists every value.</desc>
       <line x1="0" y1="{{ chart.height }}" x2="{{ chart.width }}" y2="{{ chart.height }}" class="chart-axis"/>
       <line x1="0" y1="{{ chart.height / 2 }}" x2="{{ chart.width }}" y2="{{ chart.height / 2 }}" class="chart-grid"/>
       {% for bar in chart.bars %}
@@ -85,7 +88,7 @@
     </details></figcaption>
   </figure>
   {% else %}
-  {{ empty("chart", "No requests yet", "Requests from the chat, the playground and the API appear here.") }}
+  {{ empty("chart", "No requests yet.") }}
   {% endif %}
 </section>
 
@@ -97,11 +100,11 @@
 
 <section class="settings-section" aria-labelledby="compute-title">
   <div class="section-header">
-    <h2 id="compute-title">Inference server load</h2>
+    <h2 id="compute-title">Model server load</h2>
     <span class="small muted">A sample every {{ interval }} s{% if latest %} · {{ source_labels.get(latest.metrics_source, latest.metrics_source or "Unknown") }} · latest {{ when(latest.recorded_at) }}{% endif %}</span>
   </div>
   {% if stale %}
-  <div class="alert alert-warning section-body">{{ icon("alert") }}<p>{% if latest %}No recent samples: the background services may not be running.{% else %}No samples recorded yet. They are collected by the background services every {{ interval }} seconds.{% endif %}</p></div>
+  <div class="alert alert-warning section-body">{{ icon("alert") }}<p>{% if latest %}No recent samples. The background services may not be running.{% else %}No samples yet.{% endif %}</p></div>
   {% endif %}
   {% if peaks.samples %}
   <dl class="details section-body">

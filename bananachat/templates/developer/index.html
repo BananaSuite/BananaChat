@@ -6,10 +6,7 @@
 {% set active = "index" %}
 <div class="page">
   <header class="page-header">
-    <div>
-      <h1>{{ t("developer.title") }}</h1>
-      <p>{{ t("developer.intro") }}</p>
-    </div>
+    <h1>{{ t("developer.title") }}</h1>
   </header>
   {% include "developer/_tabs.html" %}
 
@@ -22,7 +19,7 @@
           {#- Shown as wrapping text, not a field: long addresses stay readable with large text on phones. -#}
           {%- set url_head, url_slash, url_tail = api_base.rpartition("/") %}
           <code class="dev-endpoint-url" translate="no" title="{{ t('developer.base_url') }}">{% if url_head %}{{ url_head }}/<wbr>{{ url_tail }}{% else %}{{ api_base }}{% endif %}</code>
-          <button type="button" class="btn" data-copy="{{ api_base }}">{{ icon("copy") }}{{ t("common.copy") }}</button>
+          <button type="button" class="btn" data-copy="{{ api_base }}">{{ t("common.copy") }}</button>
         </div>
         <p class="hint mt-1 mb-0"><a href="{{ url_for('developer.playground') }}">{{ t("developer.try_playground") }}</a></p>
       </section>
@@ -91,7 +88,7 @@
         </table>
       </div>
       {% else %}
-      <div class="empty">{{ icon("key") }}<p>{{ t("developer.tokens_empty") }}</p></div>
+      <div class="empty"><p>{{ t("developer.tokens_empty") }}</p></div>
       {% endif %}
 
       {% if tokens | length < max_tokens %}
@@ -116,7 +113,7 @@
             {% endfor %}
           </select>
         </div>
-        <button type="submit" class="btn btn-primary">{{ icon("plus") }}{{ t("developer.create_token") }}</button>
+        <button type="submit" class="btn btn-primary">{{ t("developer.create_token") }}</button>
         <p class="hint mb-0" id="token-scope-hint">{{ t("developer.scope_hint") }}</p>
       </form>
       {% else %}
@@ -134,7 +131,7 @@
           <summary>{{ title }}{{ icon("chevron-down") }}</summary>
         <figure class="code-block dev-snippet">
           <header><figcaption class="visually-hidden">{{ title }}</figcaption><span class="code-lang" aria-hidden="true">{{ "Shell" if snippet.startswith("curl") else "Python" }}</span>
-            <button type="button" class="btn btn-sm btn-ghost" data-copy="{{ snippet }}">{{ icon("copy") }}{{ t("common.copy") }}<span class="visually-hidden"> {{ title }}</span></button>
+            <button type="button" class="btn btn-sm btn-ghost" data-copy="{{ snippet }}">{{ t("common.copy") }}<span class="visually-hidden"> {{ title }}</span></button>
           </header>
           <pre tabindex="0"><code>{{ snippet }}</code></pre>
         </figure>
@@ -189,7 +186,7 @@
         </table>
       </div>
       {% else %}
-      <div class="empty">{{ icon("layers") }}<p>{{ t("developer.models_empty") }}</p></div>
+      <div class="empty"><p>{{ t("developer.models_empty") }}</p></div>
       {% endif %}
     </section>
   </div>

@@ -71,5 +71,5 @@ def delete_invite(invite_id):
         return back("admin.invites")
     invites.delete(invite_id)
     audit("invite_delete", row["code"])
-    flash(f"Invitation {row['code']} deleted; it can no longer be used.", "success")
+    flash(f"Invitation {row['code']} deleted.", "success")
     return back("admin.invites")

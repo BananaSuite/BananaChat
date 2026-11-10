@@ -8,7 +8,7 @@
 {% set creativity_labels = {"precise": "Precise", "balanced": "Balanced", "creative": "Creative"} %}
 {% block admin_content %}
 <p class="breadcrumb"><a href="{{ url_for('admin.personalities', kind='featured') }}">{{ icon("chevron-left") }}Featured personalities</a></p>
-{{ header(("Edit " ~ row.name) if row else "New featured personality", "Visible to every user who may use personalities, once published. Users can use it as it is or duplicate it into their own list; copies do not follow later edits.") }}
+{{ header(("Edit " ~ row.name) if row else "New featured personality") }}
 
 <div class="persona-editor persona-page">
   <form method="post" action="{{ url_for('admin.personality_featured_update', personality_id=row.id) if row else url_for('admin.personality_featured_create') }}" class="stack persona-form" id="persona-form" data-busy>
@@ -33,7 +33,7 @@
             <button type="button" class="emoji-pick emoji-clear" data-emoji="" aria-label="No emoji">{{ icon("close") }}</button>
           </div>
         </details>
-        <span class="hint" id="avatar-hint">A single emoji. Empty shows the first letter of the name.</span>
+        <span class="hint" id="avatar-hint">One emoji. Empty shows the first letter of the name.</span>
         <div class="field">
           <span class="label" id="color-label">Accent colour</span>
           <div class="swatches" role="radiogroup" aria-labelledby="color-label">
@@ -55,7 +55,7 @@
       <div class="field">
         <label for="instructions" class="required">What should the assistant do?</label>
         <textarea id="instructions" name="instructions" required maxlength="{{ limits.instructions }}" rows="9" data-counter aria-describedby="instructions-hint">{{ values.instructions or '' }}</textarea>
-        <span class="hint" id="instructions-hint">Added below each model's system prompt with the note to apply them only where they do not conflict with it.</span>
+        <span class="hint" id="instructions-hint">Added below each model's system prompt.</span>
       </div>
     </fieldset>
 
@@ -65,7 +65,7 @@
         <div class="field">
           <label for="greeting">Greeting</label>
           <textarea id="greeting" name="greeting" maxlength="{{ limits.greeting }}" rows="3" data-counter aria-describedby="greeting-hint">{{ values.greeting or '' }}</textarea>
-          <span class="hint" id="greeting-hint">Optional. Shown in an empty chat; never sent to the model.</span>
+          <span class="hint" id="greeting-hint">Shown in an empty chat. Not sent to the model.</span>
         </div>
         <div class="field">
           <span class="label">Conversation starters</span>
@@ -93,7 +93,7 @@
           <div class="segmented" role="radiogroup" aria-labelledby="creativity-label" aria-describedby="creativity-hint">
             {% for key in creativity_levels %}<label><input type="radio" name="creativity" value="{{ key }}"{% if (values.creativity or "balanced") == key %} checked{% endif %}><span>{{ creativity_labels[key] }}</span></label>{% endfor %}
           </div>
-          <span class="hint" id="creativity-hint">Precise uses 40% of the model's temperature, creative raises it by 40% (at least 0.3), always within 0–2. Length is added as a one-line instruction.</span>
+          <span class="hint" id="creativity-hint">Changes the model's temperature.</span>
         </div>
         <div class="field">
           <label for="preferred_model">Preferred model</label>
@@ -102,12 +102,12 @@
             {% if missing_model %}<option value="{{ values.preferred_model }}" selected>{{ values.preferred_model }} (not available)</option>{% endif %}
             {% for model in models %}<option value="{{ model.name }}"{% if values.preferred_model == model.name %} selected{% endif %}>{{ model.label }}</option>{% endfor %}
           </select>
-          <span class="hint" id="model-hint">Selected when a chat starts with this personality. Users who may not use the model keep their usual one and see a notice.</span>
+          <span class="hint" id="model-hint">Selected when a chat starts with this personality.</span>
         </div>
       </div>
     </fieldset>
 
-    <label class="check"><input type="checkbox" name="enabled" value="1"{% if values.enabled %} checked{% endif %}><span>Published<small>Unpublished personalities are drafts that users cannot see.</small></span></label>
+    <label class="check"><input type="checkbox" name="enabled" value="1"{% if values.enabled %} checked{% endif %}><span>Published<small>Drafts are hidden from users.</small></span></label>
     <div class="form-actions form-actions-end">
       <a class="btn btn-ghost" href="{{ url_for('admin.personalities', kind='featured') }}">Cancel</a>
       <button type="submit" class="btn btn-primary">{{ "Save" if row else "Create" }}</button>

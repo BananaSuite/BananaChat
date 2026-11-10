@@ -1,22 +1,15 @@
 /* Administrator layout. */
 .admin-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: calc(100vh - var(--topbar-height)); }
-/* Narrow side padding and gaps: the longest label ("Backup & migration") fits in bold with room to spare, so the
-   current page does not wrap. */
+/* One flat list of eleven entries: the current one has a quiet background and the yellow marker. */
 .admin-nav { position: sticky; top: var(--topbar-height); align-self: start; height: calc(100vh - var(--topbar-height)); overflow-y: auto;
-  display: flex; flex-direction: column; gap: 2px; padding: .85rem .5rem 1.25rem; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 40%, var(--surface)); }
-.admin-nav a { display: flex; align-items: center; gap: .5rem; min-height: 36px; padding: .4rem .55rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: var(--text-md); }
+  display: flex; flex-direction: column; gap: 1px; padding: 1rem .6rem 1.25rem; border-right: 1px solid var(--border); background: var(--bg); }
+.admin-nav a { display: flex; align-items: center; gap: .6rem; min-height: 36px; padding: .4rem .6rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: var(--text-md); }
 .admin-nav a:hover { background: var(--hover); color: var(--text); }
-.admin-nav a[aria-current="page"] { background: var(--active); color: var(--text); font-weight: 600; box-shadow: inset 2px 0 0 var(--primary); }
-.admin-nav a[aria-current="page"] svg { color: var(--primary); }
-.admin-nav svg { width: 16px; height: 16px; flex: none; }
+.admin-nav a[aria-current="page"] { background: var(--hover); color: var(--text); font-weight: 500; box-shadow: inset 2px 0 0 var(--primary); }
+.admin-nav svg { width: 16px; height: 16px; flex: none; opacity: .8; }
 .admin-nav a > span { min-width: 0; overflow-wrap: anywhere; }
-/* The current page is bold: reserve the bold width so the label does not wrap only when current. */
-.admin-nav-desktop a > span { display: inline-grid; }
-.admin-nav-desktop a > span::after { content: attr(data-label); height: 0; overflow: hidden; visibility: hidden; font-weight: 600; user-select: none; }
-.admin-nav-group { display: flex; flex-direction: column; gap: 2px; margin-top: .8rem; }
-.admin-nav-label { padding: 0 .55rem .3rem; color: var(--text-muted); font-size: var(--text-xs); font-weight: 600; letter-spacing: .02em; }
 .admin-nav-mobile { display: none; }
-.admin-main { padding: 1.75rem clamp(1rem, 3vw, 2.5rem) 4rem; min-width: 0; width: 100%; max-width: var(--content-width); margin-inline: auto; }
+.admin-main { padding: 2rem clamp(1rem, 3vw, 2.5rem) 4rem; min-width: 0; width: 100%; max-width: var(--content-width); margin-inline: auto; }
 .admin-main [id] { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
 .admin-toc { margin-bottom: 1.5rem; padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
 .admin-options { border-top: 1px solid var(--border); padding-top: 1rem; }
@@ -42,17 +35,14 @@
   .admin-nav-mobile > summary > svg { width: 17px; height: 17px; flex: none; }
   .admin-nav-mobile > summary > svg:last-child { margin-left: auto; }
   .admin-nav-mobile[open] > summary > svg:last-child { transform: rotate(180deg); }
-  .admin-nav-divider { padding-inline: .5rem; color: var(--border-strong); }
-  .admin-nav-mobile .admin-nav { position: static; height: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; overflow: visible; border: 0; padding: 0 .75rem .75rem; }
-  .admin-nav-mobile .admin-nav > a { grid-column: 1 / -1; }
-  .admin-nav-mobile .admin-nav-group { margin: 0; }
+  .admin-nav-mobile .admin-nav { position: static; height: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px .75rem; overflow: visible; border: 0; padding: 0 .75rem .75rem; }
   .admin-nav-mobile .admin-nav a { min-height: 44px; }
   .admin-main { padding-top: 1.25rem; }
 }
 
 /* ----- page furniture ------------------------------------------------------ */
 .admin-header h1 { display: flex; align-items: center; gap: .5rem; }
-.admin-main h2 { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.admin-main h2 { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: 1.0625rem; }
 .admin-main h2 svg { width: 20px; height: 20px; }
 .breadcrumb { margin: 0 0 .75rem; font-size: var(--text-base); }
 .breadcrumb a { display: inline-flex; align-items: center; gap: .25rem; min-height: 1.5rem; color: var(--text-muted); text-decoration: none; }
@@ -68,10 +58,10 @@
 .block { display: block; }
 .section-body { margin: 0 0 1rem; }
 .section-footer { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
-.admin-stats { gap: 0; border-block: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 55%, var(--bg)); }
+.admin-stats { gap: 0; border-block: 1px solid var(--border); }
 .admin-stats > .stat { padding: 1rem; }
 .admin-stats > .stat + .stat { border-inline-start: 1px solid var(--border); }
-.admin-stats .stat-value { font-size: 1.65rem; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.admin-stats .stat-value { font-size: 1.5rem; font-weight: 600; line-height: 1.3; font-variant-numeric: tabular-nums; }
 .stat-link { text-decoration: none; color: inherit; transition: background var(--speed); }
 .stat-link:hover { background: var(--hover); color: inherit; }
 .card-attention { border-color: color-mix(in srgb, var(--warning) 55%, var(--bg)); }
@@ -81,9 +71,6 @@
 /* Floated, the legend leaves the fieldset's top border, so a divider above a group never strikes through its title. */
 .admin-fieldset > legend:not(.visually-hidden) { float: left; width: 100%; padding: 0; margin-bottom: .6rem; }
 .admin-fieldset > legend:not(.visually-hidden) + * { clear: both; }
-.admin-setting-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
-.admin-setting-row > h2 { font-size: 1rem; line-height: 1.45; margin: 0; }
-.admin-setting-row .admin-fieldset + .admin-fieldset { border-top: 1px solid var(--border); padding-top: 1rem; }
 .admin-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; cursor: pointer; list-style: none; font-weight: 600; }
 .admin-disclosure > summary::-webkit-details-marker { display: none; }
 .admin-disclosure > summary svg { width: 18px; height: 18px; color: var(--text-muted); flex: none; }
@@ -251,22 +238,17 @@ fieldset .check + .check { margin-top: .5rem; }
 .color-input { display: flex; gap: .5rem; align-items: center; }
 .color-input input[type="text"] { flex: 1 1 auto; }
 .palette-preview { width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius); }
-.segmented label { display: inline-flex; align-items: center; gap: .35rem; }
-.segmented label span { display: inline-flex; align-items: center; gap: .35rem; }
-.segmented svg { width: 16px; height: 16px; }
 
 /* ----- metrics chart --------------------------------------------------------- */
 .chart { margin: 0; }
-.bar-chart { width: 100%; height: 220px; display: block; overflow: visible; }
+.bar-chart { width: 100%; height: 200px; display: block; overflow: visible; }
 .chart-axis { stroke: var(--border-strong); stroke-width: 1; }
 .chart-grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 4; }
-.chart-bar { fill: var(--primary); }
+.chart-bar { fill: color-mix(in srgb, var(--text) 45%, var(--bg)); }
 .chart-hit { fill: transparent; }
 .chart-bar-group:hover .chart-hit { fill: var(--hover); }
-.chart-bar-group:hover .chart-bar { fill: var(--accent); }
-.chart-label { fill: var(--text-muted); font-size: 11px; font-family: var(--font); }
+.chart-bar-group:hover .chart-bar { fill: var(--text); }
 .chart figcaption { margin-top: .5rem; }
-.bar-chart { height: 200px; }
 .chart-ticks { display: flex; justify-content: space-between; gap: 1rem; margin-top: .35rem; color: var(--text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 /* Two breakdowns side by side only when each has room; the share bar is left to the wide model table. */
 .metrics-pair { grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); }
@@ -297,7 +279,6 @@ fieldset .check + .check { margin-top: .5rem; }
 @media (max-width: 760px) {
   .admin-main .btn { max-width: 100%; white-space: normal; }
   .admin-main .row > form { min-width: 0; max-width: 100%; }
-  .admin-setting-row { grid-template-columns: 1fr; gap: 1rem; }
   .admin-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-stats > .stat { border-inline-start: 0; padding: .85rem .75rem; }
   .admin-stats > .stat + .stat { border-inline-start: 0; }
@@ -344,9 +325,10 @@ fieldset .check + .check { margin-top: .5rem; }
 }
 
 /* ----- service status and notice previews ---------------------------------------- */
-.status-card.status-maintenance { border-color: color-mix(in srgb, var(--warning) 55%, var(--bg)); }
-.status-card.status-outage { border-color: color-mix(in srgb, var(--danger) 55%, var(--bg)); }
-.status-card .plain-list li { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.dashboard-status { display: flex; flex-direction: column; gap: .5rem; }
+.status-line { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; }
+.status-line > .btn { margin-inline-start: auto; }
+.status-notices li { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .notice-preview { display: flex; flex-direction: column; gap: .3rem; }
 .notice-preview .alert { font-size: var(--text-base); }
 .notice-preview p { margin: 0; overflow-wrap: anywhere; }
@@ -481,3 +463,20 @@ fieldset .check + .check { margin-top: .5rem; }
 .remote-terminal { height: min(75vh, 900px); min-height: 320px; padding: .5rem; border-radius: var(--radius); background: #000; overflow: hidden; }
 .remote-screen { width: 100%; height: min(78vh, 1000px); min-height: 320px; border-radius: var(--radius); background: #111; overflow: hidden; }
 .remote-screen:fullscreen { height: 100vh; border-radius: 0; }
+
+/* ----- tabs, empty lists and the settings panels ----------------------------------------------------- */
+/* The title sits on its tabs: one rule under the tabs. Sub-tabs are a quieter row inside a tab. */
+.admin-header:has(+ .tabs) { border-bottom: 0; padding-bottom: 0; margin-bottom: .75rem; }
+.admin-main .tabs { margin-bottom: 1.5rem; }
+.admin-main .tabs:has(+ .subtabs) { margin-bottom: .75rem; }
+.subtabs { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom: 1.5rem; }
+.subtabs a { padding: .3rem .7rem; border-radius: var(--radius-sm); color: var(--text-muted); text-decoration: none; font-size: var(--text-md); }
+.subtabs a:hover, .subtabs a[aria-current="page"] { background: var(--hover); color: var(--text); }
+.admin-empty { margin: 0; padding: .75rem 0; color: var(--text-muted); }
+/* Settings panels (admin.js): a link to one (#maintenance) keeps the page at its top. */
+.settings-panel { padding-block: .25rem 1.5rem; }
+.settings-panel + .settings-panel { border-top: 1px solid var(--border); padding-top: 1.5rem; }
+.has-panel-tabs > .settings-panel[id] { border-top: 0; scroll-margin-top: 100vh; }
+.panel-title { font-size: 1rem; }
+.has-panel-tabs .panel-title { position: absolute; clip-path: inset(50%); }
+.palette-disclosure, #settings-form > .form-actions { border-top: 1px solid var(--border); padding-top: 1rem; }

@@ -86,7 +86,7 @@ def test_cloud_audience_controls_navigation_and_start_form(cloud_browser, mode, 
     assert page.locator("#new-task-form").count() == int(allowed)
     assert page.locator("#main-nav a[href='/agents']").count() == int(allowed)
     if mode == "admins" and not allowed:
-        assert "Administrators only" in page.inner_text("main")
+        assert "available only to administrators" in page.inner_text("main")
         assert page.locator("main a[href='/account#access']").count() == 0
     if mode == "custom" and not allowed:
         assert page.locator("main a[href='/account#access']").count() == 1
@@ -183,7 +183,7 @@ def test_cloud_missing_runner_has_a_clear_non_actionable_form(cloud_browser):
     cloud_browser.app.config["BC"] = replace(cloud_browser.app.config["BC"], agents_runner_url="")
     page = cloud_browser.open_page()
     assert page.locator("#new-task-form").count() == 0
-    assert "administrator to finish the setup" in page.inner_text("main").lower()
+    assert "are not set up. ask an administrator" in page.inner_text("main").lower()
     _layout(page)
 
 

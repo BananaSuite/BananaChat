@@ -31,7 +31,7 @@ password manager). Someone who learns the password still cannot sign in.
 
 ## For administrators
 
-**Require it for administrators** (Admin → Site settings → Sign-in security,
+**Require two-step verification for administrators** (Admin → Settings → Sign-in,
 off by default) sends every administrator without it to set it up before the
 administration pages open. Turn it on for your own account first; the page
 shows how many administrators still have to.
@@ -53,7 +53,7 @@ somewhere new ask the administrator to confirm it is them, with their password,
 or with a code from their authenticator app when they use two-step
 verification:
 
-- downloading the database export (Admin → Backup & migration);
+- downloading the database export (Admin → Settings → Backup and restore);
 - resetting another account's password or two-step verification;
 - changing a role, creating an account (its password keeps working) or an
   invitation of any kind (whoever holds the code makes an account that keeps

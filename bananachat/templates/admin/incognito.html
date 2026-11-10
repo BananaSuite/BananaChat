@@ -1,30 +1,22 @@
 {% extends "admin/_layout.html" %}
 {% from "partials/icons.html" import icon %}
 {% set section = "chats" %}
-{% block title %}No-history audit{% endblock %}
+{% from "admin/_macros.html" import header %}
+{% block title %}No-history chats{% endblock %}
 {% block admin_content %}
-{#- The same header as the Chats tab, so the tabs stay in place; this tab's explanation follows them. -#}
-<header class="page-header">
-  <div>
-    <h1>Chat audit</h1>
-    <p>Conversations of every user. Deleted chats stay here until they are erased after the retention period.</p>
-  </div>
-</header>
-<nav class="tabs" aria-label="Chat audit sections">
-  <a href="{{ url_for('admin.chats') }}">Chats</a>
-  <a href="{{ url_for('admin.incognito') }}" aria-current="page">No-history audit</a>
-</nav>
-<p class="muted small">Copies of the messages of no-history chats. Users are told that administrators can review these chats. The chats themselves are erased after {{ config.no_history_ttl_hours }} hours of inactivity; these copies stay until you delete them.</p>
+{{ header("Activity") }}
+{% include "admin/_activity_tabs.html" %}
+<p class="muted small">Copies of no-history chats, kept until you delete them. The chats themselves are erased after {{ config.no_history_ttl_hours }} hours of inactivity. Users are told that administrators can read them.</p>
 <form class="search-form mb-2" role="search" method="get" action="{{ url_for('admin.incognito') }}">
   <label class="visually-hidden" for="filter-user">Username</label>
   <input type="search" id="filter-user" name="user" value="{{ username }}" placeholder="Filter by username">
-  <button type="submit" class="btn btn-primary">{{ icon("search") }}Filter</button>
+  <button type="submit" class="btn">Filter</button>
   {% if username %}<a class="btn btn-ghost" href="{{ url_for('admin.incognito') }}">Reset</a>{% endif %}
 </form>
 {% if unknown %}
 <div class="alert alert-warning" role="status">{{ icon("alert") }}<p>No user is called “{{ username }}”.</p></div>
 {% elif not rows %}
-<div class="empty">{{ icon("eye-off") }}<h2>No entries</h2><p>No no-history messages have been recorded.</p></div>
+<p class="admin-empty">No no-history chats recorded.</p>
 {% else %}
 <p class="muted">{{ total | number }} chat{{ "" if total == 1 else "s" }}</p>
 <div class="table-wrap">
@@ -42,7 +34,7 @@
         <td class="actions">
           <form method="post" action="{{ url_for('admin.incognito_delete_session', session_id=row.session_id) }}" data-confirm="Delete every audit entry of this chat (and the chat, if still active)?" data-confirm-label="Delete" data-confirm-danger>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-danger btn-sm" aria-label="Delete the no-history chat of {{ row.username }}">{{ icon("trash") }}Delete</button>
+            <button type="submit" class="btn btn-danger btn-sm" aria-label="Delete the no-history chat of {{ row.username }}">Delete</button>
           </form>
         </td>
       </tr>

@@ -12,7 +12,7 @@
     {% for item in items %}
       {% set grant = item.row %}
       <tr id="grant-{{ grant.id }}"{% if not revocable %} class="row-muted"{% endif %}>
-        <td class="cell-full">{% if grant.user_id %}<a href="{{ url_for('admin.user_limits', user_id=grant.user_id) }}">{{ item.target }}</a>{% else %}<span class="badge badge-primary">Everyone</span>{% endif %}</td>
+        <td class="cell-full">{% if grant.user_id %}<a href="{{ url_for('admin.user_limits', user_id=grant.user_id) }}">{{ item.target }}</a>{% else %}Everyone{% endif %}</td>
         <td class="cell-full grant-what"><strong>{{ item.what }}</strong>{% if item.scope %} · {{ item.scope }}{% endif %} · {{ item.pool }}</td>
         <td data-label="From:">{{ grant.starts_at | datetime_html }}</td>
         <td data-label="Until:">{% if grant.revoked_at %}Revoked <span class="nowrap">{{ when(grant.revoked_at) }}</span>{% if grant.revoked_by_name %} <span class="nowrap">by {{ grant.revoked_by_name }}</span>{% endif %}{% elif grant.ends_at %}{{ grant.ends_at | datetime_html }}{% else %}Forever{% endif %}</td>
@@ -31,13 +31,13 @@
 </div>
 {%- endmacro %}
 
-{{ header("Limits", "Grants raise limits for a while or for good: for one account or for everyone.") }}
+{{ header("Limits") }}
 {% include "admin/_limits_tabs.html" %}
 
 <form method="post" action="{{ url_for('admin.limit_grant_create') }}" class="settings-section stack" aria-labelledby="grant-new-title">
   {{ csrf() }}
   <h2 id="grant-new-title">New grant</h2>
-  <p class="muted small mb-0">Examples: unlimited use for 24 hours for someone who explained why; ×2 tokens for everyone during a coding jam; +500k tokens per 5 hours with one heavy model. Several grants add up: any unlimited grant wins, then multipliers multiply, then extras are added.</p>
+  <p class="muted small mb-0">Grants add up. Unlimited wins, then multipliers apply, then extras.</p>
   <div class="grid grid-2">
     <fieldset class="admin-fieldset stack">
       <legend class="required">For</legend>
@@ -64,7 +64,7 @@
         <div class="field">
           <label for="grant-amount">Amount</label>
           <input type="text" id="grant-amount" name="amount" inputmode="decimal" autocomplete="off" maxlength="20" aria-describedby="grant-amount-hint" value="{{ form.get('amount', '') if form else '' }}">
-          <span class="hint" id="grant-amount-hint">A factor above 1 (e.g. 2), or extra tokens for a 5‑hour or weekly limit (e.g. 100k). The request rate takes multipliers only. Not used for unlimited.</span>
+          <span class="hint" id="grant-amount-hint">A factor such as 2, or extra tokens such as 100k. Not used for unlimited.</span>
         </div>
         <div class="field">
           <label for="grant-pool">Where</label>
@@ -80,7 +80,7 @@
             </optgroup>
             {% endif %}
           </select>
-          <span class="hint" id="grant-pool-hint">A model grant raises only that model's own limits. Unlimited use for every service also lifts every model's own limits.</span>
+          <span class="hint" id="grant-pool-hint">A model grant raises only that model's own limits.</span>
         </div>
         <div class="field">
           <label for="grant-scope">Limit</label>
@@ -99,8 +99,8 @@
         <label class="check"><input type="radio" name="duration" value="{{ value }}"{% if value == (form.get("duration") if form else "24h") %} checked{% endif %}><span>{{ label }}</span></label>
         {% endfor %}
       </div>
-      {{ utc_input("ends_at", "grant-ends", "Ends (for “Until a date”)", "Time in UTC.", form.get("ends_at", "") if form else "", min_datetime) }}
-      {{ utc_input("starts_at", "grant-starts", "Starts (optional)", "Time in UTC. Leave empty to start now.", form.get("starts_at", "") if form else "", min_datetime) }}
+      {{ utc_input("ends_at", "grant-ends", "Ends (for “Until a date”)", "UTC.", form.get("ends_at", "") if form else "", min_datetime) }}
+      {{ utc_input("starts_at", "grant-starts", "Starts (optional)", "UTC. Leave empty to start now.", form.get("starts_at", "") if form else "", min_datetime) }}
     </fieldset>
     <div class="field grid-full">
       <label for="grant-reason">Reason</label>
@@ -108,15 +108,15 @@
       <span class="hint" id="grant-reason-hint">Shown to the people who receive the grant.</span>
     </div>
   </div>
-  <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Create grant</button></div>
+  <div class="form-actions"><button type="submit" class="btn btn-primary">Create grant</button></div>
 </form>
 
 <section class="mt-3" aria-labelledby="active-title">
-  <h2 id="active-title">Active <span class="badge badge-success">{{ active | length }}</span></h2>
-  {% if active %}{{ grant_table(active, "Active grants", true) }}{% else %}{{ empty("chart", "No active grants") }}{% endif %}
+  <h2 id="active-title">Active <span class="badge">{{ active | length }}</span></h2>
+  {% if active %}{{ grant_table(active, "Active grants", true) }}{% else %}{{ empty("chart", "No active grants.") }}{% endif %}
 </section>
 <section class="mt-3" aria-labelledby="upcoming-title">
-  <h2 id="upcoming-title">Upcoming <span class="badge badge-info">{{ upcoming | length }}</span></h2>
+  <h2 id="upcoming-title">Upcoming <span class="badge">{{ upcoming | length }}</span></h2>
   {% if upcoming %}{{ grant_table(upcoming, "Upcoming grants", true) }}{% else %}<p class="muted">No grants start later.</p>{% endif %}
 </section>
 <section class="mt-3" aria-labelledby="ended-title">

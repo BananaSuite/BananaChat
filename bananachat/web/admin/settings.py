@@ -1,4 +1,4 @@
-"""Site settings: name, sign-up, maintenance, warning banner, two-step verification for
+"""Settings: name, sign-up, maintenance, warning banner, two-step verification for
 administrators, default theme and palettes.
 
 Changing the two-step requirement for administrators, or opening sign-up to everyone, needs a

@@ -4,24 +4,25 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Users{% endblock %}
 {% block admin_content %}
-{{ header("Users", "Search accounts, create new ones and open an account to manage it.") }}
+{{ header("Users") }}
+{% include "admin/_users_tabs.html" %}
 
 <div class="toolbar mb-2">
   <form method="get" action="{{ url_for('admin.users') }}" class="search-form" role="search">
     <label class="visually-hidden" for="user-search">Search by username</label>
     <input type="search" id="user-search" name="q" value="{{ search }}" placeholder="Search by username" maxlength="64">
-    <button type="submit" class="btn">{{ icon("search") }}Search</button>
+    <button type="submit" class="btn">Search</button>
     {% if search %}<a class="btn" href="{{ url_for('admin.users') }}">Clear</a>{% endif %}
   </form>
   <details class="disclosure">
-    <summary class="btn btn-primary">{{ icon("plus") }}New user</summary>
+    <summary class="btn btn-primary">New user</summary>
     <form method="post" action="{{ url_for('admin.user_create') }}" class="settings-section stack mt-1" data-busy>
       {{ csrf() }}
       <div class="form-grid">
         <div class="field">
           <label for="new-username" class="required">Username</label>
           <input type="text" id="new-username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]{3,32}" autocomplete="off" aria-describedby="new-username-hint">
-          <span class="hint" id="new-username-hint">3-32 letters, digits, dots, hyphens or underscores.</span>
+          <span class="hint" id="new-username-hint">3–32 letters, digits, dots, hyphens or underscores.</span>
         </div>
         <div class="field">
           <label for="new-role">Role</label>
@@ -38,7 +39,7 @@
         </div>
       </div>
       {{ reauth_field("new-user-reauth") }}
-      <div class="form-actions"><button type="submit" class="btn btn-primary">Create account</button></div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Create user</button></div>
     </form>
   </details>
 </div>
@@ -61,12 +62,12 @@
     {% for row in rows %}
       <tr>
         <td class="cell-full"><a href="{{ url_for('admin.user_detail', user_id=row.id) }}"><strong>{{ row.username }}</strong></a>{% if row.id == current_user.id %} <span class="badge">you</span>{% endif %}</td>
-        <td data-label="Role:">{% if row.role == "admin" %}<span class="badge badge-primary">Admin</span>{% else %}User{% endif %}</td>
+        <td data-label="Role:">{% if row.role == "admin" %}Administrator{% else %}User{% endif %}</td>
         <td data-label="Status:">
           {% if row.suspended and (not row.suspended_until or row.suspended_until > now) %}
           <span class="badge badge-danger">Suspended{% if row.suspended_until %} until {{ row.suspended_until | datetime }}{% endif %}</span>
           {% else %}Active{% endif %}
-          {% if row.bm_mode %} <span class="badge" title="BM mode (easy mode) is on for this account">BM mode</span>{% endif %}
+          {% if row.bm_mode %} <span class="badge" title="BM mode is on for this account">BM mode</span>{% endif %}
         </td>
         <td class="nowrap col-optional">
           {% if row.role == "admin" %}<span class="muted">Unlimited</span>
@@ -89,6 +90,6 @@
 </div>
 {{ pagination(page, "admin.users", "User pages", q=search or None) }}
 {% else %}
-{{ empty("users", "No users found", "Try another search." if search else "Create the first account above.") }}
+{{ empty("users", "No users match “" ~ search ~ "”." if search else "No users yet.") }}
 {% endif %}
 {% endblock %}

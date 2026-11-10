@@ -86,7 +86,7 @@ def save_policy(pool):
         flash(f"{POOL_LABELS[pool]}: {error}", "error")
         return _quotas_page({"pool": pool, "policy": _typed_policy()}), 400
     audit("limits_policy", pool, config)
-    flash(f"{POOL_LABELS[pool]}: limits saved ({policy_summary(config)}).", "success")
+    flash(f"{POOL_LABELS[pool]} limits saved.", "success")
     return back("admin.quotas", _anchor=f"policy-{pool}")
 
 

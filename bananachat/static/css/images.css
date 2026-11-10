@@ -13,12 +13,12 @@
 }
 .img-size:hover { background: var(--hover); }
 .img-size input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.img-size:has(input:checked) { border-color: var(--primary); background: var(--active); }
+.img-size:has(input:checked) { border-color: var(--text); background: var(--active); }
 .img-size:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 .img-size-text { display: flex; flex-direction: column; font-size: var(--text-base); line-height: 1.3; }
 .img-size-text small { color: var(--text-muted); font-size: var(--text-xs); }
 .img-size-shape { justify-self: center; border: 2px solid currentColor; border-radius: 3px; color: var(--text-muted); width: 20px; height: 20px; }
-.img-size:has(input:checked) .img-size-shape { color: var(--primary); }
+.img-size:has(input:checked) .img-size-shape { color: var(--text); }
 .img-shape-512x512 { width: 14px; height: 14px; }
 .img-shape-768x768 { width: 17px; height: 17px; }
 .img-shape-832x1216 { width: 15px; height: 22px; }

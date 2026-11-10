@@ -252,10 +252,10 @@ def recovery_message(manager):
     name, mode = manager.settings()["service"], manager.settings()["mode"]
     if mode == "compute":
         return ("Model weights were not in this backup: the web server connected to this compute server will offer "
-                f"the missing models for download in Admin → Overview (used without a web server: run '{name} models "
+                f"the missing models for download in Admin → Dashboard (used without a web server: run '{name} models "
                 "restore --yes' here).")
     return ("Model weights were not in this backup: BananaChat checks which saved models are missing on its model "
-            "server and, only if some are, Admin → Overview offers to download them.")
+            "server and, only if some are, Admin → Dashboard offers to download them.")
 
 
 def reset_two_step(manager, username):
@@ -410,7 +410,7 @@ def main(argv=None):
             from .models import compute_recovery
             settings = manager.settings()
             if settings["mode"] != "compute":
-                raise ValueError("This server offers missing models in its web interface: Admin → Overview after a "
+                raise ValueError("This server offers missing models in its web interface: Admin → Dashboard after a "
                                  "restore, and Admin → Models for every download.")
             result = compute_recovery(manager.root / "data", args.action, assume_yes=args.yes,
                                       upstream=profile.ollama_upstream(settings))

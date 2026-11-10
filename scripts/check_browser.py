@@ -780,8 +780,10 @@ def run() -> int:
                     response = page.goto(base + path)
                     if response is None or response.status != 200:
                         failures.append(f"{label}: {path} answered {response and response.status}")
-                    if path == "/account" and not page.locator("#quota .table-wrap table").is_visible():
-                        failures.append(f"{label}: the populated quota-history table is missing")
+                    if path == "/account":
+                        page.goto(base + "/account#quota")  # on the Usage tab
+                        if not page.locator("#quota .table-wrap table").is_visible():
+                            failures.append(f"{label}: the populated quota-history table is missing")
                     overflow = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
                     if overflow > 1:
                         failures.append(f"{label}: {path} scrolls sideways by {overflow}px")

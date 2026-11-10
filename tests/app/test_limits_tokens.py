@@ -1013,7 +1013,7 @@ def test_an_automatically_approved_amount_never_holds_an_account_below_its_tier(
         assert limits.effective(user, "api").window.tokens == 60_000
         assert limits.base_limits(user["id"], "api")["window_tokens"] == 60_000
     page = admin.get(f"/admin/users/{user['id']}/limits").get_data(as_text=True)
-    assert "Approved automatically, so never below the tier's amount: tokens per 5 hours." in page
+    assert "Auto-approved, not below the tier amount: tokens per 5 hours." in page
     # Saving the account's form unchanged keeps the amount automatic ...
     form = {"pool": "api", "window_tokens": "40k", "window_slow_tokens": "", "weekly_tokens": ""}
     assert admin.post(f"/admin/users/{user['id']}/limits/custom", form).status_code == 302
@@ -1125,7 +1125,7 @@ def test_a_charge_never_runs_the_30_day_usage_query_under_the_write_lock(app, ma
 def test_admin_limit_pages_render_and_explain(app, admin, make_user):
     user = make_user("pat")
     _models(app)
-    for path, text in (("/admin/quotas", "How limits work"), ("/admin/quotas/models", "Quick start"),
+    for path, text in (("/admin/quotas", "Chat tokens"), ("/admin/quotas/models", "Presets"),
                        ("/admin/quotas/effort", "How it works"), ("/admin/quotas/requests", "Quota requests"),
                        ("/admin/quotas/tiers", "Token multiplier"), ("/admin/quotas/grants", "One model"),
                        (f"/admin/users/{user['id']}/limits", "Reasoning effort")):
@@ -1151,7 +1151,7 @@ def test_admins_edit_service_policies_with_rules_and_friendly_amounts(app, admin
         assert not policy["weekly"]["enabled"] and policy["weekly"]["tokens"] == 500_000
         assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='admin.limits_policy'") == 1
     bad = admin.post("/admin/quotas/policy/api", {**form, "window_tokens": "plenty"}, follow_redirects=True)
-    assert "write a number of tokens" in bad.get_data(as_text=True)
+    assert "enter a number of tokens" in bad.get_data(as_text=True)
     duplicate = admin.post("/admin/quotas/policy/api", {**form, "rule_per_1": "second"}, follow_redirects=True)
     assert "one request-rate rule per time unit" in duplicate.get_data(as_text=True)
 
@@ -1348,7 +1348,7 @@ def test_the_grant_form_keeps_what_was_typed_and_never_defaults_to_everyone(app,
              "scope": "window", "duration": "7d", "reason": "Exam week for the whole class"}
     response = admin.post("/admin/quotas/grants", typed)
     page = response.get_data(as_text=True)
-    assert response.status_code == 400 and "Extra tokens: write a number of tokens" in page
+    assert response.status_code == 400 and "Extra tokens: enter a number of tokens" in page
     assert 'value="gina"' in page and ">Exam week for the whole class</textarea>" in page and 'value="lots"' in page
     assert 'value="extra" selected' in page and 'value="api" selected' in page and 'value="window" selected' in page
     assert 'name="target" value="user" checked' in page and 'name="duration" value="7d" checked' in page

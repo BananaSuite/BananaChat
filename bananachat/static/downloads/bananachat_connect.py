@@ -46,7 +46,7 @@ import threading
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
-VERSION = "1.7.6"
+VERSION = "1.8.0"
 CONFIG = os.path.join(os.path.expanduser("~"), ".config", "bananachat-connect.json")
 TEXT, BINARY, CLOSE, PING, PONG, CONTINUATION = 0x1, 0x2, 0x8, 0x9, 0xA, 0x0
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"

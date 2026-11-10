@@ -181,8 +181,7 @@ def _featured_fields(row=None):
             raise FormError(f"A featured personality called “{fields['name']}” already exists.")
         owner = row["user_id"] if row is not None else me()["id"]
         if personalities_db.name_taken(owner, fields["name"], exclude_id=exclude):
-            raise FormError(f"The owning administrator already has a personality called “{fields['name']}”; "
-                            "choose another name.")
+            raise FormError(f"The owner already has a personality called “{fields['name']}”. Choose another name.")
     except service.Invalid as problem:
         flash(problem.message("en"), "error")
         return None, _editor(row, {**raw, "enabled": flag("enabled")}, 400)
@@ -258,6 +257,5 @@ def publish(personality_id):
     published = flag("published")
     personalities_db.set_enabled(row["id"], published, me()["id"])
     audit("personality_publish" if published else "personality_unpublish", _label(row), {"id": row["id"]})
-    flash(f"{_who(row)} is " + ("published: every user with access to personalities can see it."
-                                if published else "unpublished and hidden from users."), "success")
+    flash(f"{_who(row)} " + ("published." if published else "unpublished."), "success")
     return _back()

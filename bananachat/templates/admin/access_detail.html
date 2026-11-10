@@ -1,12 +1,12 @@
 {% extends "admin/_layout.html" %}
 {% from "admin/_macros.html" import header, csrf, when, utc_input %}
 {% from "partials/icons.html" import icon %}
-{% block title %}Permissions · {{ resource.name }}{% endblock %}
+{% block title %}Access · {{ resource.name }}{% endblock %}
 {% block admin_content %}
 {% set scope_labels = {"uncensored": "Uncensored models", "image_generation": "Image generation", "custom_personality": "Custom personalities", "agents": "Cloud sessions", "category": "Category", "model": "Model"} %}
-<p class="breadcrumb"><a href="{{ url_for('admin.access') }}">{{ icon("chevron-left") }}Permissions</a></p>
+<p class="breadcrumb"><a href="{{ url_for('admin.access') }}">{{ icon("chevron-left") }}Access</a></p>
 {% if resource.scope == "model" %}
-{#- A model's description is its technical id: monospace, like on the Permissions overview. -#}
+{#- A model's description is its technical id: monospace, like on the Access overview. -#}
 <header class="page-header admin-header">
   <div>
     <h1>{{ resource.kind ~ ": " ~ resource.name }}</h1>
@@ -25,21 +25,21 @@
       <fieldset class="admin-fieldset">
         <legend class="visually-hidden">Access mode</legend>
         {% for mode, label in mode_labels.items() %}
-        <label class="check"><input type="radio" name="mode" value="{{ mode }}"{% if policy.mode == mode %} checked{% endif %}><span>{{ label }}<small>{{ mode_help[mode] }}</small></span></label>
+        <label class="check"><input type="radio" name="mode" value="{{ mode }}"{% if policy.mode == mode %} checked{% endif %}><span>{{ label }}</span></label>
         {% endfor %}
       </fieldset>
       <label class="switch">
         <input type="checkbox" name="requests_enabled" value="1"{% if policy.requests_enabled %} checked{% endif %}>
         <span class="track" aria-hidden="true"></span>
-        <span>Let users ask for access<small class="block hint">Users who are not allowed see a request form; you approve or deny requests here.</small></span>
+        <span>Let people ask for access<small class="block hint">People without access can send a request.</small></span>
       </label>
-      {% if not policy.persisted %}<p class="hint">This is the default rule; saving it makes it explicit.</p>{% endif %}
-      <div class="form-actions"><button type="submit" class="btn btn-primary">Save rule</button></div>
+      {% if not policy.persisted %}<p class="hint">Default rule.</p>{% endif %}
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
     </form>
   </section>
 
   <section class="settings-section" aria-labelledby="add-title">
-    <h2 id="add-title">Add someone to a list</h2>
+    <h2 id="add-title">Add to a list</h2>
     <form method="post" action="{{ url_for('admin.access_member_add', scope=resource.scope, resource_id=resource.id) }}" class="stack">
       {{ csrf() }}
       <div class="form-grid">
@@ -59,17 +59,17 @@
         <label for="member-reason">Reason (optional)</label>
         <input type="text" id="member-reason" name="reason" maxlength="500">
       </div>
-      {{ utc_input("expires_at", "member-expires", "Expires (optional)", "Time in UTC. Leave empty to keep the entry until you remove it.", min=min_datetime) }}
-      <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Add</button></div>
+      {{ utc_input("expires_at", "member-expires", "Expires (optional)", "UTC. Leave empty to keep the entry until you remove it.", min=min_datetime) }}
+      <div class="form-actions"><button type="submit" class="btn">Add</button></div>
     </form>
   </section>
 </div>
 
-{% for list_type, title, explanation in [("allowlist", "Allowlist", "Used when only people on the allowlist may use it."), ("denylist", "Denylist", "Used when everyone except people on the denylist may use it.")] %}
+{% for list_type, title in [("allowlist", "Allowlist"), ("denylist", "Denylist")] %}
 <section class="mb-3" aria-labelledby="{{ list_type }}-title">
   <div class="row-between">
     <h2 id="{{ list_type }}-title" class="mb-0">{{ title }} <span class="badge">{{ lists[list_type] | length }}</span></h2>
-    <p class="small muted mb-0">{{ explanation }}{% if (list_type == "allowlist" and policy.mode != "deny_except_allowlist") or (list_type == "denylist" and policy.mode != "allow_except_denylist") %} <strong>Not in effect with the current rule.</strong>{% endif %}</p>
+    {% if (list_type == "allowlist" and policy.mode != "deny_except_allowlist") or (list_type == "denylist" and policy.mode != "allow_except_denylist") %}<p class="small muted mb-0">Not in effect with the current rule.</p>{% endif %}
   </div>
   {% if lists[list_type] %}
   <div class="table-wrap mt-1">

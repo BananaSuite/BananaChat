@@ -22,7 +22,7 @@ are not used.
 
 ## Add a provider
 
-1. Open **Admin → Models → External APIs**.
+1. Open **Admin → Models → Providers → External APIs**.
 2. Under **Add a provider**, choose the **Service**. The preset fills in the
    API base URL, the API format, the header that carries the key and any
    suggested extra headers. Every value stays editable. Choose **Other

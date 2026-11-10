@@ -35,7 +35,7 @@ def test_turning_on_two_step_offers_to_revoke_the_api_keys(app, make_user, clock
     assert CHECKBOX in page and "Also revoke my API key" in page
     response = browser.post("/account/two-step", {"action": "enable", "code": clock.code(_secret(page)),
                                                   "password": "devon-password", "revoke_api_tokens": "1"})
-    assert response.status_code == 200 and "Your API key has been revoked." in response.get_data(as_text=True)
+    assert response.status_code == 200 and "API key revoked." in response.get_data(as_text=True)
     assert not _works(app, key)
 
 

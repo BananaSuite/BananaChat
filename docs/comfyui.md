@@ -334,7 +334,7 @@ next automatic sync (every ten minutes) or after **Sync now** in Admin → Model
 
 New checkpoints are hidden and marked as image models. Use **Edit** for the
 display name and categories, **Publish** to offer the model, and
-**Admin → Permissions** for image, category and per-model access.
+**Admin → Access** for image, category and per-model access.
 
 ## Configuration reference
 

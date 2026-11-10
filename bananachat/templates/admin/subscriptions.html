@@ -18,7 +18,7 @@
 {% block admin_content %}
 {% set endpoint = "admin." ~ provider %}
 {#- The same title as the other tabs of the Models area, so it does not change when switching tabs. -#}
-{% call header("Models", "Pool the site’s " ~ setup.name ~ " subscription accounts, cap how much of each they use and choose the models they offer.") %}{% endcall %}
+{{ header("Models") }}
 {% include "admin/_models_tabs.html" %}
 
 {% set setup_ok = setup_checks | selectattr("ok", "false") | list | length == 0 %}
@@ -33,8 +33,8 @@
       </li>
       {% endfor %}
     </ul>
-    <p class="small muted mb-0">On a managed server, <code>sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py</code> prepares everything above once (the official CLI, the private profile folder and the configuration) and restarts BananaChat. Then add accounts below and sign each one in from this page. See <em>docs/subscription-router.md</em>.</p>
-    <p class="small muted mb-0 mt-1">{{ setup.name }} subscriptions are personal plans; check the provider's terms before answering other people's requests with them.</p>
+    <p class="small muted mb-0">On a managed server, <code>sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py</code> sets this up once and restarts BananaChat. See <em>docs/subscription-router.md</em>.</p>
+    <p class="small muted mb-0 mt-1">{{ setup.name }} subscriptions are personal plans. Check the provider's terms before using them for other people.</p>
   </details>
 </section>
 
@@ -47,36 +47,35 @@
   {% elif not connected %}
   <div class="alert alert-warning" role="status">{{ icon("alert") }}<p><strong>Disconnected.</strong> {{ setup.name }} requests need the {{ setup.client }} connector on this server. Follow the <a href="#setup">setup checklist</a>.</p></div>
   {% else %}
-  <p><strong>{{ setup.client ~ " configured." if profiled else "Adapter configured." }}</strong> Model discovery and quota reports decide which requests can run.</p>
+  <p><strong>{{ setup.client ~ " configured." if profiled else "Adapter configured." }}</strong></p>
   {% endif %}
   <p>Scheduling capacity: 5-hour {{ share(quota.window_left) }} · weekly {% if quota.weekly_left is none %}uncapped locally{% else %}{{ share(quota.weekly_left) }}{% endif %}</p>
-  {% if profiled %}<p class="muted small">This combines local token budgets, caps and subscription observations. Each account’s own plan and balance are shown below.</p>{% endif %}
-  <p class="muted small mb-0">{{ quota.accounts }} active account(s) · {{ quota.usable }} with fresh quota · {{ quota.busy }} answering{% if quota.stale %} · {{ quota.stale }} awaiting a fresh provider report{% endif %}</p>
+  <p class="muted small mb-0">{{ quota.accounts }} active account{{ "s" if quota.accounts != 1 }} · {{ quota.usable }} with fresh quota · {{ quota.busy }} answering{% if quota.stale %} · {{ quota.stale }} awaiting a fresh provider report{% endif %}</p>
   {% if quota.reporter_error %}<p class="danger-text mt-1">The quota report could not be verified. {{ setup.name }} requests are paused until a valid refresh.</p>{% endif %}
-  <details class="inline-details mt-2"><summary>How pool capacity works{{ icon("chevron-down") }}</summary>
-    <div class="stack mt-1">
-      <p class="muted small">Each account answers one request at a time. A 5-hour token budget is required; a blank or zero budget cannot serve requests. Weekly budgets are optional. Higher priority accounts are tried first.</p>
-      <p class="muted small">Local budgets count usage recorded by this server; they are estimates, not the provider’s billing units. Provider reports expire after 15 minutes or at their reported reset. An expired report needs a fresh observation before the account can answer again.</p>
-      <p class="muted small">Allowance caps keep part of each subscription for its owner: an account stops once it has used that share of the provider’s own 5-hour or weekly allowance, or of one model family’s allowance. A capped account answers only while a fresh provider report shows its usage.</p>
-      <p class="muted small">Each model family starts with strict limits per 5 hours: {% for family, policy in strictness.items() %}{{ families[family] }} {{ policy.window_tokens | compact }}{{ " tokens" if loop.last else ", " }}{% endfor %}. Remaining provider capacity reduces them, alongside demand adjustment. {{ setup.name }} models do not count towards service token budgets by default; this can be changed in the model’s limits.</p>
-      <p class="muted small mb-0">Another account is tried only before any text or reasoning is emitted. Model fallback follows your <a href="{{ url_for('admin.quotas') }}#fallback">limit settings</a>.</p>
-    </div>
+  <details class="inline-details mt-2"><summary>How the pool works{{ icon("chevron-down") }}</summary>
+    <ul class="plain-list muted small mt-1 mb-0">
+      <li>Each account answers one request at a time. Higher priority accounts go first.</li>
+      <li>Every account needs a 5-hour token budget. Budgets are counted on this server and are estimates.</li>
+      <li>Provider reports expire after 15 minutes. An allowance cap stops an account at a share of the provider's allowance and needs a fresh report.</li>
+      <li>Strict limits per 5 hours for each model family: {% for family, policy in strictness.items() %}{{ families[family] }} {{ policy.window_tokens | compact }}{{ " tokens" if loop.last else ", " }}{% endfor %}.</li>
+      <li>Another account is tried only before any text is sent. Model fallback follows the <a href="{{ url_for('admin.quotas') }}#fallback">limit settings</a>.</li>
+    </ul>
   </details>
 </section>
 
 <section class="settings-section mb-3" aria-labelledby="accounts-title">
   <div class="section-header"><h2 id="accounts-title">Accounts ({{ accounts | length }})</h2></div>
-  <p class="muted small">{% if managed %}Add an account with a <strong>new profile</strong>, then <strong>Sign in</strong>: the official {{ setup.client }} sign-in opens on {{ "Anthropic's" if provider == "claude" else "OpenAI's" }} own page, and the login stays in that account's private profile on this server. {% endif %}{% if profiled %}Each profile can be used by one account.{% if not managed %} The operator signs each profile in on the server, or from this page once the setup adds a profile folder.{% endif %}{% else %}Use the account labels expected by your adapter. Credentials belong in its server configuration.{% endif %}</p>
+  <p class="muted small">{% if managed %}Add an account with a new profile, then sign it in on {{ "Anthropic's" if provider == "claude" else "OpenAI's" }} page. The login stays in the account's private profile on this server. {% endif %}{% if profiled %}Each profile can be used by one account.{% if not managed %} Sign profiles in on the server.{% endif %}{% else %}Use the account labels expected by your adapter. Credentials belong in its server configuration.{% endif %}</p>
   <form method="post" action="{{ url_for(endpoint ~ '_account_add') }}" class="stack" data-busy>
     {{ csrf() }}
     <div class="form-grid">
       <div class="field"><label for="{{ provider }}-label" class="required">Account name</label><input type="text" id="{{ provider }}-label" name="label" required maxlength="80" placeholder="{{ setup.example }}"></div>
       {% if profiled %}<div class="field"><label for="{{ provider }}-profile" class="required">{{ setup.client }} profile</label><select id="{{ provider }}-profile" name="profile" required>{% if managed %}<option value="{{ new_profile }}" selected>New profile (sign in on this page)</option>{% endif %}{% for profile in profiles if not profile.startswith("managed-") %}<option value="{{ profile }}">{{ profile }}</option>{% endfor %}</select></div>{% endif %}
       <div class="field"><label for="{{ provider }}-priority">Priority</label><input id="{{ provider }}-priority" name="priority" type="number" value="0" min="-100" max="100"></div>
-      {{ token_field("window_limit", "5-hour token budget", none, provider ~ "-window", "Tokens this server may use per 5 hours, e.g. 100k.", true, "100k") }}
-      {{ token_field("weekly_limit", "Weekly token budget", none, provider ~ "-weekly", "Optional, off by default.", false) }}
-      {{ percent_field("window_cap_pct", "Stop at % of the 5-hour allowance", none, provider ~ "-window-cap", "Optional. Needs the provider’s usage report.") }}
-      {{ percent_field("weekly_cap_pct", "Stop at % of the weekly allowance", none, provider ~ "-weekly-cap", "Optional. Needs the provider’s usage report.") }}
+      {{ token_field("window_limit", "5-hour token budget", none, provider ~ "-window", "For example 100k.", true, "100k") }}
+      {{ token_field("weekly_limit", "Weekly token budget (optional)", none, provider ~ "-weekly", none, false) }}
+      {{ percent_field("window_cap_pct", "Stop at % of the 5-hour allowance", none, provider ~ "-window-cap", "Needs the provider's usage report.") }}
+      {{ percent_field("weekly_cap_pct", "Stop at % of the weekly allowance", none, provider ~ "-weekly-cap", "Needs the provider's usage report.") }}
     </div>
     {{ reauth_field(provider ~ "-new-reauth") }}
     <div class="form-actions form-actions-start"><button class="btn btn-primary" type="submit">Add account</button></div>
@@ -94,10 +93,10 @@
     {% if profiled %}
     {% set state = signin[account.id] %}
     <div class="signin-row" data-signin-account="{{ account.id }}" data-signin-label="{{ account.label }}">
-      <p class="small mb-0" data-signin-state>{% if state and state.signed_in %}{{ icon("check") }} <strong>Signed in</strong>{% if state.plan %} · {{ state.plan | capitalize }}{% endif %}{% if state.checked %} · checked {{ state.checked | timeago }}{% endif %}{% elif state %}<strong>Not signed in.</strong> {{ state.message }}{% else %}Sign-in not checked yet.{% endif %}</p>
+      <p class="small mb-0" data-signin-state>{% if state and state.signed_in %}<strong>Signed in</strong>{% if state.plan %} · {{ state.plan | capitalize }}{% endif %}{% if state.checked %} · checked {{ state.checked | timeago }}{% endif %}{% elif state %}<strong>Not signed in.</strong> {{ state.message }}{% else %}Sign-in not checked yet.{% endif %}</p>
       {% if can_sign_in %}
       <div class="row gap-1">
-        <button type="button" class="btn btn-sm{% if not (state and state.signed_in) %} btn-primary{% endif %}" data-signin-start>{{ icon("key") }}{{ "Sign in again" if state and state.signed_in else "Sign in" }}</button>
+        <button type="button" class="btn btn-sm{% if not (state and state.signed_in) %} btn-primary{% endif %}" data-signin-start>{{ "Sign in again" if state and state.signed_in else "Sign in" }}</button>
         {% if state and state.signed_in %}<form method="post" action="{{ url_for(endpoint ~ '_account_logout', account_id=account.id) }}" data-confirm="Sign {{ account.label }} out on this server? It answers no requests until it is signed in again.">{{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost">Sign out</button></form>{% endif %}
       </div>
       <div class="signin-panel" data-signin-panel hidden aria-live="polite"></div>
@@ -108,15 +107,15 @@
     <div class="stack">
       <p class="small mb-0"><strong>Subscription: {{ usage.plan_label or "plan unknown" }}</strong>{% if usage.source == "file" %} · authorised observation file{% endif %}</p>
       {% if (usage.available and usage.fresh) or usage.has_observation %}
-      {% if not (usage.available and usage.fresh) %}<p class="small muted mb-0"><strong>Last known usage · stale.</strong> These percentages belong to the observation below. Requests are paused until a fresh report is available.</p>{% endif %}
+      {% if not (usage.available and usage.fresh) %}<p class="small muted mb-0"><strong>Last known usage · stale.</strong> Requests are paused until a fresh report is available.</p>{% endif %}
       <p class="small muted mb-0">5-hour remaining: {{ share(usage.window_left) }}{% if usage.window_resets_at %} · resets {{ usage.window_resets_at | datetime }}{% endif %}{% if account.window_cap_pct %} · stops at {{ account.window_cap_pct }}% used{% endif %}</p>
       <p class="small muted mb-0">Weekly remaining: {% if usage.weekly_left is none %}not reported{% else %}{{ share(usage.weekly_left) }}{% endif %}{% if usage.weekly_resets_at %} · resets {{ usage.weekly_resets_at | datetime }}{% endif %}{% if account.weekly_cap_pct %} · stops at {{ account.weekly_cap_pct }}% used{% endif %}</p>
       {% for family, scope in usage.model_limits.items() %}{% set cap = caps[account.id].get(family) %}<p class="small muted mb-0">{{ families.get(family, family) }} remaining: {{ share(scope.left) }}{% if scope.resets_at %} · resets {{ scope.resets_at | datetime }}{% endif %}{% if cap and cap.cap_pct %} · stops at {{ cap.cap_pct }}% used{% endif %}</p>{% endfor %}
       <p class="small muted mb-0">Observed {{ usage.observed_at | datetime if usage.observed_at else "at an unknown time" }}. Subscription percentages are separate from local token usage.</p>
-      {% else %}<p class="small muted mb-0">Subscription usage is unavailable. This account waits for a fresh observation; other healthy accounts can continue answering.</p>{% endif %}
+      {% else %}<p class="small muted mb-0">Subscription usage is unavailable. This account waits for a fresh report.</p>{% endif %}
     </div>
-    {% elif profiled %}<p class="small muted mb-0">Subscription usage and plan are not reported yet. Refresh quota to ask the adapter again.</p>{% endif %}
-    {% if account.id in blind %}<div class="alert alert-warning" role="status">{{ icon("alert") }}<p>This account has an allowance cap, but the provider has not freshly reported that allowance, so the account does not answer until it does. Refresh quota, or clear the cap to rely on local budgets.</p></div>{% endif %}
+    {% elif profiled %}<p class="small muted mb-0">Plan and usage not reported yet.</p>{% endif %}
+    {% if account.id in blind %}<div class="alert alert-warning" role="status">{{ icon("alert") }}<p>This account has an allowance cap but no fresh report of that allowance, so it does not answer. Refresh quota or clear the cap.</p></div>{% endif %}
     <form method="post" action="{{ url_for(endpoint ~ '_account_save', account_id=account.id) }}" class="stack" data-busy>
       {{ csrf() }}
       <div class="form-grid">
@@ -124,14 +123,14 @@
         <div class="field"><label for="{{ prefix }}-status">Status</label><select id="{{ prefix }}-status" name="status">{% for value in ["active", "disabled", "error"] %}<option value="{{ value }}"{% if account.status == value %} selected{% endif %}>{{ value | capitalize }}</option>{% endfor %}</select></div>
         <div class="field"><label for="{{ prefix }}-priority">Priority</label><input id="{{ prefix }}-priority" name="priority" type="number" value="{{ account.priority }}" min="-100" max="100"></div>
         {{ token_field("window_limit", "5-hour token budget", account.window_limit, prefix ~ "-window", "Required to serve requests.", false) }}
-        {{ token_field("weekly_limit", "Weekly token budget", account.weekly_limit, prefix ~ "-weekly", "Optional, off by default.", false) }}
+        {{ token_field("weekly_limit", "Weekly token budget (optional)", account.weekly_limit, prefix ~ "-weekly", none, false) }}
         {{ percent_field("window_cap_pct", "Stop at % of the 5-hour allowance", account.window_cap_pct, prefix ~ "-window-cap", "Empty: no cap.") }}
         {{ percent_field("weekly_cap_pct", "Stop at % of the weekly allowance", account.weekly_cap_pct, prefix ~ "-weekly-cap", "Empty: no cap.") }}
       </div>
       <div class="field form-width"><label for="{{ prefix }}-note">Note</label><input type="text" id="{{ prefix }}-note" name="note" value="{{ account.note }}" maxlength="500"></div>
       <details class="inline-details"{% if account.id in family_capped %} open{% endif %}><summary>Model family caps{{ icon("chevron-down") }}</summary>
         <div class="stack mt-2">
-          <p class="muted small">Stop using this account for one model family before its own limits: at a share of the provider’s allowance for that family, or after token budgets counted by this server. A share needs the provider to report that family’s allowance; when it does not, the family stops on this account. Leave a family empty for no cap.</p>
+          <p class="muted small">Stop this account for one model family at a share of that family's allowance or after a token budget. Leave a family empty for no cap.</p>
           {% for family, name in families.items() %}{% set cap = caps[account.id][family] %}
           <fieldset class="admin-fieldset">
             <legend class="label">{{ name }}</legend>
@@ -154,7 +153,7 @@
     <details class="inline-details"><summary>Remove this account{{ icon("chevron-down") }}</summary>
       <form id="{{ prefix }}-remove" method="post" action="{{ url_for(endpoint ~ '_account_save', account_id=account.id) }}" class="stack mt-2" data-confirm="Remove {{ account.label }} from the pool?" data-confirm-danger>
         {{ csrf() }}<input type="hidden" name="action" value="delete">
-        <p class="muted small mb-0">Requests stop going to this subscription. {% if account.id in managed_accounts %}Its private profile and the sign-in stored in it are deleted from this server.{% else %}Its login on the server is not changed.{% endif %}</p>
+        <p class="muted small mb-0">{% if account.id in managed_accounts %}Its private profile and sign-in are deleted from this server.{% else %}Its login on the server is not changed.{% endif %}</p>
         {{ reauth_field(prefix ~ "-remove-reauth") }}
         <div class="form-actions form-actions-start"><button class="btn btn-ghost" type="submit">Remove account</button></div>
       </form>
@@ -167,13 +166,11 @@
   <div class="section-header"><h2 id="models-title">Available models</h2>
     <form method="post" action="{{ url_for(endpoint ~ '_discover') }}" data-busy>{{ csrf() }}<button class="btn btn-sm" type="submit"{% if not has_discovery %} disabled{% endif %}>Refresh models</button></form>
   </div>
-  {% if profiled %}<p class="muted small">Each profile reports the models its subscription offers through the official {{ setup.client }}. Refresh checks the available models and updates missing entries.</p>{% endif %}
-  <p class="muted small">Only models reported by your adapter can be selected. Enrolment is currently <strong>{{ enrollment }}</strong>: manual waits for review; automatic publishes with strict limits. Supported reasoning levels come from discovery. Medium is the default where supported; high, extra and max require the configured unlocks.</p>
   {% if discovery.note %}<p class="muted">{{ discovery.note }}</p>{% endif %}
   {% if available %}
   <form method="post" action="{{ url_for(endpoint ~ '_sync') }}" class="stack" data-busy>
     {{ csrf() }}
-    <div class="field form-width"><label for="{{ provider }}-enrollment">New model enrolment</label><select id="{{ provider }}-enrollment" name="enrollment" aria-describedby="{{ provider }}-enrollment-hint"><option value="manual"{% if not automatic_enrollment %} selected{% endif %}>Manual review</option><option value="automatic"{% if automatic_enrollment %} selected{% endif %}>Automatic with strict limits</option></select><span class="hint" id="{{ provider }}-enrollment-hint">Automatic enrolment offers newly discovered models with their family’s limits. Unchecked models stay excluded. The catalogue ignore list still applies.</span></div>
+    <div class="field form-width"><label for="{{ provider }}-enrollment">New model enrolment</label><select id="{{ provider }}-enrollment" name="enrollment" aria-describedby="{{ provider }}-enrollment-hint"><option value="manual"{% if not automatic_enrollment %} selected{% endif %}>Manual review</option><option value="automatic"{% if automatic_enrollment %} selected{% endif %}>Automatic with strict limits</option></select><span class="hint" id="{{ provider }}-enrollment-hint">Automatic publishes new models with their family's strict limits.</span></div>
     <fieldset class="admin-fieldset">
       <legend class="visually-hidden">Models to offer</legend>
       <div class="check-list">

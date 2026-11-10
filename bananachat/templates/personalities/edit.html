@@ -9,7 +9,7 @@
   <header class="page-header">
     <div>
       <h1>{{ t("personality.edit_title", name=row.name) if row else t("personality.create_title") }}</h1>
-      <p>{{ t("personality.editor_subtitle") if row else t("personality.editor_subtitle_new") }}</p>
+      {% if row %}<p>{{ t("personality.editor_subtitle") }}</p>{% endif %}
     </div>
   </header>
 
@@ -23,7 +23,7 @@
       {% if template_key %}<li><a class="chip chip-link" href="{{ url_for('personalities.new') }}">{{ t("personality.templates_blank") }}</a></li>{% endif %}
     </ul>
   </nav>
-  {% if template_key %}<p class="alert alert-info mb-3">{{ icon("info") }}<span>{{ t("personality.template_notice") }}</span></p>{% endif %}
+  {% if template_key %}<p class="hint mb-3">{{ t("personality.template_notice") }}</p>{% endif %}
   {% endif %}
 
   <div class="persona-editor">

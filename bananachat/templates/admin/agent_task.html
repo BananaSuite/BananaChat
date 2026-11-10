@@ -5,17 +5,17 @@
 {% block title %}Cloud session · {{ task.title or "Untitled session" }}{% endblock %}
 {% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/agents.css') }}">{% endblock %}
 {% set shown = "interrupted" if stale else task.status %}
-{% set status_badges = {"queued": "badge-info", "running": "badge-primary", "paused": "badge-warning", "finished": "badge-success", "failed": "badge-danger", "stopped": "", "out_of_budget": "badge-warning", "interrupted": "badge-warning"} %}
+{% set status_badges = {"queued": "", "running": "badge-info", "paused": "badge-warning", "finished": "badge-success", "failed": "badge-danger", "stopped": "", "out_of_budget": "badge-warning", "interrupted": "badge-warning"} %}
 {% block admin_content %}
 <p class="breadcrumb"><a href="{{ url_for('admin.agents', _anchor='tasks') }}">{{ icon("chevron-left") }}Cloud sessions</a></p>
-{% call header(task.title or "Untitled session", "Session history: messages, tool calls and results.") %}
+{% call header(task.title or "Untitled session") %}
   {% if active %}
   <form method="post" action="{{ url_for('admin.agents_task_stop', task_id=task.id) }}" data-confirm="Stop this session now? The owner sees that an administrator stopped it." data-confirm-label="Stop" data-confirm-danger>
-    {{ csrf() }}<button type="submit" class="btn btn-danger">{{ icon("stop") }}<span>Stop session</span></button>
+    {{ csrf() }}<button type="submit" class="btn btn-danger">Stop session</button>
   </form>
   {% endif %}
   <form method="post" action="{{ url_for('admin.agents_task_delete', task_id=task.id) }}" data-confirm="Delete this session, its history and its workspace?" data-confirm-label="Delete" data-confirm-danger>
-    {{ csrf() }}<button type="submit" class="btn btn-ghost">{{ icon("trash") }}<span>Delete</span></button>
+    {{ csrf() }}<button type="submit" class="btn btn-ghost">Delete</button>
   </form>
 {% endcall %}
 
@@ -55,13 +55,13 @@
   </div>
 
   <section aria-labelledby="log-title">
-    <h2 id="log-title">{{ icon("file") }}Log</h2>
+    <h2 id="log-title">Log</h2>
     {% if not steps %}<p class="muted">No entries.</p>{% endif %}
     <ol class="timeline admin-agent-log">
       {% for step in steps %}
       <li class="card admin-step">
         <div class="row admin-step-head">
-          <span class="badge {{ {'tool': 'badge-primary', 'error': 'badge-danger', 'summary': 'badge-success', 'user': 'badge-info'}.get(step.kind, '') }}">{{ step.kind | capitalize }}</span>
+          <span class="badge {{ {'error': 'badge-danger'}.get(step.kind, '') }}">{{ step.kind | capitalize }}</span>
           <span class="muted small">{{ "main agent" if step.agent == 0 else "sub-agent " ~ step.agent }}</span>
           {% if step.tool_name %}<code>{{ step.tool_name }}</code>{% endif %}
           {% if step.tool_status and step.tool_status != "ok" %}<span class="badge badge-danger">{{ step.tool_status }}</span>{% endif %}

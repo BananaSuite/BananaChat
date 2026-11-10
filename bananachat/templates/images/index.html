@@ -5,15 +5,11 @@
 {% block content %}
 <div class="page images-page">
   <header class="page-header">
-    <div>
-      <h1>{{ t("images.title") }}</h1>
-      <p>{{ t("images.intro") }}</p>
-    </div>
+    <h1>{{ t("images.title") }}</h1>
   </header>
 
   {% if not models %}
   <div class="card empty">
-    {{ icon("image") }}
     <h2>{{ t("images.no_models_title") }}</h2>
     <p>{{ t("images.no_models_text") }}</p>
   </div>
@@ -56,8 +52,8 @@
         </p>
         <p id="img-paused" class="alert alert-warning status-paused mb-0" aria-live="polite">{% if paused %}{{ t("images.paused") }}{% endif %}</p>
         <div class="row-end">
-          <button type="button" class="btn" id="img-cancel" hidden>{{ icon("stop") }}{{ t("images.cancel") }}</button>
-          <button type="submit" class="btn btn-primary" id="img-generate"{% if paused %} disabled{% endif %}>{{ icon("image") }}{{ t("images.generate") }}</button>
+          <button type="button" class="btn" id="img-cancel" hidden>{{ t("images.cancel") }}</button>
+          <button type="submit" class="btn btn-primary" id="img-generate"{% if paused %} disabled{% endif %}>{{ t("images.generate") }}</button>
         </div>
       </form>
     </section>
@@ -73,7 +69,7 @@
         <figcaption id="img-caption" class="hint"></figcaption>
       </figure>
       <div class="row-end" id="img-actions" hidden>
-        <a class="btn" id="img-download" download>{{ icon("download") }}{{ t("common.download") }}</a>
+        <a class="btn" id="img-download" download>{{ t("common.download") }}</a>
       </div>
     </section>
   </div>

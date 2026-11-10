@@ -432,9 +432,9 @@ def test_restore_messages_say_what_happens_next(tmp_path, checkout, monkeypatch,
         connection.executescript("CREATE TABLE ai_models (ollama_name TEXT, backend TEXT, backend_model_name TEXT);"
                                  "INSERT INTO ai_models VALUES ('tiny:latest', 'ollama', 'tiny:latest');")
     assert run_cli(monkeypatch, web, "restore", str(web.backup(exclude_model_weights=True))) == 0
-    assert "Admin → Overview offers to download them" in capsys.readouterr().out
+    assert "Admin → Dashboard offers to download them" in capsys.readouterr().out
     assert run_cli(monkeypatch, web, "models", "status") == 1
-    assert "Admin → Overview" in capsys.readouterr().err
+    assert "Admin → Dashboard" in capsys.readouterr().err
     (tmp_path / "compute").mkdir()
     compute, _ = installed(tmp_path / "compute", checkout, "BananaChat", "compute")
     assert run_cli(monkeypatch, compute, "restore", str(compute.backup(exclude_model_weights=True))) == 0

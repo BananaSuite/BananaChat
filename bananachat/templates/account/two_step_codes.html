@@ -21,8 +21,8 @@
         {% for code in codes %}<li>{{ code }}</li>{% endfor %}
       </ul>
       <div class="form-actions">
-        <button type="button" class="btn" data-copy="{{ codes | join('\n') }}">{{ icon("copy") }}{{ t("two_step.copy_codes") }}</button>
-        <a class="btn btn-primary" href="{{ url_for('account.index') }}#two-step">{{ icon("check") }}{{ t("two_step.saved_codes") }}</a>
+        <button type="button" class="btn" data-copy="{{ codes | join('\n') }}">{{ t("two_step.copy_codes") }}</button>
+        <a class="btn btn-primary" href="{{ url_for('account.index') }}#two-step">{{ t("two_step.saved_codes") }}</a>
       </div>
     </section>
   </div>

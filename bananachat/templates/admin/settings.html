@@ -2,7 +2,7 @@
 {% from "admin/_macros.html" import header, csrf %}
 {% from "admin/_reauth.html" import reauth_field with context %}
 {% from "partials/icons.html" import icon %}
-{% block title %}Site settings{% endblock %}
+{% block title %}Settings{% endblock %}
 {% block admin_content %}
 {% macro toggle(name, label, checked, hint=None) -%}
 <label class="switch">
@@ -26,141 +26,141 @@
 </svg>
 {%- endmacro %}
 
-{{ header("Site settings", "Sign-up, announcements and the site's appearance.") }}
-
-<nav class="admin-toc" aria-label="Site settings sections">
-  <div class="section-nav" data-section-nav>
-    <a href="#general">General</a>
-    <a href="#sign-in">Sign-in security</a>
-    <a href="#notices">Maintenance and announcements</a>
-    <a href="#palette-dark">Dark palette</a>
-    <a href="#palette-light">Light palette</a>
-  </div>
+{{ header("Settings") }}
+{#- One form: the tabs show one part of it at a time (admin.js) and Save keeps all of it. Without
+    scripts every part shows and the tabs jump to it. -#}
+<nav class="tabs" aria-label="Settings" data-panel-tabs>
+  <a href="#general">General</a>
+  <a href="#sign-in">Sign-in</a>
+  <a href="#maintenance">Maintenance</a>
+  <a href="#appearance">Appearance</a>
+  <a href="{{ url_for('admin.migration') }}">Backup and restore</a>
 </nav>
 
-<form method="post" action="{{ url_for('admin.settings_save') }}" class="section-stack" id="settings-form">
+<form method="post" action="{{ url_for('admin.settings_save') }}" id="settings-form">
   {{ csrf() }}
-  <div class="section-stack">
-    <section class="settings-section admin-setting-row" id="general" aria-labelledby="general-title">
-      <h2 id="general-title">General</h2>
-      <div class="stack form-width">
+  <section class="settings-panel" id="general" aria-labelledby="general-title">
+    <h2 id="general-title" class="panel-title">General</h2>
+    <div class="stack form-width">
+      <div class="field">
+        <label for="site-name" class="required">Site name</label>
+        <input type="text" id="site-name" name="site_name" required maxlength="80" value="{{ s.site_name }}">
+      </div>
+      <fieldset class="admin-fieldset">
+        <legend>Sign-up</legend>
+        <label class="check"><input type="radio" name="signup_mode" value="invite"{% if s.signup_mode == "invite" %} checked{% endif %}><span>Invitation only<small>New accounts need an <a href="{{ url_for('admin.invites') }}">invitation</a>.</small></span></label>
+        <label class="check"><input type="radio" name="signup_mode" value="open"{% if s.signup_mode == "open" %} checked{% endif %}><span>Open<small>Anyone who can reach the site can create an account.</small></span></label>
+        <label class="check"><input type="radio" name="signup_mode" value="disabled"{% if s.signup_mode == "disabled" %} checked{% endif %}><span>Closed<small>Only administrators create accounts.</small></span></label>
+        {% if s.signup_mode != "open" %}<p class="hint mt-1 mb-0">Open sign-up requires your password or a two-step code on the Sign-in tab.</p>{% endif %}
+      </fieldset>
+      <fieldset class="admin-fieldset" id="bm-mode">
+        <legend>BM mode (easy mode)</legend>
+        <input type="hidden" name="bm_mode_present" value="1">
+        <p class="hint mt-0">A simpler interface with only the chat, the model choice and the essentials.</p>
+        <label class="check"><input type="radio" name="bm_mode_global" value="0"{% if not s.bm_mode_global %} checked{% endif %}><span>Per account</span></label>
+        <label class="check"><input type="radio" name="bm_mode_global" value="1"{% if s.bm_mode_global %} checked{% endif %}><span>On for everyone<small>Nobody can switch it off.</small></span></label>
+        <label class="check"><input type="checkbox" name="bm_mode_self_service"{% if s.bm_mode_self_service != 0 %} checked{% endif %}><span>People can switch it on and off themselves</span></label>
+        <div class="row mt-1">
+          <button type="submit" class="btn btn-sm" form="bm-all-on">Turn on for every account</button>
+          <button type="submit" class="btn btn-sm" form="bm-all-off">Turn off for every account</button>
+        </div>
+      </fieldset>
+    </div>
+  </section>
+
+  <section class="settings-panel" id="sign-in" aria-labelledby="sign-in-title">
+    <h2 id="sign-in-title" class="panel-title">Sign-in</h2>
+    <div class="stack form-width">
+      <fieldset class="admin-fieldset stack-sm">
+        <legend>Two-step verification</legend>
+        <input type="hidden" name="admin_two_step_present" value="1">
+        {{ toggle("admin_two_step_required", "Require two-step verification for administrators", s.admin_two_step_required, "Administrators without it set it up before the administration opens. API keys keep working.") }}
+        {% if not own_two_step %}
+        <p class="hint">Turn it on for <a href="{{ url_for('account.two_step') }}">your own account</a> first.</p>
+        {% elif admins_without_two_step %}
+        <p class="hint">{{ admins_without_two_step }} active administrator{{ "s have" if admins_without_two_step != 1 else " has" }} not set it up yet.</p>
+        {% endif %}
+        {{ reauth_field("settings-reauth", needed_for="to change this requirement or to open sign-up") }}
+      </fieldset>
+    </div>
+  </section>
+
+  <section class="settings-panel" id="maintenance" aria-labelledby="maintenance-title">
+    <h2 id="maintenance-title" class="panel-title">Maintenance</h2>
+    <span id="notices"></span>
+    <div class="stack form-width">
+      <fieldset class="admin-fieldset stack-sm">
+        <legend>Maintenance</legend>
+        {{ toggle("maintenance_mode", "Pause new messages", s.maintenance_mode, "Only administrators can send messages.") }}
         <div class="field">
-          <label for="site-name" class="required">Site name</label>
-          <input type="text" id="site-name" name="site_name" required maxlength="80" value="{{ s.site_name }}">
+          <label for="maintenance-message">Maintenance message</label>
+          <textarea id="maintenance-message" name="maintenance_message" maxlength="1000" rows="3" data-preview-target="maintenance-preview" aria-describedby="maintenance-message-hint">{{ s.maintenance_message }}</textarea>
+          <span class="hint" id="maintenance-message-hint">For example, when you expect to be back.</span>
         </div>
-        <fieldset class="admin-fieldset">
-          <legend>Sign-up</legend>
-          <label class="check"><input type="radio" name="signup_mode" value="invite"{% if s.signup_mode == "invite" %} checked{% endif %}><span>Invitation only<small>People need an <a href="{{ url_for('admin.invites') }}">invitation</a> to create an account.</small></span></label>
-          <label class="check"><input type="radio" name="signup_mode" value="open"{% if s.signup_mode == "open" %} checked{% endif %}><span>Open<small>Anyone who can reach the site can create an account.</small></span></label>
-          <label class="check"><input type="radio" name="signup_mode" value="disabled"{% if s.signup_mode == "disabled" %} checked{% endif %}><span>Closed<small>Only administrators create accounts.</small></span></label>
-          {% if s.signup_mode != "open" %}<p class="hint mt-1 mb-0">Opening sign-up to everyone asks for your password or authenticator code under Sign-in security below.</p>{% endif %}
-        </fieldset>
-        <fieldset class="admin-fieldset">
-          <legend>Default theme</legend>
-          <div class="segmented">
-            <label><input type="radio" name="default_theme_mode" value="dark"{% if s.default_theme_mode != "light" %} checked{% endif %}><span>{{ icon("moon") }} Dark</span></label>
-            <label><input type="radio" name="default_theme_mode" value="light"{% if s.default_theme_mode == "light" %} checked{% endif %}><span>{{ icon("sun") }} Light</span></label>
-          </div>
-          <p class="hint mt-1">Used for visitors and for users who did not choose a theme.</p>
-        </fieldset>
-        <fieldset class="choice-group">
-          <legend>Easter eggs</legend>
-          <input type="hidden" name="easter_eggs_present" value="1">
-          <label class="check"><input type="checkbox" name="easter_mascot_motion"{% if s.easter_mascot_motion != 0 %} checked{% endif %}><span>Lively mascot<small>The banana in the top bar bobs, blinks, tilts on hover and hops when clicked. Off: it stays still.</small></span></label>
-          <label class="check"><input type="checkbox" name="easter_mascot_shades"{% if s.easter_mascot_shades != 0 %} checked{% endif %}><span>The mascot's sunglasses<small>Eleven clicks in a row on the banana put its sunglasses on (remembered in that browser), as many again take them off.</small></span></label>
-          <label class="check"><input type="checkbox" name="easter_konami"{% if s.easter_konami != 0 %} checked{% endif %}><span>Banana shower<small>The Konami code (↑ ↑ ↓ ↓ ← → ← → B A) typed on any page makes small bananas fall for three seconds.</small></span></label>
-          <p class="hint mt-1">Each person can also switch off the ones the site offers, in Customise. Less motion (theirs or their system's) always keeps the banana still.</p>
-        </fieldset>
-        <fieldset class="choice-group" id="bm-mode">
-          <legend>BM mode (easy mode)</legend>
-          <input type="hidden" name="bm_mode_present" value="1">
-          <p class="hint mt-0">A simpler interface: the chat, the model choice and the essentials. Reasoning effort, sampling settings, personalities and the extra pages are hidden, and their defaults apply.</p>
-          <label class="check"><input type="radio" name="bm_mode_global" value="0"{% if not s.bm_mode_global %} checked{% endif %}><span>Per account<small>Off unless switched on for an account, by the person or by an administrator (Users → an account → BM mode).</small></span></label>
-          <label class="check"><input type="radio" name="bm_mode_global" value="1"{% if s.bm_mode_global %} checked{% endif %}><span>On for everyone<small>Every account uses BM mode and nobody can switch it off.</small></span></label>
-          <label class="check"><input type="checkbox" name="bm_mode_self_service"{% if s.bm_mode_self_service != 0 %} checked{% endif %}><span>People may switch it on and off themselves<small>In Customise and the account menu. Off: only administrators switch it. An account can have its own rule either way.</small></span></label>
-          <div class="row mt-1">
-            <button type="submit" class="btn btn-sm" form="bm-all-on">Turn on for every account</button>
-            <button type="submit" class="btn btn-sm" form="bm-all-off">Turn off for every account</button>
-          </div>
-        </fieldset>
-      </div>
-    </section>
-
-    <section class="settings-section admin-setting-row" id="sign-in" aria-labelledby="sign-in-title">
-      <h2 id="sign-in-title">Sign-in security</h2>
-      <div class="stack form-width">
-        <fieldset class="admin-fieldset stack-sm">
-          <legend>Two-step verification</legend>
-          <input type="hidden" name="admin_two_step_present" value="1">
-          {{ toggle("admin_two_step_required", "Require two-step verification for administrators", s.admin_two_step_required, "Administrators without it are sent to set up an authenticator app before the administration pages open. Everyone else can turn it on from their account page. API keys keep working.") }}
-          {% if not own_two_step %}
-          <p class="hint">Turn it on for <a href="{{ url_for('account.two_step') }}">your own account</a> before you require it.</p>
-          {% elif admins_without_two_step %}
-          <p class="hint">{{ admins_without_two_step }} active administrator{{ "s have" if admins_without_two_step != 1 else " has" }} not set it up yet.</p>
-          {% endif %}
-          {{ reauth_field("settings-reauth", needed_for="to change this requirement or to open sign-up to everyone") }}
-        </fieldset>
-      </div>
-    </section>
-
-    <section class="settings-section admin-setting-row" id="notices" aria-labelledby="notices-title">
-      <h2 id="notices-title">Maintenance and announcements</h2>
-      <div class="stack form-width">
-        <fieldset class="admin-fieldset stack-sm">
-          <legend>Maintenance</legend>
-          {{ toggle("maintenance_mode", "Pause new messages", s.maintenance_mode, "Pause new messages for everyone except administrators; the site stays reachable and shows your message in a banner. Chats, history and accounts stay available.") }}
-          <div class="field">
-            <label for="maintenance-message">Maintenance message</label>
-            <textarea id="maintenance-message" name="maintenance_message" maxlength="1000" rows="3" data-preview-target="maintenance-preview" aria-describedby="maintenance-message-hint">{{ s.maintenance_message }}</textarea>
-            <span class="hint" id="maintenance-message-hint">For example when you expect to be back. Users also see that their chats are safe.</span>
-          </div>
-          <div class="notice-preview" aria-live="polite">
-            <span class="small muted">Banner preview</span>
-            <div class="alert alert-warning">{{ icon("alert") }}<p><strong>New messages are paused for maintenance.</strong> <span id="maintenance-preview" data-empty="(no message)">{{ s.maintenance_message or "(no message)" }}</span></p></div>
-          </div>
-        </fieldset>
-        <fieldset class="admin-fieldset stack-sm">
-          <legend>Model-server status</legend>
-          <input type="hidden" name="worker_offline_warning_present" value="1">
-          {{ toggle("worker_offline_warning_enabled", "Show the model-server offline warning", s.worker_offline_warning_enabled, "Show a notice when the model server is unreachable. Users can hide it for 24 hours; hiding it does not change which models answer.") }}
-        </fieldset>
-        <fieldset class="admin-fieldset stack-sm">
-          <legend>Announcement banner</legend>
-          <p class="hint">An informational notice on every page. It does not pause anything and is independent of maintenance.</p>
-          {{ toggle("warning_banner_enabled", "Show the announcement", s.warning_banner_enabled) }}
-          {{ toggle("warning_banner_dismissible", "Users can dismiss it", s.warning_banner_dismissible, "Dismissed announcements come back in a new browser session or when the text changes.") }}
-          <div class="field">
-            <label for="banner-message">Announcement</label>
-            <textarea id="banner-message" name="warning_banner_message" maxlength="500" rows="2">{{ s.warning_banner_message }}</textarea>
-          </div>
-        </fieldset>
-      </div>
-    </section>
-  </div>
-
-  {% for mode in ["dark", "light"] %}
-  <details class="settings-section admin-disclosure" id="palette-{{ mode }}">
-    <summary><span id="palette-{{ mode }}-title">{{ mode | capitalize }} palette</span>{{ icon("chevron-down") }}</summary>
-    <div class="row-end mb-2">
-      <button type="submit" form="reset-{{ mode }}" class="btn btn-sm btn-ghost">{{ icon("refresh") }}Reset to defaults</button>
-    </div>
-    <div class="palette-layout">
-      <div class="palette-fields">
-        {% for key, column in fields[mode].items() %}
-        <div class="field color-field">
-          <label for="{{ column }}">{{ color_labels[key] }}</label>
-          <div class="color-input">
-            <input type="color" value="{{ palettes[mode][key] }}" data-color-for="{{ column }}" aria-label="{{ color_labels[key] }} ({{ mode }} theme) colour picker">
-            <input type="text" id="{{ column }}" name="{{ column }}" value="{{ palettes[mode][key] }}" required pattern="#[0-9a-fA-F]{6}" maxlength="7" class="mono" data-palette="{{ mode }}" data-key="{{ key }}" aria-describedby="{{ column }}-hint" spellcheck="false">
-          </div>
-          <span class="hint" id="{{ column }}-hint">Default {{ defaults[mode][key] }}</span>
+        <div class="notice-preview" aria-live="polite">
+          <span class="small muted">Preview</span>
+          <div class="alert alert-warning">{{ icon("alert") }}<p><strong>New messages are paused for maintenance.</strong> <span id="maintenance-preview" data-empty="(no message)">{{ s.maintenance_message or "(no message)" }}</span></p></div>
         </div>
-        {% endfor %}
-      </div>
-      <div>{{ preview(mode, palettes[mode]) }}</div>
+      </fieldset>
+      <fieldset class="admin-fieldset stack-sm">
+        <legend>Model server</legend>
+        <input type="hidden" name="worker_offline_warning_present" value="1">
+        {{ toggle("worker_offline_warning_enabled", "Warn users when the model server is offline", s.worker_offline_warning_enabled, "Users can hide the warning for 24 hours.") }}
+      </fieldset>
+      <fieldset class="admin-fieldset stack-sm">
+        <legend>Announcement</legend>
+        {{ toggle("warning_banner_enabled", "Show an announcement on every page", s.warning_banner_enabled) }}
+        {{ toggle("warning_banner_dismissible", "Users can dismiss it", s.warning_banner_dismissible, "It comes back in a new browser session or when the text changes.") }}
+        <div class="field">
+          <label for="banner-message">Announcement</label>
+          <textarea id="banner-message" name="warning_banner_message" maxlength="500" rows="2">{{ s.warning_banner_message }}</textarea>
+        </div>
+      </fieldset>
     </div>
-  </details>
-  {% endfor %}
+  </section>
+
+  <section class="settings-panel" id="appearance" aria-labelledby="appearance-title">
+    <h2 id="appearance-title" class="panel-title">Appearance</h2>
+    <div class="stack form-width">
+      <fieldset class="admin-fieldset">
+        <legend>Default theme</legend>
+        <div class="segmented">
+          <label><input type="radio" name="default_theme_mode" value="dark"{% if s.default_theme_mode != "light" %} checked{% endif %}><span>Dark</span></label>
+          <label><input type="radio" name="default_theme_mode" value="light"{% if s.default_theme_mode == "light" %} checked{% endif %}><span>Light</span></label>
+        </div>
+        <p class="hint mt-1">For visitors and for people who have not chosen a theme.</p>
+      </fieldset>
+      <fieldset class="choice-group">
+        <legend>Logo</legend>
+        <input type="hidden" name="easter_eggs_present" value="1">
+        <label class="check"><input type="checkbox" name="easter_mascot_motion"{% if s.easter_mascot_motion != 0 %} checked{% endif %}><span>Animated logo<small>The banana moves and hops when clicked.</small></span></label>
+        <label class="check"><input type="checkbox" name="easter_mascot_shades"{% if s.easter_mascot_shades != 0 %} checked{% endif %}><span>Sunglasses<small>Eleven clicks in a row on the banana put them on.</small></span></label>
+        <label class="check"><input type="checkbox" name="easter_konami"{% if s.easter_konami != 0 %} checked{% endif %}><span>Banana shower<small>The Konami code (↑ ↑ ↓ ↓ ← → ← → B A) makes bananas fall for three seconds.</small></span></label>
+        <p class="hint mt-1">People can turn these off for themselves in Appearance.</p>
+      </fieldset>
+      {% for mode in ["dark", "light"] %}
+      <details class="admin-disclosure palette-disclosure" id="palette-{{ mode }}">
+        <summary><span id="palette-{{ mode }}-title">{{ mode | capitalize }} palette</span>{{ icon("chevron-down") }}</summary>
+        <div class="palette-layout">
+          <div class="palette-fields">
+            {% for key, column in fields[mode].items() %}
+            <div class="field color-field">
+              <label for="{{ column }}">{{ color_labels[key] }}</label>
+              <div class="color-input">
+                <input type="color" value="{{ palettes[mode][key] }}" data-color-for="{{ column }}" aria-label="{{ color_labels[key] }} ({{ mode }} theme) colour picker">
+                <input type="text" id="{{ column }}" name="{{ column }}" value="{{ palettes[mode][key] }}" required pattern="#[0-9a-fA-F]{6}" maxlength="7" class="mono" data-palette="{{ mode }}" data-key="{{ key }}" aria-describedby="{{ column }}-hint" spellcheck="false">
+              </div>
+              <span class="hint" id="{{ column }}-hint">Default {{ defaults[mode][key] }}</span>
+            </div>
+            {% endfor %}
+          </div>
+          <div>{{ preview(mode, palettes[mode]) }}</div>
+        </div>
+        <button type="submit" form="reset-{{ mode }}" class="btn btn-sm btn-ghost mt-1">Reset to default colours</button>
+      </details>
+      {% endfor %}
+    </div>
+  </section>
 
   <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
 </form>

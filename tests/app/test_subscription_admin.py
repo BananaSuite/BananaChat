@@ -294,11 +294,15 @@ def test_automatic_enrollment_offers_new_models_without_rechecking_excluded_ones
 
 
 def test_both_pools_have_a_tab_in_the_models_area(admin):
+    """Claude, Codex and the external APIs share the Models area's Providers tab, each with a tab of its own."""
     html = admin.get("/admin/models").get_data(as_text=True)
-    assert '<a href="/admin/models/claude">Claude</a>' in html
-    assert '<a href="/admin/models/codex">Codex</a>' in html
-    assert '<a href="/admin/models/codex" aria-current="page">Codex</a>' in admin.get(
-        "/admin/models/codex").get_data(as_text=True)
+    assert '<a href="/admin/models/providers">Providers</a>' in html
+    providers = admin.get("/admin/models/providers").get_data(as_text=True)
+    assert '<a href="/admin/models/claude">Claude</a>' in providers
+    assert '<a href="/admin/models/codex">Codex</a>' in providers
+    codex = admin.get("/admin/models/codex").get_data(as_text=True)
+    assert '<a href="/admin/models/providers" aria-current="page">Providers</a>' in codex
+    assert '<a href="/admin/models/codex" aria-current="page">Codex</a>' in codex
 
 
 def test_refreshing_asks_only_that_providers_adapter_for_fresh_reports_and_models(site, browser, adapters):
@@ -493,7 +497,7 @@ def test_family_caps_are_kept_per_family_and_cleared_when_empty(site, browser):
 
 @pytest.mark.parametrize("provider,field,value,message", [
     ("claude", "cap_pct_opus", "150", "The Opus allowance cap must be between 1 and 100."),
-    ("claude", "window_cap_haiku", "lots", "Haiku 5-hour tokens: write a number of tokens"),
+    ("claude", "window_cap_haiku", "lots", "Haiku 5-hour tokens: enter a number of tokens"),
     ("codex", "cap_pct_gpt", "0", "The Other GPT allowance cap must be between 1 and 100."),
     ("codex", "weekly_cap_luna", "2000000000", "Luna weekly tokens must be between 0 and 1,000,000,000 tokens."),
 ])
@@ -509,7 +513,7 @@ def test_a_refused_family_cap_names_its_family_and_changes_nothing(site, browser
                                                                      "weekly_cap": None}}
 
 
-WAITING = "the provider has not freshly reported that allowance"
+WAITING = "no fresh report of that allowance"
 
 
 def test_a_capped_account_without_a_fresh_report_says_it_is_waiting(site, browser, adapters):

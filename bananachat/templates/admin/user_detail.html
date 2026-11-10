@@ -4,13 +4,13 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}{{ user.username }} · Users{% endblock %}
 {% block admin_content %}
-<p class="breadcrumb"><a href="{{ url_for('admin.users') }}">{{ icon("chevron-left") }}All users</a></p>
+<p class="breadcrumb"><a href="{{ url_for('admin.users') }}">{{ icon("chevron-left") }}Users</a></p>
 {% call header(user.username, ("Administrator" if user.role == "admin" else "User") ~ " · created " ~ (user.created_at | datetime)) %}
   {% if suspended_now %}<span class="badge badge-danger">Suspended{% if user.suspended_until %} until {{ user.suspended_until | datetime }}{% endif %}</span>{% else %}<span class="badge badge-success">Active</span>{% endif %}
 {% endcall %}
 
 {% if is_self %}
-<div class="alert alert-info mb-3">{{ icon("info") }}<p>This is your own account. Change your password or delete the account from <a href="{{ url_for('account.index') }}">your account page</a>. Another administrator must change your role or suspend you, so you cannot lock yourself out.</p></div>
+<div class="alert alert-info mb-3">{{ icon("info") }}<p>This is your account. Change your password or delete it on <a href="{{ url_for('account.index') }}">your account page</a>.</p></div>
 {% endif %}
 
 <div class="grid grid-2">
@@ -23,16 +23,16 @@
       <dt>Chats</dt><dd>{{ chats | number }}</dd>
       <dt>Active API keys</dt><dd>{{ api_tokens }}</dd>
       <dt>Tokens today</dt><dd><ul class="plain-list tokens-today"><li>API {{ usage.api[0] | tokens }}</li><li>Chat {{ usage.chat[0] | tokens }}</li><li>Cloud sessions {{ usage.agent[0] | tokens }}</li></ul>
-        <div class="hint">Counted against the services' limits (× each model's weight), since midnight UTC.</div></dd>
+        <div class="hint">Since 00:00 UTC, weighted by model.</div></dd>
     </dl>
     <div class="section-footer row">
       <form method="post" action="{{ url_for('admin.user_export', user_id=user.id, kind='gdpr') }}">
         {{ csrf() }}
-        <button type="submit" class="btn btn-sm">{{ icon("download") }}Export personal data</button>
+        <button type="submit" class="btn btn-sm">Export personal data</button>
       </form>
       <form method="post" action="{{ url_for('admin.user_export', user_id=user.id, kind='chats') }}">
         {{ csrf() }}
-        <button type="submit" class="btn btn-sm">{{ icon("download") }}Export chats</button>
+        <button type="submit" class="btn btn-sm">Export chats</button>
       </form>
     </div>
   </section>
@@ -40,10 +40,10 @@
   <section class="settings-section" aria-labelledby="quota-title">
     <div class="section-header">
       <h2 id="quota-title">Limits</h2>
-      <a class="btn btn-sm" href="{{ url_for('admin.user_limits', user_id=user.id) }}">{{ icon("sliders") }}Manage limits</a>
+      <a class="btn btn-sm" href="{{ url_for('admin.user_limits', user_id=user.id) }}">Manage limits</a>
     </div>
     {% if user.role == "admin" %}
-    <p class="muted mb-0">Administrators are never limited. The settings under Manage limits take effect only if this account becomes a regular user.</p>
+    <p class="muted mb-0">Administrators have no limits.</p>
     {% else %}
     {#- Long service names and values in a third of the page: each value under its name. -#}
     <dl class="details details-stacked">
@@ -61,21 +61,21 @@
 
   <section class="settings-section" id="bm-mode" aria-labelledby="bm-mode-title">
     <h2 id="bm-mode-title">BM mode</h2>
-    {% if bm_mode_global %}<p class="muted small">BM mode is on for everyone (<a href="{{ url_for('admin.settings') }}#bm-mode">Settings</a>); what you choose here applies when it is per account again.</p>{% endif %}
+    {% if bm_mode_global %}<p class="muted small">BM mode is on for everyone in <a href="{{ url_for('admin.settings') }}#bm-mode">Settings</a>. This choice applies when it is per account again.</p>{% endif %}
     <form method="post" action="{{ url_for('admin.user_bm_mode', user_id=user.id) }}" class="stack">
       {{ csrf() }}
       <fieldset class="admin-fieldset">
-        <legend>The easy mode for this account</legend>
-        <label class="check"><input type="radio" name="state" value="on"{% if user.bm_mode %} checked{% endif %}><span>On<small>A simpler interface: advanced controls and extra pages are hidden.</small></span></label>
+        <legend class="visually-hidden">BM mode for this account</legend>
+        <label class="check"><input type="radio" name="state" value="on"{% if user.bm_mode %} checked{% endif %}><span>On<small>A simpler interface without advanced controls.</small></span></label>
         <label class="check"><input type="radio" name="state" value="off"{% if not user.bm_mode %} checked{% endif %}><span>Off</span></label>
       </fieldset>
       <fieldset class="admin-fieldset">
-        <legend>Who switches it</legend>
-        <label class="check"><input type="radio" name="control" value="site"{% if user.bm_mode_control not in ("self", "admin") %} checked{% endif %}><span>The site's rule<small>Currently {{ "the person, in Customise or the account menu" if bm_mode_self_service else "administrators only" }} (Settings).</small></span></label>
-        <label class="check"><input type="radio" name="control" value="self"{% if user.bm_mode_control == "self" %} checked{% endif %}><span>{{ user.username }} themselves<small>Even when the site leaves it to administrators.</small></span></label>
-        <label class="check"><input type="radio" name="control" value="admin"{% if user.bm_mode_control == "admin" %} checked{% endif %}><span>Administrators only<small>{{ user.username }} cannot switch it themselves.</small></span></label>
+        <legend>Who can switch it</legend>
+        <label class="check"><input type="radio" name="control" value="site"{% if user.bm_mode_control not in ("self", "admin") %} checked{% endif %}><span>As in Settings<small>Now: {{ "the person" if bm_mode_self_service else "administrators only" }}.</small></span></label>
+        <label class="check"><input type="radio" name="control" value="self"{% if user.bm_mode_control == "self" %} checked{% endif %}><span>{{ user.username }}</span></label>
+        <label class="check"><input type="radio" name="control" value="admin"{% if user.bm_mode_control == "admin" %} checked{% endif %}><span>Administrators only</span></label>
       </fieldset>
-      <div class="form-actions"><button type="submit" class="btn">Save BM mode</button></div>
+      <div class="form-actions"><button type="submit" class="btn">Save</button></div>
     </form>
   </section>
 
@@ -86,11 +86,11 @@
       {{ csrf() }}
       <fieldset class="admin-fieldset">
         <legend class="visually-hidden">Account role</legend>
-        <label class="check"><input type="radio" name="role" value="user"{% if user.role == "user" %} checked{% endif %}><span>User<small>Uses chat and the API within quotas and access rules.</small></span></label>
-        <label class="check"><input type="radio" name="role" value="admin"{% if user.role == "admin" %} checked{% endif %}><span>Administrator<small>Full control of the site, unlimited usage.</small></span></label>
+        <label class="check"><input type="radio" name="role" value="user"{% if user.role == "user" %} checked{% endif %}><span>User</span></label>
+        <label class="check"><input type="radio" name="role" value="admin"{% if user.role == "admin" %} checked{% endif %}><span>Administrator<small>Full control, no limits.</small></span></label>
       </fieldset>
       {{ reauth_field("role-reauth") }}
-      <div class="form-actions"><button type="submit" class="btn">Save role</button></div>
+      <div class="form-actions"><button type="submit" class="btn">Change role</button></div>
     </form>
   </section>
 
@@ -104,10 +104,10 @@
       <div class="form-actions"><button type="submit" class="btn">Lift suspension</button></div>
     </form>
     {% else %}
-    <p class="muted small">A suspended user is signed out immediately and cannot sign in or use API keys.</p>
+    <p class="muted small">Signs {{ user.username }} out and blocks sign-in and API keys.</p>
     <form method="post" action="{{ url_for('admin.user_suspend', user_id=user.id) }}" class="stack" data-confirm="Suspend {{ user.username }} and sign them out everywhere?" data-confirm-danger>
       {{ csrf() }}
-      {{ utc_input("until", "suspend-until", "Suspended until (optional)", "Time in UTC. Leave empty to suspend until you lift it.", min=min_datetime) }}
+      {{ utc_input("until", "suspend-until", "Suspended until (optional)", "UTC. Leave empty to suspend until you lift it.", min=min_datetime) }}
       {% if user.role == "admin" %}{{ reauth_field("suspend-reauth") }}{% endif %}
       <div class="form-actions"><button type="submit" class="btn btn-danger">Suspend</button></div>
     </form>
@@ -116,7 +116,7 @@
 
   <section class="settings-section" aria-labelledby="password-title">
     <h2 id="password-title">Reset password</h2>
-    <p class="muted small">Sets a new password and signs {{ user.username }} out of every device. Tell them the new password through a safe channel.</p>
+    <p class="muted small">Signs {{ user.username }} out of every device.</p>
     <form method="post" action="{{ url_for('admin.user_password', user_id=user.id) }}" class="stack" data-confirm="Set a new password for {{ user.username }}?">
       {{ csrf() }}
       <div class="form-grid">
@@ -142,10 +142,10 @@
     {% if two_step %}
     <p><span class="badge badge-success">On</span> Since {{ two_step.enabled_at | datetime }}. Recovery codes left: {{ two_step.codes_left }}.</p>
     {% if not is_self %}
-    <p class="muted small">If {{ user.username }} lost both their authenticator app and their recovery codes, reset it. They then sign in with their password alone and can set it up again. All their sessions end.</p>
+    <p class="muted small">For when {{ user.username }} lost both the authenticator app and the recovery codes. They sign in with their password and set it up again.</p>
     <form method="post" action="{{ url_for('admin.user_two_step_reset', user_id=user.id) }}" class="stack" data-confirm="Reset two-step verification for {{ user.username }} and sign them out everywhere?" data-confirm-danger>
       {{ csrf() }}
-      {% if api_tokens %}<label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>Also revoke their {{ "API key" if api_tokens == 1 else api_tokens ~ " API keys" }}<small>Scripts using them stop working; {{ user.username }} creates new ones after signing in.</small></span></label>{% endif %}
+      {% if api_tokens %}<label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>Also revoke their {{ "API key" if api_tokens == 1 else api_tokens ~ " API keys" }}</span></label>{% endif %}
       {% if share_links %}<label class="check"><input type="checkbox" name="revoke_share_links" value="1" checked><span>Also stop their {{ "chat share link" if share_links == 1 else share_links ~ " chat share links" }}</span></label>{% endif %}
       {{ reauth_field("two-step-reauth") }}
       <div class="form-actions"><button type="submit" class="btn btn-danger">Reset two-step verification</button></div>
@@ -155,14 +155,14 @@
     {% endif %}
     {% else %}
     <p><span class="badge">Off</span>{% if user.role == "admin" and two_step_required %} <span class="badge badge-warning">Required for administrators</span>{% endif %}</p>
-    <p class="muted small">{% if user.role == "admin" and two_step_required %}{{ user.username }} must set it up before opening the administration pages.{% else %}Each person turns it on from their own account page.{% endif %}</p>
+    {% if user.role == "admin" and two_step_required %}<p class="muted small">{{ user.username }} must set it up before opening the administration.</p>{% endif %}
     {% endif %}
   </section>
 </div>
 
 <section class="settings-section mt-3" aria-labelledby="sessions-title">
   <div class="section-header">
-    <h2 id="sessions-title">Signed-in sessions</h2>
+    <h2 id="sessions-title">Sessions</h2>
     {% if sessions %}
     <form method="post" action="{{ url_for('admin.user_sessions_revoke_all', user_id=user.id) }}" class="row" data-confirm="Sign {{ user.username }} out of {{ 'every other session' if is_self else 'every session' }}?">
       {{ csrf() }}
@@ -184,7 +184,7 @@
           <td class="nowrap" data-label="Last active:">{{ when(item.last_seen_at) }}</td>
           <td class="nowrap col-optional" data-label="Started:">{{ item.created_at | datetime }}</td>
           <td class="actions">
-            {% if is_self and item.id_hash == current_session %}<span class="badge badge-primary">This session</span>
+            {% if is_self and item.id_hash == current_session %}<span class="badge">This session</span>
             {% else %}
             <form method="post" action="{{ url_for('admin.user_session_revoke', user_id=user.id) }}">
               {{ csrf() }}<input type="hidden" name="session" value="{{ item.id_hash }}">
@@ -205,7 +205,7 @@
 {% if not is_self %}
 <section class="settings-section settings-section-danger mt-3" aria-labelledby="delete-title">
   <h2 id="delete-title">Delete account</h2>
-  <p>Deletes {{ user.username }} with all chats, personalities, API keys and usage history. This cannot be undone. Export their data first if it must be kept.</p>
+  <p>Deletes {{ user.username }} with all chats, personalities, API keys and usage history. This cannot be undone.</p>
   <form method="post" action="{{ url_for('admin.user_delete', user_id=user.id) }}" class="stack" data-confirm="Permanently delete {{ user.username }} and all of their data?" data-confirm-danger>
     {{ csrf() }}
     <div class="field field-narrow">
@@ -213,7 +213,7 @@
       <input type="text" id="confirm-username" name="confirm_username" required autocomplete="off" spellcheck="false">
     </div>
     {% if user.role == "admin" %}{{ reauth_field("delete-reauth") }}{% endif %}
-    <div class="form-actions"><button type="submit" class="btn btn-danger">{{ icon("trash") }}Delete account</button></div>
+    <div class="form-actions"><button type="submit" class="btn btn-danger">Delete account</button></div>
   </form>
 </section>
 {% endif %}

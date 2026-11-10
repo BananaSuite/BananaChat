@@ -159,7 +159,7 @@ def test_the_set_up_expires(app, make_user, clock, monkeypatch):
                                           "at": session[account.ENROLMENT_KEY]["at"] - account.ENROLMENT_SECONDS - 1}
     response = _english(browser).post("/account/two-step", {"action": "enable", "code": clock.code(secret),
                                                             "password": "alice-password"}, follow_redirects=True)
-    assert "The set-up took too long" in response.get_data(as_text=True)
+    assert "Set-up expired" in response.get_data(as_text=True)
     assert _secret(response.get_data(as_text=True)) != secret  # a new secret to scan
 
 
@@ -229,7 +229,7 @@ def test_a_recovery_code_signs_in_once(app, make_user, clock):
 
     other, response = _sign_in(app, "alice", codes[3].lower(), browser=_english(Browser(app)))
     assert response.status_code == 302
-    assert "9 recovery codes are left" in other.get("/account").get_data(as_text=True)
+    assert "9 recovery codes left" in other.get("/account").get_data(as_text=True)
     assert "auth.two_step_recovery_code_used" in _audit_actions(app)
     _, again = _sign_in(app, "alice", codes[3])
     assert again.status_code == 401
@@ -341,7 +341,7 @@ def test_a_new_secret_key_leaves_recovery_codes_working(make_app, clock):
     assert response.status_code == 401
     other, response = _sign_in(app, "alice", codes[0], browser=_english(Browser(app)))
     assert response.status_code == 302
-    assert "can no longer read your authenticator" in other.get("/account/two-step").get_data(as_text=True)
+    assert "authenticator set-up can&#39;t be read" in other.get("/account/two-step").get_data(as_text=True)
     assert other.post("/account/two-step", {"action": "disable", "code": codes[1],
                                             "password": "alice-password"}).status_code == 302
     assert "two-step-key" in other.get("/account/two-step").get_data(as_text=True)  # set it up again
@@ -399,7 +399,7 @@ def test_requiring_it_of_administrators(app, admin, make_user, clock):
     bob = _english(Browser(app))
     response = bob.login("bob")
     assert response.headers["Location"].endswith("/account/two-step")
-    assert "requires administrators to use two-step verification" in \
+    assert "Administrators must use two-step verification" in \
         bob.get("/account/two-step").get_data(as_text=True)
     response = bob.get("/admin/")
     assert response.status_code == 302 and response.headers["Location"].endswith("/account/two-step")

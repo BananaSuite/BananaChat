@@ -21,7 +21,7 @@
 <div class="field">
   <label for="{{ id }}"{% if required %} class="required"{% endif %}>{{ label }}</label>
   <input type="text" id="{{ id }}" name="{{ name }}" inputmode="decimal" autocomplete="off" spellcheck="false" maxlength="20"{% if required %} required{% endif %} value="{{ value if value is string else (value | token_input) }}"{% if placeholder %} placeholder="{{ placeholder }}"{% endif %} aria-describedby="{{ id }}-hint">
-  <span class="hint" id="{{ id }}-hint">{{ hint or "Tokens, e.g. 50000, 50k or 1.5M." }}</span>
+  <span class="hint" id="{{ id }}-hint">{{ hint or "For example 50000, 50k or 1.5M." }}</span>
 </div>
 {%- endmacro %}
 
@@ -49,13 +49,13 @@
     </span>
   </div>
   {% endfor %}
-  <span class="hint" id="{{ id }}-hint">{{ hint or "All rules apply. Burst allows consecutive requests; leave it empty to use the request count. Fill the last row to add a rule, then save for another row. Clear a row to remove it." }}</span>
+  <span class="hint" id="{{ id }}-hint">{{ hint or "All rules apply. An empty burst equals the request count. Clear a row to remove it." }}</span>
 </fieldset>
 {%- endmacro %}
 
 {#- Both existing and new account overrides use the same fields and access controls. -#}
 {% macro model_override_fields(shown, id, units, rows, username) -%}
-{{ rules_editor(shown.rate_rules if shown else none, id ~ "-rules", units, rows, "Request rate", "All rules apply. Leave every row empty to use the model policy.") }}
+{{ rules_editor(shown.rate_rules if shown else none, id ~ "-rules", units, rows, "Request rate", "Leave every row empty to use the model policy.") }}
 <div class="form-grid">
   {{ token_field("window_tokens", "Tokens per 5 hours", shown.window_tokens if shown else none, id ~ "-window", "Empty: use the model policy.", false) }}
   {{ token_field("weekly_tokens", "Tokens per week", shown.weekly_tokens if shown else none, id ~ "-weekly", "Empty: use the model policy.", false) }}

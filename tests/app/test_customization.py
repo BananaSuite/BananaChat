@@ -213,8 +213,8 @@ def test_reset_restores_defaults_and_deletes_the_background(app, make_user):
 
 
 @pytest.mark.parametrize(("language", "message"), [
-    ("it", "Troppe richieste. Attendi un momento e riprova."),
-    ("en", "Too many requests. Please wait a moment and try again."),
+    ("it", "Riprova tra un momento."),
+    ("en", "Try again in a moment."),
 ])
 def test_rate_limited_requests_answer_in_the_interface_language(app, make_user, language, message):
     make_user("ugo")

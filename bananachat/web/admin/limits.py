@@ -137,7 +137,7 @@ def update_tier(tier_id):
         flash(str(error), "error")
         return back("admin.limit_tiers")
     audit(f"limits_tier_{'update' if action == 'save' else action}", tier["name"], details)
-    flash({"delete": f"Tier {tier['name']} deleted; its accounts are back in the first tier.",
+    flash({"delete": f"Tier {tier['name']} deleted. Its accounts moved to the first tier.",
            "save": f"Tier {tier['name']} saved."}.get(action, "Tier order changed."), "success")
     return back("admin.limit_tiers")
 
@@ -470,7 +470,7 @@ def effort_model(model_id):
         flash(str(error), "error")
         return back("admin.limit_effort")
     audit("limits_effort_model", model["ollama_name"], {"default": level, **controls})
-    flash(f"{model['display_name']}: reasoning settings saved.", "success")
+    flash(f"Reasoning settings for {model['display_name']} saved.", "success")
     return back("admin.limit_effort", _anchor="models")
 
 
@@ -573,7 +573,7 @@ def set_custom(user_id):
         flash(f"{POOL_LABELS[pool]}: {error}", "error")
         return _user_limits_page(user, {"pool": pool, "override": _typed_override()}), 400
     audit("limits_user_custom", user["username"], {"pool": pool, **values})
-    flash(f"{POOL_LABELS[pool]}: custom limits of {user['username']} saved (empty fields follow the defaults).",
+    flash(f"Custom {POOL_LABELS[pool]} limits for {user['username']} saved.",
           "success")
     return back("admin.user_limits", user_id=user_id, _anchor=f"pool-{pool}")
 
@@ -650,7 +650,7 @@ def set_exemptions(user_id):
     controls = {name: flag(name) for name in ("token_exempt", "rate_exempt")}
     limits_db.update_user_settings(user_id, me()["id"], **controls)
     audit("limits_user_exemptions", user["username"], controls)
-    flash(f"{user['username']}: token and request-rate exemptions saved.", "success")
+    flash(f"Exemptions for {user['username']} saved.", "success")
     return back("admin.user_limits", user_id=user_id, _anchor="exemptions")
 
 

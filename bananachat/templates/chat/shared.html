@@ -12,7 +12,7 @@
       <h1>{{ title }}</h1>
       <p>{{ t("chat.shared_intro", site=site_name) }}</p>
     </div>
-    <a class="btn" href="{{ url_for('chat.shared_download', token=token) }}">{{ icon("download") }}{{ t("chat.download") }}</a>
+    <a class="btn" href="{{ url_for('chat.shared_download', token=token) }}">{{ t("chat.download") }}</a>
   </header>
   {% if older_url %}
   <p class="text-center"><a class="btn btn-ghost btn-sm" href="{{ older_url }}">{{ t("chat.show_earlier") }}</a></p>

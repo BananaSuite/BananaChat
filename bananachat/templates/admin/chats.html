@@ -1,18 +1,11 @@
 {% extends "admin/_layout.html" %}
 {% from "partials/icons.html" import icon %}
 {% set section = "chats" %}
-{% block title %}Chat audit{% endblock %}
+{% from "admin/_macros.html" import header %}
+{% block title %}Chats{% endblock %}
 {% block admin_content %}
-<header class="page-header">
-  <div>
-    <h1>Chat audit</h1>
-    <p>Conversations of every user. Deleted chats stay here until they are erased after the retention period.</p>
-  </div>
-</header>
-<nav class="tabs" aria-label="Chat audit sections">
-  <a href="{{ url_for('admin.chats') }}" aria-current="page">Chats</a>
-  <a href="{{ url_for('admin.incognito') }}">No-history audit</a>
-</nav>
+{{ header("Activity") }}
+{% include "admin/_activity_tabs.html" %}
 <form class="settings-section mb-2" method="get" action="{{ url_for('admin.chats') }}">
   <div class="form-grid">
     <div class="field">
@@ -29,18 +22,18 @@
     </div>
     <label class="check">
       <input type="checkbox" name="deleted" value="1"{% if include_deleted %} checked{% endif %}>
-      <span>Include deleted chats<small>Soft-deleted chats waiting to be erased.</small></span>
+      <span>Include deleted chats<small>Kept until the retention period ends.</small></span>
     </label>
   </div>
   <div class="form-actions">
     <a class="btn btn-ghost" href="{{ url_for('admin.chats') }}">Reset</a>
-    <button type="submit" class="btn btn-primary">{{ icon("search") }}Filter</button>
+    <button type="submit" class="btn">Filter</button>
   </div>
 </form>
 {% if unknown %}
 <div class="alert alert-warning" role="status">{{ icon("alert") }}<p>No user is called “{{ username }}”.</p></div>
 {% elif not rows %}
-<div class="empty">{{ icon("chat") }}<h2>No chats</h2><p>Nothing matches these filters.</p></div>
+<p class="admin-empty">No chats match these filters.</p>
 {% else %}
 <p class="muted">{{ total | number }} chat{{ "" if total == 1 else "s" }}</p>
 <div class="table-wrap">
@@ -56,22 +49,22 @@
         <td class="nowrap" data-label="Updated:"><time datetime="{{ row.updated_at }}" title="{{ row.updated_at | datetime }}">{{ row.updated_at | timeago }}</time></td>
         <td>
           {% if row.deleted_at %}<span class="badge badge-danger">Deleted</span>{% endif %}
-          {% if row.is_incognito %}<span class="badge badge-info">No history</span>{% endif %}
-          {% if row.shared %}<span class="badge badge-primary">Shared</span>{% endif %}
+          {% if row.is_incognito %}<span class="badge">No history</span>{% endif %}
+          {% if row.shared %}<span class="badge">Shared</span>{% endif %}
           {% if row.share_blocked %}<span class="badge badge-warning">Sharing blocked</span>{% endif %}
           {% if row.generation_state in ("queued", "running") %}<span class="badge badge-warning">Generating</span>{% endif %}
         </td>
         <td class="actions">
           {% if row.shared %}
-          <form method="post" action="{{ url_for('admin.chat_unshare', session_id=row.id) }}" data-confirm="Stop sharing this chat? Its public link stops working and its owner cannot share it again until you allow it; the chat itself is kept." data-confirm-label="Stop sharing">
+          <form method="post" action="{{ url_for('admin.chat_unshare', session_id=row.id) }}" data-confirm="Stop sharing this chat? The link stops working and the owner cannot share it again until you allow it." data-confirm-label="Stop sharing">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="next" value="list">
-            <button type="submit" class="btn btn-sm" aria-label="Stop sharing {{ row.title if row.title and row.title != 'New Chat' else 'Untitled chat' }}">{{ icon("share") }}Stop sharing</button>
+            <button type="submit" class="btn btn-sm" aria-label="Stop sharing {{ row.title if row.title and row.title != 'New Chat' else 'Untitled chat' }}">Stop sharing</button>
           </form>
           {% endif %}
           <form method="post" action="{{ url_for('admin.chat_delete', session_id=row.id) }}" data-confirm="Permanently delete this chat and its messages? This cannot be undone." data-confirm-label="Delete" data-confirm-danger>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-danger btn-sm" aria-label="Delete {{ chat_title }}">{{ icon("trash") }}Delete</button>
+            <button type="submit" class="btn btn-danger btn-sm" aria-label="Delete {{ chat_title }}">Delete</button>
           </form>
         </td>
       </tr>

@@ -262,7 +262,7 @@ def test_quota_uses_the_site_defaults(app, admin, make_user):
     limits_page = f"/admin/users/{frank['id']}/limits"
     response = admin.post(limits_page + "/custom", {"pool": "api", "window_tokens": "-5", "window_slow_tokens": "1"},
                           follow_redirects=True)
-    assert "write a number of tokens" in response.get_data(as_text=True)
+    assert "enter a number of tokens" in response.get_data(as_text=True)
     admin.post(limits_page + "/custom", {"pool": "api", "window_tokens": "90k", "window_slow_tokens": "9000"})
     row = _one(app, "SELECT window_tokens, window_slow_tokens, updated_by FROM user_limit_overrides "
                     "WHERE user_id=? AND pool='api'", (frank["id"],))
@@ -378,7 +378,7 @@ def test_quota_settings_are_validated(app, admin):
     for field, value in (("quota_auto_approve_max_tokens", "2000000001"), ("quota_auto_approve_max_weekly_tokens", "-1")):
         response = admin.post("/admin/quotas", {**base, field: value}, follow_redirects=True)
         text = response.get_data(as_text=True)
-        assert "must be" in text or "write a number of tokens" in text, field
+        assert "must be" in text or "enter a number of tokens" in text, field
     # A cached form's retired setting is ignored, even if it is malformed.
     assert admin.post("/admin/quotas", {**base, "quota_auto_approve_max_slow_tokens": "abc"}).status_code == 302
     for field, value in (("window_tokens", "2000000001"), ("rule_requests_0", "-1"), ("rule_burst_0", "abc"),
@@ -626,4 +626,4 @@ def test_overview_shows_the_service_status(app, admin):
     html = admin.get("/admin/").get_data(as_text=True)
     assert "Maintenance</span>" in html and "Back at 18:00 UTC" in html and "Turn off maintenance" in html
     settings_html = admin.get("/admin/settings").get_data(as_text=True)
-    assert "the site stays reachable" in settings_html and 'id="maintenance-preview"' in settings_html
+    assert "Only administrators can send messages." in settings_html and 'id="maintenance-preview"' in settings_html

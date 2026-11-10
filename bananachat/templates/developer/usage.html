@@ -6,10 +6,7 @@
 {% set active = "usage" %}
 <div class="page">
   <header class="page-header">
-    <div>
-      <h1>{{ t("developer.title") }}</h1>
-      <p>{{ t("developer.usage_intro") }}</p>
-    </div>
+    <h1>{{ t("developer.title") }}</h1>
   </header>
   {% include "developer/_tabs.html" %}
   <div class="section-stack">
@@ -57,7 +54,7 @@
       </div>
       <p class="hint mt-1 mb-0">{{ t("developer.usage_hint") }}</p>
       {% else %}
-      <div class="empty">{{ icon("chart") }}<p>{{ t("developer.usage_empty") }}</p>
+      <div class="empty"><p>{{ t("developer.usage_empty") }}</p>
         <a class="btn" href="{{ url_for('developer.playground') }}">{{ t("developer.try_playground") }}</a></div>
       {% endif %}
     </section>

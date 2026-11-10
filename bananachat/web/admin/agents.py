@@ -27,23 +27,22 @@ from ._helpers import FormError, audit, back, flag, integer, me, page, text
 
 LIMIT_LABELS = {
     "max_steps": ("Steps per run", "Model calls per run, including parallel agents."),
-    "max_minutes": ("Minutes per run", "Wall time per run; time paused for maintenance does not count."),
-    "max_tokens": ("Tokens per run", "Prompt and answer tokens per run (also counted against the owner's Cloud sessions token limits)."),
+    "max_minutes": ("Minutes per run", "Paused time does not count."),
+    "max_tokens": ("Tokens per run", "Prompt and answer tokens."),
     "max_tasks_per_user": ("Running sessions per user", "Administrators are limited only by the site limit."),
     "max_tasks_total": ("Running sessions on the site", "Also capped by the runner's sandbox limit."),
-    "command_timeout": ("Command timeout (seconds)", "Longest single command; the runner applies its own cap too."),
-    "keep_workspace_minutes": ("Keep workspace (minutes)", "After a run ends, keep the sandbox for downloads and "
-                                                           "follow-ups (0 deletes it at once)."),
+    "command_timeout": ("Command timeout (seconds)", "Longest single command."),
+    "keep_workspace_minutes": ("Keep workspace (minutes)", "For downloads and follow-ups after a run. 0 deletes it at "
+                                                           "once."),
     "starts_per_hour": ("Starts per user per hour", "New tasks and follow-ups that start a run."),
-    "retention_days": ("Keep sessions (days)", "Ended sessions and their logs are deleted after this many days."),
+    "retention_days": ("Keep sessions (days)", "Ended sessions and their logs are deleted after this."),
     "max_subagents": ("Agents per parallel run", "Only used when parallel agents are enabled."),
-    "max_concurrent_subagents": ("Agents at the same time", "At most this many agents work in parallel."),
+    "max_concurrent_subagents": ("Agents at the same time", ""),
 }
 STATUS_FILTERS = agents_db.STATES
 GIT_LABELS = {
-    "git_max_mb": ("Largest repository archive (MB)", "Downloads stop as soon as they exceed this; the runner accepts "
-                                                        "at most 50 MB."),
-    "git_imports_per_hour": ("Imports per user per hour", "Repository downloads each person may start."),
+    "git_max_mb": ("Largest repository archive (MB)", "The runner accepts at most 50 MB."),
+    "git_imports_per_hour": ("Imports per user per hour", ""),
 }
 
 
@@ -181,7 +180,7 @@ def check_image():
     if state.get("git"):
         flash(f"The sandbox image has Git ({state.get('version') or 'git'}).", "success")
     else:
-        flash("The sandbox image has no Git: imports work, patch export does not.", "warning")
+        flash("The sandbox image has no Git. Imports work, patch export doesn't.", "warning")
     return redirect(url_for("admin.agents", _anchor="git"))
 
 

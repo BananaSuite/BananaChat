@@ -18,10 +18,10 @@
 {% if not model.backend_available %}<span class="badge badge-danger" title="Last seen {{ model.backend_last_seen_at | datetime }}">Not installed</span>{% endif %}
 {%- endmacro %}
 {% block admin_content %}
-{% call header("Models", "Publish models to users, review new ones, retire old ones and tune their defaults.") %}
+{% call header("Models") %}
   <form method="post" action="{{ url_for('admin.models_sync') }}" data-busy>
     {{ csrf() }}
-    <button type="submit" class="btn btn-primary">{{ icon("refresh") }}Sync now</button>
+    <button type="submit" class="btn btn-primary">Sync now</button>
   </form>
 {% endcall %}
 {% include "admin/_models_tabs.html" %}
@@ -29,19 +29,19 @@
 <div class="mb-2" id="sync-status">
   {% if sync %}
   <p class="small mb-0 {{ 'danger-text' if sync.error else 'muted' }}">
-    {{ icon("refresh") }} Last sync {{ when(sync.at) }}{% if sync.ok %}: {{ sync.count }} model{{ "s" if sync.count != 1 }} on the model server{% if sync.new %}; new: <span class="mono">{{ sync.new | join(", ") }}</span>{% endif %}{% if sync.missing %}; now missing: <span class="mono">{{ sync.missing | join(", ") }}</span>{% endif %}.{% else %}. {{ sync.error }}{% if sync.last_success_at %} Last successful sync {{ when(sync.last_success_at) }}; nothing was marked missing meanwhile.{% endif %}{% endif %}
+    Last sync {{ when(sync.at) }}.{% if sync.ok %} {{ sync.count }} model{{ "s" if sync.count != 1 }} on the model server.{% if sync.new %} New: <span class="mono">{{ sync.new | join(", ") }}</span>.{% endif %}{% if sync.missing %} Now missing: <span class="mono">{{ sync.missing | join(", ") }}</span>.{% endif %}{% else %} {{ sync.error }}{% if sync.last_success_at %} Last successful sync {{ when(sync.last_success_at) }}. No models were marked missing.{% endif %}{% endif %}
     {% if sync.note %}{{ sync.note }}{% endif %}
   </p>
   {% if sync.errors %}
   <details class="inline-details small">
     <summary>{{ sync.errors | length }} model{{ "s" if sync.errors | length != 1 }} could not be inspected{{ icon("chevron-down") }}</summary>
-    <ul class="plain-list">{% for item in sync.errors %}<li><span class="mono">{{ item.model }}</span> <span class="muted">— {{ item.error }}</span></li>{% endfor %}</ul>
+    <ul class="plain-list">{% for item in sync.errors %}<li><span class="mono">{{ item.model }}</span> <span class="muted">· {{ item.error }}</span></li>{% endfor %}</ul>
   </details>
   {% endif %}
   {% else %}
-  <p class="small muted mb-0">{{ icon("refresh") }} The model server has not been synced yet.</p>
+  <p class="small muted mb-0">The model server has not been synced yet.</p>
   {% endif %}
-  <p class="small muted mb-0">New models: <strong>{{ "enabled automatically with limits for their size" if policy.enrollment == "automatic" else "wait for your review" }}</strong> · <a href="{{ url_for('admin.model_settings') }}">Change</a></p>
+  <p class="small muted mb-0">New models {{ "are enabled automatically with limits for their size" if policy.enrollment == "automatic" else "wait for your review" }}. <a href="{{ url_for('admin.model_settings') }}">Change</a></p>
 </div>
 
 {% if recovery and recovery.open %}
@@ -55,11 +55,11 @@
   <p class="muted">Fix or remove <code>.model-recovery.json</code> in the instance directory.</p>
   {% else %}
   {% if recovery.origin == "catalog" %}
-  <p>These published models are no longer on the model server, for example after it was rebuilt. Choose which to download again; nothing is downloaded until you approve it.</p>
+  <p>These published models are no longer on the model server. Choose which to download again.</p>
   {% else %}
-  <p>This installation was restored from a backup without model files. Only the models that are missing are listed{% if recovery.installed_count %} ({{ recovery.installed_count }} already installed){% endif %}; nothing is downloaded until you approve it.</p>
+  <p>This installation was restored from a backup without model files. Choose which missing models to download{% if recovery.installed_count %} ({{ recovery.installed_count }} already installed){% endif %}.</p>
   {% endif %}
-  {% if not recovery.checked %}<p class="hint">{% if recovery.check_error %}The model server could not be checked: {{ recovery.check_error }}{% else %}Not checked yet; every saved model is listed.{% endif %}</p>{% endif %}
+  {% if not recovery.checked %}<p class="hint">{% if recovery.check_error %}The model server could not be checked. {{ recovery.check_error }}{% else %}Not checked yet. Every saved model is listed.{% endif %}</p>{% endif %}
   <form method="post" action="{{ url_for('admin.model_recovery') }}" class="stack">
     {{ csrf() }}
     {% if recovery.missing_choices %}
@@ -72,12 +72,12 @@
       </div>
     </fieldset>
     {% if recovery.missing_choices | selectattr("kind", "equalto", "huggingface") | list and not checkpoint.configured %}
-    <p class="hint">Hugging Face checkpoints need image generation and the checkpoint download agent; configure them first or leave those unchecked.</p>
+    <p class="hint">Hugging Face checkpoints need image generation and the checkpoint download agent.</p>
     {% endif %}
     {% endif %}
     <div class="form-actions">
       {% if recovery.missing_choices %}
-      <button type="submit" name="action" value="download" class="btn btn-primary">{{ icon("download") }}Download selected models</button>
+      <button type="submit" name="action" value="download" class="btn btn-primary">Download selected models</button>
       <button type="submit" name="action" value="defer" class="btn btn-ghost" formnovalidate>Not now</button>
       {% endif %}
       <button type="submit" name="action" value="dismiss" class="btn btn-ghost" formnovalidate>Dismiss list</button>
@@ -86,7 +86,7 @@
   {% if recovery.manual %}
   <h3 class="mt-2">Needs manual action</h3>
   <ul class="plain-list">
-    {% for item in recovery.manual %}<li><span class="mono">{{ item.name }}</span> <span class="muted small">— {{ item.reason }}</span></li>{% endfor %}
+    {% for item in recovery.manual %}<li><span class="mono">{{ item.name }}</span> <span class="muted small">· {{ item.reason }}</span></li>{% endfor %}
   </ul>
   {% endif %}
   {% if recovery.jobs %}
@@ -102,7 +102,7 @@
   <div class="section-header">
     <h2 id="new-models-title">{{ new_models | length }} new model{{ "s" if new_models | length != 1 }}</h2>
   </div>
-  <p class="muted small">Detected on the model server and hidden from users until you enable them. Ignored models are never offered again (restore them in Settings).</p>
+  <p class="muted small">Hidden from users until you enable them.</p>
   <ul class="divider-list lifecycle-list">
     {% for model in new_models %}
     <li class="lifecycle-item" id="new-{{ model.id }}">
@@ -117,7 +117,7 @@
         {% if model.details_error %}<p class="danger-text small mb-0">Details could not be read: {{ model.details_error }}</p>{% endif %}
       </div>
       <div class="row lifecycle-actions">
-        {% if not model.embedding_only %}<a class="btn btn-sm btn-primary" href="{{ url_for('admin.model_enable', model_id=model.id) }}">{{ icon("check") }}Enable…</a>{% endif %}
+        {% if not model.embedding_only %}<a class="btn btn-sm btn-primary" href="{{ url_for('admin.model_enable', model_id=model.id) }}">Enable…</a>{% endif %}
         <form method="post" action="{{ url_for('admin.model_ignore', model_id=model.id) }}">
           {{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost" aria-label="Ignore {{ model.ollama_name }}">Ignore</button>
         </form>
@@ -143,7 +143,7 @@
         {% if model.failing_at %}
         <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}">
           {{ csrf() }}<input type="hidden" name="return_to" value="catalog">
-          <button type="submit" name="action" value="retry_check" class="btn btn-sm">{{ icon("refresh") }}Check again</button>
+          <button type="submit" name="action" value="retry_check" class="btn btn-sm">Check again</button>
           <button type="submit" name="action" value="force_enable" class="btn btn-sm btn-ghost">Enable anyway</button>
         </form>
         {% endif %}
@@ -156,15 +156,15 @@
         {% if model.missing_at and model.backend == "ollama" %}
         <form method="post" action="{{ url_for('admin.pulls_bulk') }}">
           {{ csrf() }}<input type="hidden" name="models" value="{{ model.backend_model_name or model.ollama_name }}">
-          <button type="submit" class="btn btn-sm">{{ icon("download") }}Download again</button>
+          <button type="submit" class="btn btn-sm">Download again</button>
         </form>
         {% endif %}
         {% if model.enrollment == "auto" %}
         <form method="post" action="{{ url_for('admin.model_reviewed', model_id=model.id) }}">
-          {{ csrf() }}<button type="submit" class="btn btn-sm">{{ icon("check") }}Mark reviewed</button>
+          {{ csrf() }}<button type="submit" class="btn btn-sm">Mark reviewed</button>
         </form>
         {% endif %}
-        <a class="btn btn-sm btn-ghost" href="{{ url_for('admin.model_edit', model_id=model.id) }}#lifecycle">{{ icon("edit") }}Edit</a>
+        <a class="btn btn-sm btn-ghost" href="{{ url_for('admin.model_edit', model_id=model.id) }}#lifecycle">Edit</a>
       </div>
     </li>
     {% endfor %}
@@ -175,7 +175,7 @@
 <section aria-labelledby="catalog-title" class="mb-3">
   <div class="row-between mb-1">
     <h2 id="catalog-title" class="mb-0">Catalogue</h2>
-    <p class="muted small mb-0">Users only see <strong>published</strong> models that are <strong>available</strong> and that their access rules allow. The order here is the order users see.</p>
+    <p class="muted small mb-0">Users see published models in this order.</p>
   </div>
   {% if rows %}
   <div class="table-wrap">
@@ -219,7 +219,7 @@
               {{ csrf() }}
               <input type="hidden" name="enabled" value="{{ 0 if model.is_rolled_out else 1 }}">
               {% if model.is_rolled_out %}
-              <button type="submit" class="btn btn-sm btn-published" aria-label="{{ model.display_name }} is published. Hide it from users">{{ icon("check") }}Published</button>
+              <button type="submit" class="btn btn-sm btn-published" aria-label="{{ model.display_name }} is published. Hide it from users">Published</button>
               {% elif model.embedding_only %}
               <span class="badge" title="Embedding models cannot answer chats, so they cannot be published">Hidden</span>
               {% else %}
@@ -228,19 +228,19 @@
             </form>
           </td>
           <td class="actions">
-            <a class="btn btn-sm" href="{{ url_for('admin.model_edit', model_id=model.id) }}">{{ icon("edit") }}Edit</a>
+            <a class="btn btn-sm" href="{{ url_for('admin.model_edit', model_id=model.id) }}">Edit</a>
             <details class="menu" data-menu>
               <summary class="icon-btn" aria-label="More actions for {{ model.display_name }}">{{ icon("more") }}</summary>
               <div class="menu-panel">
-                <form method="post" action="{{ url_for('admin.model_ignore', model_id=model.id) }}" data-confirm="Ignore {{ model.ollama_name }}? It is hidden from users and never offered again until you restore it in Settings.">
-                  {{ csrf() }}<button type="submit">{{ icon("close") }}Ignore</button>
+                <form method="post" action="{{ url_for('admin.model_ignore', model_id=model.id) }}" data-confirm="Ignore {{ model.ollama_name }}? It is hidden from users until you restore it in Settings.">
+                  {{ csrf() }}<button type="submit">Ignore</button>
                 </form>
-                <form method="post" action="{{ url_for('admin.model_remove', model_id=model.id) }}" data-confirm="Remove {{ model.display_name }} from the catalogue? Its settings and access rules are lost; the files stay on the server.">
-                  {{ csrf() }}<button type="submit">{{ icon("close") }}Remove from catalogue</button>
+                <form method="post" action="{{ url_for('admin.model_remove', model_id=model.id) }}" data-confirm="Remove {{ model.display_name }} from the catalogue? Its settings and access rules are lost. The files stay on the server.">
+                  {{ csrf() }}<button type="submit">Remove from catalogue</button>
                 </form>
                 {% if model.backend == "ollama" %}
-                <form method="post" action="{{ url_for('admin.model_delete_server', model_id=model.id) }}" data-confirm="Delete {{ model.ollama_name }} from the Ollama server? Its files are removed and must be downloaded again to use it. Refused while requests are using it." data-confirm-danger>
-                  {{ csrf() }}<button type="submit" class="danger">{{ icon("trash") }}Delete from server</button>
+                <form method="post" action="{{ url_for('admin.model_delete_server', model_id=model.id) }}" data-confirm="Delete {{ model.ollama_name }} from the Ollama server? Its files are removed and must be downloaded again." data-confirm-danger>
+                  {{ csrf() }}<button type="submit" class="danger">Delete from server</button>
                 </form>
                 {% endif %}
               </div>
@@ -252,7 +252,7 @@
     </table>
   </div>
   {% else %}
-  {{ empty("layers", "No models yet", "Download a model on the Downloads tab or press Sync now after installing one on the inference server.") }}
+  {{ empty("layers", "No models yet. Download one on the Downloads tab.") }}
   {% endif %}
 </section>
 
@@ -260,11 +260,11 @@
   <div class="section-header">
     <h2 id="running-title">Loaded in memory</h2>
     <div class="row">
-      <button type="button" class="btn btn-sm" data-running-refresh>{{ icon("refresh") }}Refresh</button>
+      <button type="button" class="btn btn-sm" data-running-refresh>Refresh</button>
       <button type="button" class="btn btn-sm btn-danger" data-unload-all>Unload all</button>
     </div>
   </div>
-  <p class="muted small">How long a model stays in memory after a request is set by <code>BC_KEEP_ALIVE</code> (by default it is unloaded when the answer ends). Unloading frees memory; the next request loads it again.</p>
+  <p class="muted small">Models are unloaded after each answer unless <code>BC_KEEP_ALIVE</code> keeps them longer.</p>
   <div id="running-models" aria-live="polite"><p class="muted">Checking…</p></div>
   <noscript><p class="hint">Enable JavaScript to see and unload running models.</p></noscript>
 </section>

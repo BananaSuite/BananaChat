@@ -40,18 +40,18 @@
       {% if own %}
       <p class="hint mb-0">{{ t("personality.shared_own") }}</p>
       <div class="persona-actions">
-        <a class="btn btn-sm btn-primary" href="{{ url_for('personalities.edit', personality_id=row.id) }}">{{ icon("edit") }}{{ t("personality.edit") }}</a>
+        <a class="btn btn-sm btn-primary" href="{{ url_for('personalities.edit', personality_id=row.id) }}">{{ t("personality.edit") }}</a>
         <a class="btn btn-sm btn-ghost" href="{{ url_for('personalities.index', _anchor='personality-' ~ row.id) }}">{{ t("personality.back") }}</a>
       </div>
       {% elif not allowed %}
-      <div class="alert alert-warning">{{ icon("shield") }}<p>{{ t("personality.no_access_text") }} <a href="{{ url_for('account.index', _anchor='access') }}">{{ t("personality.request_access") }}</a></p></div>
+      <div class="alert alert-warning"><p>{{ t("personality.no_access_text") }} <a href="{{ url_for('account.index', _anchor='access') }}">{{ t("personality.request_access") }}</a></p></div>
       {% elif full %}
       <p class="hint mb-0">{{ t("personality.limit_reached", max=max_count) }}</p>
       {% else %}
       <p class="hint mb-0">{{ t("personality.shared_copy_hint") }}</p>
       <form method="post" action="{{ url_for('personalities.save_shared', token=token) }}" class="persona-actions" data-busy>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-primary">{{ icon("copy") }}{{ t("personality.shared_save") }}</button>
+        <button type="submit" class="btn btn-primary">{{ t("personality.shared_save") }}</button>
       </form>
       {% endif %}
     </div>

@@ -162,7 +162,7 @@
   font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--font);
 }
 .emoji-pick:hover { background: var(--hover); border-color: var(--border-strong); }
-.emoji-pick[aria-pressed="true"] { border-color: var(--primary); background: var(--active); }
+.emoji-pick[aria-pressed="true"] { border-color: var(--text); background: var(--active); }
 .emoji-pick svg { width: 16px; height: 16px; }
 .swatches { display: flex; flex-wrap: wrap; gap: .45rem; padding-top: .15rem; }
 .swatch-option { position: relative; display: inline-grid; cursor: pointer; }

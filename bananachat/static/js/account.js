@@ -1,6 +1,6 @@
 // Account, personalities and free-quota pages: live character counters for long text fields,
-// and the limit-request form (shows the fields of the chosen kind of request).
-import { el, pageData, t } from "./core.js";
+// the limit-request form (shows the fields of the chosen kind of request) and the account page's tabs.
+import { el, fragmentTarget, pageData, t } from "./core.js";
 
 /** <textarea data-counter maxlength="N"> shows "used / N" at the end of its hint (announced politely when near the limit). */
 function initCounters() {
@@ -118,5 +118,30 @@ function initQuotaForm() {
   if (kind.value === "effort" && window.location.hash === "#quota") document.getElementById("quota_reason")?.focus();
 }
 
+/** Account page tabs: show the panel the address names (#security) or holds (#two-step). Without JavaScript all show. */
+function initAccountTabs() {
+  const nav = document.querySelector("[data-account-tabs]");
+  if (!nav) return;
+  const links = [...nav.querySelectorAll('a[href^="#"]')];
+  const panels = links.map((link) => document.getElementById(link.hash.slice(1)));
+  const show = (hash, scroll) => {
+    const target = fragmentTarget(hash);
+    const index = Math.max(0, panels.findIndex((panel) => target && panel?.contains(target)));
+    panels.forEach((panel, i) => { if (panel) panel.hidden = i !== index; });
+    links.forEach((link, i) => (i === index ? link.setAttribute("aria-current", "page") : link.removeAttribute("aria-current")));
+    if (scroll && target && !panels.includes(target)) target.scrollIntoView({ block: "start" });
+  };
+  nav.addEventListener("click", (event) => {
+    const link = event.target.closest('a[href^="#"]');
+    if (!link || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    event.preventDefault();
+    history.replaceState(null, "", link.hash);
+    show(link.hash, false);
+  });
+  window.addEventListener("hashchange", () => show(window.location.hash, true));
+  show(window.location.hash, true);
+}
+
+initAccountTabs();
 initCounters();
 initQuotaForm();

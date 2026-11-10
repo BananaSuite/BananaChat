@@ -514,7 +514,7 @@ def test_admin_page_warns_when_workers_are_off(make_app):
     browser = Browser(app)
     browser.login("admin", "admin-password")
     page = browser.get("/admin/workers").get_data(as_text=True)
-    assert "Remote workers are turned off" in page and "BC_WORKERS_ENABLED=1" in page
+    assert "Workers are turned off on this server" in page and "BC_WORKERS_ENABLED=1" in page
     assert "can read the prompts" in page
 
 

@@ -6,18 +6,18 @@
 {% block title %}Terminal · {{ worker.name }}{% endblock %}
 {% block admin_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='vendor/xterm/xterm.css') }}">{% endblock %}
 {% block admin_content %}
-{% call header("Terminal on " ~ worker.name, "A shell on the worker PC, as the account its worker runs under. Everything you type runs there.") %}{% endcall %}
+{{ header("Terminal on " ~ worker.name, "Runs on the worker PC as the account its worker uses.") }}
 <div class="remote-toolbar row gap-1 wrap mb-1">
-  <a class="btn btn-sm btn-ghost" href="{{ page_data.back }}">{{ icon("chevron-left") }}Back to the worker</a>
+  <a class="btn btn-sm btn-ghost" href="{{ page_data.back }}">{{ icon("chevron-left") }}{{ worker.name }}</a>
   <span class="small muted grow" id="remote-status" aria-live="polite">Starting…</span>
-  <button type="button" class="btn btn-sm" id="remote-reconnect" hidden>{{ icon("refresh") }}Reconnect</button>
+  <button type="button" class="btn btn-sm" id="remote-reconnect" hidden>Reconnect</button>
   <button type="button" class="btn btn-sm btn-ghost" id="remote-end" hidden>End session</button>
 </div>
 <form class="sub-card stack" id="remote-confirm" hidden>
   <div class="field field-narrow">
     <label for="remote-reauth" class="required">Your password or authenticator code</label>
     <input type="password" id="remote-reauth" name="reauth_secret" maxlength="1024" autocomplete="current-password" spellcheck="false" aria-describedby="remote-reauth-hint">
-    <span class="hint" id="remote-reauth-hint">Opening a terminal on a worker PC needs a recent confirmation; not asked again for 10 minutes.</span>
+    <span class="hint" id="remote-reauth-hint">Not asked again for 10 minutes.</span>
   </div>
   <div class="form-actions form-actions-start"><button type="submit" class="btn btn-primary">Open terminal</button></div>
 </form>

@@ -6,7 +6,7 @@
 }
 .music-toggle { gap: .35rem; }
 .music-toggle svg { width: 16px; height: 16px; }
-.music-player.is-playing .music-toggle { border-color: var(--primary); }
+.music-player.is-playing .music-toggle { border-color: var(--text-muted); }
 .music-menu .menu-panel { width: min(280px, calc(100vw - 2rem)); padding: .75rem; }
 .music-menu .menu-panel a { margin-top: .25rem; }
 .music-title { margin: 0 .7rem .75rem; font-weight: 600; overflow-wrap: anywhere; }

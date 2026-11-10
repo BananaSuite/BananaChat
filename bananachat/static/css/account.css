@@ -1,9 +1,12 @@
-/* Account navigation and usage. Section and form layout comes from app.css. */
-.account-layout { display: flex; flex-direction: column; gap: 1.5rem; }
-.account-toc { width: 100%; padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
-.account-toc a[href="#delete"]:hover { color: var(--danger); }
+/* Account page: tabs (account.js shows one panel at a time) and usage. Section and form layout comes from app.css. */
+.account-tabs { margin-bottom: 1.5rem; }
+.account-panel { min-width: 0; }
+.account-panel > .settings-section:first-child { padding-top: 0; }
+.account-panel > .settings-section:last-child { border-bottom: 0; }
+/* A link to a whole tab (#security) keeps the tabs in view above it. */
+.account-panel { scroll-margin-top: calc(var(--topbar-height) + 5rem); }
+:is(.account-panel .settings-section, .account-sections > section) { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
 .account-sections { width: 100%; }
-.account-sections > section { scroll-margin-top: calc(var(--topbar-height) + 1rem); }
 .account-sections > section > p.muted { max-width: 68ch; font-size: var(--text-md); text-wrap: pretty; }
 .account-profile-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 1rem 1.5rem; margin: 0; }
 .account-profile-details > div { min-width: 0; }
@@ -48,11 +51,7 @@
   .usage-pools-expanded { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
   .usage-pools-expanded .usage-pool + .usage-pool { padding: 1rem 0 0; border-inline-start: 0; border-top: 1px solid var(--border); }
 }
-@media (max-width: 860px) {
-  .account-layout { gap: 1.25rem; }
-}
 @media (max-width: 640px) {
-  .account-toc { padding-bottom: .5rem; }
   .account-profile-details { align-items: start; }
   .usage-pools { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
   .usage-pool + .usage-pool { padding: 1rem 0 0; border-inline-start: 0; border-top: 1px solid var(--border); }

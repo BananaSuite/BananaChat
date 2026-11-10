@@ -6,10 +6,7 @@
 {% block content %}
 <div class="page community-page">
   <header class="page-header">
-    <div>
-      <h1>{{ t("community.title") }}</h1>
-      <p>{{ t("community.subtitle") }}</p>
-    </div>
+    <h1>{{ t("community.title") }}</h1>
   </header>
 
   <div class="section-stack">
@@ -66,7 +63,7 @@
             <span class="hint" id="tokens-{{ row.id }}-hint">{{ t("community.renounce_hint", max=(item.room | tokens)) if item.room else t("community.renounce_none") }}</span>
           </div>
           {% endif %}
-          <button type="submit" class="btn btn-primary">{{ icon("check") }}{{ t("community.support") }}</button>
+          <button type="submit" class="btn btn-primary">{{ t("community.support") }}</button>
         </form>
         <form method="post" action="{{ url_for('community.vote', request_id=row.id) }}" data-busy>
           {{ csrf() }}

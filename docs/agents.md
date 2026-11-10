@@ -8,7 +8,7 @@ web server and are never copied into workspaces.
 
 The feature is off by default. In **Admin → Cloud sessions**, choose who can
 start sessions: **Administrators only**, **Everyone signed in**, or **Custom
-access lists** (the Cloud sessions lists in **Admin → Permissions**). Model
+access lists** (the Cloud sessions lists in **Admin → Access**). Model
 access and token limits apply in every mode. If the stored choice is invalid,
 nobody can start sessions.
 
@@ -568,7 +568,7 @@ users.
 
 **Cloud sessions** appears in the top bar when an administrator has turned it
 on for you: for administrators only, for everyone signed in, or for the people
-on the Cloud sessions list in **Admin → Permissions**. Model access and usage
+on the Cloud sessions list in **Admin → Access**. Model access and usage
 limits apply in every mode.
 
 ### Starting a task
@@ -820,11 +820,11 @@ DNS64/NAT64 are not supported for imports.
   or with **Check tool support**. External API models use their enrolled
   capabilities. Override per model (*Always*/*Never*). People
   also need access to the model in the chat (rollout, categories, policies).
-- **All tasks**: every task of every user, filterable by state, with the full
+- **All sessions**: every session of every user, filterable by status, with the full
   log (prompt, every model message and reasoning, tool call, arguments and
-  result, tokens and timings). Administrators can stop or delete any task.
+  result, tokens and timings). Administrators can stop or delete any session.
 
-**Custom access lists**: Admin → Permissions → *Cloud sessions*. The list starts as
+**Custom access lists**: Admin → Access → *Cloud sessions*. The list starts as
 *Only people on the allowlist* with access requests enabled; approve requests
 there or add people to the allowlist (optionally until a date).
 

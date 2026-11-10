@@ -87,7 +87,7 @@ function renderRemote() {
   if (!remote.enabled) {
     parts.push(el("div", { class: "alert alert-info", role: "note" }, icon("info"),
       el("div", {},
-        el("p", { text: "The worker's owner has not allowed maintenance access (or the worker daemon is too old to offer it). On the worker, add to its settings file and restart it:" }),
+        el("p", { text: "The owner has not allowed maintenance access, or the worker is too old. Add to the worker's settings file and restart it:" }),
         el("pre", { class: "card small", text: "BC_WORKER_REMOTE_ACCESS=1\n# optional: the built-in terminal (no SSH server needed)\nBC_WORKER_REMOTE_SHELL=1\n# optional: services of the PC (default ssh:22,vnc:5900,rdp:3389)\nBC_WORKER_REMOTE_SERVICES=ssh:22,vnc:5900" }))));
     remotePanel.replaceChildren(...parts);
     return;
@@ -100,20 +100,20 @@ function renderRemote() {
 
   const actions = el("div", { class: "row gap-1 wrap" });
   if (remote.shell) {
-    const button = el("button", { type: "button", class: "btn btn-primary" }, icon("terminal"), el("span", { text: "Open terminal" }));
+    const button = el("button", { type: "button", class: "btn btn-primary", text: "Open terminal" });
     button.addEventListener("click", () => openSession("shell", 0, button));
     actions.append(button);
   }
   for (const service of remote.services || []) {
     if (service.kind === "vnc") {
-      const button = el("button", { type: "button", class: "btn" }, icon("image"), el("span", { text: `VNC in the browser (port ${service.port})` }));
+      const button = el("button", { type: "button", class: "btn", text: `VNC in the browser (port ${service.port})` });
       button.addEventListener("click", () => openSession("vnc", service.port, button));
       actions.append(button);
     }
   }
   if (actions.childElementCount) parts.push(actions);
   if (!remote.shell) {
-    parts.push(el("p", { class: "small muted mb-0", text: "The built-in terminal is off on this worker (its owner can set BC_WORKER_REMOTE_SHELL=1). SSH below needs an SSH server on the PC." }));
+    parts.push(el("p", { class: "small muted mb-0", text: "The built-in terminal is off on this worker (BC_WORKER_REMOTE_SHELL=1 turns it on). SSH needs an SSH server on the PC." }));
   }
 
   const services = remote.services || [];
@@ -134,7 +134,7 @@ function renderRemote() {
   }
   if ((remote.subnets || []).length) {
     parts.push(el("h3", { text: "The owner's network" }),
-      el("p", { class: "small muted", text: `Reachable through this worker: ${remote.subnets.join(", ")} on ports ${(remote.subnet_ports || []).join(", ") || "none"}. Use the helper's SOCKS proxy, then connect to those addresses as if you were there:` }),
+      el("p", { class: "small muted", text: `Use the helper's SOCKS proxy to reach ${remote.subnets.join(", ")} on ports ${(remote.subnet_ports || []).join(", ") || "none"}.` }),
       codeLine("python bananachat_connect.py socks --listen 127.0.0.1:1080"),
       codeLine(`ssh -o ProxyCommand="python bananachat_connect.py proxy %h %p" user@${remote.subnets[0].split("/")[0].replace(/\.0$/, ".10")}`));
   }
@@ -169,7 +169,7 @@ function renderModels() {
   const manages = data.manages_models;
   const parts = [];
   if (!manages) {
-    parts.push(el("p", { class: "small muted", text: "This worker cannot manage its models from here: its daemon is older, or its owner set BC_WORKER_MODEL_MANAGEMENT=0. Its owner can still use ollama pull on the PC." }));
+    parts.push(el("p", { class: "small muted", text: "This worker's models cannot be managed from here (older worker, or BC_WORKER_MODEL_MANAGEMENT=0)." }));
     document.getElementById("pull-form")?.setAttribute("hidden", "");
   } else {
     document.getElementById("pull-form")?.removeAttribute("hidden");
@@ -181,7 +181,7 @@ function renderModels() {
     for (const model of models) {
       const item = el("li", {}, el("span", { class: "mono", text: model }));
       if (manages) {
-        item.append(" ", el("button", { type: "button", class: "btn btn-sm btn-ghost", onclick: () => removeModel(model) }, icon("trash"), el("span", { text: "Remove" })));
+        item.append(" ", el("button", { type: "button", class: "btn btn-sm btn-ghost", onclick: () => removeModel(model), text: "Remove" }));
       }
       list.append(item);
     }
@@ -224,7 +224,7 @@ function renderCommands() {
     if (["queued", "running"].includes(command.status)) {
       actions.append(el("button", { type: "button", class: "btn btn-sm btn-ghost", onclick: () => commandAction(urls.cancel, command.id) }, "Cancel"));
     } else if (["failed", "cancelled"].includes(command.status)) {
-      actions.append(el("button", { type: "button", class: "btn btn-sm", onclick: () => commandAction(urls.retry, command.id) }, icon("refresh"), el("span", { text: "Retry" })));
+      actions.append(el("button", { type: "button", class: "btn btn-sm", onclick: () => commandAction(urls.retry, command.id), text: "Retry" }));
     }
     return el("tr", {},
       el("td", { class: "mono break-anywhere", text: command.model_name }),

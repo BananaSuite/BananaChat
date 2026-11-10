@@ -197,7 +197,7 @@ def tunnel(tunnel_id):
         return _error("Expected a WebSocket.", 400)
     config = current_app.config["BC"]
     if not tunnel_broker.take_slot(config.worker_tunnels_per_process, config.http_threads):
-        response = _error("The server is relaying as many sessions as it can; try again shortly.", 503)
+        response = _error("Too many relayed sessions. Try again shortly.", 503)
         response.headers["Retry-After"] = "5"
         return response
     try:

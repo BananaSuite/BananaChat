@@ -360,7 +360,7 @@ def workers_key_revoke(key_id):
     _audit("access_key_revoke", key_id)
     if security.wants_json():
         return _json({"ok": True})
-    flash("Access key revoked; its sessions were ended.", "success")
+    flash("Access key revoked. Its sessions ended.", "success")
     return redirect(url_for("admin.workers") + "#remote-access")
 
 

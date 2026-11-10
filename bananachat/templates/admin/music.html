@@ -8,16 +8,16 @@
 {% if value %}<span class="badge badge-success">Yes</span>{% else %}<span class="badge">No</span>{% endif %}
 {%- endmacro %}
 {% macro empty(icon_name, title, text=None) -%}
-<div class="empty">{{ icon(icon_name) }}<h3>{{ title }}</h3>{% if text %}<p>{{ text }}</p>{% endif %}</div>
+<p class="admin-empty">{{ title }}{% if text %} {{ text }}{% endif %}</p>
 {%- endmacro %}
 {% from "partials/icons.html" import icon %}
 {% set section = "music" %}
-{% block title %}Music programme{% endblock %}
+{% block title %}Music{% endblock %}
 {% block admin_content %}
-<header class="page-header">
+<header class="page-header admin-header">
   <div>
-    <h1>Music programme</h1>
-    <p>Participants hear music while they use the site and receive larger token limits (per 5-hour window) in exchange. The player never starts by itself and can always be paused.</p>
+    <h1>Music</h1>
+    <p>Participants hear music while they use the site and get larger token limits in exchange.</p>
   </div>
 </header>
 
@@ -35,10 +35,10 @@
     {{ csrf() }}
     <fieldset class="admin-fieldset stack-sm">
       <legend>Availability</legend>
-      <label class="check"><input type="checkbox" name="music_enabled" value="1"{% if music.music_enabled %} checked{% endif %}><span>Programme enabled<small>When off, nobody receives the bonus, the player disappears and audio is no longer served.</small></span></label>
-      <label class="check"><input type="checkbox" name="music_visible" value="1"{% if music.music_visible %} checked{% endif %}><span>Visible to everyone<small>When hidden, only current participants see the Free quota page (so they can still leave); they keep the bonus.</small></span></label>
+      <label class="check"><input type="checkbox" name="music_enabled" value="1"{% if music.music_enabled %} checked{% endif %}><span>Programme enabled</span></label>
+      <label class="check"><input type="checkbox" name="music_visible" value="1"{% if music.music_visible %} checked{% endif %}><span>Visible to everyone<small>When hidden, only current participants see it. They keep the bonus.</small></span></label>
       <label class="check"><input type="checkbox" name="music_opt_in_allowed" value="1"{% if music.music_opt_in_allowed %} checked{% endif %}><span>People may join</span></label>
-      <label class="check"><input type="checkbox" name="music_opt_out_allowed" value="1"{% if music.music_opt_out_allowed %} checked{% endif %}><span>People may leave<small>People you enrol yourself can never leave on their own.</small></span></label>
+      <label class="check"><input type="checkbox" name="music_opt_out_allowed" value="1"{% if music.music_opt_out_allowed %} checked{% endif %}><span>People may leave<small>People you enrol cannot leave on their own.</small></span></label>
     </fieldset>
     <fieldset class="admin-fieldset stack-sm">
       <legend>Bonus</legend>
@@ -50,17 +50,17 @@
         <div class="field">
           <label for="music_credit_multiplier">Multiplier</label>
           <input type="number" id="music_credit_multiplier" name="music_credit_multiplier" min="{{ multiplier_range[0] }}" max="{{ multiplier_range[1] }}" step="0.1" required value="{{ music.music_credit_multiplier if music.music_credit_multiplier is not none else 2 }}" aria-describedby="multiplier-hint">
-          <span class="hint" id="multiplier-hint">{{ multiplier_range[0] | int }}–{{ multiplier_range[1] | int }}. The 5-hour and weekly token limits are multiplied by this.</span>
+          <span class="hint" id="multiplier-hint">{{ multiplier_range[0] | int }}–{{ multiplier_range[1] | int }}. Applies to the 5-hour and weekly limits.</span>
         </div>
         <div class="field">
           <label for="music_bonus_fixed_tokens">Extra tokens per 5 hours</label>
           <input type="text" id="music_bonus_fixed_tokens" name="music_bonus_fixed_tokens" inputmode="decimal" autocomplete="off" maxlength="20" required value="{{ fixed[0] | token_input }}" aria-describedby="fixed-hint">
-          <span class="hint" id="fixed-hint">Added to each limited 5-hour window, e.g. 30k. Zero is allowed.</span>
+          <span class="hint" id="fixed-hint">For example 30k.</span>
         </div>
         <div class="field">
           <label for="music_bonus_fixed_weekly_tokens">Extra tokens per week</label>
           <input type="text" id="music_bonus_fixed_weekly_tokens" name="music_bonus_fixed_weekly_tokens" inputmode="decimal" autocomplete="off" maxlength="20" required value="{{ weekly_fixed | token_input }}" aria-describedby="fixed-weekly-hint">
-          <span class="hint" id="fixed-weekly-hint">Added to each limited week, separately from the 5-hour bonus. Zero is allowed.</span>
+          <span class="hint" id="fixed-weekly-hint">Separate from the 5-hour bonus.</span>
         </div>
       </div>
     </fieldset>
@@ -71,16 +71,16 @@
         <option value="shuffle"{% if music.music_playback_mode == "shuffle" %} selected{% endif %}>Shuffled for each listener</option>
       </select>
     </div>
-    <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
   </form>
   <div class="section-footer row">
     {% if music.music_visible %}
-    <form method="post" action="{{ url_for('admin.music_hide') }}" data-confirm="Hide the programme? Participants keep their bonus and can still leave; nobody else can join.">
-      {{ csrf() }}<button type="submit" class="btn">{{ icon("eye-off") }}Hide the programme</button>
+    <form method="post" action="{{ url_for('admin.music_hide') }}" data-confirm="Hide the programme? Participants keep their bonus. Nobody else can join.">
+      {{ csrf() }}<button type="submit" class="btn">Hide the programme</button>
     </form>
     {% endif %}
     <form method="post" action="{{ url_for('admin.music_remove') }}" data-confirm="Remove the programme? Everyone is opted out (including people you enrolled) and the programme is switched off. Tracks are kept." data-confirm-danger>
-      {{ csrf() }}<button type="submit" class="btn btn-danger">{{ icon("trash") }}Remove the programme</button>
+      {{ csrf() }}<button type="submit" class="btn btn-danger">Remove the programme</button>
     </form>
   </div>
 </section>
@@ -93,7 +93,7 @@
       <div class="field">
         <label for="track-file" class="required">Audio file</label>
         <input type="file" id="track-file" name="track" required accept=".mp3,.ogg,.wav,.m4a,audio/mpeg,audio/ogg,audio/wav,audio/mp4" aria-describedby="track-file-hint">
-        <span class="hint" id="track-file-hint">{{ allowed_types }}, up to {{ max_track_mb }} MB. Only upload music you have the right to play to your users.</span>
+        <span class="hint" id="track-file-hint">{{ allowed_types }}, up to {{ max_track_mb }} MB. Only music you have the right to play to your users.</span>
       </div>
       <div class="field">
         <label for="track-name">Display name</label>
@@ -102,7 +102,7 @@
       </div>
     </div>
     <p class="field-error" id="track-error" role="alert" hidden></p>
-    <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Upload track</button></div>
+    <div class="form-actions"><button type="submit" class="btn">Upload track</button></div>
   </form>
 
   {% if tracks %}
@@ -136,7 +136,7 @@
     {% endfor %}
   </ol>
   {% else %}
-  {{ empty("music", "No tracks yet", "Participants see the player once at least one track is uploaded.") }}
+  {{ empty("music", "No tracks yet.") }}
   {% endif %}
 </section>
 
@@ -161,7 +161,7 @@
       <option value="{{ value }}"{% if status == value %} selected{% endif %}>{{ label }}</option>
       {% endfor %}
     </select>
-    <button type="submit" class="btn">{{ icon("search") }}Search</button>
+    <button type="submit" class="btn">Search</button>
   </form>
   {% if participants %}
   <div class="table-wrap">
@@ -171,7 +171,7 @@
       <tbody>
         {% for row in participants %}
         <tr>
-          <td class="cell-full"><strong>{{ row.username }}</strong>{% if row.role == "admin" %} <span class="badge badge-primary">Admin</span>{% endif %}</td>
+          <td class="cell-full"><strong>{{ row.username }}</strong>{% if row.role == "admin" %} <span class="badge">Administrator</span>{% endif %}</td>
           <td data-label="Participating:">{{ yes_no(row.music_opted_in) }}</td>
           <td data-label="Enrolled by an administrator:">{{ yes_no(row.music_forced) }}</td>
           <td data-label="Last sign-in:">{{ when(row.last_login_at) }}</td>
@@ -197,7 +197,7 @@
   </nav>
   {% endif %}
   {% else %}
-  {{ empty("users", "No matching accounts") }}
+  {{ empty("users", "No matching accounts.") }}
   {% endif %}
 </section>
 </div>

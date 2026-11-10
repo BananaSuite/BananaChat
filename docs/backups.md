@@ -130,7 +130,7 @@ Restoring a backup never starts a registry download by itself, and it asks only 
 
 1. After the restore, BananaChat compares the saved model list with what its model server (the compute server, or the local Ollama of a single server) and ComfyUI have. It does this in the background every minute and whenever an administrator opens the overview or the models page.
 2. If everything is installed, the list is closed silently and nothing is shown.
-3. Otherwise **Admin → Overview** shows one card, for example "2 models from the backup are missing on the compute server (about 9.5 GB)", with **Download them**, **Choose…** (Admin → Models, where the missing models are listed with checkboxes) and **Dismiss**. The size appears when it is known from the catalogue before the backup.
+3. Otherwise **Admin → Dashboard** shows one card, for example "2 models from the backup are missing on the compute server (about 9.5 GB)", with **Download them**, **Choose…** (Admin → Models, where the missing models are listed with checkboxes) and **Dismiss**. The size appears when it is known from the catalogue before the backup.
 4. The card closes by itself once the downloads have finished. **Not now** postpones it, and **Dismiss** closes it for good: nothing stays on the dashboard forever, and a dismissed model is not offered again unless it is installed and later lost again.
 
 A compute server that is restored from its own backup, or replaced by an empty one, needs no action on its side: the web server notices the published models its compute server no longer has and shows the same card ("published models not installed"). The restore command says which of these happens next.

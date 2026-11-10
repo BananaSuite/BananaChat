@@ -1,4 +1,4 @@
-"""Overview: users, models, queue, inference health, today's usage, pending work."""
+"""Dashboard: users, models, queue, inference health, today's usage, pending work."""
 
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def database_check():
     result = db.integrity_check()
     audit("database_check", "database", {"result": result[:200]})
     if result == "ok":
-        flash("Database check passed: no corruption found.", "success")
+        flash("Database check passed.", "success")
     else:
-        flash(f"Database check reported a problem: {result[:300]}. Restore a backup or contact support.", "error")
+        flash(f"Database check found a problem: {result[:300]}. Restore a backup.", "error")
     return redirect(url_for("admin.dashboard"))

@@ -4,19 +4,15 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Reasoning effort · Limits{% endblock %}
 {% block admin_content %}
-{{ header("Limits", "Set default reasoning access and when users can unlock higher levels.") }}
+{{ header("Limits") }}
 {% include "admin/_limits_tabs.html" %}
 
 <details class="settings-section admin-help mb-3">
   <summary>{{ icon("chevron-down") }}<span id="effort-help-title">How it works</span></summary>
-  <div class="stack">
   <ul class="plain-list small">
-    <li>Levels, lowest first: <strong>Off</strong>, <strong>Low</strong>, <strong>Medium</strong>, <strong>High</strong>, <strong>Extra</strong>, <strong>Max</strong>. Each model offers only the levels it supports; provider <code>xhigh</code> means Extra. Models that can only switch thinking on count as Medium.</li>
-    <li>Everyone may use levels up to the <strong>default</strong> (Medium unless you change it, globally or per model). Higher levels are locked until unlocked: unlocking a level unlocks every level below it.</li>
-    <li>People unlock more by <strong>asking</strong> (a request on their account page) or <strong>automatically</strong> after sustained use of a model. You can also set levels for one account on its limits page.</li>
-    <li>Locked levels show a lock in the chat composer with a “Request access” link. The API answers <code>403 reasoning_effort_locked</code>; agents use at most the unlocked level.</li>
+    <li>Levels, lowest first: Off, Low, Medium, High, Extra, Max. Unlocking a level unlocks every level below it.</li>
+    <li>People unlock higher levels by asking or after sustained use of a model. Locked levels show a lock in the chat. The API answers <code>403 reasoning_effort_locked</code>.</li>
   </ul>
-</div>
 </details>
 
 <div class="section-stack">
@@ -31,11 +27,11 @@
       <select id="effort-default" name="effort_default_level" aria-describedby="effort-default-hint">
         {% for level in levels %}<option value="{{ level }}"{% if shown.default == level %} selected{% endif %}>{{ level | capitalize }}</option>{% endfor %}
       </select>
-      <span class="hint" id="effort-default-hint">Allows every supported level up to this one. The model defaults below can override it.</span>
+      <span class="hint" id="effort-default-hint">Model defaults below can override it.</span>
     </div>
     <fieldset class="admin-fieldset stack">
       <legend>Automatic unlocks</legend>
-      {{ toggle("effort_auto_unlock", "Unlock the next level after sustained use", shown.auto, "Checked hourly. Unlocks one level at a time, then restarts the usage count. Pinned account levels are unchanged.") }}
+      {{ toggle("effort_auto_unlock", "Unlock the next level after sustained use", shown.auto, "Checked hourly, one level at a time.") }}
       <details class="admin-help admin-options"{% if typed_settings %} open{% endif %}>
         <summary>{{ icon("chevron-down") }}Eligibility requirements</summary>
         <div class="form-grid">
@@ -43,7 +39,7 @@
             <label for="effort-days" class="required">Active days</label>
             <input type="number" id="effort-days" name="effort_auto_active_days" min="1" max="365" step="1" required value="{{ shown.active_days }}">
           </div>
-          {{ token_field("effort_auto_tokens", "Model tokens used", shown.tokens, "effort-tokens", "E.g. 2M.") }}
+          {{ token_field("effort_auto_tokens", "Model tokens used", shown.tokens, "effort-tokens", "For example 2M.") }}
           <div class="field">
             <label for="effort-period" class="required">Usage period (days)</label>
             <input type="number" id="effort-period" name="effort_auto_period_days" min="1" max="365" step="1" required value="{{ shown.period_days }}">
@@ -61,19 +57,19 @@
         </div>
       </details>
     </fieldset>
-    <div class="form-actions"><button type="submit" class="btn btn-primary">Save reasoning settings</button></div>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
   </form>
   {#- Next to the automatic-unlock settings it belongs to (a form cannot sit inside the settings form). -#}
   <form method="post" action="{{ url_for('admin.limit_effort_auto') }}" class="settings-section row-between effort-check">
     {{ csrf() }}
-    <p class="muted small mb-0">Run the check now to apply new requirements at once.</p>
-    <button type="submit" class="btn">{{ icon("refresh") }}Check automatic unlocks now</button>
+    <p class="muted small mb-0">Automatic unlocks</p>
+    <button type="submit" class="btn">Check now</button>
   </form>
 
   <section class="settings-section stack" id="models" aria-labelledby="effort-models-title">
     <h2 id="effort-models-title">Model defaults</h2>
     {% if models %}
-    <p class="muted small mb-0">Override the default for individual models. Account-specific levels take priority.</p>
+    <p class="muted small mb-0">Account levels take priority.</p>
     <ul class="plain-list divider-list">
       {% for item in models %}
       <li class="list-item">
@@ -91,9 +87,9 @@
               </select>
               <span class="hint" id="effort-model-{{ item.model.id }}-hint">Supported levels: {{ item.levels | join(", ") }}.</span>
             </div>
-            {{ toggle("effort_gating_off", "Allow all reasoning levels", item.policy.effort_gating_off, "Every level it supports, for everyone.") }}
-            {{ toggle("effort_auto_unlock_off", "Disable automatic unlocks", item.policy.effort_auto_unlock_off, "Requests and administrator unlocks remain available.") }}
-            <div class="form-actions"><button type="submit" class="btn btn-sm">Save {{ item.model.display_name }}</button></div>
+            {{ toggle("effort_gating_off", "Allow all reasoning levels", item.policy.effort_gating_off) }}
+            {{ toggle("effort_auto_unlock_off", "Disable automatic unlocks", item.policy.effort_auto_unlock_off) }}
+            <div class="form-actions"><button type="submit" class="btn btn-sm">Save</button></div>
           </form>
         </details>
       </li>
@@ -127,7 +123,7 @@
   </div>
   {% if unlocks | length >= 100 %}<p class="hint mt-1">Showing the latest 100 account settings.</p>{% endif %}
   {% else %}
-  <p class="muted">No account-specific levels. All accounts follow the defaults.</p>
+  <p class="muted">No account levels. Everyone follows the defaults.</p>
   {% endif %}
 </section>
 {% endblock %}

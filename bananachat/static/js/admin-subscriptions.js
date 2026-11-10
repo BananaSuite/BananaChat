@@ -22,7 +22,7 @@ function confirmationField(panel) {
     el("label", { for: id, class: "required", text: "Your password or authenticator code" }),
     el("input", { type: "password", id, name: "reauth_secret", maxlength: "1024", autocomplete: "current-password",
                   spellcheck: "false", "aria-describedby": `${id}-hint` }),
-    el("span", { class: "hint", id: `${id}-hint`, text: "Signing a subscription in needs a recent confirmation; not asked again for 10 minutes." }));
+    el("span", { class: "hint", id: `${id}-hint`, text: "Not asked again for 10 minutes." }));
   panel.replaceChildren(field, el("div", { class: "form-actions form-actions-start" },
     el("button", { type: "button", class: "btn btn-primary", "data-signin-confirm": "" }, "Continue"),
     el("button", { type: "button", class: "btn btn-ghost", "data-signin-close": "" }, "Cancel")));
@@ -64,7 +64,7 @@ function render(accountId, login) {
       parts.push(el("p", { class: "small mb-0", text: "2. Enter this one-time code there (it expires in 15 minutes):" }));
       parts.push(el("p", { class: "device-code mb-0" }, el("code", { text: login.user_code || "" }), " ",
         el("button", { type: "button", class: "btn btn-sm btn-ghost", onclick: async () => { await copyText(login.user_code || ""); toast("Code copied.", "success"); } }, icon("copy"), el("span", { text: "Copy" }))));
-      parts.push(el("p", { class: "small muted mb-0", text: "This page continues on its own once you approve. If OpenAI says device codes are not allowed, turn on device code sign-in for Codex in the ChatGPT security settings (or ask the workspace administrator)." }));
+      parts.push(el("p", { class: "small muted mb-0", text: "This page continues once you approve. If OpenAI refuses device codes, turn on device code sign-in for Codex in the ChatGPT security settings." }));
     } else {
       parts.push(el("p", { class: "small mb-0", text: "1. Open Anthropic's page, sign in to the Claude account of this subscription and approve the access." }));
       parts.push(linkBlock(login.url));

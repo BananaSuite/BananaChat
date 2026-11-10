@@ -97,7 +97,7 @@ function initRunningModels() {
     setBusy(refreshButton, false);
   });
   unloadAllButton?.addEventListener("click", async () => {
-    const ok = await confirmDialog({ title: "Unload all models?", message: "Every loaded model is removed from memory. Running answers may be interrupted.", confirmLabel: "Unload all", danger: true });
+    const ok = await confirmDialog({ title: "Unload all models?", message: "Running answers may be interrupted.", confirmLabel: "Unload all", danger: true });
     if (!ok) return;
     setBusy(unloadAllButton, true);
     try {
@@ -224,6 +224,33 @@ function initCounters() {
   }
 }
 
+// ----- settings: a tab shows one panel of the form; a link to a field or an invalid field opens its panel
+function initPanelTabs() {
+  const links = [...document.querySelectorAll('[data-panel-tabs] a[href^="#"]')];
+  const panels = links.map((link) => document.getElementById(link.hash.slice(1)));
+  const form = panels[0]?.closest("form");
+  if (!form || panels.includes(null)) return;
+  form.classList.add("has-panel-tabs");
+  const show = (index) => {
+    panels.forEach((panel, i) => { panel.hidden = i !== index; });
+    links.forEach((link, i) => (i === index ? link.setAttribute("aria-current", "page") : link.removeAttribute("aria-current")));
+    form.action = `${form.action.split("#")[0]}#${panels[index].id}`;  // the redirect after saving keeps the tab
+  };
+  const reveal = (node) => {
+    const index = panels.findIndex((panel) => panel.contains(node));
+    if (index >= 0) show(index);
+    return index >= 0;
+  };
+  links.forEach((link, index) => link.addEventListener("click", (event) => {
+    event.preventDefault();
+    show(index);
+    history.replaceState(null, "", link.hash);
+  }));
+  document.addEventListener("invalid", (event) => reveal(event.target), true);
+  window.addEventListener("hashchange", () => reveal(fragmentTarget()));
+  if (!reveal(fragmentTarget())) show(0);
+}
+
 // Section links reveal optional settings; core handles native form validation.
 function initSettingsDisclosures() {
   const followHash = () => {
@@ -244,4 +271,5 @@ initPalettes();
 initToggles();
 initCounters();
 initPreviews();
+initPanelTabs();
 initSettingsDisclosures();

@@ -5,8 +5,8 @@
     "banana_backup/cli.py": "665e11e54b771946716fae60fc2cbbf311ebc7017ec2beedafa6daf98babab9f",
     "banana_backup/crypto.py": "6cb6c6e4f4e3bd3ee1d6b397eb01e508a94653a0466bea74d6c85cda48fe7cde",
     "banana_backup/files.py": "45dce6eacc1f577b33a76da63d19deecbd30dd6636a3aa81fb3ebea954a50dd8",
-    "banana_backup/git.py": "5fd6ccc9546473c438cc96f98e2c88e1827b5e717cb6aa76445b555b801d8e33",
-    "banana_backup/store.py": "f8391e1e6e3d7bd3ad23585f574986929cc3c1420e9fca0770dece1f844d31af",
+    "banana_backup/git.py": "abdb5d4935573cd98923cb04edd20ef7307e6aac07db1386d915df9e7ab481d5",
+    "banana_backup/store.py": "850a3ef1834e3b89b6aa7ee14fcd79ec14abfd1ff541fada8da5df809329565f",
     "scripts/sync_backups.py": "b0ab9d2fbcabb44c446360eb1be0c1b1a1cd7e40860d8a7f71bd0059c7e373c8",
     "tests/test_git_backups.py": "efd0e85f1beb73ec8274253144557d0542f07010fdea9962c33ed461f68c6fe4"
   }

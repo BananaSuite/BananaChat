@@ -191,7 +191,7 @@ def test_a_failed_listing_changes_nothing(app, admin, fake_ollama, lenient):
     row = model(app, "llama3.2:3b")
     assert row["backend_available"] == 1 and row["absent_syncs"] == 0 and row["missing_at"] is None
     page = admin.get("/admin/models").get_data(as_text=True)
-    assert "could not be listed" in page and "nothing was marked missing" in page
+    assert "could not be listed" in page and "No models were marked missing." in page
 
 
 def test_an_empty_listing_is_believed_only_when_it_repeats(app, fake_ollama, lenient):
@@ -613,12 +613,12 @@ def test_deprecated_models_move_chats_to_the_replacement_and_retire_on_their_dat
     session_id = new_chat(alice)
     events_en = parse_sse(send(alice, session_id, model="qwen3:4b").get_data(as_text=True))
     assert events_en[0]["model"] == "llama3.2:3b"
-    assert events_en[0]["notice"] == "Qwen3 is being phased out, so Llama3.2 is answering instead."
+    assert events_en[0]["notice"] == "Qwen3 is being phased out. Llama3.2 is answering instead."
     italian = alice.post(f"/chat/{new_chat(alice)}/send", {"content": "Ciao", "model": "qwen3:4b"},
                          headers={"X-Requested-With": "fetch", "Accept-Language": "it"})
     notice = parse_sse(italian.get_data(as_text=True))[0]["notice"]
-    assert notice in ("Qwen3 sta per essere dismesso, quindi risponde Llama3.2.",
-                      "Qwen3 is being phased out, so Llama3.2 is answering instead.")
+    assert notice in ("Qwen3 sta per essere dismesso. Risponde Llama3.2.",
+                      "Qwen3 is being phased out. Llama3.2 is answering instead.")
     # The API keeps serving it until it is retired.
     client = app.test_client()
     body = {"model": "qwen3:4b", "messages": [{"role": "user", "content": "Hi"}]}
@@ -635,7 +635,7 @@ def test_deprecated_models_move_chats_to_the_replacement_and_retire_on_their_dat
     assert refused.status_code == 404 and refused.get_json()["error"]["code"] == "model_not_found"
     assert "retired; use 'llama3.2:3b' instead" in refused.get_json()["error"]["message"]
     retired = parse_sse(send(alice, new_chat(alice), model="qwen3:4b").get_data(as_text=True))
-    assert retired[0]["notice"] == "Qwen3 was retired, so Llama3.2 is answering instead."
+    assert retired[0]["notice"] == "Qwen3 was retired. Llama3.2 is answering instead."
     assert "Retired" in admin.get(f"/admin/models/{qwen['id']}/edit").get_data(as_text=True)
     # Restoring brings it back.
     admin.post(f"/admin/models/{qwen['id']}/lifecycle", {"action": "undeprecate"})
@@ -925,7 +925,7 @@ def test_cancel_can_keep_the_partial_download(app, admin, fake_ollama):
     assert wait_for(lambda: (job(app, "keep:1b")["progress_pct"] or 0) > 0)
     response = admin.post(f"/admin/models/downloads/{row['id']}/cancel", {"keep_partial": "1"}, follow_redirects=True)
     worker.join(10)
-    assert "partial download is kept" in response.get_data(as_text=True)
+    assert "Partial files kept." in response.get_data(as_text=True)
     assert job(app, "keep:1b")["status"] == "cancelled"
     assert not any(path == "/api/delete" for path, _body in fake_ollama.requests)
 

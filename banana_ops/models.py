@@ -218,7 +218,7 @@ def compute_recovery(data, action, *, assume_yes=False, upstream="http://127.0.0
     """The command-line model restore of a compute server used without a web server.
 
     A web server connected to this compute server offers the missing models
-    itself (Admin → Overview); this is the path for a standalone compute host.
+    itself (Admin → Dashboard); this is the path for a standalone compute host.
     Models that are already installed are never downloaded again.
     """
     path = data / RECOVERY_FILE
@@ -244,7 +244,7 @@ def compute_recovery(data, action, *, assume_yes=False, upstream="http://127.0.0
             message = f"Ollama at {upstream} cannot be asked which models are installed; start it and check again."
         elif missing or manual_missing:
             message = (f"{len(missing) + len(manual_missing)} saved model(s) are not installed. A web server connected "
-                       "to this compute server offers them in Admin → Overview; without one, run models restore --yes here.")
+                       "to this compute server offers them in Admin → Dashboard; without one, run models restore --yes here.")
         else:
             message = "Every saved model is installed."
         return {**record, "missing": missing, "manual_missing": manual_missing,

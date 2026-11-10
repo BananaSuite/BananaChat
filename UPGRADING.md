@@ -15,6 +15,18 @@ The updater backs everything up, starts the new release and checks `/health`
 before letting users back in. If anything fails it restores the old code and
 database together.
 
+## 1.7.6 to 1.8.0
+
+Interface release. No database migration (schema version 29): 1.7.6 can still open the database.
+
+- **Moved pages and renamed labels.** Update your own guides and screenshots.
+  - *Customise* is now **Appearance** (Italian *Aspetto*, German *Darstellung*), in the account menu.
+  - Admin menu: *Overview* is **Dashboard**, *Permissions* is **Access**, *Site settings* is **Settings**
+    (tabs General, Sign-in, Maintenance, Appearance, Backup and restore), *Backup & migration* is
+    **Settings → Backup and restore**. Metrics, Audit log, Chat audit and Errors are tabs of **Activity**.
+    Claude, Codex and External APIs are under **Models → Providers**. Invitations are a tab of **Users**.
+  - Admin URLs are unchanged.
+
 ## 1.7.3 to 1.7.6
 
 Two database migrations (`v28_device_epoch`, schema version 28, additive;

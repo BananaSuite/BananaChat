@@ -537,6 +537,6 @@ def test_deprecated_checkpoints_leave_the_picker_and_the_automatic_choice(image_
     admin = Browser(image_app)
     admin.login("admin", "admin-password")
     page = admin.get(f"/admin/models/{checkpoint_id}/edit").get_data(as_text=True)
-    assert "A deprecated checkpoint is left out of the image picker" in page
+    assert "A deprecated checkpoint leaves the image picker" in page
     assert "chats move" not in page and 'id="replacement"' not in page
     assert "It is hidden from users and requests that name it are refused." in page

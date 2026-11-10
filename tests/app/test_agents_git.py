@@ -816,6 +816,6 @@ def test_pages_offer_repositories_in_both_languages(env, runner, fake_ollama, la
     assert ("Download changes (.patch)" if language == "en" else "Scarica le modifiche (.patch)") in page
     response = start(env.browser, repo_url="ftp://github.com/a/b")
     message = response.get_json()["error"]["message"]
-    assert message == ("Use the repository's https:// address; other protocols are not supported." if language == "en"
-                       else "Usa l'indirizzo https:// del repository; altri protocolli non sono supportati.")
+    assert message == ("Use the repository's https:// address. Other protocols are not supported." if language == "en"
+                       else "Usa l'indirizzo https:// del repository. Altri protocolli non sono supportati.")
 

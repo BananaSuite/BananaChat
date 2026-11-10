@@ -73,7 +73,7 @@
       {% if can_join %}
       <form method="post" action="{{ url_for('music.opt_in') }}">
         {{ csrf() }}
-        <button type="submit" class="btn btn-primary">{{ icon("music") }}{{ t("music.join") }}</button>
+        <button type="submit" class="btn btn-primary">{{ t("music.join") }}</button>
       </form>
       {% else %}
       <p class="hint mb-0">{{ t("music.join_paused") }}</p>

@@ -204,7 +204,7 @@ def revoke_session(user_id):
     user = user_or_404(user_id)
     session_hash = (request.form.get("session") or "")[:128]
     if user_id == me()["id"] and session_hash == security.current_session_hash():
-        flash("That is the session you are using; sign out instead.", "error")
+        flash("That's your current session. Sign out instead.", "error")
     elif users.revoke_session(user_id, session_hash):
         audit("user_session_revoke", user["username"])
         flash("Session ended.", "success")
@@ -269,7 +269,7 @@ def export(user_id, kind):
     safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", user["username"])
     response = download_export("data" if kind == "gdpr" else "chats", user, f"{safe_name}-{name}-{stamp}.json")
     if response is None:
-        return fail(f"An export of {user['username']} is still being downloaded. Try again when it has finished.",
+        return fail(f"An export of {user['username']} is in progress. Try again when it finishes.",
                     "admin.user_detail", user_id=user_id)
     audit("user_export", user["username"], {"kind": kind})
     return response

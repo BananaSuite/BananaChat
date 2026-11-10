@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.8.0 — 2026-11-09
+
+There are no database changes (the schema version is still 29), so 1.7.6 can still open the database.
+
+### Interface
+
+- The interface has a quieter style. Yellow is now only used for primary buttons, the current menu item and links in answers. Avatars, badges, meters and switches are neutral.
+- The top bar shows the main sections and the account menu. **Appearance** (previously *Customise*) has moved to the account menu, next to Account, BM mode and Sign out.
+- The account page is split into tabs: Profile, Security, Limits, Access and Data. Old links (`#two-step`, `#quota`, `#access`, `#data` and `#delete`) open the matching tab.
+- Text in English, Italian and German is shorter. Page introductions and hints that only described the interface have been removed.
+
+### Administration
+
+- The admin menu is a single list: Dashboard, Users, Models, Access, Limits, Personalities, Workers, Cloud sessions, Music, Activity and Settings. Phones show the same list, and old URLs still work.
+- Several pages are split into tabs: **Users** (Users, Invitations), **Models** (Catalogue, Downloads, Providers, Categories, Settings), **Limits** (General, Models, Tiers and grants, Requests), **Activity** (Metrics, Audit log, Chats, No-history chats, Errors) and **Settings** (General, Sign-in, Maintenance, Appearance, Backup and restore).
+- The dashboard shows the service status, items to review, key figures, the model server and recent activity.
+- Each form has one Save button. Sampling parameters are under **Advanced** on the model page.
+
+### Dependencies
+
+- Updated pypdf to 6.21.4 to fix seven known vulnerabilities. `requirements.txt` now requires at least this version.
+
 ## 1.7.6 — 2026-10-30
 
 Two database migrations (`v28_device_epoch`, `v29_community_kinds`, schema version 29).

@@ -128,7 +128,7 @@ def _tokens(name: str, *, maximum: int = FIXED_MAX) -> int:
 
     value = parse_amount(request.form.get(name))
     if value is None or not 0 <= value <= maximum:
-        raise ValueError(f"{name.replace('_', ' ').capitalize()}: write a number of tokens up to "
+        raise ValueError(f"{name.replace('_', ' ').capitalize()}: enter a number of tokens up to "
                          f"{maximum:,}, such as 30000 or 30k.")
     return int(round(value))
 
@@ -163,7 +163,7 @@ def music_settings():
         return _redirect("settings")
     site_settings.update(**values)
     _audit("settings", details=values)
-    flash("Music programme settings saved.", "success")
+    flash("Music settings saved.", "success")
     return _redirect("settings")
 
 
@@ -172,7 +172,7 @@ def music_settings():
 def music_hide():
     site_settings.update(music_visible=0)
     _audit("hide")
-    flash("The programme is hidden. Participants keep their bonus and can still leave from the Free quota page.", "info")
+    flash("Programme hidden. Participants keep their bonus.", "info")
     return _redirect("settings")
 
 
@@ -181,7 +181,7 @@ def music_hide():
 def music_remove():
     count = music_db.remove_program()
     _audit("remove", details={"opted_out": count})
-    flash(f"Programme removed: it is disabled and {count} account(s) were opted out.", "info")
+    flash(f"Programme removed. {count} account{'' if count == 1 else 's'} opted out.", "info")
     return _redirect("settings")
 
 

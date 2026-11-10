@@ -1,0 +1,6 @@
+{#- Tabs of the Users area: accounts and invitations. -#}
+{% from "admin/_macros.html" import tabs %}
+{{ tabs("Users", [
+  ("users", url_for("admin.users"), "Users", None),
+  ("invites", url_for("admin.invites"), "Invitations", None),
+], section) }}

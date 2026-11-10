@@ -6,7 +6,7 @@
 <div class="field field-narrow">
   <label for="{{ id }}"{% if not needed_for %} class="required"{% endif %}>Your password or authenticator code</label>
   <input type="password" id="{{ id }}" name="reauth_secret"{% if not needed_for %} required{% endif %} maxlength="1024" autocomplete="current-password" spellcheck="false" aria-describedby="{{ id }}-hint">
-  <span class="hint" id="{{ id }}-hint">{% if needed_for %}Needed {{ needed_for }}. {% endif %}Confirms it is you; not asked again for 10 minutes.</span>
+  <span class="hint" id="{{ id }}-hint">{% if needed_for %}Needed {{ needed_for }}. {% endif %}Not asked again for 10 minutes.</span>
 </div>
 {% endif %}
 {%- endmacro %}

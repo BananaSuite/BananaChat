@@ -11,7 +11,7 @@
     <label for="new-token" class="label">{{ name or t("developer.token_unnamed") }}</label>
     <div class="secret-box mt-1">
       <input type="text" id="new-token" readonly value="{{ token }}" class="mono">
-      <button type="button" class="btn" data-copy="{{ token }}">{{ icon("copy") }}{{ t("common.copy") }}</button>
+      <button type="button" class="btn" data-copy="{{ token }}">{{ t("common.copy") }}</button>
     </div>
     <p class="hint mt-1">{{ t("developer.scope_" ~ (scope or "full")) }} · {% if expires_at %}{{ t_html("developer.expires_on", date=(expires_at | local_time("date"))) }}{% else %}{{ t("developer.expires_never_long") }}{% endif %}</p>
     <p class="hint mt-1">{{ t("developer.token_usage_hint", base=api_base) }}</p>

@@ -28,7 +28,7 @@
   <div class="field{{ ' tier-entry-field' if entry }}">
     <label for="{{ prefix }}-tokens">Tokens used in the last 30 days</label>
     <input type="text" id="{{ prefix }}-tokens" name="min_tokens_30d" inputmode="decimal" autocomplete="off" maxlength="20" value="{{ (tier.min_tokens_30d | token_input) if tier else 0 }}" aria-describedby="{{ prefix }}-tokens-hint{% if entry %} {{ prefix }}-entry-hint{% endif %}"{% if entry %} readonly{% endif %}>
-    <span class="hint" id="{{ prefix }}-tokens-hint">Counted tokens (× each model's weight), e.g. 200k.</span>
+    <span class="hint" id="{{ prefix }}-tokens-hint">Weighted by model, for example 200k.</span>
   </div>
   <div class="field{{ ' tier-entry-field' if entry }}">
     <label for="{{ prefix }}-clean">Days without a suspension</label>
@@ -37,12 +37,12 @@
 </div>
 {%- endmacro %}
 
-{{ header("Limits", "Tiers raise the token limits of accounts that have been around, use the site regularly and behave.") }}
+{{ header("Limits") }}
 {% include "admin/_limits_tabs.html" %}
 
 <div class="alert {{ 'alert-success' if applies else 'alert-info' }} mb-3">{{ icon("info") }}
-  <p>{% if applies %}Tiers raise: {{ applies | join("; ") }}.{% else %}No limit uses tiers yet: turn on “Raise with tier levels” for a 5-hour or weekly limit on the <a href="{{ url_for('admin.quotas') }}">Services</a> tab (or for a model on the <a href="{{ url_for('admin.limit_models') }}">Models</a> tab).{% endif %}
-  Every hour, accounts move up to the highest tier whose requirements they all meet. They never move down by themselves; set or lock a tier on an account's limits page.</p>
+  <p>{% if applies %}Tiers raise {{ applies | join(", ") }}.{% else %}No limit uses tiers yet. Turn on “Apply account tiers” under <a href="{{ url_for('admin.quotas') }}">General</a> or <a href="{{ url_for('admin.limit_models') }}">Models</a>.{% endif %}
+  Accounts move up every hour when they meet a tier's requirements. They don't move down automatically.</p>
 </div>
 
 <div class="section-stack">
@@ -60,10 +60,10 @@
       </div>
     </div>
     {{ tier_fields(tier, "tier-" ~ tier.id, entry=loop.first) }}
-    {% if loop.first %}<p class="hint mb-0" id="tier-{{ tier.id }}-entry-hint">Every account starts in this tier, so its requirements are not checked.</p>{% endif %}
+    {% if loop.first %}<p class="hint mb-0" id="tier-{{ tier.id }}-entry-hint">Every account starts here, so these requirements are not checked.</p>{% endif %}
     <div class="form-actions">
-      {% if tiers | length > 1 %}<button type="submit" form="tier-delete-{{ tier.id }}" class="btn btn-danger">{{ icon("trash") }}Delete</button>{% endif %}
-      <button type="submit" name="action" value="save" class="btn btn-primary">Save {{ tier.name }}</button>
+      <button type="submit" name="action" value="save" class="btn">Save</button>
+      {% if tiers | length > 1 %}<button type="submit" form="tier-delete-{{ tier.id }}" class="btn btn-danger">Delete</button>{% endif %}
     </div>
   </form>
   {% if tiers | length > 1 %}
@@ -75,15 +75,15 @@
 
   <form method="post" action="{{ url_for('admin.limit_tier_create') }}" class="settings-section stack" aria-labelledby="tier-new-title">
     {{ csrf() }}
-    <h2 id="tier-new-title">Add a tier</h2>
-    <p class="muted small mb-0">New tiers are added at the top of the ladder.</p>
+    <h2 id="tier-new-title">New tier</h2>
+    <p class="muted small mb-0">New tiers go to the top.</p>
     {{ tier_fields(none, "tier-new") }}
-    <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("plus") }}Add tier</button></div>
+    <div class="form-actions"><button type="submit" class="btn">Add tier</button></div>
   </form>
 
   <form method="post" action="{{ url_for('admin.limit_tiers_promote') }}" class="row">
     {{ csrf() }}
-    <button type="submit" class="btn">{{ icon("refresh") }}Check promotions now</button>
+    <button type="submit" class="btn">Check promotions now</button>
   </form>
 </div>
 {% endblock %}

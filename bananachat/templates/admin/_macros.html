@@ -5,6 +5,8 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 {%- endmacro %}
 
+{#- The page title, with optional actions beside it (call block). `description` is for a fact the page
+    cannot show otherwise; most pages pass none. -#}
 {% macro header(title, description=None) -%}
 <header class="page-header admin-header">
   <div>
@@ -15,12 +17,19 @@
 </header>
 {%- endmacro %}
 
+{#- A row of tabs: items are (key, url, label, badge) and the one whose key is `current` is marked.
+    `secondary` draws the smaller row used inside a tab. -#}
+{% macro tabs(label, items, current, secondary=False) -%}
+<nav class="{{ 'subtabs' if secondary else 'tabs' }}" aria-label="{{ label }}">
+  {%- for key, href, text, badge in items %}
+  <a href="{{ href }}"{% if key == current %} aria-current="page"{% endif %}>{{ text }}{% if badge %} <span class="badge">{{ badge }}</span>{% endif %}</a>
+  {%- endfor %}
+</nav>
+{%- endmacro %}
+
+{#- An empty list: one line. `icon_name` is kept for the callers' signature and not drawn. -#}
 {% macro empty(icon_name, title, text=None) -%}
-<div class="empty">
-  {{ icon(icon_name) }}
-  <h3>{{ title }}</h3>
-  {% if text %}<p>{{ text }}</p>{% endif %}
-</div>
+<p class="admin-empty">{{ title }}{% if text %} {{ text }}{% endif %}</p>
 {%- endmacro %}
 
 {% macro pagination(page, endpoint, label="Pages") -%}
@@ -45,7 +54,7 @@
 {%- endmacro %}
 
 {% macro yes_no(value, yes="Yes", no="No") -%}
-{% if value %}<span class="badge badge-success">{{ icon("check") }}{{ yes }}</span>{% else %}<span class="badge">{{ no }}</span>{% endif %}
+{% if value %}<span class="badge badge-success">{{ yes }}</span>{% else %}<span class="badge">{{ no }}</span>{% endif %}
 {%- endmacro %}
 
 {% macro when(value) -%}
@@ -56,6 +65,6 @@
 <div class="field">
   <label for="{{ id }}">{{ label }}</label>
   <input type="datetime-local" id="{{ id }}" name="{{ name }}" value="{{ value }}"{% if min %} min="{{ min }}"{% endif %} aria-describedby="{{ id }}-hint">
-  <span class="hint" id="{{ id }}-hint">{{ hint or "Time in UTC. Leave empty for no end date." }}</span>
+  <span class="hint" id="{{ id }}-hint">{{ hint or "UTC. Leave empty for no end date." }}</span>
 </div>
 {%- endmacro %}

@@ -197,7 +197,7 @@ def test_error_messages_follow_the_page_language_but_not_for_api_clients(app):
     assert "Il modulo è scaduto" in fetched.json["error"]["message"]
     missing = client.get("/nope", headers={"Accept": "application/json", "X-Requested-With": "fetch"})
     assert missing.status_code == 404 and missing.json["error"]["message"] == \
-        "Questa pagina non esiste o non è più disponibile."
+        "Questa pagina non esiste."
     api = client.get("/v1/nope", headers={"Accept-Language": "it"})
     assert api.status_code == 404 and "Unknown endpoint" in api.json["error"]["message"]
     cross_site = client.post("/login", headers={"Sec-Fetch-Site": "cross-site"})

@@ -12,8 +12,8 @@
   </div>
 </div>
 <fieldset class="admin-fieldset">
-  <legend>Where the category's access rule applies</legend>
+  <legend>Its access rule applies to</legend>
   <label class="check"><input type="radio" name="scope" value="both"{% if current_scope == "both" %} checked{% endif %}><span>Chat and API</span></label>
-  <label class="check"><input type="radio" name="scope" value="chat"{% if current_scope == "chat" %} checked{% endif %}><span>Chat only<small>The API ignores this category.</small></span></label>
-  <label class="check"><input type="radio" name="scope" value="api"{% if current_scope == "api" %} checked{% endif %}><span>API only<small>The chat ignores this category.</small></span></label>
+  <label class="check"><input type="radio" name="scope" value="chat"{% if current_scope == "chat" %} checked{% endif %}><span>Chat only</span></label>
+  <label class="check"><input type="radio" name="scope" value="api"{% if current_scope == "api" %} checked{% endif %}><span>API only</span></label>
 </fieldset>

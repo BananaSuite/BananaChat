@@ -155,7 +155,7 @@ def rollout(model_id):
     model = _model_or_404(model_id)
     enabled = flag("enabled")
     if enabled and model["retired_at"]:
-        flash(f"{model['display_name']} is retired; restore it on its edit page before publishing it.", "error")
+        flash(f"{model['display_name']} is retired. Restore it on its edit page first.", "error")
         return back("admin.models", _anchor=f"model-{model_id}")
     if enabled and model["enrollment"] == "ignored":
         flash(IGNORED_MESSAGE.format(name=model["ollama_name"]), "error")
@@ -273,7 +273,7 @@ def _edit_form(model, known_categories: set[int]):
         )
     categories = _form_categories()
     if not set(categories) <= known_categories:
-        raise FormError("A selected category no longer exists; reload the page.")
+        raise FormError("A selected category no longer exists. Reload the page.")
     return fields, categories
 
 
@@ -292,11 +292,11 @@ def remove(model_id):
                 catalog.delete(model_id)
     except (model_lifecycle.ModelInUse, Timeout) as error:
         reason = str(error) if isinstance(error, model_lifecycle.ModelInUse) else "A model operation is still finishing."
-        flash(f"{model['display_name']} was not removed: {reason} Hide it or try again when they finish.", "error")
+        flash(f"{model['display_name']} not removed. {reason} Hide it or try again later.", "error")
         return back("admin.models", _anchor=f"model-{model_id}")
     audit("model_remove", model["ollama_name"])
-    flash(f"{model['display_name']} was removed from the catalogue. If the model is still installed, the next sync adds "
-          "it back as a new entry waiting for review.", "success")
+    flash(f"{model['display_name']} removed from the catalogue. If it is still installed, the next sync adds it back "
+          "for review.", "success")
     return back("admin.models")
 
 
@@ -305,15 +305,15 @@ def remove(model_id):
 def delete_from_server(model_id):
     model = _model_or_404(model_id)
     if model["backend"] != "ollama":
-        flash("Only Ollama models can be deleted from here; remove checkpoints on the ComfyUI server.", "error")
+        flash("Only Ollama models can be deleted here. Remove checkpoints on the ComfyUI server.", "error")
         return back("admin.models")
     name = model["backend_model_name"] or model["ollama_name"]
     when_idle = flag("when_idle")
     try:
         outcome = model_lifecycle.delete_from_server(model, me(), when_idle=when_idle)
     except model_lifecycle.ModelInUse as error:
-        flash(f"{name} was not deleted: {error} Try again when they finish, or choose “Delete after current "
-              "requests” on its edit page.", "error")
+        flash(f"{name} not deleted. {error} Try again later or use “Delete after current requests” on its "
+              "edit page.", "error")
         return back("admin.model_edit", model_id=model_id, _anchor="lifecycle")
     except ValueError as error:
         flash(str(error), "error")
@@ -344,7 +344,7 @@ def enable(model_id):
     if request.method == "POST":
         try:
             if model["retired_at"]:
-                raise FormError("This model is retired; restore it on its edit page first.")
+                raise FormError("This model is retired. Restore it on its edit page first.")
             if model["enrollment"] == "ignored":
                 raise FormError(IGNORED_MESSAGE.format(name=model["ollama_name"]))
             fields = {
@@ -357,7 +357,7 @@ def enable(model_id):
                               supports_vision=1 if flag("supports_vision") else 0)
             categories = _form_categories()
             if not set(categories) <= {row["id"] for row in all_categories}:
-                raise FormError("A selected category no longer exists; reload the page.")
+                raise FormError("A selected category no longer exists. Reload the page.")
             mode = choice("access_mode", access_db.MODES, label="Access")
             preset = choice("limit_preset", model_lifecycle.PRESETS, label="Limit preset")
         except FormError as error:
@@ -387,7 +387,7 @@ def ignore(model_id):
     model = _model_or_404(model_id)
     model_lifecycle.ignore_model(model, me())
     audit("model_ignore", model["ollama_name"])
-    flash(f"{model['ollama_name']} is ignored: it is hidden and never offered again. Restore it in Settings.",
+    flash(f"{model['ollama_name']} ignored. Restore it in Models → Settings.",
           "success")
     return back("admin.models")
 
@@ -530,8 +530,8 @@ def ignore_rule_add():
         flash(str(error), "error")
         return back("admin.model_settings", _anchor="ignore-list")
     audit("model_ignore_rule_add", pattern, {"ignored": affected})
-    flash(f"Models matching {pattern} are never offered or enabled." +
-          (f" Ignored now: {', '.join(affected[:10])}." if affected else ""), "success")
+    flash(f"Ignore rule {pattern} added." +
+          (f" Ignored: {', '.join(affected[:10])}." if affected else ""), "success")
     return back("admin.model_settings", _anchor="ignore-list")
 
 
@@ -695,7 +695,7 @@ def pull_cancel(job_id):
     if pulls.cancel(job_id, cleanup=cleanup):
         audit("model_pull_cancel", job["ollama_name"], {"job": job_id, "remove_partial": cleanup})
         flash(f"Download of {job['ollama_name']} cancelled." + ("" if cleanup else
-              " The partial download is kept; downloading it again resumes from there."), "success")
+              " Partial files kept."), "success")
     else:
         flash("That download had already finished.", "info")
     return back("admin.model_downloads")
@@ -892,7 +892,7 @@ def category_delete(category_id):
     category = _category_or_404(category_id)
     catalog.delete_category(category_id)
     audit("category_delete", category["name"], {"id": category_id})
-    flash(f"Category {category['name']} deleted; its models and access rules for it were detached.", "success")
+    flash(f"Category {category['name']} deleted.", "success")
     return back("admin.categories")
 
 

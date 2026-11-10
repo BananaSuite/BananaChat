@@ -160,7 +160,7 @@ def test_opening_sign_up_to_everyone_needs_a_confirmation(app, admin, field, val
             **{f"{prefix}{key}_color": "#123456" for prefix in ("", "light_")
                for key in ("primary", "secondary", "accent", "text", "sidebar", "bg")}}
     _stale(app)
-    assert "or to open sign-up to everyone" in admin.get("/admin/settings").get_data(as_text=True)
+    assert "to change this requirement or to open sign-up" in admin.get("/admin/settings").get_data(as_text=True)
     admin.post("/admin/settings", {**form, field: value})
     assert (_changed_settings(app)[field] == value) is not needs
     admin.post("/admin/settings", {**form, field: value, "reauth_secret": ADMIN_PASSWORD})

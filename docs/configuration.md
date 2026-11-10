@@ -30,8 +30,8 @@ answering. Monitors should poll `GET /status` (always HTTP 200, `status` is `ok`
 
 ## Offline model-server notices
 
-In **Admin → Site settings → Maintenance and announcements → Model-server
-status**, **Show the model-server offline warning** turns the notice on or off
+In **Admin → Settings → Maintenance → Model server**,
+**Warn users when the model server is offline** turns the notice on or off
 for all users (on by default). Users can choose **Hide for 24 hours** on an
 offline or backup-server notice; the choice is kept in that browser for that
 account, or for the current page only when browser storage is blocked. Hiding
@@ -239,7 +239,7 @@ amount per five hours; see [Architecture → Limits](architecture.md#limits).
 | `BC_NO_HISTORY_TTL_HOURS` | `24` | No-history chats are erased this long after their last message. Copies kept for the administrator audit remain until an administrator deletes them. |
 | `BC_DELETED_CHAT_RETENTION_DAYS` | `30` | Deleted chats are erased permanently after this many days (`0` erases immediately). |
 | `BC_METRICS_RETENTION_DAYS` | `30` | Request statistics and hardware snapshots older than this are removed. |
-| `BC_COMPUTE_SNAPSHOT_INTERVAL` | `30` | Seconds between the hardware snapshots (CPU, memory, GPU, loaded models) shown in Admin → Metrics (5–3600). |
+| `BC_COMPUTE_SNAPSHOT_INTERVAL` | `30` | Seconds between the hardware snapshots (CPU, memory, GPU, loaded models) shown in Admin → Activity → Metrics (5–3600). |
 
 ## Image generation
 
@@ -343,7 +343,7 @@ variables (see [workers](workers.md)).
 
 ## External API providers
 
-Hosted providers are set up in **Admin → Models → External APIs**, not in the
+Hosted providers are set up in **Admin → Models → Providers → External APIs**, not in the
 environment; see [external providers](external-providers.md). Their keys are
 stored encrypted under `BC_INSTANCE_DIR/.provider-keys` with a key derived from
 `BC_SECRET_KEY` (or `.secret_key`), so back up both together.
@@ -368,7 +368,7 @@ The server operator installs the tools; `sudo python3
 settings and manifests (with a `managed_root`), so administrators can create
 private profiles and sign them in from the pages. Profiles signed in on the
 command line keep working. Web administrators choose profiles, caps and budgets in
-**Administration → Models → Claude** and **Codex**: an account can stop at a
+**Administration → Models → Providers → Claude** and **Codex**: an account can stop at a
 share of the provider's own five-hour or weekly allowance (for example 70 % and
 90 %), and per model family at a share of that family's allowance (such as
 Fable). A cap on an allowance the provider does not report keeps the account

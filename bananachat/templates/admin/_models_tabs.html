@@ -1,10 +1,18 @@
-{#- Tabs of the Models area. Expects `tab` and `counts` ({"downloads", "new"}). -#}
-<nav class="tabs" aria-label="Models">
-  {% for key, endpoint, label in [("catalog", "admin.models", "Catalogue"), ("downloads", "admin.model_downloads", "Downloads"),
-                                  ("claude", "admin.claude_pool", "Claude"), ("codex", "admin.codex_pool", "Codex"),
-                                  ("providers", "admin.external_providers", "External APIs"),
-                                  ("settings", "admin.model_settings", "Settings")] %}
-  <a href="{{ url_for(endpoint) }}"{% if tab == key %} aria-current="page"{% endif %}>{{ label }}{% if key == "catalog" and counts.new %} <span class="badge badge-info" title="New models waiting for review">{{ counts.new }} new</span>{% elif key == "downloads" and counts.downloads %} <span class="badge badge-primary" title="Queued or running downloads">{{ counts.downloads }}</span>{% endif %}</a>
-  {% endfor %}
-  <a href="{{ url_for('admin.categories') }}"{% if tab == "categories" %} aria-current="page"{% endif %}>Categories</a>
-</nav>
+{#- Tabs of the Models area. Expects `tab` and `counts` ({"downloads", "new"}). Claude, Codex and the
+    external APIs are one "Providers" tab with a row of its own. -#}
+{% from "admin/_macros.html" import tabs %}
+{%- set providers_tab = tab in ("providers", "claude", "codex") -%}
+{{ tabs("Models", [
+  ("catalog", url_for("admin.models"), "Catalogue", (counts.new ~ " new") if counts.new else None),
+  ("downloads", url_for("admin.model_downloads"), "Downloads", counts.downloads or None),
+  ("providers", url_for("admin.external_providers"), "Providers", None),
+  ("categories", url_for("admin.categories"), "Categories", None),
+  ("settings", url_for("admin.model_settings"), "Settings", None),
+], "providers" if providers_tab else tab) }}
+{% if providers_tab %}
+{{ tabs("Providers", [
+  ("providers", url_for("admin.external_providers"), "External APIs", None),
+  ("claude", url_for("admin.claude_pool"), "Claude", None),
+  ("codex", url_for("admin.codex_pool"), "Codex", None),
+], tab, secondary=True) }}
+{% endif %}

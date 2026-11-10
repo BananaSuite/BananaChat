@@ -1,26 +1,19 @@
 BananaChat
-Copyright (c) 2026 Luca Zani and contributors.
+Copyright (c) 2026 Luca Zani and contributors
 
-Contributors retain copyright in their respective contributions.
+BananaChat was created by Luca Zani (OverloadedTech) in July 2026. It started
+as BananaAI, a part of BananaWiki, and was rewritten as a separate application
+for its open-source release. Contributors keep the copyright to their
+contributions.
 
-Started by Luca Zani (OverloadedTech) on 9 July 2026.
-First recorded commit: 3b79b7595c6ed1c1f2a2e2f065635adfe47a5a86
-(2026-07-09T17:01:12+02:00).
-BananaChat began as BananaAI inside BananaWiki and was rewritten as a separate
-application for the open-source release. BananaWiki's history starts with
-1a7c1e99847a5145429b4033293a497a118d85fc (2026-02-20T01:16:43+01:00).
-The development history before the public release is not published; this
-repository starts from a clean export of the source.
+BananaChat is licensed under the GNU Affero General Public License v3.0 only
+(AGPL-3.0-only). See LICENSE for the full text. Third-party components are
+licensed under their own terms, listed below.
 
-Licensed under the GNU Affero General Public License, version 3 only
-(AGPL-3.0-only). See LICENSE. Third-party components keep their own licences
-and notices, listed below.
-
-The inline icons in bananachat/templates/partials/icons.html include SVG paths
-from Feather v4.29.2 and local adaptations. The Feather-derived portions keep
-their MIT licence. Upstream source:
-https://github.com/feathericons/feather/tree/v4.29.2
-The original copyright and permission notice follows:
+Some of the inline icons in bananachat/templates/partials/icons.html are
+based on SVG paths from Feather v4.29.2
+(https://github.com/feathericons/feather/tree/v4.29.2). Those parts remain
+under Feather's MIT licence, which follows:
 
 The MIT License (MIT)
 
@@ -44,14 +37,18 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-The administrator's worker terminal and VNC viewer serve two vendored browser
-libraries, bundled unmodified under bananachat/static/vendor (see its README):
-xterm.js (@xterm/xterm 5.5.0 and @xterm/addon-fit 0.10.0), MIT licence,
-Copyright (c) 2017-2019 The xterm.js authors, Copyright (c) 2014-2016
-SourceLair Private Company, Copyright (c) 2012-2013 Christopher Jeffrey; and
-noVNC (@novnc/novnc 1.5.0), Mozilla Public License 2.0, Copyright (C) 2022 The
-noVNC authors, including pako (MIT, Copyright (C) 2014-2017 by Vitaly
-Puzrin and Andrei Tuputcyn). Their licence texts are next to the files:
-bananachat/static/vendor/xterm/LICENSE.txt, bananachat/static/vendor/novnc/
-LICENSE.txt, LICENSE.MPL-2.0 and LICENSE.pako. The MPL-2.0 source code is
-the published @novnc/novnc package.
+The worker terminal and VNC viewer in the administration area use two browser
+libraries, bundled unmodified in bananachat/static/vendor (see the README
+there):
+
+- xterm.js (@xterm/xterm 5.5.0 and @xterm/addon-fit 0.10.0), MIT licence.
+  Copyright (c) 2017-2019 The xterm.js authors, Copyright (c) 2014-2016
+  SourceLair Private Company, Copyright (c) 2012-2013 Christopher Jeffrey.
+- noVNC (@novnc/novnc 1.5.0), Mozilla Public License 2.0. Copyright (C) 2022
+  The noVNC authors. It includes pako (MIT licence, Copyright (C) 2014-2017 by
+  Vitaly Puzrin and Andrei Tuputcyn).
+
+Their licence texts are next to the files: bananachat/static/vendor/xterm/
+LICENSE.txt, and bananachat/static/vendor/novnc/LICENSE.txt, LICENSE.MPL-2.0
+and LICENSE.pako. The source code of the MPL-2.0 files is the published
+@novnc/novnc package.

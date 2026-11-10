@@ -35,34 +35,23 @@
   <div class="topbar-end">
     {% block topbar_extra %}{% endblock %}
     {% if current_user %}
-    {% if has_endpoint("customization.index") %}
-    <a class="btn btn-ghost btn-sm topbar-shortcut bm-hide" href="{{ url_for('customization.index') }}" aria-label="{{ t('nav.customize') }}" title="{{ t('nav.customize') }}"{% if path.startswith('/customize') %} aria-current="page"{% endif %}>{{ icon("palette") }}<span>{{ t("nav.customize") }}</span></a>
-    {% endif %}
     <details class="menu topbar-account" data-menu>
       <summary class="icon-btn" aria-label="{{ t('nav.account_menu') }}" title="{{ t('nav.account_menu') }}"><span class="avatar" aria-hidden="true">{{ current_user.username[:1] }}</span></summary>
       <div class="menu-panel">
         <div class="menu-label menu-identity">{{ current_user.username }}</div>
-        <a href="{{ url_for('account.index') }}"{% if path.startswith('/account') %} aria-current="page"{% endif %}>{{ icon("user") }}{{ t("nav.account") }}</a>
-        {% if has_endpoint("customization.index") %}<a href="{{ url_for('customization.index') }}"{% if path.startswith('/customize') %} aria-current="page"{% endif %}>{{ icon("palette") }}{{ t("nav.customize") }}</a>{% endif %}
+        <a href="{{ url_for('account.index') }}"{% if path.startswith('/account') %} aria-current="page"{% endif %}>{{ t("nav.account") }}</a>
+        {% if has_endpoint("customization.index") %}<a href="{{ url_for('customization.index') }}"{% if path.startswith('/customize') %} aria-current="page"{% endif %}>{{ t("nav.customize") }}</a>{% endif %}
         {% if bm_mode_switchable and has_endpoint("customization.toggle_bm_mode") %}
         <form method="post" action="{{ url_for('customization.toggle_bm_mode') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="next" value="{{ path }}">
-          <button type="submit" aria-pressed="{{ 'true' if bm_mode else 'false' }}">{{ icon("sliders") }}{{ t("nav.bm_mode") }}{% if bm_mode %}<span class="menu-check">{{ icon("check") }}</span>{% endif %}</button>
+          <button type="submit" aria-pressed="{{ 'true' if bm_mode else 'false' }}">{{ t("nav.bm_mode") }}{% if bm_mode %}<span class="menu-check">{{ icon("check") }}</span>{% endif %}</button>
         </form>
         {% endif %}
         <hr>
-        <div class="menu-label">{{ t("nav.language") }}</div>
-        {% for code, name in language_names.items() %}
-        <form method="post" action="{{ language_switch_url(code) }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" lang="{{ code }}"{% if code == lang %} aria-current="true"{% endif %}>{{ icon("globe") }}{{ name }}{% if code == lang %}<span class="menu-check">{{ icon("check") }}</span>{% endif %}</button>
-        </form>
-        {% endfor %}
-        <hr>
         <form method="post" action="{{ url_for('auth.logout') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">{{ icon("logout") }}{{ t("nav.sign_out") }}</button>
+          <button type="submit">{{ t("nav.sign_out") }}</button>
         </form>
       </div>
     </details>

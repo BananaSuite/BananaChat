@@ -139,7 +139,7 @@ def test_invalid_music_weekly_bonus_keeps_saved_program(app, admin, amount):
     response = admin.post("/admin/music/settings", {**MUSIC_FORM, "music_bonus_fixed_weekly_tokens": amount},
                           follow_redirects=True)
     assert response.status_code == 200
-    assert f"write a number of tokens up to {maximum:,}" in response.get_data(as_text=True)
+    assert f"enter a number of tokens up to {maximum:,}" in response.get_data(as_text=True)
     with app.app_context():
         after = settings.get()
         for name in MUSIC_FORM:
@@ -239,5 +239,5 @@ def test_account_speed_remains_separate_and_historical_usage_is_unified(app, adm
     assert "Default (45k)" in people and "slowed down" in people
     assert_no_slow_fields(people)
     custom = admin.get(f"/admin/users/{user['id']}/limits").get_data(as_text=True)
-    assert 'name="speed" value="slow"' in custom and "Lowest priority." in custom
+    assert 'name="speed" value="slow"' in custom and "Slow down" in custom
     assert_no_slow_fields(custom)

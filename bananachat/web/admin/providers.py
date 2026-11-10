@@ -225,7 +225,7 @@ def enroll(provider_id):
         flash(str(error), 'error')
     else:
         audit('external_model_enroll', row['ollama_name'], {'provider_id': provider_id, 'model_id': row['id']})
-        flash('Model saved. Review and publish it in the catalogue; its limits are already installed.', 'success')
+        flash('Model saved. Review and publish it in the catalogue.', 'success')
     return back('admin.external_providers', _anchor=f'provider-{provider_id}')
 
 
@@ -250,7 +250,7 @@ def enroll_many(provider_id):
                                                 'the catalogue.' if publish else
                                                 'added. Review and publish them in the catalogue.'), 'success')
         if problems:
-            flash('Not added: ' + '; '.join(f'{name} ({reason})' for name, reason in problems[:10]), 'error')
+            flash('Not added: ' + ' · '.join(f'{name} ({reason})' for name, reason in problems[:10]), 'error')
     return back('admin.external_providers', _anchor=f'provider-{provider_id}')
 
 
@@ -266,5 +266,5 @@ def remove(provider_id):
         db.execute('DELETE FROM external_providers WHERE id=?', (provider_id,))
     provider_secrets.remove(row['secret_ref'])
     audit('external_provider_remove', row['name'], {'id': provider_id})
-    flash('Provider and its credential removed. Its model history is retained; models are retired.', 'success')
+    flash('Provider removed. Its models are retired.', 'success')
     return back('admin.external_providers')

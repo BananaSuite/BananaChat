@@ -3,7 +3,7 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Requests · Limits{% endblock %}
 {% block admin_content %}
-{{ header("Limits", "Requests for more 5-hour or weekly tokens, a higher request rate, a temporary increase or a higher reasoning effort.") }}
+{{ header("Limits") }}
 {% include "admin/_limits_tabs.html" %}
 
 <section id="requests" aria-labelledby="requests-title">
@@ -17,7 +17,7 @@
   </div>
   <details class="admin-help mt-2">
     <summary>{{ icon("chevron-down") }}<span>How approving works</span></summary>
-    <p class="muted small mb-0">Approving applies the change at once: a custom limit for the account (never lower than what it has), a grant for a temporary increase that ends by itself, or the requested reasoning effort level (and every level below it). You can decide any request at any time, also while the community is voting on it; tokens people pledged to it are then given back. A request whose community voting closed keeps waiting here until you decide or its author cancels it.</p>
+    <p class="muted small mb-0">Approving applies the change at once. You can decide a request while the community votes on it. Pledged tokens are then given back.</p>
   </details>
   {% if requests %}
   <div class="grid grid-2 mt-1">
@@ -35,7 +35,7 @@
       {% if item.community %}
       {% set c = item.community.consent %}
       <p class="small mb-1"><span class="badge badge-info">Community</span>
-        {% if req.status == "pending" %}{% if item.community.open %}voting open until {{ when(req.community_until) }}{% else %}voting closed without consent: waiting for you{% endif %} · {% endif %}
+        {% if req.status == "pending" %}{% if item.community.open %}voting open until {{ when(req.community_until) }}{% else %}voting closed without consent, waiting for you{% endif %} · {% endif %}
         {{ c.supporters }} supporting ({{ c.min_supporters }} needed), {{ c.objectors }} objecting ({{ c.percent }}% in favour, {{ c.approval_percent }}% needed){% if c.needed %} · {{ c.pledged | compact }} of {{ c.needed | tokens }} pledged{% endif %}{% if req.boost_ends_at %} · increase until {{ when(req.boost_ends_at) }}{% endif %}</p>
       {% endif %}
       {% if req.status == "pending" %}
@@ -55,7 +55,7 @@
     {% endfor %}
   </div>
   {% else %}
-  {{ empty("sliders", "No " ~ ("" if status == "all" else status ~ " ") ~ "requests") }}
+  {{ empty("sliders", "No " ~ ("" if status == "all" else status ~ " ") ~ "requests.") }}
   {% endif %}
 </section>
 {% endblock %}

@@ -3,9 +3,8 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Audit log{% endblock %}
 {% block admin_content %}
-{% call header("Audit log", "Administrator and security-relevant actions, newest first.") %}
-  <a class="btn" href="{{ url_for('admin.errors') }}">{{ icon("alert") }}Error log</a>
-{% endcall %}
+{{ header("Activity") }}
+{% include "admin/_activity_tabs.html" %}
 
 <form method="get" action="{{ url_for('admin.audit') }}" class="toolbar mb-2" aria-label="Filter">
   <div class="field field-inline">
@@ -38,7 +37,7 @@
 </div>
 {{ pagination(page, "admin.audit", "Audit log pages", action=action or None) }}
 {% else %}
-{{ empty("file", "Nothing recorded yet") }}
+{{ empty("file", "Nothing recorded yet.") }}
 {% endif %}
 {% endblock %}
 {% block scripts %}<script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>{% endblock %}

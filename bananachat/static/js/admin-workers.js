@@ -1,6 +1,6 @@
 // Administrator page for remote workers: registration (token shown once) and a live list.
 // Every value from the server is inserted as text (el()/textContent), never as HTML.
-import { api, boot, el, icon, pageData, secretDialog, setBusy, toast } from "./core.js";
+import { api, boot, el, pageData, secretDialog, setBusy, toast } from "./core.js";
 
 const data = pageData();
 const urls = data.urls || {};
@@ -10,7 +10,7 @@ const updated = document.getElementById("workers-updated");
 const REFRESH_MS = 15000;
 
 const STATUS_CLASS = { online: "badge-success", busy: "badge-warning", disabled: "badge-danger" };
-const ACTIVITY_CLASS = { idle: "badge-success", light: "badge-info", active: "badge-warning", gaming: "badge-danger" };
+const ACTIVITY_CLASS = { gaming: "badge-warning" };
 
 function badge(text, cls) {
   return el("span", { class: `badge ${cls || ""}`.trim(), text });
@@ -47,7 +47,7 @@ function row(worker) {
   if (worker.platform) nameCell.append(el("br"), el("span", { class: "small muted", text: worker.platform }));
 
   const statusCell = el("td", {}, badge(capitalize(worker.status), STATUS_CLASS[worker.status]));
-  if (worker.working) statusCell.append(" ", badge("Running a job", "badge-primary"));
+  if (worker.working) statusCell.append(" ", badge("Running a job"));
   if (worker.paused) statusCell.append(" ", badge("Paused after failures", "badge-warning"));
 
   const activityCell = el("td", { dataset: { label: "Activity:" } },
@@ -73,10 +73,10 @@ function row(worker) {
     el("button", { type: "submit", class: "btn btn-sm", text: disabled ? "Enable" : "Disable" }),
     disabled ? null : { message: `Stop sending jobs to “${worker.name}”? A job it is running now is stopped.`, label: "Disable" });
   const remove = actionForm(url(urls.delete), {},
-    el("button", { type: "submit", class: "btn btn-sm btn-danger" }, icon("trash"), el("span", { text: "Remove" })),
+    el("button", { type: "submit", class: "btn btn-sm btn-danger", text: "Remove" }),
     { message: `Remove “${worker.name}”? Its token stops working immediately and a job it is running now is stopped.`, label: "Remove", danger: true });
 
-  const manage = el("a", { class: "btn btn-sm", href: url(urls.detail) }, icon("settings"), el("span", { text: "Manage" }));
+  const manage = el("a", { class: "btn btn-sm", href: url(urls.detail), text: "Manage" });
   return el("tr", { dataset: { workerId: worker.id } }, nameCell, statusCell, activityCell, gpuCell, modelsCell, seen,
     el("td", { class: "actions" }, manage, " ", toggle, " ", remove));
 }
@@ -97,7 +97,7 @@ async function refresh() {
   try {
     const result = await api(urls.data);
     render(result.workers || []);
-    updated.textContent = `Refreshes every 15 seconds · updated ${new Date().toLocaleTimeString()}`;
+    updated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
   } catch (error) {
     updated.textContent = `Could not refresh: ${error.message}`;
   }
@@ -112,7 +112,7 @@ function addConfirmationField() {
     el("label", { for: id, class: "required", text: "Your password or authenticator code" }),
     el("input", { type: "password", id, name: "reauth_secret", required: "", maxlength: "1024",
                   autocomplete: "current-password", spellcheck: "false", "aria-describedby": `${id}-hint` }),
-    el("span", { class: "hint", id: `${id}-hint`, text: "Confirms it is you; not asked again for 10 minutes." }),
+    el("span", { class: "hint", id: `${id}-hint`, text: "Not asked again for 10 minutes." }),
   ]);
   form.querySelector("button[type=submit]").before(field);
   return field.querySelector("input");

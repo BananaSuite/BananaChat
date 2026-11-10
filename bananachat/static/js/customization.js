@@ -1,4 +1,4 @@
-// Customize page: live preview of appearance preferences, saved automatically.
+// Appearance page: live preview of display preferences, saved automatically.
 import {
   api, confirmDialog, fragmentTarget, keepInitialFragmentVisible, pageData,
   requestHeaders, revealDisclosures, t, toast,
@@ -20,10 +20,6 @@ function revealSettings(hash = window.location.hash, scroll = true) {
 }
 
 window.addEventListener("hashchange", () => revealSettings());
-document.querySelector(".customize-toc")?.addEventListener("click", (event) => {
-  const link = event.target.closest('a[href^="#"]');
-  if (link) revealSettings(link.hash);
-});
 const initialSettingsTarget = revealSettings(window.location.hash, false);
 if (initialSettingsTarget?.closest(".customize-extra")) keepInitialFragmentVisible(initialSettingsTarget);
 

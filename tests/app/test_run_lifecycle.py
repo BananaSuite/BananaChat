@@ -238,7 +238,7 @@ def test_a_worker_exiting_saves_and_charges_detached_answers_and_frees_their_pla
     assert len(saved) == 1 and saved[0]["generation_state"] == "interrupted" and saved[0]["content"]
     state = _rows(app, "SELECT generation_state, generation_error FROM chat_sessions WHERE id=?", session_id)[0]
     assert state["generation_state"] == "interrupted"
-    assert state["generation_error"] == "The server stopped while answering; this is the part saved so far."
+    assert state["generation_error"] == "The server stopped while answering. This is the part saved so far."
     ledger = _rows(app, "SELECT tokens_out FROM credit_ledger")
     assert len(ledger) == 1 and ledger[0]["tokens_out"] > 0
     assert _rows(app, "SELECT * FROM inference_queue") == [] and _rows(app, "SELECT * FROM active_streams") == []

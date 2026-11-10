@@ -3,7 +3,7 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Model downloads{% endblock %}
 {% block admin_content %}
-{% call header("Models", "Download models to the inference server, one after another or several at once.") %}{% endcall %}
+{{ header("Models") }}
 {% include "admin/_models_tabs.html" %}
 
 <section class="settings-section mb-3" id="queue" aria-labelledby="queue-title">
@@ -13,9 +13,9 @@
       <form method="post" action="{{ url_for('admin.pulls_queue') }}">
         {{ csrf() }}
         {% if queue.queue_paused %}
-        <button type="submit" name="action" value="resume_all" class="btn btn-sm btn-primary">{{ icon("play") }}Resume all</button>
+        <button type="submit" name="action" value="resume_all" class="btn btn-sm btn-primary">Resume all</button>
         {% else %}
-        <button type="submit" name="action" value="pause_all" class="btn btn-sm">{{ icon("pause") }}Pause all</button>
+        <button type="submit" name="action" value="pause_all" class="btn btn-sm">Pause all</button>
         {% endif %}
       </form>
       <form method="post" action="{{ url_for('admin.pulls_queue') }}" data-confirm="Cancel every queued and running download? Partial downloads of models that were not installed are removed." data-confirm-danger>
@@ -32,9 +32,9 @@
       <span class="small muted" id="queue-bytes">{% if queue.bytes_total %}{{ queue.bytes_done | filesize }} of {{ queue.bytes_total | filesize }}{% else %}{{ queue.percent }}%{% endif %}</span>
     </div>
   </div>
-  {% if queue.queue_paused %}<p class="alert alert-warning mb-0 mt-1">The queue is paused. Nothing downloads until you resume it; paused downloads continue from where they stopped.</p>{% endif %}
-  {% if queue.active and queue.background.alive is false %}<p class="alert alert-warning mb-0 mt-1" id="background-warning">No server process is running the background services{% if queue.background.age %} (last seen {{ queue.background.age }} s ago){% endif %}, so queued downloads cannot start. Restart BananaChat (<code>sudo bananachat restart</code>), and run it with Gunicorn or <code>python -m bananachat</code>, which start them.</p>{% endif %}
-  <p class="small {{ 'danger-text' if disk.checked and not disk.ok else 'muted' }} mb-0 mt-1" id="disk-space">{{ icon("server") }} {{ disk.message }}</p>
+  {% if queue.queue_paused %}<p class="alert alert-warning mb-0 mt-1">The queue is paused. Downloads continue where they stopped when you resume it.</p>{% endif %}
+  {% if queue.active and queue.background.alive is false %}<p class="alert alert-warning mb-0 mt-1" id="background-warning">No server process is running the background services{% if queue.background.age %} (last seen {{ queue.background.age }} s ago){% endif %}, so queued downloads cannot start. Restart BananaChat with <code>sudo bananachat restart</code>.</p>{% endif %}
+  <p class="small {{ 'danger-text' if disk.checked and not disk.ok else 'muted' }} mb-0 mt-1" id="disk-space">{{ disk.message }}</p>
 </section>
 
 <div class="grid grid-2 mb-3 download-forms">
@@ -44,9 +44,9 @@
     <div class="field">
       <label for="pull-name" class="required">Model name</label>
       <input type="text" id="pull-name" name="name" required maxlength="300" placeholder="llama3.2:3b" autocomplete="off" spellcheck="false" aria-describedby="pull-name-hint">
-      <span class="hint" id="pull-name-hint">A name from the Ollama library (<code>qwen3:8b</code>) or a Hugging Face GGUF (<code>hf.co/owner/repository:Q4_K_M</code>).</span>
+      <span class="hint" id="pull-name-hint">From the Ollama library (<code>qwen3:8b</code>) or a Hugging Face GGUF (<code>hf.co/owner/repository:Q4_K_M</code>).</span>
     </div>
-    <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("download") }}Download</button></div>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Download</button></div>
   </form>
 
   <form method="post" action="{{ url_for('admin.pulls_bulk') }}" class="stack sub-card" id="bulk" data-busy>
@@ -55,7 +55,7 @@
     <div class="field">
       <label for="bulk-names">Model names</label>
       <textarea id="bulk-names" name="names" rows="4" maxlength="20000" spellcheck="false" class="mono" placeholder="llama3.2:3b&#10;qwen3:8b" aria-describedby="bulk-names-hint"></textarea>
-      <span class="hint" id="bulk-names-hint">One per line (or separated by commas), up to {{ max_bulk }}. Installed and already queued models are skipped.</span>
+      <span class="hint" id="bulk-names-hint">One per line, up to {{ max_bulk }}. Installed and queued models are skipped.</span>
     </div>
     {% if missing %}
     <fieldset class="admin-fieldset">
@@ -77,7 +77,7 @@
       </div>
     </fieldset>
     {% endif %}
-    <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("download") }}Queue downloads</button></div>
+    <div class="form-actions"><button type="submit" class="btn">Queue downloads</button></div>
   </form>
 </div>
 
@@ -94,15 +94,15 @@
       <div class="field"><label for="ckpt-sha" class="required">SHA-256</label><input type="text" id="ckpt-sha" name="expected_sha256" required minlength="64" maxlength="64" pattern="[0-9a-fA-F]{64}" spellcheck="false" class="mono"></div>
       <div class="field"><label for="ckpt-size">Size in bytes</label><input type="number" id="ckpt-size" name="expected_size" min="1" step="1"></div>
     </div>
-    <p class="hint">The checkpoint agent on the compute server downloads the file and verifies its SHA-256 before ComfyUI can use it.</p>
-    <div class="form-actions"><button type="submit" class="btn btn-primary">{{ icon("download") }}Download checkpoint</button></div>
+    <p class="hint">The file is verified against its SHA-256 before ComfyUI can use it.</p>
+    <div class="form-actions"><button type="submit" class="btn">Download checkpoint</button></div>
   </form>
   {% elif not checkpoint.images_enabled %}
-  <p class="muted small mb-0">Image generation is disabled (<code>BC_IMAGE_BACKEND</code>), so checkpoints are not downloaded from here.</p>
+  <p class="muted small mb-0">Image generation is off (<code>BC_IMAGE_BACKEND</code>).</p>
   {% elif checkpoint.problem %}
   <p class="danger-text mb-0">{{ checkpoint.problem }}</p>
   {% else %}
-  <p class="muted small mb-0">Configure the checkpoint download agent (<code>BC_CHECKPOINT_AGENT_URL</code> and <code>BC_CHECKPOINT_AGENT_TOKEN_FILE</code>) to download Hugging Face checkpoints for ComfyUI.</p>
+  <p class="muted small mb-0">Needs the checkpoint download agent. Set <code>BC_CHECKPOINT_AGENT_URL</code> and <code>BC_CHECKPOINT_AGENT_TOKEN_FILE</code>.</p>
   {% endif %}
 </section>
 
@@ -110,7 +110,7 @@
   <div class="row-between mb-1">
     <h2 id="downloads-title" class="mb-0">Downloads</h2>
     {% if jobs | selectattr("status", "in", ["done", "failed", "cancelled"]) | list %}
-    <form method="post" action="{{ url_for('admin.pulls_clear') }}" data-confirm="Remove finished downloads from the list? Completed checkpoint downloads are kept because backups use them to restore checkpoints.">
+    <form method="post" action="{{ url_for('admin.pulls_clear') }}" data-confirm="Remove finished downloads from the list? Completed checkpoint downloads stay, because backups use them.">
       {{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost">Clear finished</button>
     </form>
     {% endif %}
@@ -145,31 +145,31 @@
           <td class="actions">
             {% if job.status == "queued" and job.next_attempt_at and not job.paused %}
             <form method="post" action="{{ url_for('admin.pull_retry_now', job_id=job.id) }}">
-              {{ csrf() }}<button type="submit" class="btn btn-sm" aria-label="Retry {{ job.ollama_name }} now">{{ icon("refresh") }}Retry now</button>
+              {{ csrf() }}<button type="submit" class="btn btn-sm" aria-label="Retry {{ job.ollama_name }} now">Retry now</button>
             </form>
             {% endif %}
             {% if job.status in ("queued", "pulling") %}
             <form method="post" action="{{ url_for('admin.pull_pause', job_id=job.id) }}">
               {{ csrf() }}
-              {% if job.paused %}<input type="hidden" name="resume" value="1"><button type="submit" class="btn btn-sm" aria-label="Resume {{ job.ollama_name }}">{{ icon("play") }}Resume</button>
+              {% if job.paused %}<input type="hidden" name="resume" value="1"><button type="submit" class="btn btn-sm" aria-label="Resume {{ job.ollama_name }}">Resume</button>
               {% else %}<button type="submit" class="btn btn-sm" aria-label="Pause {{ job.ollama_name }}">Pause</button>{% endif %}
             </form>
             <details class="menu" data-menu>
               <summary class="btn btn-sm" aria-label="Cancel the download of {{ job.ollama_name }}">Cancel</summary>
               <div class="menu-panel">
                 <form method="post" action="{{ url_for('admin.pull_cancel', job_id=job.id) }}" data-confirm="Cancel the download of {{ job.ollama_name }} and remove what was downloaded?">
-                  {{ csrf() }}<button type="submit" class="danger">{{ icon("trash") }}Cancel and remove partial files</button>
+                  {{ csrf() }}<button type="submit" class="danger">Cancel and remove partial files</button>
                 </form>
                 <form method="post" action="{{ url_for('admin.pull_cancel', job_id=job.id) }}">
-                  {{ csrf() }}<input type="hidden" name="keep_partial" value="1"><button type="submit">{{ icon("close") }}{% if job.backend == "comfyui" %}Stop tracking, keep remote download{% else %}Cancel, keep partial files{% endif %}</button>
+                  {{ csrf() }}<input type="hidden" name="keep_partial" value="1"><button type="submit">{% if job.backend == "comfyui" %}Stop tracking, keep remote download{% else %}Cancel, keep partial files{% endif %}</button>
                 </form>
-                {% if job.backend == "comfyui" %}<p class="small muted">Keeping files lets the checkpoint download continue on the compute server. Choose “Cancel and remove partial files” to stop it there too.</p>{% endif %}
+                {% if job.backend == "comfyui" %}<p class="small muted">Keeping files lets the download continue on the compute server.</p>{% endif %}
               </div>
             </details>
             {% else %}
             {% if job.status in ("failed", "cancelled") %}
             <form method="post" action="{{ url_for('admin.pull_retry', job_id=job.id) }}">
-              {{ csrf() }}<button type="submit" class="btn btn-sm">{{ icon("refresh") }}Retry</button>
+              {{ csrf() }}<button type="submit" class="btn btn-sm">Retry</button>
             </form>
             {% endif %}
             <form method="post" action="{{ url_for('admin.pull_delete', job_id=job.id) }}">
@@ -182,7 +182,7 @@
       </tbody>
     </table>
   </div>
-  <p class="hint mt-1" id="downloads-notice" hidden>Downloads changed. <a href="{{ url_for('admin.model_downloads') }}#downloads">Reload the page</a> to see the latest state.</p>
+  <p class="hint mt-1" id="downloads-notice" hidden>Downloads changed. <a href="{{ url_for('admin.model_downloads') }}#downloads">Reload</a></p>
   {% else %}
   <p class="muted">No downloads yet.</p>
   {% endif %}

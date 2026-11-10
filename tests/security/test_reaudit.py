@@ -337,7 +337,7 @@ def test_fc1_2_message_text_counts_towards_the_account_storage_limit(make_app, m
 
     refused = send(alice, session_id, "x" * 60_000)
     assert refused.status_code == 413 and refused.get_json()["error"]["code"] == "storage_limit"
-    assert "storage limit for messages (1 MB)" in refused.get_json()["error"]["message"]
+    assert "storage limit reached (1 MB)" in refused.get_json()["error"]["message"]
     assert send(alice, session_id, "short").status_code == 200  # still under the limit
     wait_idle(app, session_id)
     # Administrators are exempt.
