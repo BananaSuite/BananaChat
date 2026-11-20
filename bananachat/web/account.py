@@ -15,11 +15,11 @@ from flask import (Blueprint, abort, current_app, flash, g, redirect, render_tem
 
 from bananachat import PRODUCT_NAME, db, security, totp
 from bananachat.db import access as access_db
-from bananachat.db import catalog, chats, credits, tokens, users
+from bananachat.db import catalog, chats, credits, hosting_links, tokens, users
 from bananachat.db import limits as limits_db
 from bananachat.formatting import local_time, parse_amount, tokens_text
 from bananachat.i18n import DECIMAL_COMMA, translate, translate_html
-from bananachat.services import community, exports, limits, two_step
+from bananachat.services import community, exports, hosting_signin, limits, two_step
 from bananachat.services.access import AccessContext, is_image_model, is_text_model
 from bananachat.services.agents import service as agents_service
 
@@ -311,6 +311,11 @@ def _page(draft: dict | None = None):
     pending = credits.pending_request(user["id"])
     community_options = community.settings(settings)
     form = _request_form(user) if user["role"] != "admin" else None
+    hosting_mode = hosting_signin.effective_mode(settings)
+    hosting_link = hosting_links.link_of(user["id"]) if hosting_mode != "local" else None
+    if hosting_mode != "local" and hosting_link is None:
+        # The link form continues to the portal once the password is confirmed.
+        g.form_action_origins = (hosting_signin.portal_origin(),)
     if draft is None and form is not None and request.args.get("request") == "effort":
         # "Request access" from a locked level in the chat composer.
         draft = {"form": "quota", "kind": "effort", "effort_model": (request.args.get("model") or "")[:300],
@@ -341,6 +346,8 @@ def _page(draft: dict | None = None):
         sessions=_sessions(user["id"]),
         two_step_state=two_step.state(user["id"]),
         two_step_required=two_step.required(user),
+        hosting_mode=hosting_mode,
+        hosting_link=hosting_link,
         api_token_count=tokens.count_active(user["id"]), share_link_count=chats.count_shared(user["id"]),
         access=access,
         requestable=[{"value": f"{scope}:{resource_id}", "label": gate.label,

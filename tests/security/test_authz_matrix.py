@@ -22,6 +22,9 @@ PUBLIC = {
     "core.favicon", "core.health", "core.robots", "core.set_language", "core.source", "core.status_report",
     "developer.legacy_index", "developer.legacy_playground", "developer.legacy_usage",
     "chat.shared", "chat.shared_download", "personalities.shared",
+    # Sign in with BananaWiki Hosting (404 unless configured and switched on; the recovery page only in hosting mode).
+    "hosting.start", "hosting.callback", "hosting.connect", "hosting.create", "hosting.connect_existing",
+    "hosting.connect_code", "hosting.recovery",
 }
 TOKEN_BLUEPRINTS = ("api_v1.", "worker_api.", "remote_api.")  # authenticate their own bearer tokens
 SKIP = {"auth.logout"}  # would end the caller's own session half-way through

@@ -11,5 +11,5 @@ bp = Blueprint("admin", __name__, url_prefix="/admin")
 # Imported for their route registrations.
 from . import (  # noqa: E402,F401
     dashboard, users, invites, models, subscriptions, providers, access, personalities, quotas, limits, settings,
-    metrics, audit, migration, chats, workers, music, agents, two_step,
+    metrics, audit, migration, chats, workers, music, agents, two_step, hosting,
 )

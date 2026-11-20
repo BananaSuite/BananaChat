@@ -71,6 +71,20 @@
   <section class="settings-panel" id="sign-in" aria-labelledby="sign-in-title">
     <h2 id="sign-in-title" class="panel-title">Sign-in</h2>
     <div class="stack form-width">
+      <fieldset class="admin-fieldset stack-sm" id="signin-mode"{% if not hosting.configured %} disabled aria-describedby="signin-mode-off"{% endif %}>
+        <legend>Sign-in with BananaWiki Hosting</legend>
+        {% if hosting.configured %}<input type="hidden" name="signin_mode_present" value="1">{% endif %}
+        <label class="check"><input type="radio" name="signin_mode" value="local"{% if hosting.mode == "local" %} checked{% endif %}><span>Local accounts only<small>Username and password, as before. The BananaWiki Hosting pages are off.</small></span></label>
+        <label class="check"><input type="radio" name="signin_mode" value="both"{% if hosting.mode == "both" %} checked{% endif %}><span>Both<small>The sign-in page offers the password form and "Sign in with BananaWiki Hosting". People can connect their account on their account page.</small></span></label>
+        <label class="check"><input type="radio" name="signin_mode" value="hosting"{% if hosting.mode == "hosting" %} checked{% endif %}{% if hosting.configured and not hosting.own_link and hosting.mode != "hosting" %} disabled{% endif %}><span>BananaWiki Hosting accounts only<small>Only "Sign in with BananaWiki Hosting". New accounts are made through it, still following the sign-up setting and its invitations; existing accounts connect with their password on their first hosting sign-in.</small></span></label>
+        {% if not hosting.configured %}
+        <p class="hint mb-0" id="signin-mode-off">Off: set <code>BC_HOSTING_OAUTH_URL</code>, <code>BC_HOSTING_OAUTH_CLIENT_ID</code> and <code>BC_HOSTING_OAUTH_CLIENT_SECRET</code> on the server and restart it. Until then everyone signs in with a password{% if hosting.mode != "local" %} (the saved choice, {{ hosting.mode }}, applies once it is configured){% endif %}.</p>
+        {% else %}
+        <p class="hint mb-0">Portal <code>{{ hosting.url }}</code>, client <code>{{ hosting.client_id }}</code>. Register this redirect URI for the app on the portal (Account → Developer apps), exactly as shown: <code>{{ hosting.callback }}</code></p>
+        {% if not hosting.own_link %}<p class="hint mb-0">Hosting-only sign-in needs your own account connected first (choose Both, save, then connect it on <a href="{{ url_for('account.index', _anchor='hosting') }}">your account page</a>), so you can still sign in.</p>{% endif %}
+        <p class="hint mb-0">With hosting-only sign-in, administrators can still sign in with their password (and two-step code) at <code>{{ url_for('hosting.recovery', _external=True) }}</code>, which is not linked from the sign-in page; every attempt is in the audit log. On the server, <code>python -m bananachat.manage signin-mode both</code> switches back.</p>
+        {% endif %}
+      </fieldset>
       <fieldset class="admin-fieldset stack-sm">
         <legend>Two-step verification</legend>
         <input type="hidden" name="admin_two_step_present" value="1">
@@ -80,7 +94,7 @@
         {% elif admins_without_two_step %}
         <p class="hint">{{ admins_without_two_step }} active administrator{{ "s have" if admins_without_two_step != 1 else " has" }} not set it up yet.</p>
         {% endif %}
-        {{ reauth_field("settings-reauth", needed_for="to change this requirement or to open sign-up") }}
+        {{ reauth_field("settings-reauth", needed_for="to change this requirement or the sign-in mode, or to open sign-up") }}
       </fieldset>
     </div>
   </section>

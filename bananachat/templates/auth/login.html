@@ -2,8 +2,10 @@
 {% block title %}{{ t("auth.sign_in") }}{% endblock %}
 {% block card %}
 <h1>{{ t("auth.sign_in") }}</h1>
+{%- set mode = signin_mode() %}
 {%- set kept_username = request.form.get('username', '') %}
 {%- set described = ' aria-describedby="auth-messages"' if get_flashed_messages() else '' %}
+{% if mode != "hosting" %}
 <form method="post" action="{{ url_for('auth.login') }}" class="stack">
   {% include "auth/_bot_fields.html" %}
   {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
@@ -17,9 +19,18 @@
   </div>
   <button type="submit" class="btn btn-primary btn-lg btn-block">{{ t("auth.sign_in") }}</button>
 </form>
+{% endif %}
+{% if mode != "local" %}
+{% if mode == "both" %}<p class="text-center muted">{{ t("hosting.or") }}</p>{% endif %}
+<a class="btn btn-lg btn-block{% if mode == 'hosting' %} btn-primary{% endif %}" href="{{ url_for('hosting.start', next=next_url or None) }}">{{ t("hosting.sign_in_button") }}</a>
+{% endif %}
 {% endblock %}
 {% block below %}
 {% if settings.signup_mode in ("open", "invite") %}
+{% if signin_mode() == "hosting" %}
+<p>{{ t("hosting.no_account") }}</p>
+{% else %}
 <p>{{ t("auth.no_account") }} <a href="{{ url_for('auth.signup') }}">{{ t("auth.create_account") }}</a></p>
+{% endif %}
 {% endif %}
 {% endblock %}

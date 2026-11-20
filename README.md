@@ -64,7 +64,7 @@ Updates are off by default and follow release tags. Run `sudo bananachat update`
 
 ## Documentation
 
-- [Deployment and updates](docs/deployment.md) · [Backups](docs/backups.md) · [Configuration](docs/configuration.md) · [Two-step verification](docs/two-step-verification.md)
+- [Deployment and updates](docs/deployment.md) · [Backups](docs/backups.md) · [Configuration](docs/configuration.md) · [Two-step verification](docs/two-step-verification.md) · [Sign in with BananaWiki Hosting](docs/hosting-signin.md)
 - [API](docs/api.md) · [Image generation with ComfyUI](docs/comfyui.md) · [Compute server](docs/compute.md) · [Worker PCs](docs/workers.md)
 - [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Capacity](docs/capacity.md)
 - [Contributing](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md) · [Security policy](SECURITY.md)

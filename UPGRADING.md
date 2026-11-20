@@ -15,6 +15,24 @@ The updater backs everything up, starts the new release and checks `/health`
 before letting users back in. If anything fails it restores the old code and
 database together.
 
+## Unreleased
+
+One database migration (`v30_hosting_signin`, schema version 30, additive);
+to roll back, restore the backup the updater made. Sign-in stays as it was
+(*Local accounts only*) until an administrator chooses another mode.
+
+- **Optional: sign in with BananaWiki Hosting.** Register an app on the portal
+  with the redirect URI `https://<site>/login/hosting/callback`, set
+  `BC_HOSTING_OAUTH_URL`, `BC_HOSTING_OAUTH_CLIENT_ID` and
+  `BC_HOSTING_OAUTH_CLIENT_SECRET`, restart, and choose the mode in
+  **Admin → Settings → Sign-in** ([guide](docs/hosting-signin.md)). Behind a
+  reverse proxy, check that the redirect URI shown there starts with your
+  public `https://` address (`BC_PROXY_MODE=1`).
+- Before choosing *BananaWiki Hosting accounts only*, connect your own account
+  (Account → Security). If administrators are ever locked out, use
+  `/login/recovery` or run `python -m bananachat.manage signin-mode both` on the
+  server as the service's user.
+
 ## 1.7.6 to 1.8.0
 
 Interface release. No database migration (schema version 29): 1.7.6 can still open the database.

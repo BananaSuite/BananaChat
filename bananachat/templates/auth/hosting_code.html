@@ -1,0 +1,17 @@
+{% extends "auth/_layout.html" %}
+{% block title %}{{ t("two_step.login_title") }}{% endblock %}
+{% block card %}
+<h1>{{ t("two_step.login_title") }}</h1>
+<p class="muted" id="two-step-hint">{{ t("hosting.code_hint", username=username) }}</p>
+<form method="post" action="{{ url_for('hosting.connect_code') }}" class="stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="field">
+    <label for="code">{{ t("two_step.code_or_recovery") }}</label>
+    <input type="text" id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" required autofocus maxlength="64" aria-describedby="{% if get_flashed_messages() %}auth-messages {% endif %}two-step-hint">
+  </div>
+  <button type="submit" class="btn btn-primary btn-lg btn-block">{{ t("two_step.verify") }}</button>
+</form>
+{% endblock %}
+{% block below %}
+<p><a href="{{ url_for('hosting.connect') }}">{{ t("hosting.back_to_choice") }}</a></p>
+{% endblock %}

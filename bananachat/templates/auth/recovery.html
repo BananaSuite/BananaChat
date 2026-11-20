@@ -1,0 +1,20 @@
+{% extends "auth/_layout.html" %}
+{% block title %}{{ t("hosting.recovery_title") }}{% endblock %}
+{% block card %}
+<h1>{{ t("hosting.recovery_title") }}</h1>
+<p class="muted">{{ t("hosting.recovery_intro") }}</p>
+{%- set described = ' aria-describedby="auth-messages"' if get_flashed_messages() else '' %}
+<form method="post" action="{{ url_for('hosting.recovery') }}" class="stack">
+  {% include "auth/_bot_fields.html" %}
+  <div class="field">
+    <label for="username">{{ t("auth.username") }}</label>
+    <input type="text" id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus{{ described | safe }} maxlength="64" value="{{ request.form.get('username', '') }}">
+  </div>
+  <div class="field">
+    <label for="password">{{ t("auth.password") }}</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required maxlength="1024">
+  </div>
+  <button type="submit" class="btn btn-primary btn-lg btn-block">{{ t("auth.sign_in") }}</button>
+</form>
+{% endblock %}
+{% block below %}<p><a href="{{ url_for('auth.login') }}">{{ t("hosting.back_to_sign_in") }}</a></p>{% endblock %}

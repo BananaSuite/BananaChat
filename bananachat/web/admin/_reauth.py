@@ -57,7 +57,8 @@ WHEN = {
     "admin.user_suspend": "when the account is an administrator",
     "admin.user_unsuspend": "when the account is an administrator",
     "admin.user_delete": "when the account is an administrator",
-    "admin.settings_save": "when the administrator requirement changes or sign-up opens to everyone",
+    "admin.settings_save": "when the administrator requirement or the sign-in mode changes, or sign-up opens to "
+                           "everyone",
     "admin.claude_account_save": "when the account's profile changes or the account is removed",
     "admin.codex_account_save": "when the account's profile changes or the account is removed",
 }
@@ -69,7 +70,7 @@ EXEMPT = {
         "admin.models_unload_all", "admin.pull_cancel", "admin.pull_pause", "admin.pulls_queue",
         "admin.claude_account_login_cancel", "admin.codex_account_login_cancel", "admin.claude_account_logout",
         "admin.codex_account_logout", "admin.workers_tunnel_close", "admin.workers_key_revoke",
-        "admin.workers_command_cancel",
+        "admin.workers_command_cancel", "admin.user_hosting_unlink",
     ),
     # The code completes a sign-in that was confirmed when it started (admin.<provider>_account_login), and
     # only the CLI process waiting for it can redeem it.

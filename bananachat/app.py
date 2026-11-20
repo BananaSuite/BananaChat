@@ -272,12 +272,14 @@ def _language() -> str:
 
 def _security_headers(response) -> None:
     nonce = getattr(g, "csp_nonce", "")
+    # Pages whose forms continue to another site (linking BananaWiki Hosting) name it here.
+    form_action = " ".join(("'self'", *getattr(g, "form_action_origins", ())))
     csp = (
         "default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}'; "
         f"style-src 'self' 'nonce-{nonce}'; "
         "img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; "
-        "form-action 'self'; frame-ancestors 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; "
+        f"form-action {form_action}; frame-ancestors 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; "
         "manifest-src 'self'; worker-src 'self' blob:"
     )
     headers = response.headers

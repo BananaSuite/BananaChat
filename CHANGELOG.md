@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+One database migration (`v30_hosting_signin`, schema version 30, additive): the
+new `hosting_links` table and `site_settings.signin_mode`. Nothing changes until
+an administrator chooses another sign-in mode.
+
+### Sign in with BananaWiki Hosting
+
+- People can sign in with their BananaWiki Hosting account. Set
+  `BC_HOSTING_OAUTH_URL`, `BC_HOSTING_OAUTH_CLIENT_ID` and
+  `BC_HOSTING_OAUTH_CLIENT_SECRET` (an app registered on the portal, with the
+  redirect URI `https://<site>/login/hosting/callback`), then choose the mode in
+  **Admin → Settings → Sign-in**: *Local accounts only* (the default, as
+  before), *Both*, or *BananaWiki Hosting accounts only*. See
+  [sign in with BananaWiki Hosting](docs/hosting-signin.md).
+- Hosting accounts are connected to BananaChat accounts by the portal's account
+  id only, never by user name or email. The first hosting sign-in creates a new
+  account (under the sign-up setting and its invitations; a free name is
+  suggested when the hosting name is taken) or connects an existing one with its
+  password and two-step code. Accounts with two-step verification still give
+  their code after the portal.
+- People connect and disconnect their account on **Account → Security** with
+  their password; administrators see the connection in **Admin → Users** and
+  can remove it (audited).
+- Switching to hosting-only sign-in needs the administrator's own account to be
+  connected first, and a recent confirmation. In that mode administrators can
+  still sign in with their password at `/login/recovery` (not linked, rate
+  limited, every attempt audited), and the new operator command
+  `python -m bananachat.manage signin-mode both` switches back.
+- The personal data export names the connected hosting account.
+
 ## 1.8.0 — 2026-11-09
 
 There are no database changes (the schema version is still 29), so 1.7.6 can still open the database.

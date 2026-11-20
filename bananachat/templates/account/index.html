@@ -104,6 +104,43 @@
           <div class="form-actions"><a class="btn{% if not two_step_state %} btn-primary{% endif %}" href="{{ url_for('account.two_step') }}">{{ t("two_step.manage") if two_step_state else t("two_step.set_up") }}</a></div>
         </section>
 
+        {# ----- BananaWiki Hosting ----- #}
+        {% if hosting_mode != "local" %}
+        <section class="settings-section" id="hosting" aria-labelledby="hosting-title">
+          <div class="section-header">
+            <h2 id="hosting-title">{{ t("hosting.account_title") }}</h2>
+            {% if hosting_link %}<span class="badge badge-success">{{ t("hosting.account_connected") }}</span>{% else %}<span class="badge">{{ t("hosting.account_not_connected") }}</span>{% endif %}
+          </div>
+          {% if hosting_link %}
+          <p>{{ t_html("hosting.account_linked", name=(hosting_link.portal_username or "—"), when=(hosting_link.linked_at | local_time)) }}</p>
+          {% if hosting_mode == "hosting" %}
+          <p class="hint mb-0">{{ t("hosting.account_unlink_hosting_only") }}</p>
+          {% else %}
+          <form method="post" action="{{ url_for('hosting.unlink') }}" class="stack" data-busy data-confirm="{{ t('hosting.account_unlink_confirm') }}">
+            {{ csrf() }}
+            <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
+            <div class="field">
+              <label for="hosting_unlink_password">{{ t("account.confirm_with_password") }}</label>
+              <input type="password" id="hosting_unlink_password" name="password" autocomplete="current-password" required maxlength="1024">
+            </div>
+            <div class="form-actions"><button type="submit" class="btn">{{ t("hosting.account_unlink") }}</button></div>
+          </form>
+          {% endif %}
+          {% else %}
+          <p class="muted">{{ t("hosting.account_intro") }}</p>
+          <form method="post" action="{{ url_for('hosting.link') }}" class="stack" data-busy>
+            {{ csrf() }}
+            <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
+            <div class="field">
+              <label for="hosting_link_password">{{ t("account.confirm_with_password") }}</label>
+              <input type="password" id="hosting_link_password" name="password" autocomplete="current-password" required maxlength="1024">
+            </div>
+            <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("hosting.account_link") }}</button></div>
+          </form>
+          {% endif %}
+        </section>
+        {% endif %}
+
         {# ----- sessions ----- #}
         <section class="settings-section" id="sessions" aria-labelledby="sessions-title">
           <h2 id="sessions-title">{{ t("account.sessions") }}</h2>

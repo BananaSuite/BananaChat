@@ -13,11 +13,11 @@ from datetime import datetime, timezone
 from flask import flash, render_template, request
 
 from bananachat import db, security
-from bananachat.db import chats, credits, tokens, users
+from bananachat.db import chats, credits, hosting_links, tokens, users
 from bananachat.db import settings as site_settings
 from bananachat.db import limits as limits_db
 from bananachat.security import admin_required
-from bananachat.services import limits, two_step
+from bananachat.services import hosting_signin, limits, two_step
 from bananachat.services.agents import service as agents_service
 from bananachat.web.account import download_export
 from . import _reauth, bp
@@ -81,6 +81,8 @@ def user_detail(user_id):
         limit_settings=limit_settings, limit_tier=limits.resolve_tier(limit_settings.tier_id),
         sessions=users.list_sessions(user_id), is_self=user_id == me()["id"],
         two_step=two_step.state(user_id), two_step_required=two_step.required_for_admins(),
+        hosting_link=hosting_links.link_of(user_id), hosting_mode=hosting_signin.effective_mode(),
+        hosting_configured=hosting_signin.configured(),
         current_session=security.current_session_hash(), min_password=security.PASSWORD_MIN,
         suspended_now=users.is_suspended(user), min_datetime=utc_input_min(),
         api_tokens=tokens.count_active(user_id), share_links=chats.count_shared(user_id),

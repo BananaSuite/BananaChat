@@ -8,6 +8,12 @@
   who held a session may have created one; the person creates new ones), and
   it is recorded in the audit log (``operator.user_two_step_reset``, by
   "server operator").
+* ``signin-mode [local|both|hosting]`` shows the sign-in mode (BananaWiki
+  Hosting, see docs/hosting-signin.md), or sets it: for an operator who must
+  undo hosting-only sign-in that locked the administrators out
+  (``signin-mode both``). A change is recorded in the audit log
+  (``operator.signin_mode``). ``"effective"`` is the mode in force with the
+  given environment: ``local`` while ``BC_HOSTING_OAUTH_*`` is not complete.
 
 Run it as the user the service runs as, with the service's environment
 (``BC_DATABASE_PATH``, ``BC_INSTANCE_DIR``). On a managed server
@@ -15,7 +21,7 @@ Run it as the user the service runs as, with the service's environment
 (``banana_ops``). The command never creates or upgrades a database: the
 database must be at this release's schema version (start the service once
 after an update). The result is printed as JSON; the exit status is 0 when the
-command ran (``"outcome"``: ``"reset"`` or ``"unchanged"``) and 1 when it was
+command ran (``"outcome"``: ``"reset"``, ``"changed"`` or ``"unchanged"``) and 1 when it was
 refused, with the reason on standard error.
 """
 
@@ -70,6 +76,24 @@ def reset_two_step(username: str) -> dict:
     return {"outcome": "reset", "username": user["username"], "signed_out": True, "api_keys_revoked": revoked}
 
 
+def signin_mode(mode: str | None, config) -> dict:
+    from bananachat.db import settings as site_settings
+    from bananachat.db import users
+    from bananachat.services.hosting_signin import MODES
+
+    with db.transaction():
+        current = site_settings.get().get("signin_mode")
+        current = current if current in MODES else "local"
+        if mode is not None and mode != current:
+            site_settings.update(signin_mode=mode)
+            users.audit(OPERATOR, "operator.signin_mode", "site", {"from": current, "to": mode,
+                                                                   "via": "signin-mode command"})
+    chosen = mode or current
+    return {"outcome": "unchanged" if mode in (None, current) else "changed", "mode": chosen,
+            "previous": current, "configured": config.hosting_oauth_configured,
+            "effective": chosen if config.hosting_oauth_configured else "local"}
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="python -m bananachat.manage",
                                      description="BananaChat operator commands. Run them as the service's user "
@@ -80,14 +104,22 @@ def parser() -> argparse.ArgumentParser:
                                      "app and its recovery codes (audited; signs the account out everywhere and "
                                      "revokes its API keys)")
     reset.add_argument("username")
+    mode = commands.add_parser("signin-mode",
+                               help="Show the sign-in mode, or set it (local, both or hosting; audited), for "
+                                    "example to undo hosting-only sign-in that locked the administrators out")
+    mode.add_argument("mode", nargs="?", choices=("local", "both", "hosting"))
     return result
 
 
 def main(argv=None, *, environ=None) -> int:
     args = parser().parse_args(argv)
     try:
-        open_database(load_config(environ, load_secret=False))
-        result = reset_two_step(args.username)
+        config = load_config(environ, load_secret=False)
+        open_database(config)
+        if args.command == "signin-mode":
+            result = signin_mode(args.mode, config)
+        else:
+            result = reset_two_step(args.username)
     except (Refused, sqlite3.Error) as error:
         print(f"BananaChat: {error}", file=sys.stderr)
         return 1

@@ -161,6 +161,20 @@ amount per five hours; see [Architecture → Limits](architecture.md#limits).
 | `BC_ENV` | `production` | `development` downgrades some start-up checks (such as key-file permissions) to warnings. |
 | `BC_DEFAULT_LANGUAGE` | `it` | Interface language when the browser prefers none of Italian, English or German (`it`, `en` or `de`). |
 
+## Sign in with BananaWiki Hosting
+
+Optional: people sign in with their BananaWiki Hosting account. All three are
+needed (a missing or invalid one leaves the feature off with a warning), and
+the administrators then choose the sign-in mode in Admin → Settings → Sign-in.
+See [sign in with BananaWiki Hosting](hosting-signin.md), which also gives the
+redirect URI to register on the portal.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BC_HOSTING_OAUTH_URL` | unset | The portal, for example `https://hosting.bananawiki.com` (its `/oauth/authorize`, `/oauth/token` and `/oauth/userinfo`). HTTPS, or plain HTTP to this machine only. |
+| `BC_HOSTING_OAUTH_CLIENT_ID` | unset | The client id of the app registered on the portal (`bwa_…`). |
+| `BC_HOSTING_OAUTH_CLIENT_SECRET` | unset | The app's client secret. Only sent to the portal's token endpoint; never logged or shown. |
+
 ## Storage and logs
 
 | Variable | Default | Purpose |

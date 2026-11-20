@@ -311,6 +311,14 @@ def _two_step(user_id: str) -> dict:
             "recovery_codes_left": len(digests) if isinstance(digests, list) else 0}
 
 
+def _hosting_account(user_id: str) -> dict | None:
+    """The BananaWiki Hosting account the account is connected to (sign-in), or None."""
+    if not _columns("hosting_links"):
+        return None
+    row = db.one("SELECT account_id, portal_username, linked_at FROM hosting_links WHERE user_id=?", (user_id,))
+    return row.to_dict() if row else None
+
+
 def _chats_payload(user_id: str) -> dict:
     user = users.get(user_id)
     payload = _header("chats_export", user)
@@ -341,6 +349,7 @@ def _gdpr_payload(user_id: str) -> dict:
             "SELECT id, name, token_prefix, scope, created_at, expires_at, last_used_at, revoked FROM api_tokens "
             "WHERE user_id=? ORDER BY id", (user_id,))]
     payload["two_step"] = _two_step(user_id)
+    payload["hosting_account"] = _hosting_account(user_id)
     payload["credit_ledger"] = _Lazy(_keyset(
         "SELECT l.id AS key, l.created_at, l.request_type, l.credits_used * 1000 AS counted_tokens, l.is_slow, l.tokens_in, "
         "l.tokens_out, "

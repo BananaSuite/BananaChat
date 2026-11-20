@@ -12,7 +12,7 @@ from flask import Blueprint, current_app, flash, g, redirect, render_template, r
 from bananachat import PRODUCT_NAME, db, security
 from bananachat.db import invites, settings as site_settings, users
 from bananachat.i18n import translate
-from bananachat.services import two_step
+from bananachat.services import hosting_signin, two_step
 
 bp = Blueprint("auth", __name__)
 log = logging.getLogger("bananachat.auth")
@@ -100,8 +100,11 @@ def login():
     next_url = security.safe_next_url(request.values.get("next"))
     if request.method == "GET":
         return _render("auth/login.html", next_url=next_url)
+    if hosting_signin.effective_mode() == "hosting":
+        # Only BananaWiki Hosting signs in; administrators have the recovery page (web.hosting).
+        flash(_t("hosting.password_disabled"), "error")
+        return _render("auth/login.html", 403, next_url=next_url)
 
-    config = current_app.config["BC"]
     username = (request.form.get("username") or "").strip()[:64]
     password = request.form.get("password") or ""
     user = users.get_by_username(username)
@@ -109,21 +112,14 @@ def login():
     # A browser that has signed in to this account before is counted apart from
     # everyone else at its address (a school or office NAT, a VPN exit), so
     # strangers there can neither lock it out nor use up its request rate.
-    if not _allow_attempt(user, device):
+    if not allow_attempt(user, device):
         return security.too_many_requests()
 
     if not security.form_looks_human():
         flash(_t("auth.form_expired"), "error")
         return _render("auth/login.html", 400, next_url=next_url)
 
-    account_key = (f"login-fail-device:{user['id']}:{device}" if device
-                   else "login-fail-user:" + username.lower())
-    limits = [(account_key, config.login_failures_per_account)]
-    if device:
-        limits.append(("login-fail-ip-known:" + security.client_key(),
-                       config.login_failures_per_address * KNOWN_BROWSER_ADDRESS_FACTOR))
-    else:
-        limits.append(("login-fail-ip:" + security.client_key(), config.login_failures_per_address))
+    account_key, limits = _failure_limits(user, username, device)
     # The attempt is counted before the password is checked, atomically with the
     # limit check, so parallel guesses cannot all pass it. It stays counted as a
     # failure unless the sign-in succeeds.
@@ -164,16 +160,71 @@ def login():
             fresh = users.get(fresh["id"])
         if two_step.enabled(fresh["id"]):
             # The password was right; the session starts once a code is accepted.
-            _await_code(fresh, next_url)
+            await_code(fresh, next_url)
             return redirect(url_for("auth.two_step"))
-        _start_session(fresh, "password")
-    response = redirect(_landing(fresh, next_url))
+        start_session(fresh, "password")
+    response = redirect(landing(fresh, next_url))
     # Signed with the current password hash (rehashed above if needed).
     security.set_device_cookie(response, fresh)
     return response
 
 
-def _allow_attempt(user, device: str | None) -> bool:
+def _failure_limits(user, username: str, device: str | None):
+    """``(account key, limits)`` that count a failed password for *username* (see :func:`login`)."""
+    config = current_app.config["BC"]
+    account_key = (f"login-fail-device:{user['id']}:{device}" if device
+                   else "login-fail-user:" + username.lower())
+    limits = [(account_key, config.login_failures_per_account)]
+    if device:
+        limits.append(("login-fail-ip-known:" + security.client_key(),
+                       config.login_failures_per_address * KNOWN_BROWSER_ADDRESS_FACTOR))
+    else:
+        limits.append(("login-fail-ip:" + security.client_key(), config.login_failures_per_address))
+    return account_key, limits
+
+
+class Refused(Exception):
+    """A password check failed; ``key`` is the translation key, ``status`` the HTTP status."""
+
+    def __init__(self, key: str, status: int):
+        super().__init__(key)
+        self.key = key
+        self.status = status
+
+
+def check_password(username: str, password: str, *, accept=None):
+    """The account *username* when *password* is its own, counted and limited like a sign-in, else :class:`Refused`.
+
+    For the forms that prove an account with its password outside the sign-in form (connecting an
+    account to BananaWiki Hosting, the administrators' recovery sign-in). *accept* (a function of the
+    account) can turn a right password away; it then counts and reads as a wrong one, so the answer
+    tells nothing about the account. A suspended account is refused after a right password, as at sign-in.
+    """
+    username = (username or "").strip()[:64]
+    user = users.get_by_username(username) if username else None
+    device = security.device_cookie_nonce(user) if user else None
+    if not allow_attempt(user, device):
+        raise Refused("auth.too_many_attempts", 429)
+    account_key, limits = _failure_limits(user, username, device)
+    attempt = users.reserve(limits, FAILURE_WINDOW)
+    if attempt is None:
+        raise Refused("auth.too_many_attempts", 429)
+    if user is None:
+        security.burn_password_check(password or "")
+        valid = False
+    else:
+        valid = security.verify_password(user["password"], password or "")
+    if not valid or (accept is not None and not accept(user)):
+        log.info("Failed password check from %s", security.client_ip())
+        raise Refused("auth.invalid_credentials", 401)
+    users.release(attempt)
+    users.clear_hits(account_key)
+    if users.is_suspended(user):
+        raise Refused("auth.suspended", 403)
+    return user
+
+
+def allow_attempt(user, device: str | None) -> bool:
     """Count a sign-in request: per known browser and its address, or per address."""
     config = current_app.config["BC"]
     if not device:
@@ -182,7 +233,7 @@ def _allow_attempt(user, device: str | None) -> bool:
             and security.allow("login-known", config.login_attempts_per_minute * KNOWN_BROWSER_ADDRESS_FACTOR, 60))
 
 
-def _start_session(user, method: str) -> None:
+def start_session(user, method: str) -> None:
     """Sign *user* in, inside the caller's transaction; the session counts as just confirmed."""
     users.touch_login(user["id"])
     security.login(user)
@@ -191,7 +242,7 @@ def _start_session(user, method: str) -> None:
         users.audit(user, "auth.admin_login", details={"method": method}, ip_address=security.client_ip())
 
 
-def _landing(user, next_url: str | None) -> str:
+def landing(user, next_url: str | None) -> str:
     """Where a completed sign-in goes: the two-step set-up first when the site requires it of *user*."""
     if two_step.missing(user):
         flash(_t("two_step.required_notice"), "info")
@@ -201,13 +252,17 @@ def _landing(user, next_url: str | None) -> str:
 
 # ----- two-step verification ------------------------------------------------
 
-def _await_code(user, next_url: str | None) -> None:
+# How the first step was passed: the password form, BananaWiki Hosting, or the administrators' recovery page.
+FIRST_STEPS = ("password", "hosting", "recovery")
+
+
+def await_code(user, next_url: str | None, first_step: str = "password") -> None:
     """Keep the sign-in pending until :func:`two_step` accepts a code."""
     language = session.get("language")
     session.clear()
     if language:
         session["language"] = language
-    session[TWO_STEP_PENDING_KEY] = {"user": user["id"], "at": time.time(),
+    session[TWO_STEP_PENDING_KEY] = {"user": user["id"], "at": time.time(), "via": first_step,
                                      "fingerprint": two_step.fingerprint(user), "next": next_url or ""}
 
 
@@ -246,7 +301,7 @@ def two_step_code():
     if request.method == "GET":
         return _render("auth/two_step.html")
 
-    if not _allow_attempt(user, security.device_cookie_nonce(user)):
+    if not allow_attempt(user, security.device_cookie_nonce(user)):
         return security.too_many_requests()
     try:
         method = two_step.check_code(user, request.form.get("code"))
@@ -264,7 +319,13 @@ def two_step_code():
         if users.is_suspended(fresh):
             flash(_t("auth.suspended"), "error")
             return redirect(url_for("auth.login"))
-        _start_session(fresh, "password+" + method)
+        first_step = state.get("via") if state.get("via") in FIRST_STEPS else "password"
+        if (first_step == "recovery" and fresh["role"] != "admin") or (
+                first_step == "password" and hosting_signin.effective_mode() == "hosting"):
+            # The recovery page is for administrators only, and passwords stop with hosting-only sign-in (web.hosting).
+            flash(_t("two_step.sign_in_again"), "info")
+            return redirect(url_for("auth.login"))
+        start_session(fresh, f"{first_step}+{method}")
     if method == "recovery_code":
         if security.allow("auth-recovery-code-audit", RECOVERY_CODE_AUDITS, RECOVERY_CODE_AUDIT_SECONDS,
                           key="user:" + fresh["id"]):
@@ -274,7 +335,7 @@ def two_step_code():
                      fresh["id"], RECOVERY_CODE_AUDITS, RECOVERY_CODE_AUDIT_SECONDS)
         left = (two_step.state(fresh["id"]) or {}).get("codes_left", 0)
         flash(_t("two_step.recovery_used", count=left), "warning")
-    response = redirect(_landing(fresh, security.safe_next_url(state.get("next"))))
+    response = redirect(landing(fresh, security.safe_next_url(state.get("next"))))
     # Issued only now: a browser becomes "known" to the account after both steps.
     security.set_device_cookie(response, fresh)
     return response
@@ -296,6 +357,9 @@ def signup():
     if mode == "disabled":
         flash(_t("auth.signup_closed"), "info")
         return redirect(url_for("auth.login"))
+    if hosting_signin.effective_mode() == "hosting":
+        # New accounts are made on the connect page after signing in with BananaWiki Hosting.
+        return redirect(url_for("hosting.start", invite=request.values.get("invite", "")[:32] or None))
     if request.method == "GET":
         return _render("auth/signup.html", signup_mode=mode, invite=request.args.get("invite", "")[:32])
 

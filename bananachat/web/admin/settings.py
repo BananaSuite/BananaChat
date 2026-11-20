@@ -1,17 +1,18 @@
-"""Settings: name, sign-up, maintenance, warning banner, two-step verification for
-administrators, default theme and palettes.
+"""Settings: name, sign-up, sign-in mode (BananaWiki Hosting), maintenance, warning banner, two-step
+verification for administrators, default theme and palettes.
 
-Changing the two-step requirement for administrators, or opening sign-up to everyone, needs a
-recent confirmation (:mod:`._reauth`)."""
+Changing the two-step requirement for administrators or the sign-in mode, or opening sign-up to
+everyone, needs a recent confirmation (:mod:`._reauth`). Only an administrator whose own account is
+connected to BananaWiki Hosting can switch to hosting-only sign-in."""
 
 from __future__ import annotations
 
-from flask import flash, render_template, request
+from flask import current_app, flash, render_template, request
 
+from bananachat.db import hosting_links, users
 from bananachat.db import settings as site_settings
-from bananachat.db import users
 from bananachat.security import admin_required
-from bananachat.services import two_step
+from bananachat.services import hosting_signin, two_step
 
 from . import _reauth, bp
 from ._helpers import FormError, audit, back, choice, flag, me, text
@@ -32,9 +33,16 @@ def _palette_fields(mode: str) -> dict:
 def show():
     settings = site_settings.get()
     palettes = {mode: site_settings.palette(settings, mode) for mode in THEMES}
+    config = current_app.config["BC"]
     return render_template("admin/settings.html", section="settings", s=settings, palettes=palettes,
                            admins_without_two_step=two_step.admins_without(),
                            own_two_step=two_step.enabled(me()["id"]),
+                           hosting={"configured": hosting_signin.configured(),
+                                    "mode": hosting_signin.stored_mode(settings),
+                                    "effective": hosting_signin.effective_mode(settings),
+                                    "url": config.hosting_oauth_url, "client_id": config.hosting_oauth_client_id,
+                                    "callback": hosting_signin.callback_url(),
+                                    "own_link": hosting_links.link_of(me()["id"])},
                            defaults={"dark": site_settings.DARK_PALETTE, "light": site_settings.LIGHT_PALETTE},
                            color_labels=COLOR_LABELS, fields={mode: _palette_fields(mode) for mode in THEMES},
                            page_data={"defaults": {"dark": site_settings.DARK_PALETTE,
@@ -70,6 +78,13 @@ def save():
             if values[two_step.REQUIRED_SETTING] and not two_step.enabled(me()["id"]):
                 raise FormError("Turn on two-step verification for your own account first (Account → Two-step "
                                 "verification).")
+        # Only offered (and only kept) while the portal is configured; the mode stays as it was otherwise.
+        if request.form.get("signin_mode_present") == "1" and hosting_signin.configured():
+            values["signin_mode"] = choice("signin_mode", hosting_signin.MODES, label="Sign-in mode")
+            if (values["signin_mode"] == "hosting" and hosting_signin.stored_mode() != "hosting"
+                    and hosting_links.link_of(me()["id"]) is None):
+                raise FormError("Connect your own account to BananaWiki Hosting first (Account → Security), "
+                                "so you can still sign in once only BananaWiki Hosting accounts can.")
         if values["warning_banner_enabled"] and not values["warning_banner_message"]:
             raise FormError("Write the banner message before turning the banner on.")
         for mode in THEMES:
@@ -84,8 +99,10 @@ def save():
         return back("admin.settings")
     before = site_settings.get()
     requirement = values.get(two_step.REQUIRED_SETTING)
+    mode = values.get("signin_mode")
     sensitive = (requirement is not None and requirement != before.get(two_step.REQUIRED_SETTING)) or (
-        values["signup_mode"] == "open" and before.get("signup_mode") != "open")
+        values["signup_mode"] == "open" and before.get("signup_mode") != "open") or (
+        mode is not None and mode != hosting_signin.stored_mode(before))
     if sensitive and not _reauth.confirmed():
         return back("admin.settings")
     site_settings.update(**values)

@@ -7,6 +7,8 @@ verification**. After the password, signing in then also asks for a six-digit
 code from an authenticator app (any app for time-based codes, also called
 TOTP: for example Aegis, Google Authenticator, Microsoft Authenticator or a
 password manager). Someone who learns the password still cannot sign in.
+Signing in with [BananaWiki Hosting](hosting-signin.md) asks for the code too,
+after the portal.
 
 - **Turning it on** shows a QR code and the same key as text, and asks for a
   code from the app and the password. It then shows ten **recovery codes**,
@@ -65,8 +67,8 @@ verification:
 - adding, changing or removing an external provider, with or without an API
   key (its connection decides where prompts and the key go; removing it
   deletes the key);
-- turning the administrator requirement on or off, and opening sign-up to
-  everyone.
+- turning the administrator requirement on or off, changing the sign-in mode
+  ([BananaWiki Hosting](hosting-signin.md)), and opening sign-up to everyone.
 
 The rest (moderation, limits, the model catalogue and downloads, provider tests
 and model choices, site appearance) is recorded in the audit log but not

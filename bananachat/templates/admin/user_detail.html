@@ -158,6 +158,25 @@
     {% if user.role == "admin" and two_step_required %}<p class="muted small">{{ user.username }} must set it up before opening the administration.</p>{% endif %}
     {% endif %}
   </section>
+
+  <section class="settings-section" id="hosting" aria-labelledby="hosting-title">
+    <h2 id="hosting-title">BananaWiki Hosting</h2>
+    {% if hosting_link %}
+    <p><span class="badge badge-success">Connected</span> To <strong>{{ hosting_link.portal_username or "—" }}</strong> (name when connected) since {{ hosting_link.linked_at | datetime }}.</p>
+    <p class="muted small mono">Portal account id {{ hosting_link.account_id }}</p>
+    {% if is_self and hosting_mode == "hosting" %}
+    <p class="muted small">Your own link cannot be removed while only BananaWiki Hosting accounts can sign in.</p>
+    {% else %}
+    <form method="post" action="{{ url_for('admin.user_hosting_unlink', user_id=user.id) }}" class="stack" data-confirm="Remove the BananaWiki Hosting link of {{ user.username }}{% if not is_self %} and sign them out everywhere{% endif %}?" data-confirm-danger>
+      {{ csrf() }}
+      <p class="muted small mb-0">{% if is_self %}You can connect again on your account page.{% else %}{{ user.username }} is signed out everywhere and can connect again, with the account's password, on their next hosting sign-in.{% endif %}</p>
+      <div class="form-actions"><button type="submit" class="btn btn-danger">Remove link</button></div>
+    </form>
+    {% endif %}
+    {% else %}
+    <p><span class="badge">Not connected</span>{% if not hosting_configured %} <span class="muted small">Sign-in with BananaWiki Hosting is not configured.</span>{% endif %}</p>
+    {% endif %}
+  </section>
 </div>
 
 <section class="settings-section mt-3" aria-labelledby="sessions-title">

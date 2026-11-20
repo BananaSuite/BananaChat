@@ -157,6 +157,10 @@ class Config:
     signup_failures_per_hour: int = 20
     password_hash_method: str = "auto"  # noqa: S105 - the name of a hashing scheme, not a password
     min_form_seconds: float = 0.4
+    # Sign in with BananaWiki Hosting (OAuth 2.0 client of the hosting portal); empty when off or invalid.
+    hosting_oauth_url: str = ""
+    hosting_oauth_client_id: str = ""
+    hosting_oauth_client_secret: str = field(default="", repr=False)
 
     # Interface
     default_language: str = "it"
@@ -320,6 +324,11 @@ class Config:
         return (urlsplit(self.ollama_url).hostname or "").lower() in LOOPBACK_HOSTS
 
     @property
+    def hosting_oauth_configured(self) -> bool:
+        """Whether sign-in with BananaWiki Hosting has a complete, valid configuration."""
+        return bool(self.hosting_oauth_url and self.hosting_oauth_client_id and self.hosting_oauth_client_secret)
+
+    @property
     def fallback_enabled(self) -> bool:
         return self.inference_outage_mode == "fallback" and bool(self.inference_fallback_url)
 
@@ -439,6 +448,47 @@ def _insecure_networks(r: _Reader, name: str, tailscale: bool) -> tuple[str, ...
     return tuple(dict.fromkeys(networks))
 
 
+_CLIENT_ID = re.compile(r"[A-Za-z0-9_.~-]{1,128}")
+
+
+def _hosting_oauth(r: _Reader) -> tuple[str, str, str]:
+    """``(portal URL, client id, client secret)`` for sign-in with BananaWiki Hosting, or three empty strings.
+
+    All three are needed. The portal is reached over HTTPS, or plain HTTP to this machine only (a
+    development portal), and the secret is never part of a warning.
+    """
+    url = r.text("BC_HOSTING_OAUTH_URL").rstrip("/")
+    client_id = r.text("BC_HOSTING_OAUTH_CLIENT_ID")
+    secret = r.text("BC_HOSTING_OAUTH_CLIENT_SECRET")
+    off = ("", "", "")
+    if not (url or client_id or secret):
+        return off
+    if not (url and client_id and secret):
+        r.warnings.append("Sign-in with BananaWiki Hosting needs BC_HOSTING_OAUTH_URL, BC_HOSTING_OAUTH_CLIENT_ID "
+                          "and BC_HOSTING_OAUTH_CLIENT_SECRET; it is off.")
+        return off
+    try:
+        parts = _http_url_parts(url)
+    except (ValueError, UnicodeError):
+        r.warnings.append("BC_HOSTING_OAUTH_URL must be an HTTP(S) URL with a valid port and without credentials, "
+                          "spaces, query parameters or a fragment; sign-in with BananaWiki Hosting is off.")
+        return off
+    if parts.scheme != "https" and (parts.hostname or "").lower() not in LOOPBACK_HOSTS:
+        r.warnings.append("BC_HOSTING_OAUTH_URL must use https:// (plain HTTP only to this machine); sign-in with "
+                          "BananaWiki Hosting is off.")
+        return off
+    if not _CLIENT_ID.fullmatch(client_id):
+        r.warnings.append("BC_HOSTING_OAUTH_CLIENT_ID must be the client id the portal issued (letters, digits, "
+                          "'_', '-', '.', '~'); sign-in with BananaWiki Hosting is off.")
+        return off
+    if len(secret) > 4096 or not secret.isascii() or any(ord(char) < 33 or ord(char) == 127 or char == ":"
+                                                         for char in secret):
+        r.warnings.append("BC_HOSTING_OAUTH_CLIENT_SECRET must be ASCII without spaces, colons or control "
+                          "characters; sign-in with BananaWiki Hosting is off.")
+        return off
+    return url, client_id, secret
+
+
 def _cookie_name(r: _Reader) -> str:
     """The session cookie's base name. Over HTTPS it is sent as ``__Host-<name>`` (see security.py)."""
     name = r.text("BC_SESSION_COOKIE_NAME", "bc_session") or "bc_session"
@@ -508,6 +558,7 @@ def load_config(environ=None, *, load_secret=True) -> Config:
     checkpoint_agent_tailscale = r.flag("BC_CHECKPOINT_AGENT_ALLOW_INSECURE_TAILSCALE", False)
     agents_runner_tailscale = r.flag("BC_AGENTS_RUNNER_ALLOW_INSECURE_TAILSCALE", False)
     agents_max_upload_bytes = r.integer("BC_AGENTS_MAX_UPLOAD_MB", 20, 1, 200) * 1024 * 1024
+    hosting_url, hosting_client_id, hosting_secret = _hosting_oauth(r)
 
     config = Config(
         host=r.text("BC_HOST", "127.0.0.1") or "127.0.0.1",
@@ -532,6 +583,9 @@ def load_config(environ=None, *, load_secret=True) -> Config:
         signup_failures_per_hour=r.integer("BC_SIGNUP_FAILURES_PER_HOUR", 20, 1, 100000),
         password_hash_method=r.text("BC_PASSWORD_HASH_METHOD", "auto") or "auto",
         min_form_seconds=r.number("BC_MIN_FORM_SECONDS", 0.4, 0, 30),
+        hosting_oauth_url=hosting_url,
+        hosting_oauth_client_id=hosting_client_id,
+        hosting_oauth_client_secret=hosting_secret,
         default_language=default_language,
         source_url=source_url,
         background_max_bytes=r.integer("BC_BACKGROUND_IMAGE_MAX_MB", 4, 1, 64) * 1024 * 1024,

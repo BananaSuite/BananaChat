@@ -13,6 +13,7 @@ log = logging.getLogger("bananachat")
 BLUEPRINTS = (
     ("bananachat.web.core", "bp"),
     ("bananachat.web.auth", "bp"),
+    ("bananachat.web.hosting", "bp"),
     ("bananachat.web.chat", "bp"),
     ("bananachat.web.account", "bp"),
     ("bananachat.web.community", "bp"),

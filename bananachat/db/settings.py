@@ -47,6 +47,8 @@ COLUMNS = frozenset({
     "admin_two_step_required",
     # BM mode (the easy mode) for everyone or per account, and the easter eggs offered (schema version 27).
     "bm_mode_global", "bm_mode_self_service", "easter_mascot_motion", "easter_mascot_shades", "easter_konami",
+    # Password sign-in, BananaWiki Hosting, or both (schema version 30).
+    "signin_mode",
 })
 # The easter eggs: the mascot's animations, its sunglasses (enough clicks on it) and the Konami code's shower.
 EASTER_EGGS = ("mascot_motion", "mascot_shades", "konami")
