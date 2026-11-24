@@ -272,7 +272,12 @@ Setup checklist then reports that the sandbox cannot start. Either:
 - run `sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py
   --allow-bwrap-userns`, which installs `/etc/apparmor.d/bananachat-bwrap`, a
   profile that lets only `/usr/bin/bwrap` create user namespaces, and reloads
-  it; or
+  it. On releases whose `apparmor` package ships
+  `/etc/apparmor.d/bwrap-userns-restrict` (Ubuntu 26.04, for one), that
+  profile also attaches to `/usr/bin/bwrap`, takes precedence and strips the
+  capabilities Bubblewrap needs (`bwrap: setting up uid map: Permission
+  denied`), so the script disables it the supported way (a link in
+  `/etc/apparmor.d/disable`, then `apparmor_parser -R`); or
 - write an equivalent profile yourself (`abi <abi/4.0>, include <tunables/global>
   profile bananachat-bwrap /usr/bin/bwrap flags=(unconfined) { userns, }`) and load it with
   `sudo apparmor_parser -r`.

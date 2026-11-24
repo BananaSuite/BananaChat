@@ -19,7 +19,8 @@ It then:
    ``BC_CODEX_EXTENSION``/``BC_CODEX_CLI_CONFIG`` in ``config/app.env``;
 4. checks that Bubblewrap can start sandboxes for the service user (and, with
    ``--allow-bwrap-userns``, installs the AppArmor profile Ubuntu 23.10 and
-   later need for that);
+   later need for that, and on newer releases such as 26.04 disables the packaged
+   ``bwrap-userns-restrict`` profile that would otherwise override it);
 5. restarts BananaChat (``--no-restart`` skips it).
 
 Then open Administration → Models → Claude (or Codex), add an account with a
@@ -69,6 +70,10 @@ profile bananachat-bwrap /usr/bin/bwrap flags=(unconfined) {
   include if exists <local/bananachat-bwrap>
 }
 """
+# Newer Ubuntu releases (26.04, for one) ship this profile with the apparmor package. It also attaches to /usr/bin/bwrap, wins over
+# the profile above and strips the capabilities bwrap needs inside the namespace ("setting up uid map: Permission
+# denied"). It exists only to let bwrap use user namespaces, which the profile above already allows.
+UBUNTU_BWRAP_PROFILE = Path("/etc/apparmor.d/bwrap-userns-restrict")
 
 
 def say(message: str) -> None:
@@ -237,7 +242,18 @@ def check_sandbox(service: str) -> tuple[bool, str]:
     return False, " ".join(result.stderr.decode("utf-8", "replace").split())[:300] or "Bubblewrap failed."
 
 
-def allow_bwrap_userns(dry_run: bool) -> None:
+def allow_bwrap_userns(dry_run: bool, ubuntu_profile: Path = UBUNTU_BWRAP_PROFILE) -> None:
+    if ubuntu_profile.exists():
+        # The supported way to turn off a packaged profile: it stays off across package upgrades and reboots.
+        disabled = ubuntu_profile.parent / "disable" / ubuntu_profile.name
+        if dry_run:
+            say(f"would disable {ubuntu_profile} (link {disabled}) and unload it")
+        else:
+            disabled.parent.mkdir(mode=0o755, exist_ok=True)
+            if not disabled.is_symlink() and not disabled.exists():
+                disabled.symlink_to(ubuntu_profile)
+            subprocess.run(["apparmor_parser", "-R", str(ubuntu_profile)], check=False, capture_output=True)
+            say(f"AppArmor: disabled {ubuntu_profile}, which blocks Bubblewrap's user namespaces.")
     if dry_run:
         say(f"would write {APPARMOR_PROFILE} and reload AppArmor")
         return

@@ -31,6 +31,14 @@ an administrator chooses another sign-in mode.
   `python -m bananachat.manage signin-mode both` switches back.
 - The personal data export names the connected hosting account.
 
+### Fixes
+
+- `scripts/setup_subscriptions.py --allow-bwrap-userns` now works on Ubuntu
+  releases whose `apparmor` package ships `bwrap-userns-restrict` (26.04, for
+  one). That profile overrode BananaChat's and the sandbox check failed with
+  `bwrap: setting up uid map: Permission denied`; the script now disables it
+  (a link in `/etc/apparmor.d/disable`) before loading its own.
+
 ## 1.8.0 — 2026-11-09
 
 There are no database changes (the schema version is still 29), so 1.7.6 can still open the database.
