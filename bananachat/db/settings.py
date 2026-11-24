@@ -49,8 +49,11 @@ COLUMNS = frozenset({
     "bm_mode_global", "bm_mode_self_service", "easter_mascot_motion", "easter_mascot_shades", "easter_konami",
     # Password sign-in, BananaWiki Hosting, or both (schema version 30).
     "signin_mode",
+    # The easter egg list (banana-eggs/v1 JSON, NULL for the default egg; schema version 31).
+    "easter_egg_configs",
 })
-# The easter eggs: the mascot's animations, its sunglasses (enough clicks on it) and the Konami code's shower.
+# The easter eggs: the mascot's animations, its sunglasses (enough clicks on it) and the key-sequence eggs
+# (``easter_konami`` turns every egg of ``easter_egg_configs`` on or off, see bananachat.eggs).
 EASTER_EGGS = ("mascot_motion", "mascot_shades", "konami")
 
 # Retained schema columns are accepted for older callers but cannot restore a

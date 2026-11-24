@@ -17,9 +17,11 @@ database together.
 
 ## Unreleased
 
-One database migration (`v30_hosting_signin`, schema version 30, additive);
-to roll back, restore the backup the updater made. Sign-in stays as it was
-(*Local accounts only*) until an administrator chooses another mode.
+Two database migrations (`v30_hosting_signin` and `v31_easter_eggs`, schema
+version 31, additive); to roll back, restore the backup the updater made.
+Sign-in stays as it was (*Local accounts only*) until an administrator chooses
+another mode, and the Konami code's banana shower stays the only easter egg
+typed on the keyboard until an administrator adds others.
 
 - **Optional: sign in with BananaWiki Hosting.** Register an app on the portal
   with the redirect URI `https://<site>/login/hosting/callback`, set
@@ -32,6 +34,9 @@ to roll back, restore the backup the updater made. Sign-in stays as it was
   (Account → Security). If administrators are ever locked out, use
   `/login/recovery` or run `python -m bananachat.manage signin-mode both` on the
   server as the service's user.
+- **Easter eggs.** The *Banana shower* switch in **Admin → Settings →
+  Appearance** is now *Keyboard easter eggs*, with the egg editor under it.
+  People who turned the banana shower off in Appearance get no keyboard eggs.
 
 ## 1.7.6 to 1.8.0
 

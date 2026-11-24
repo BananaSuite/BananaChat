@@ -22,6 +22,8 @@ PUBLIC = {
     "core.favicon", "core.health", "core.robots", "core.set_language", "core.source", "core.status_report",
     "developer.legacy_index", "developer.legacy_playground", "developer.legacy_usage",
     "chat.shared", "chat.shared_download", "personalities.shared",
+    # The easter egg page: visitors see the eggs as "?" and a sign-in hint.
+    "easter_eggs.index",
     # Sign in with BananaWiki Hosting (404 unless configured and switched on; the recovery page only in hosting mode).
     "hosting.start", "hosting.callback", "hosting.connect", "hosting.create", "hosting.connect_existing",
     "hosting.connect_code", "hosting.recovery",

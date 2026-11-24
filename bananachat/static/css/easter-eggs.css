@@ -1,0 +1,9 @@
+/* The easter egg page (templates/easter_eggs/index.html); the eggs themselves use banana-eggs/banana-eggs.css. */
+.egg-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.egg-card { display: grid; justify-items: center; gap: .25rem; padding: 1rem .75rem; text-align: center;
+  border: 1px dashed var(--border); border-radius: var(--radius-sm); color: var(--text-muted); }
+.egg-card--found { border-style: solid; color: inherit; }
+.egg-card:target { outline: 2px solid var(--primary); outline-offset: 2px; }
+.egg-card__sprite { font-size: 2rem; line-height: 1.2; }
+.egg-card__name { font-weight: 600; overflow-wrap: anywhere; }
+.egg-card__date { font-size: var(--text-sm, .875rem); color: var(--text-muted); }

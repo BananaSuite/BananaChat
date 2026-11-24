@@ -476,7 +476,7 @@
   "customize.eggs": "Easter eggs",
   "customize.egg_mascot_motion": "Animated logo",
   "customize.egg_mascot_shades": "Logo sunglasses",
-  "customize.egg_konami": "Banana shower (Konami code)",
+  "customize.egg_konami": "Keyboard easter eggs (like the Konami code)",
   "customize.egg_site_off": "Turned off on this site.",
   "customize.bm_mode_everyone": "On for everyone on this site.",
   "customize.bm_mode_admin_only": "Only an administrator can change this."
@@ -958,7 +958,7 @@
   "customize.eggs": "Easter egg",
   "customize.egg_mascot_motion": "Logo animato",
   "customize.egg_mascot_shades": "Occhiali da sole del logo",
-  "customize.egg_konami": "Pioggia di banane (codice Konami)",
+  "customize.egg_konami": "Easter egg da tastiera (come il codice Konami)",
   "customize.egg_site_off": "Disattivato su questo sito.",
   "customize.bm_mode_everyone": "Attiva per tutti su questo sito.",
   "customize.bm_mode_admin_only": "Solo un amministratore può cambiarla."
@@ -1440,7 +1440,7 @@
   "customize.eggs": "Easter Eggs",
   "customize.egg_mascot_motion": "Animiertes Logo",
   "customize.egg_mascot_shades": "Sonnenbrille des Logos",
-  "customize.egg_konami": "Bananenregen (Konami-Code)",
+  "customize.egg_konami": "Tastatur-Easter-Eggs (wie der Konami-Code)",
   "customize.egg_site_off": "Auf dieser Website ausgeschaltet.",
   "customize.bm_mode_everyone": "Auf dieser Website für alle eingeschaltet.",
   "customize.bm_mode_admin_only": "Nur ein Administrator kann das ändern."

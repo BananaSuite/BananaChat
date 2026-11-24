@@ -115,11 +115,18 @@ with db.transaction():                                        # BEGIN IMMEDIATE 
   class `bm-hide` is hidden: mark advanced controls and extra navigation with
   it. Hidden controls must not keep acting unseen: the chat sends no reasoning
   effort or sampling settings in BM mode.
-* **Easter eggs** live in `static/js/mascot.js`. Each has a site switch
-  (`site_settings.easter_<egg>`) and a personal one (`egg_<egg>` preference);
-  `db.users.easter_eggs()` combines them into the mascot button's
+* **Easter eggs**: the mascot's live in `static/js/mascot.js`. Each has a site
+  switch (`site_settings.easter_<egg>`) and a personal one (`egg_<egg>`
+  preference); `db.users.easter_eggs()` combines them into the mascot button's
   `data-mascot-*` attributes, which the script reads at every use, so the
   Appearance page can switch them live. A new easter egg gets both switches.
+  The keyboard eggs are BananaSuite's shared `banana-eggs/v1`: the files in
+  `static/banana-eggs/`, `bananachat/eggs.py` and
+  `tests/fixtures/eggs-vectors.json` are copies of BananaWiki's and stay
+  byte-identical (change them there first). The `konami` switches turn all of
+  them on or off; `site_settings.easter_egg_configs` holds the list
+  (`db.easter_eggs`), `web/easter_eggs.py` puts it in every page's head and
+  records finds.
 
 ## Service status
 

@@ -68,7 +68,8 @@ function apply() {
   if (mascot) {
     // The easter eggs: on when the site offers them and this person wants them (mascot.js reads these at each use).
     const site = data.easter_site || {};
-    const flags = { mascotMotion: "mascot_motion", mascotShades: "mascot_shades", mascotKonami: "konami" };
+    // The eggs typed on the keyboard (banana-eggs.js) follow the switch from the next page on.
+    const flags = { mascotMotion: "mascot_motion", mascotShades: "mascot_shades" };
     for (const [attribute, egg] of Object.entries(flags)) {
       mascot.dataset[attribute] = site[egg] !== false && prefs[`egg_${egg}`] !== false ? "1" : "0";
     }

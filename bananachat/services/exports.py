@@ -6,11 +6,11 @@
   (never the token hash), whether two-step verification is on (since when,
   how many recovery codes are left; never the authenticator secret or the
   recovery-code digests), the credit ledger, access-list memberships and
-  requests, quota requests, personalities, sign-in sessions (never the
-  session hash), the account's own audit-log entries, every chat that has
-  not been deleted with its messages and attachments, and the account's
-  agent tasks with their steps, sub-agents and follow-up messages (never the
-  task's lease or sandbox identifiers).
+  requests, quota requests, personalities, the easter eggs found, sign-in
+  sessions (never the session hash), the account's own audit-log entries,
+  every chat that has not been deleted with its messages and attachments,
+  and the account's agent tasks with their steps, sub-agents and follow-up
+  messages (never the task's lease or sandbox identifiers).
 * :func:`chats_export` - chats and messages only.
 
 Attachments are exported as metadata plus their extracted text. Image bytes
@@ -405,6 +405,9 @@ def _gdpr_payload(user_id: str) -> dict:
         (user_id,))
     payload["default_personality_id"] = db.scalar(
         "SELECT personality_id FROM personality_defaults WHERE user_id=?", (user_id,))
+    payload["easter_egg_finds"] = _rows(
+        "SELECT egg_id, found_at FROM easter_egg_finds WHERE user_id=? ORDER BY found_at, egg_id", (user_id,)) \
+        if _columns("easter_egg_finds") else []
     payload["sign_in_sessions"] = _rows(
         "SELECT created_at, last_seen_at, expires_at, user_agent, ip_address FROM auth_sessions WHERE user_id=? "
         "ORDER BY created_at", (user_id,))

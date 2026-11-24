@@ -2,9 +2,26 @@
 
 ## Unreleased
 
-One database migration (`v30_hosting_signin`, schema version 30, additive): the
-new `hosting_links` table and `site_settings.signin_mode`. Nothing changes until
-an administrator chooses another sign-in mode.
+Two database migrations (schema version 31, additive): `v30_hosting_signin`
+adds the `hosting_links` table and `site_settings.signin_mode`; nothing changes
+until an administrator chooses another sign-in mode. `v31_easter_eggs` adds
+`site_settings.easter_egg_configs` and the `easter_egg_finds` table; the
+Konami code works as before until an administrator edits the easter eggs.
+
+### Easter eggs you design
+
+- Administrators design the keyboard easter eggs in **Admin → Settings →
+  Appearance → Keyboard easter eggs**: up to 10, each with its own key sequence
+  (recorded by pressing the keys), emoji or the mascot falling, how many and how
+  fast, and what happens afterwards (open the easter egg page, show a message,
+  or nothing). The Konami code's banana shower is the default egg. The editor
+  is the one BananaWiki uses (BananaSuite `banana-eggs/v1`); a wrong list is
+  refused with each problem shown next to it.
+- The *Banana shower* switch is now *Keyboard easter eggs* and turns every one
+  of them off, for the site or (in Appearance) for one person.
+- Signed-in people's finds are kept, once per egg; the new **easter egg page**
+  (linked from Appearance) shows which ones they found and when, the others as
+  "?". The personal data export lists the finds.
 
 ### Sign in with BananaWiki Hosting
 

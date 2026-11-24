@@ -12,6 +12,11 @@
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/apple-touch-icon.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/mascot.css') }}">
+  {#- Easter eggs (web/easter_eggs.py): the egg list comes before any page content, so nothing a page holds can
+      stand in for it. The script is always there: the egg editor previews through it. -#}
+  {% if banana_eggs %}<script type="application/json" id="banana-eggs">{{ banana_eggs }}</script>{% endif %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='banana-eggs/banana-eggs.css') }}">
+  <script src="{{ url_for('static', filename='banana-eggs/banana-eggs.js') }}" defer></script>
   {% block styles %}{% endblock %}
   {% include "partials/theme.html" %}
 </head>

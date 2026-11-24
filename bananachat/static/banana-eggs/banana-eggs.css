@@ -1,0 +1,65 @@
+/* BananaSuite easter eggs (banana-eggs/v1), shared byte for byte by BananaWiki, the hosting portal, BananaChat
+ * and BananaGit. Every rule is scoped to .banana-eggs-*; colours come from the host app's custom properties
+ * when it has them, with plain fallbacks otherwise. No markup needs a style attribute: the falling items get
+ * their position, size and speed from the script (CSSOM), which every app's content security policy allows. */
+
+.banana-eggs-layer { position: fixed; inset: 0; z-index: 2147483000; overflow: hidden; pointer-events: none; }
+.banana-eggs-item {
+  position: absolute; top: -3rem; line-height: 1; user-select: none;
+  animation-name: banana-eggs-fall; animation-timing-function: linear; animation-fill-mode: both;
+}
+.banana-eggs-item--sprite { width: 1.6em; height: 1.6em; }
+.banana-eggs-item--sprite > * { display: block; width: 100%; height: 100%; }
+.banana-eggs-item--still {
+  top: 40%; left: 50%; font-size: 3rem; margin-left: -.5em;
+  animation: banana-eggs-appear 1.6s ease-out both;
+}
+@keyframes banana-eggs-fall {
+  from { transform: translateY(0) rotate(0deg); opacity: 1; }
+  90% { opacity: 1; }
+  to { transform: translateY(calc(100vh + 6rem)) rotate(300deg); opacity: 0; }
+}
+@keyframes banana-eggs-appear { 0% { opacity: 0; } 15%, 80% { opacity: 1; } 100% { opacity: 0; } }
+
+.banana-eggs-toast {
+  position: fixed; left: 50%; bottom: 1.5rem; transform: translateX(-50%); z-index: 2147483001;
+  max-width: min(32rem, calc(100vw - 2rem)); padding: .75rem 1rem; border-radius: .6rem;
+  background: var(--banana-eggs-toast-bg, #24211b); color: var(--banana-eggs-toast-fg, #fff8dc);
+  box-shadow: 0 .4rem 1.2rem rgba(0, 0, 0, .3); font: inherit; line-height: 1.4;
+}
+.banana-eggs-toast__link { color: inherit; font-weight: 600; text-decoration: underline; }
+
+/* The admin editor (banana-eggs-admin.js). */
+.banana-eggs-editor { display: grid; gap: 1rem; }
+.banana-eggs-editor__card {
+  display: grid; gap: .75rem; padding: 1rem; border-radius: .6rem;
+  border: 1px solid var(--banana-eggs-border, rgba(127, 127, 127, .35));
+}
+.banana-eggs-editor__head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; justify-content: space-between; }
+.banana-eggs-editor__title { margin: 0; font-size: 1rem; font-weight: 600; }
+.banana-eggs-editor__row { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: flex-end; }
+.banana-eggs-editor__field { display: grid; gap: .25rem; min-width: 7rem; }
+.banana-eggs-editor__field--wide { flex: 1 1 16rem; }
+.banana-eggs-editor__field input[type="number"] { width: 7rem; }
+.banana-eggs-editor__check { display: flex; gap: .4rem; align-items: center; }
+.banana-eggs-editor__keys {
+  min-height: 2.2rem; padding: .3rem .6rem; border-radius: .4rem; font-family: ui-monospace, monospace;
+  letter-spacing: .1em; border: 1px dashed var(--banana-eggs-border, rgba(127, 127, 127, .5));
+  display: flex; align-items: center; flex-wrap: wrap; gap: .3rem;
+}
+.banana-eggs-editor__keys--recording { border-style: solid; border-color: var(--banana-eggs-accent, #e0b000); }
+.banana-eggs-editor__key { padding: 0 .35rem; border-radius: .25rem; background: rgba(127, 127, 127, .18); }
+.banana-eggs-editor__emojis { display: flex; flex-wrap: wrap; gap: .2rem; }
+.banana-eggs-editor__emoji {
+  font-size: 1.35rem; line-height: 1; padding: .2rem .3rem; border-radius: .3rem; cursor: pointer;
+  border: 1px solid transparent; background: transparent;
+}
+.banana-eggs-editor__emoji:hover, .banana-eggs-editor__emoji:focus-visible { border-color: var(--banana-eggs-accent, #e0b000); }
+.banana-eggs-editor__emoji[aria-pressed="true"] { background: rgba(224, 176, 0, .25); }
+.banana-eggs-editor__actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.banana-eggs-editor__hint { margin: 0; opacity: .75; font-size: .875rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .banana-eggs-item { animation-duration: 1ms !important; }
+  .banana-eggs-item--still { animation: banana-eggs-appear 1.6s linear both !important; }
+}

@@ -1,0 +1,40 @@
+{#- The easter eggs the site offers (web/easter_eggs.py): found ones with the date, the others as "?". The
+    runtime opens this page at #egg-<id> after a find. -#}
+{% extends "base.html" %}
+{% block title %}{{ t("eggs.title") }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/easter-eggs.css') }}">{% endblock %}
+{% block content %}
+<div class="page page-narrow easter-eggs-page">
+  <header class="page-header">
+    <h1>{{ t("eggs.title") }}</h1>
+    {% if items %}<p class="mb-0" id="eggs-count">{{ t("eggs.count", found=found_count, total=items | length) }}</p>{% endif %}
+  </header>
+  <div class="section-stack">
+    {% if not current_user %}
+    <section class="settings-section"><p class="mb-0"><a href="{{ url_for('auth.login', next=request.path) }}">{{ t("eggs.sign_in") }}</a></p></section>
+    {% elif personal_off %}
+    <section class="settings-section"><p class="mb-0">{{ t("eggs.personal_off") }} <a href="{{ url_for('customization.index') }}#easter-eggs">{{ t("eggs.personal_off_link") }}</a></p></section>
+    {% endif %}
+    {% if not items %}
+    <section class="settings-section"><p class="muted mb-0">{{ t("eggs.none") if site_on else t("eggs.site_off") }}</p></section>
+    {% else %}
+    <section class="settings-section">
+      <ul class="egg-list">
+        {% for item in items %}
+        {% if item.found_at %}
+        {%- set sprite = item.egg.sprite %}
+        <li class="egg-card egg-card--found" id="egg-{{ item.egg.id }}">
+          <span class="egg-card__sprite" aria-hidden="true">{{ sprite.value if sprite.type == "emoji" else "🍌" }}</span>
+          <span class="egg-card__name">{{ item.egg.id }}</span>
+          <span class="egg-card__date">{{ t_html("eggs.found_on", date=(item.found_at | local_time("date"))) }}</span>
+        </li>
+        {% else %}
+        <li class="egg-card"><span class="egg-card__sprite" aria-hidden="true">?</span><span class="egg-card__name">{{ t("eggs.not_found") }}</span></li>
+        {% endif %}
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

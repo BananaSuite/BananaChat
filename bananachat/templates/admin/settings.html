@@ -149,8 +149,21 @@
         <input type="hidden" name="easter_eggs_present" value="1">
         <label class="check"><input type="checkbox" name="easter_mascot_motion"{% if s.easter_mascot_motion != 0 %} checked{% endif %}><span>Animated logo<small>The banana moves and hops when clicked.</small></span></label>
         <label class="check"><input type="checkbox" name="easter_mascot_shades"{% if s.easter_mascot_shades != 0 %} checked{% endif %}><span>Sunglasses<small>Eleven clicks in a row on the banana put them on.</small></span></label>
-        <label class="check"><input type="checkbox" name="easter_konami"{% if s.easter_konami != 0 %} checked{% endif %}><span>Banana shower<small>The Konami code (↑ ↑ ↓ ↓ ← → ← → B A) makes bananas fall for three seconds.</small></span></label>
         <p class="hint mt-1">People can turn these off for themselves in Appearance.</p>
+      </fieldset>
+      {#- The shared BananaSuite egg editor (static/banana-eggs/banana-eggs-admin.js) keeps the hidden field up to
+          date with the whole list as JSON; web/admin/settings.py checks it with bananachat.eggs. -#}
+      <fieldset class="choice-group" id="easter-eggs">
+        <legend>Keyboard easter eggs</legend>
+        <label class="check"><input type="checkbox" name="easter_konami"{% if s.easter_konami != 0 %} checked{% endif %}><span>Keyboard easter eggs<small>Typing a key sequence, such as the Konami code (↑ ↑ ↓ ↓ ← → ← → B A), drops emoji or the mascot down the page. Off turns every easter egg below off.</small></span></label>
+        <p class="hint mt-1">People can turn them off for themselves in Appearance, and see the ones they found on the <a href="{{ url_for('easter_eggs.index') }}">easter egg page</a>.</p>
+        {% if egg_editor.errors %}
+        <div class="alert alert-error" role="alert" id="easter-egg-errors">{{ icon("alert") }}<ul class="mb-0">{% for error in egg_editor.errors %}<li>{{ error }}</li>{% endfor %}</ul></div>
+        {% endif %}
+        <input type="hidden" id="easter-egg-configs" name="easter_egg_configs" value="{{ egg_editor.value }}">
+        <div class="banana-eggs-editor" data-banana-eggs-editor data-input="easter-egg-configs"{% if egg_editor.errors %} aria-describedby="easter-egg-errors"{% endif %}>
+          <script type="application/json" data-banana-eggs-editor-options>{{ egg_editor.options }}</script>
+        </div>
       </fieldset>
       {% for mode in ["dark", "light"] %}
       <details class="admin-disclosure palette-disclosure" id="palette-{{ mode }}">
@@ -193,4 +206,5 @@
 {% block scripts %}
 <script type="application/json" id="page-data">{{ page_data | tojson }}</script>
 <script type="module" src="{{ url_for('static', filename='js/admin.js') }}"></script>
+<script src="{{ url_for('static', filename='banana-eggs/banana-eggs-admin.js') }}" defer></script>
 {% endblock %}

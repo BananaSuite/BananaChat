@@ -18,8 +18,6 @@
 }
 .mascot--hop .mascot__body { animation: mascot-hop .4s steps(4, end); }
 .mascot--eager.mascot--hop .mascot__body { animation-name: mascot-hop-high; }
-/* The Konami code with less motion asked: one still lean instead of the shower. */
-.mascot--lean .mascot-sprite { transform: rotate(-8deg); }
 /* Fingers get the touch size, the sprite centred; the art stays in place and the name follows the box. */
 @media (pointer: coarse) {
   .mascot { min-width: var(--touch-target); min-height: var(--touch-target); align-items: center; justify-content: center; }
@@ -49,14 +47,6 @@
 @keyframes mascot-glint { 0% { opacity: 1; transform: translateX(0); } 25% { transform: translateX(1px); }
   50% { transform: translateX(3px); } 75% { transform: translateX(4px); } 100% { opacity: 0; transform: translateX(4px); } }
 
-/* The Konami code: small copies of the sprite falling past the page for about three seconds. */
-.mascot-shower { position: fixed; inset: 0; z-index: 150; overflow: hidden; pointer-events: none; }
-.mascot-shower__banana { position: absolute; top: -40px; margin-left: -16px; animation: mascot-fall 2s linear both; }
-.mascot-shower__banana .mascot-sprite { display: block; width: 16px; height: 16px; }
-.mascot-shower__banana--big .mascot-sprite { width: 32px; height: 32px; }
-@keyframes mascot-fall { from { transform: translateY(0) rotate(-12deg); }
-  to { transform: translateY(calc(100vh + 80px)) rotate(12deg); } }
-
 /* The animated mascot easter egg switched off (site or person): a still banana, like with less motion. */
 .mascot[data-mascot-motion="0"] :is(.mascot__body, .mascot__eyes) { animation: none; }
 .mascot[data-mascot-motion="0"] .mascot-sprite { transition: none; }
@@ -68,11 +58,8 @@
    still instead (clicks still put the sunglasses on). After the rules, as it uses the same selectors. */
 @media (prefers-reduced-motion: reduce) {
   .mascot__body, .mascot--hop .mascot__body, .mascot--eager.mascot--hop .mascot__body, .mascot-sprite .mascot__eyes,
-  .mascot--shades-drop .mascot__shades, .mascot--shades-drop .mascot__glint, .mascot-shower__banana { animation: none; }
-  .mascot-shower { display: none; }
+  .mascot--shades-drop .mascot__shades, .mascot--shades-drop .mascot__glint { animation: none; }
   .mascot .mascot-sprite { transition: none; }
 }
-body.reduce-motion :is(.mascot__body, .mascot-sprite .mascot__eyes, .mascot__shades, .mascot__glint,
-  .mascot-shower__banana) { animation: none; }
-body.reduce-motion .mascot-shower { display: none; }
+body.reduce-motion :is(.mascot__body, .mascot-sprite .mascot__eyes, .mascot__shades, .mascot__glint) { animation: none; }
 body.reduce-motion .mascot .mascot-sprite { transition: none; }

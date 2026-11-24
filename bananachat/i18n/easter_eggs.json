@@ -1,0 +1,44 @@
+{
+  "en": {
+    "eggs.title": "Easter eggs",
+    "eggs.count": "{found} of {total} found",
+    "eggs.found_on": "Found on {date}",
+    "eggs.not_found": "Not found yet",
+    "eggs.sign_in": "Sign in to keep the easter eggs you find.",
+    "eggs.personal_off": "You have turned keyboard easter eggs off.",
+    "eggs.personal_off_link": "Appearance",
+    "eggs.none": "There are no easter eggs to find right now.",
+    "eggs.site_off": "Easter eggs are turned off on this site.",
+    "eggs.found": "You found an easter egg!",
+    "eggs.open_page": "See your easter eggs",
+    "eggs.page_link": "Easter eggs you found"
+  },
+  "it": {
+    "eggs.title": "Easter egg",
+    "eggs.count": "{found} su {total} trovati",
+    "eggs.found_on": "Trovato il {date}",
+    "eggs.not_found": "Non ancora trovato",
+    "eggs.sign_in": "Accedi per conservare gli easter egg che trovi.",
+    "eggs.personal_off": "Hai disattivato gli easter egg da tastiera.",
+    "eggs.personal_off_link": "Aspetto",
+    "eggs.none": "Al momento non ci sono easter egg da trovare.",
+    "eggs.site_off": "Gli easter egg sono disattivati su questo sito.",
+    "eggs.found": "Hai trovato un easter egg!",
+    "eggs.open_page": "Vedi i tuoi easter egg",
+    "eggs.page_link": "Easter egg trovati"
+  },
+  "de": {
+    "eggs.title": "Easter Eggs",
+    "eggs.count": "{found} von {total} gefunden",
+    "eggs.found_on": "Gefunden am {date}",
+    "eggs.not_found": "Noch nicht gefunden",
+    "eggs.sign_in": "Melde dich an, um die gefundenen Easter Eggs zu behalten.",
+    "eggs.personal_off": "Du hast Tastatur-Easter-Eggs ausgeschaltet.",
+    "eggs.personal_off_link": "Darstellung",
+    "eggs.none": "Gerade gibt es keine Easter Eggs zu finden.",
+    "eggs.site_off": "Easter Eggs sind auf dieser Website ausgeschaltet.",
+    "eggs.found": "Du hast ein Easter Egg gefunden!",
+    "eggs.open_page": "Deine Easter Eggs ansehen",
+    "eggs.page_link": "Gefundene Easter Eggs"
+  }
+}

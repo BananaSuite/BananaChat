@@ -331,6 +331,8 @@ def _install_template_helpers(app: Flask) -> None:
         primary_foreground=formatting.primary_foreground,
     )
 
+    from bananachat.web import easter_eggs as easter_egg_views
+
     @app.context_processor
     def inject():
         config = app.config["BC"]
@@ -367,6 +369,7 @@ def _install_template_helpers(app: Flask) -> None:
             "bm_mode": users.bm_mode(user, settings),
             "bm_mode_switchable": users.bm_mode_switchable(user, settings),
             "easter_eggs": users.easter_eggs(prefs, settings),
+            "banana_eggs": easter_egg_views.page_config(settings, user, prefs, language),
             "theme": theme,
             "palette": palette,
             "source_url": config.source_url,

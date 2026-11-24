@@ -1,0 +1,1348 @@
+{
+ "spec": "banana-eggs/v1",
+ "clean": [
+  {
+   "name": "empty text",
+   "input": "",
+   "clean": {
+    "version": 1,
+    "eggs": []
+   },
+   "strict_errors": []
+  },
+  {
+   "name": "default config",
+   "input": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "konami",
+      "enabled": true,
+      "keys": [
+       "ArrowUp",
+       "ArrowUp",
+       "ArrowDown",
+       "ArrowDown",
+       "ArrowLeft",
+       "ArrowRight",
+       "ArrowLeft",
+       "ArrowRight",
+       "b",
+       "a"
+      ],
+      "sprite": {
+       "type": "mascot"
+      },
+      "count": 10,
+      "speed_min": 1.6,
+      "speed_max": 2.1,
+      "delay": 80,
+      "unlock": {
+       "action": "none",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "konami",
+      "enabled": true,
+      "keys": [
+       "ArrowUp",
+       "ArrowUp",
+       "ArrowDown",
+       "ArrowDown",
+       "ArrowLeft",
+       "ArrowRight",
+       "ArrowLeft",
+       "ArrowRight",
+       "b",
+       "a"
+      ],
+      "sprite": {
+       "type": "mascot"
+      },
+      "count": 10,
+      "speed_min": 1.6,
+      "speed_max": 2.1,
+      "delay": 80,
+      "unlock": {
+       "action": "none",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": []
+  },
+  {
+   "name": "bare list accepted",
+   "input": [
+    {
+     "id": "a",
+     "keys": [
+      "x",
+      "y"
+     ]
+    }
+   ],
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "a",
+      "enabled": true,
+      "keys": [
+       "x",
+       "y"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": []
+  },
+  {
+   "name": "full egg kept",
+   "input": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "party",
+      "enabled": true,
+      "keys": [
+       "p",
+       "a",
+       "r",
+       "t",
+       "y"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🎉"
+      },
+      "count": 50,
+      "speed_min": 1,
+      "speed_max": 2.5,
+      "delay": 40,
+      "unlock": {
+       "action": "toast",
+       "delay": 1000
+      },
+      "record": false,
+      "badge": "7",
+      "message": "  Party   time "
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "party",
+      "enabled": true,
+      "keys": [
+       "p",
+       "a",
+       "r",
+       "t",
+       "y"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🎉"
+      },
+      "count": 50,
+      "speed_min": 1.0,
+      "speed_max": 2.5,
+      "delay": 40,
+      "unlock": {
+       "action": "toast",
+       "delay": 1000
+      },
+      "record": false,
+      "badge": "7",
+      "message": "Party time"
+     }
+    ]
+   },
+   "strict_errors": []
+  },
+  {
+   "name": "keys normalised",
+   "input": {
+    "eggs": [
+     {
+      "id": "caps",
+      "keys": [
+       "B",
+       "A",
+       "ArrowUp"
+      ]
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "caps",
+      "enabled": true,
+      "keys": [
+       "b",
+       "a",
+       "ArrowUp"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": []
+  },
+  {
+   "name": "numbers clamped",
+   "input": {
+    "eggs": [
+     {
+      "id": "big",
+      "keys": [
+       "a",
+       "b"
+      ],
+      "count": 999,
+      "speed_min": 0,
+      "speed_max": 99,
+      "delay": 5,
+      "unlock": {
+       "action": "page",
+       "delay": 1
+      }
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "big",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 200,
+      "speed_min": 0.3,
+      "speed_max": 20.0,
+      "delay": 10,
+      "unlock": {
+       "action": "page",
+       "delay": 100
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": [
+    [
+     0,
+     "count",
+     "range"
+    ],
+    [
+     0,
+     "speed_min",
+     "range"
+    ],
+    [
+     0,
+     "speed_max",
+     "range"
+    ],
+    [
+     0,
+     "delay",
+     "range"
+    ],
+    [
+     0,
+     "unlock.delay",
+     "range"
+    ]
+   ]
+  },
+  {
+   "name": "speeds swapped",
+   "input": {
+    "eggs": [
+     {
+      "id": "swap",
+      "keys": [
+       "a",
+       "b"
+      ],
+      "speed_min": 5,
+      "speed_max": 2
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "swap",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 2.0,
+      "speed_max": 5.0,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": []
+  },
+  {
+   "name": "badge integer",
+   "input": {
+    "eggs": [
+     {
+      "id": "b",
+      "keys": [
+       "a",
+       "b"
+      ],
+      "badge": 12
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "b",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": "12",
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": []
+  },
+  {
+   "name": "bad id dropped",
+   "input": {
+    "eggs": [
+     {
+      "id": "Bad Id",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "ok",
+      "keys": [
+       "a",
+       "b"
+      ]
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "ok",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": [
+    [
+     0,
+     "id",
+     "invalid"
+    ]
+   ]
+  },
+  {
+   "name": "too few keys dropped",
+   "input": {
+    "eggs": [
+     {
+      "id": "one",
+      "keys": [
+       "a"
+      ]
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": []
+   },
+   "strict_errors": [
+    [
+     0,
+     "keys",
+     "length"
+    ]
+   ]
+  },
+  {
+   "name": "control key dropped",
+   "input": {
+    "eggs": [
+     {
+      "id": "ctl",
+      "keys": [
+       "a",
+       "\u0007"
+      ]
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": []
+   },
+   "strict_errors": [
+    [
+     0,
+     "keys",
+     "invalid"
+    ]
+   ]
+  },
+  {
+   "name": "unknown named key dropped",
+   "input": {
+    "eggs": [
+     {
+      "id": "named",
+      "keys": [
+       "a",
+       "arrowup"
+      ]
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": []
+   },
+   "strict_errors": [
+    [
+     0,
+     "keys",
+     "invalid"
+    ]
+   ]
+  },
+  {
+   "name": "duplicate id",
+   "input": {
+    "eggs": [
+     {
+      "id": "x",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "x",
+      "keys": [
+       "c",
+       "d"
+      ]
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "x",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": [
+    [
+     1,
+     "id",
+     "duplicate"
+    ]
+   ]
+  },
+  {
+   "name": "emoji too long",
+   "input": {
+    "eggs": [
+     {
+      "id": "e",
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌🍌🍌🍌🍌🍌🍌🍌🍌"
+      }
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "e",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": [
+    [
+     0,
+     "sprite.value",
+     "invalid"
+    ]
+   ]
+  },
+  {
+   "name": "emoji markup",
+   "input": {
+    "eggs": [
+     {
+      "id": "e",
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "<b>"
+      }
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "e",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": [
+    [
+     0,
+     "sprite.value",
+     "invalid"
+    ]
+   ]
+  },
+  {
+   "name": "mascot sprite",
+   "input": {
+    "eggs": [
+     {
+      "id": "m",
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "mascot",
+       "value": "ignored"
+      }
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "m",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "mascot"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": []
+  },
+  {
+   "name": "bad unlock action",
+   "input": {
+    "eggs": [
+     {
+      "id": "u",
+      "keys": [
+       "a",
+       "b"
+      ],
+      "unlock": {
+       "action": "redirect"
+      }
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "u",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": [
+    [
+     0,
+     "unlock.action",
+     "invalid"
+    ]
+   ]
+  },
+  {
+   "name": "number as text",
+   "input": {
+    "eggs": [
+     {
+      "id": "n",
+      "keys": [
+       "a",
+       "b"
+      ],
+      "count": "30"
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "n",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": [
+    [
+     0,
+     "count",
+     "type"
+    ]
+   ]
+  },
+  {
+   "name": "message too long",
+   "input": {
+    "eggs": [
+     {
+      "id": "msg",
+      "keys": [
+       "a",
+       "b"
+      ],
+      "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "msg",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+     }
+    ]
+   },
+   "strict_errors": [
+    [
+     0,
+     "message",
+     "invalid"
+    ]
+   ]
+  },
+  {
+   "name": "too many eggs",
+   "input": {
+    "eggs": [
+     {
+      "id": "e0",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e1",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e2",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e3",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e4",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e5",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e6",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e7",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e8",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e9",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e10",
+      "keys": [
+       "a",
+       "b"
+      ]
+     },
+     {
+      "id": "e11",
+      "keys": [
+       "a",
+       "b"
+      ]
+     }
+    ]
+   },
+   "clean": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "e0",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     },
+     {
+      "id": "e1",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     },
+     {
+      "id": "e2",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     },
+     {
+      "id": "e3",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     },
+     {
+      "id": "e4",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     },
+     {
+      "id": "e5",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     },
+     {
+      "id": "e6",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     },
+     {
+      "id": "e7",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     },
+     {
+      "id": "e8",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     },
+     {
+      "id": "e9",
+      "enabled": true,
+      "keys": [
+       "a",
+       "b"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍌"
+      },
+      "count": 30,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   },
+   "strict_errors": [
+    [
+     null,
+     "eggs",
+     "too_many"
+    ]
+   ]
+  },
+  {
+   "name": "wrong version",
+   "input": {
+    "version": 2,
+    "eggs": []
+   },
+   "clean": {
+    "version": 1,
+    "eggs": []
+   },
+   "strict_errors": [
+    [
+     null,
+     "version",
+     "invalid"
+    ]
+   ]
+  },
+  {
+   "name": "not json",
+   "input": "{nope",
+   "clean": {
+    "version": 1,
+    "eggs": []
+   },
+   "strict_errors": [
+    [
+     null,
+     "list",
+     "json"
+    ]
+   ]
+  }
+ ],
+ "legacy": [
+  {
+   "name": "legacy list",
+   "value": "[{\"keys\": \"38,38,40,40,37,39,37,39,66,65\", \"emoji\": \"\\ud83c\\udf55\", \"count\": 40, \"speed_min\": 1, \"speed_max\": 2, \"delay\": 50, \"unlock_delay\": 3000}, {\"keys\": \"999,1\", \"emoji\": \"x\"}]",
+   "columns": null,
+   "result": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "legacy-1",
+      "enabled": true,
+      "keys": [
+       "ArrowUp",
+       "ArrowUp",
+       "ArrowDown",
+       "ArrowDown",
+       "ArrowLeft",
+       "ArrowRight",
+       "ArrowLeft",
+       "ArrowRight",
+       "b",
+       "a"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "🍕"
+      },
+      "count": 40,
+      "speed_min": 1.0,
+      "speed_max": 2.0,
+      "delay": 50,
+      "unlock": {
+       "action": "page",
+       "delay": 3000
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "legacy columns",
+   "value": "{\"sunglasses\":1}",
+   "columns": {
+    "easter_egg_keys": "72,73",
+    "easter_egg_emoji": "👋",
+    "easter_egg_count": "20"
+   },
+   "result": {
+    "version": 1,
+    "eggs": [
+     {
+      "id": "legacy-1",
+      "enabled": true,
+      "keys": [
+       "h",
+       "i"
+      ],
+      "sprite": {
+       "type": "emoji",
+       "value": "👋"
+      },
+      "count": 20,
+      "speed_min": 1.5,
+      "speed_max": 3.5,
+      "delay": 80,
+      "unlock": {
+       "action": "page",
+       "delay": 2500
+      },
+      "record": true,
+      "badge": null,
+      "message": ""
+     }
+    ]
+   }
+  },
+  {
+   "name": "nothing legacy",
+   "value": "{\"sunglasses\":1,\"konami\":1,\"peek\":0}",
+   "columns": {},
+   "result": null
+  }
+ ]
+}
