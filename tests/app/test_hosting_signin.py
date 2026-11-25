@@ -266,7 +266,7 @@ def test_hosting_mode_refuses_passwords_and_sends_sign_up_to_the_portal(happ, po
     browser = _english(Browser(happ))
     page = browser.get("/login").get_data(as_text=True)
     assert 'name="password"' not in page and 'href="/login/hosting/start"' in page
-    assert 'href="/login/hosting/start?create=1">Create an account</a>' in page
+    assert "create=1" not in page and "No account yet?" not in page
     response = browser.post("/login", {"username": "bob", "password": "bob-password"})
     assert response.status_code == 403 and "Signing in with a password is turned off" in response.get_data(as_text=True)
     assert _whoami(browser) is None

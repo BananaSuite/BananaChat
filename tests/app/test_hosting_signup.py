@@ -1,8 +1,9 @@
 """"Create an account" through BananaWiki Hosting (web/hosting.py, services/hosting_signin.py).
 
-In ``hosting`` mode the sign-in page links to the portal's sign-up (``prompt=create``) while the portal's
-metadata says it takes new accounts; the account here is then created at once, named like the portal
-account, under this site's sign-up policy, and never while a hosting administrator acts.
+In ``hosting`` mode ``/login/hosting/start?create=1`` asks the portal for its sign-up form
+(``prompt=create``); the account here is then created at once, named like the portal account, under this
+site's sign-up policy, and never while a hosting administrator acts. No page links to it: with the
+BananaWiki Hosting button on the sign-in page there is no "Create an account".
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from tests.app.fixtures import Browser
 from tests.app.test_hosting_signin import _english, _link_of, _make_user, _settings, _start, _user, _whoami
 from tests.app.test_hosting_signin_methods import Portal
 
-CREATE_LINK = 'href="/login/hosting/start?create=1"'
 METADATA = ("GET", "/.well-known/oauth-authorization-server")
 
 
@@ -46,53 +46,22 @@ def _create(browser, portal, sub="sub-new", name="newbie"):
     return browser.get(portal.authorize(location, sub, name))
 
 
-def _forget_signup_state(app):
-    app.extensions.pop("bananachat.portal_signup", None)
-
-
-def test_the_link_is_shown_while_the_portal_takes_new_accounts(happ, portal):
+def test_the_sign_in_page_has_no_create_link_next_to_the_hosting_button(happ, portal):
     browser = _english(Browser(happ))
     page = browser.get("/login?next=/account").get_data(as_text=True)
-    assert 'href="/login/hosting/start?create=1&amp;next=/account">Create an account</a>' in page
-    assert 'href="/signup"' not in page
-    portal.signup = "invite"
-    _forget_signup_state(happ)
-    assert CREATE_LINK in browser.get("/login").get_data(as_text=True)
-
-
-@pytest.mark.parametrize("answer", ["closed", None])
-def test_the_link_is_hidden_when_the_portal_is_closed_or_silent(happ, portal, answer):
-    portal.signup = answer
-    assert "create=1" not in _english(Browser(happ)).get("/login").get_data(as_text=True)
-
-
-def test_an_unreachable_portal_hides_the_link(happ, portal):
-    from bananachat.services.hosting_signin import OAuthError
-
-    portal.failure = OAuthError("hosting.error_portal", "unreachable")
-    assert "create=1" not in _english(Browser(happ)).get("/login").get_data(as_text=True)
-
-
-def test_the_portal_is_asked_once_in_a_while(happ, portal):
-    browser = Browser(happ)
-    for _ in range(3):
-        browser.get("/login")
-    assert portal.calls.count(METADATA) == 1
-
-
-def test_a_closed_site_offers_no_link(happ, portal):
-    _settings(happ, signup_mode="disabled")
-    assert "create=1" not in _english(Browser(happ)).get("/login").get_data(as_text=True)
-    assert METADATA not in portal.calls
-
-
-def test_both_mode_keeps_its_own_sign_up_and_adds_none(happ, portal):
+    assert "No account yet?" not in page and "create=1" not in page and 'href="/signup"' not in page
+    assert METADATA not in portal.calls, "the portal is not asked about sign-up for the page"
     _settings(happ, signin_mode="both")
-    browser = _english(Browser(happ))
     page = browser.get("/login").get_data(as_text=True)
-    assert 'href="/signup"' in page and "create=1" not in page
+    assert "No account yet?" not in page and 'href="/signup"' not in page
     location = _start(browser, "/login/hosting/start?create=1")
     assert "prompt" not in parse_qs(urlsplit(location).query), "create=1 is for hosting-only sign-in"
+
+
+def test_a_site_with_its_own_accounts_only_keeps_its_create_link(happ, portal):
+    _settings(happ, signin_mode="local")
+    page = _english(Browser(happ)).get("/login").get_data(as_text=True)
+    assert "No account yet?" in page and 'href="/signup"' in page
 
 
 def test_a_new_portal_account_gets_its_account_here_without_the_choice(happ, portal):

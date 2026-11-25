@@ -26,11 +26,8 @@
 {% endif %}
 {% endblock %}
 {% block below %}
-{% if settings.signup_mode in ("open", "invite") %}
-{% if signin_mode() == "hosting" %}
-{% if hosting_signup_open() %}<p>{{ t("auth.no_account") }} <a href="{{ url_for('hosting.start', create=1, next=next_url or None) }}">{{ t("hosting.create_account") }}</a></p>{% endif %}
-{% else %}
+{#- With the BananaWiki Hosting button on the page there is no "Create an account": the first sign-in creates it. -#}
+{% if signin_mode() == "local" and settings.signup_mode in ("open", "invite") %}
 <p>{{ t("auth.no_account") }} <a href="{{ url_for('auth.signup') }}">{{ t("auth.create_account") }}</a></p>
-{% endif %}
 {% endif %}
 {% endblock %}

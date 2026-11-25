@@ -274,15 +274,18 @@ def test_two_step_codes_need_a_password_and_the_requirement_spares_accounts_with
 
 # ----- C4: the first sign-in's choice -------------------------------------------------------------------
 
-def test_the_first_sign_in_offers_the_existing_account_first_and_keeps_what_was_typed(happ, portal):
+def test_the_first_sign_in_creates_first_and_connects_behind_a_button(happ, portal):
     _make_user(happ, "carol")
     browser = _english(Browser(happ))
     browser.get(portal.authorize(_start(browser), "sub-carol", "caz"))
     page = browser.get("/login/hosting/connect").get_data(as_text=True)
-    assert page.index("I already have an account here") < page.index("Create a new account")
-    assert "Sign in once with its username and password" in page and "You can change it." in page
+    assert page.index('action="/login/hosting/create"') < page.index("I already have an account here")
+    assert '<details class="hosting-existing">' in page, "closed until asked for"
+    assert '<summary class="btn btn-block">I already have an account here</summary>' in page
+    assert "Sign in once with its username and password" in page and "create your account" in page
     response = browser.post("/login/hosting/connect-existing", {"username": "carol", "password": "wrong"})
-    assert 'value="carol"' in response.get_data(as_text=True)
+    body = response.get_data(as_text=True)
+    assert 'value="carol"' in body and '<details class="hosting-existing" open>' in body
     response = browser.post("/login/hosting/create", {"username": "carol"})
     assert response.status_code == 409 and 'value="carol"' in response.get_data(as_text=True)
 

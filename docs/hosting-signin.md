@@ -39,8 +39,8 @@ that account's role, limits, two-step verification and data stay here.
 | Mode | Sign-in page | Sign-up |
 | --- | --- | --- |
 | **Local accounts only** (`local`, the default) | Username and password, as before. The hosting pages answer 404. | As before. |
-| **Both** (`both`) | The password form and **Sign in with BananaWiki Hosting**. | Both: the sign-up page, or the hosting button. |
-| **BananaWiki Hosting accounts only** (`hosting`) | Only **Sign in with BananaWiki Hosting**; passwords are refused. | **Create an account** signs up at BananaWiki Hosting ([sign-up from an app](#sign-up-from-an-app)); `/signup` (and invitation links) lead to the hosting button. |
+| **Both** (`both`) | The password form and **Sign in with BananaWiki Hosting**. | The hosting button (the first sign-in creates the account); `/signup` still works for invitation links. |
+| **BananaWiki Hosting accounts only** (`hosting`) | Only **Sign in with BananaWiki Hosting**; passwords are refused. | The hosting button (the first sign-in creates the account); `/signup` (and invitation links) lead to it. |
 
 Without a complete configuration the mode in force is always `local`, whatever
 is saved; the setting is shown disabled with the reason. Changing the mode asks
@@ -51,21 +51,22 @@ high-impact settings, and is recorded in the audit log.
 
 The portal tells BananaChat the hosting account's stable id. BananaChat looks
 it up among its connections only: **a hosting account is never matched to a
-BananaChat account by user name or email**. The first time, the person
-chooses:
+BananaChat account by user name or email**. The first time, one page asks
+for the rest:
 
-- **Create a new account.** The hosting name is suggested, or the closest free
+- **Create the account** (the form on the page). The hosting name is suggested, or the closest free
   name when it is taken or not allowed here (3–32 letters, digits, dots,
   hyphens and underscores). The site's sign-up setting applies: closed sign-up
   offers no new account, invitation-only sign-up asks for an invitation code
   (in hosting-only mode an invitation link carries its code along), and accounts made per address
   and hour count as on the sign-up page. The new account gets a random
   password nobody knows; it signs in through BananaWiki Hosting.
-- **Connect an existing account** ("I already have an account here"), proven
-  with its username and password, and its two-step code when it uses two-step
-  verification. Wrong passwords count towards the same limits as the sign-in
-  page. The page shows this choice first; a refused form keeps what was typed
-  (passwords excepted).
+- **Connect an existing account** (the button "I already have an account
+  here" opens its form), proven with its username and password, and its
+  two-step code when it uses two-step verification. Wrong passwords count
+  towards the same limits as the sign-in page. The form is open from the
+  start when the site takes no new accounts; a refused form keeps what was
+  typed (passwords excepted).
 
 A BananaChat account is connected to at most one hosting account, and a
 hosting account to at most one BananaChat account.
@@ -82,19 +83,14 @@ account in 15 minutes).
 ## Sign-up from an app
 
 A5 of the BananaSuite sign-in contract: someone without an account creates a
-BananaWiki Hosting account from this site's sign-in page and comes back
+BananaWiki Hosting account starting from this site and comes back
 signed in. The account works on the portal, on every hosted wiki and here.
 
-- In `hosting` mode, while the site takes new accounts (*Open* or
-  *Invitation only*), the sign-in page shows **No account yet? Create an
-  account**. It goes to `/login/hosting/start?create=1`, which asks the portal
-  for its sign-up form first (`prompt=create`). In `both` mode the site's own
-  sign-up page stays and nothing is added.
-- The link is shown only while the portal's OAuth metadata
-  (`/.well-known/oauth-authorization-server`) says `"signup": "open"` or
-  `"invite"`. The answer is remembered for five minutes per process; a portal
-  that does not answer within three seconds, or does not say, hides the link
-  for a minute.
+- `/login/hosting/start?create=1` (hosting mode, while the site takes new
+  accounts) asks the portal for its sign-up form first (`prompt=create`). No
+  page links to it: with the hosting button on the sign-in page there is no
+  "Create an account", and whoever has no hosting account yet signs up from
+  the portal's sign-in page.
 - The portal applies its own sign-up rules (invite codes, address, approval,
   limits). An account that must confirm its address or wait for approval sees
   the portal's page for that, with a link back here.

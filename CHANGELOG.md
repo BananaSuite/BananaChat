@@ -84,14 +84,16 @@ switch is gone and an announcement shows whenever it has a text.
   without one, portal account ids are entered. Hosting-only sign-in can be
   switched on there, and anywhere, only while every active administrator is
   connected.
-- The first hosting sign-in's page offers "I already have an account here"
-  first and "Create a new account" second, each with a plain explanation.
-- **Create an account from the sign-in page.** In hosting-only mode the
-  sign-in page links to BananaWiki Hosting's sign-up (`prompt=create`) while
-  the portal says it takes new accounts; back here the account is created at
-  once with the hosting name, under this site's sign-up setting (the first
-  sign-in's page takes over when the name is taken or an invitation is
-  needed). See [sign-up from an app](docs/hosting-signin.md#sign-up-from-an-app).
+- The first hosting sign-in's page is one form that creates the account
+  (name suggested, invitation code when the site asks for one). Under it, the
+  button "I already have an account here" opens the form that connects an
+  existing account.
+- With the BananaWiki Hosting button on the sign-in page (`both` and
+  `hosting` modes) there is no "No account yet? Create account": the first
+  sign-in creates the account. `/login/hosting/start?create=1` still asks the
+  portal for its sign-up form (`prompt=create`) and creates the account here
+  at once on the way back; no page links to it. See
+  [sign-up from an app](docs/hosting-signin.md#sign-up-from-an-app).
 
 ### One Save per page, at the top right
 

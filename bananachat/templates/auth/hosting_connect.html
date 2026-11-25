@@ -4,52 +4,50 @@
 <h1>{{ t("hosting.connect_title") }}</h1>
 <p class="muted">{% if portal_name %}{{ t("hosting.connect_intro", name=portal_name) }}{% else %}{{ t("hosting.connect_intro_unnamed") }}{% endif %}</p>
 
-{#- Two choices, the account that exists first: connecting it keeps its chats; a new account starts empty.
-    A refused form comes back with what was typed (passwords excepted). -#}
-<section class="stack hosting-choice" aria-labelledby="existing-title">
-  <h2 id="existing-title">{{ t("hosting.existing_title") }}</h2>
-  <p class="hint">{{ t("hosting.existing_hint") }}</p>
-  {% if existing_error %}<div class="alert alert-error" role="alert" id="existing-error"><p>{{ existing_error }}</p></div>{% endif %}
-  <form method="post" action="{{ url_for('hosting.connect_existing') }}" class="stack">
-    {% include "auth/_bot_fields.html" %}
-    <div class="field">
-      <label for="existing_username">{{ t("auth.username") }}</label>
-      <input type="text" id="existing_username" name="username" required maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{ existing_username }}"{% if existing_error %} aria-describedby="existing-error"{% endif %}>
-    </div>
-    <div class="field">
-      <label for="existing_password">{{ t("auth.password") }}</label>
-      <input type="password" id="existing_password" name="password" required maxlength="1024" autocomplete="current-password">
-    </div>
-    <button type="submit" class="btn btn-primary btn-block">{{ t("hosting.existing_submit") }}</button>
-  </form>
-</section>
-
-<p class="text-center muted">{{ t("hosting.or") }}</p>
-
-<section class="stack hosting-choice" aria-labelledby="create-title">
-  <h2 id="create-title">{{ t("hosting.create_title") }}</h2>
-  {% if create_error %}<div class="alert alert-error" role="alert" id="create-error"><p>{{ create_error }}</p></div>{% endif %}
-  {% if signup_mode == "disabled" %}
-  <p class="muted">{{ t("hosting.signup_closed") }}</p>
-  {% else %}
-  <p class="hint">{% if renamed %}{{ t("hosting.name_suggested", name=portal_name) }}{% else %}{{ t("hosting.create_hint") }}{% endif %}</p>
-  <form method="post" action="{{ url_for('hosting.create') }}" class="stack">
-    {% include "auth/_bot_fields.html" %}
-    {% if signup_mode == "invite" %}
-    <div class="field">
-      <label for="invite_code" class="required">{{ t("auth.invite_code") }}</label>
-      <input type="text" id="invite_code" name="invite_code" required maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false" value="{{ invite }}">
-      <span class="hint">{{ t("auth.invite_only") }}</span>
-    </div>
-    {% endif %}
-    <div class="field">
-      <label for="new_username" class="required">{{ t("auth.username") }}</label>
-      <input type="text" id="new_username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]+" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="new-username-hint{% if create_error %} create-error{% endif %}" value="{{ username }}">
-      <span class="hint" id="new-username-hint">{{ t("auth.username_rules") }}</span>
-    </div>
-    <button type="submit" class="btn btn-block">{{ t("hosting.create_submit") }}</button>
-  </form>
+{#- The new account's form, then a button that opens the form connecting an account that already exists
+    here (open when nothing can be created, or when that form was refused). A refused form comes back with
+    what was typed (passwords excepted). -#}
+{% if create_error %}<div class="alert alert-error" role="alert" id="create-error"><p>{{ create_error }}</p></div>{% endif %}
+{% if signup_mode == "disabled" %}
+<p class="muted">{{ t("hosting.signup_closed") }}</p>
+{% else %}
+{% if renamed %}<p class="hint">{{ t("hosting.name_suggested", name=portal_name) }}</p>{% endif %}
+<form method="post" action="{{ url_for('hosting.create') }}" class="stack">
+  {% include "auth/_bot_fields.html" %}
+  <div class="field">
+    <label for="new_username" class="required">{{ t("auth.username") }}</label>
+    <input type="text" id="new_username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]+" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="new-username-hint{% if create_error %} create-error{% endif %}" value="{{ username }}">
+    <span class="hint" id="new-username-hint">{{ t("auth.username_rules") }}</span>
+  </div>
+  {% if signup_mode == "invite" %}
+  <div class="field">
+    <label for="invite_code" class="required">{{ t("auth.invite_code") }}</label>
+    <input type="text" id="invite_code" name="invite_code" required maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false" value="{{ invite }}">
+    <span class="hint">{{ t("auth.invite_only") }}</span>
+  </div>
   {% endif %}
-</section>
+  <button type="submit" class="btn btn-primary btn-block">{{ t("hosting.create_submit") }}</button>
+</form>
+{% endif %}
+
+<details class="hosting-existing"{% if existing_error or signup_mode == "disabled" %} open{% endif %}>
+  <summary class="btn btn-block">{{ t("hosting.existing_title") }}</summary>
+  <div class="stack">
+    <p class="hint">{{ t("hosting.existing_hint") }}</p>
+    {% if existing_error %}<div class="alert alert-error" role="alert" id="existing-error"><p>{{ existing_error }}</p></div>{% endif %}
+    <form method="post" action="{{ url_for('hosting.connect_existing') }}" class="stack">
+      {% include "auth/_bot_fields.html" %}
+      <div class="field">
+        <label for="existing_username">{{ t("auth.username") }}</label>
+        <input type="text" id="existing_username" name="username" required maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false" value="{{ existing_username }}"{% if existing_error %} aria-describedby="existing-error"{% endif %}>
+      </div>
+      <div class="field">
+        <label for="existing_password">{{ t("auth.password") }}</label>
+        <input type="password" id="existing_password" name="password" required maxlength="1024" autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn btn-block">{{ t("hosting.existing_submit") }}</button>
+    </form>
+  </div>
+</details>
 {% endblock %}
 {% block below %}<p><a href="{{ url_for('auth.login') }}">{{ t("hosting.back_to_sign_in") }}</a></p>{% endblock %}

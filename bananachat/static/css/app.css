@@ -684,6 +684,11 @@ dialog.wide { width: min(760px, calc(100vw - 2rem)); }
 .auth-card .brand { display: flex; justify-content: center; margin-bottom: 1.5rem; }
 .auth-card > .card { padding: 1.25rem 1.25rem 1.5rem; }
 .auth-card h1 { font-size: 1.5rem; }
+/* The first sign-in with BananaWiki Hosting: a button opens the form connecting an account that already exists here. */
+.hosting-existing { margin-top: 1rem; }
+.hosting-existing > summary { list-style: none; }
+.hosting-existing > summary::-webkit-details-marker { display: none; }
+.hosting-existing[open] > summary { margin-bottom: 1rem; }
 .auth-footer { margin-top: 1.25rem; text-align: center; color: var(--text-muted); font-size: var(--text-base); }
 .auth-messages { margin-bottom: 1rem; }
 /* The setup command on a line of its own, so it reads (and copies) as one command. */

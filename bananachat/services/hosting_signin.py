@@ -32,9 +32,8 @@ pages are in :mod:`bananachat.web.hosting`. The rules:
 * "Create an account" (``hosting`` mode only) starts a ``login`` flow with
   ``prompt=create``: the portal shows its sign-up form first, and the state
   remembers the flow was a sign-up, so an unknown ``sub`` gets its account here
-  at once (web.hosting). The sign-in page shows it only while the portal's
-  metadata says sign-up is ``open`` or ``invite`` (:func:`portal_signup_open`,
-  remembered :data:`SIGNUP_STATE_SECONDS`; no answer hides it).
+  at once (web.hosting). No page links to it: the sign-in page's portal button
+  is the way in for everyone.
 * The administrators' linking tool can look accounts up on the portal
   (:func:`lookup`) with a portal API token stored encrypted in the settings
   (:func:`store_lookup_token`); without one, it takes portal account ids only.
@@ -90,10 +89,6 @@ LOOKUP_STATUSES = ("active", "suspended", "pending")
 TOKEN_MAX = 512
 # The portal's OAuth metadata says whether it takes new accounts ("signup"); remembered this long (a failed
 # answer: a minute), asked with a short timeout since the sign-in page waits for it.
-METADATA_PATH = "/.well-known/oauth-authorization-server"
-SIGNUP_STATE_SECONDS = 5 * 60
-SIGNUP_STATE_RETRY_SECONDS = 60
-SIGNUP_STATE_TIMEOUT = 3
 
 
 class OAuthError(Exception):
@@ -239,32 +234,6 @@ def _request(method: str, path: str, *, headers: dict, body: bytes | None = None
         return status, json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError, RecursionError):
         return status, None
-
-
-def portal_signup_open() -> bool:
-    """Whether the portal takes new accounts: its metadata's ``signup`` is ``open`` or ``invite``.
-
-    Remembered per process for :data:`SIGNUP_STATE_SECONDS`; a portal that does not answer, or does not
-    say, counts as closed for :data:`SIGNUP_STATE_RETRY_SECONDS`.
-    """
-    if not configured():
-        return False
-    cache = current_app.extensions.setdefault("bananachat.portal_signup", {})
-    now = time.monotonic()
-    if cache.get("until", 0) > now:
-        return bool(cache.get("open"))
-    answer = None
-    try:
-        status, data = _request("GET", METADATA_PATH, headers={"Accept": "application/json"},
-                                timeout=SIGNUP_STATE_TIMEOUT)
-        if status == 200 and isinstance(data, dict):
-            answer = data.get("signup")
-    except OAuthError as error:
-        log.info("The sign-up state of BananaWiki Hosting could not be read: %s", error)
-    known = answer in ("open", "invite", "closed")
-    cache.update(open=answer in ("open", "invite"),
-                 until=now + (SIGNUP_STATE_SECONDS if known else SIGNUP_STATE_RETRY_SECONDS))
-    return bool(cache["open"])
 
 
 def _client_auth() -> str:

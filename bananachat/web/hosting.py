@@ -63,7 +63,7 @@ def _t(key, **params):
 
 @bp.app_context_processor
 def _template_helpers():
-    return {"signin_mode": hosting_signin.effective_mode, "hosting_signup_open": hosting_signin.portal_signup_open}
+    return {"signin_mode": hosting_signin.effective_mode}
 
 
 def _enabled(view):
