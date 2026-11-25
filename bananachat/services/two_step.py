@@ -131,8 +131,12 @@ def required_for_admins(settings: dict | None = None) -> bool:
 
 
 def required(user) -> bool:
-    """Whether the site requires two-step verification of *user* (administrators, when switched on)."""
-    return bool(user) and user["role"] == "admin" and required_for_admins()
+    """Whether the site requires two-step verification of *user* (administrators, when switched on).
+
+    Codes are asked after a password sign-in only: an account without a password of its own (it signs in
+    with BananaWiki Hosting, which asks for its own second step) is not required to set them up.
+    """
+    return bool(user) and user["role"] == "admin" and required_for_admins() and users.has_password(user)
 
 
 def missing(user) -> bool:

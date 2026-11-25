@@ -1176,7 +1176,9 @@ def test_admins_apply_presets_and_edit_models(app, admin):
         assert policy["weekly_tokens"] is None and policy["preset"] == "custom" and policy["effort_default"] == "high"
     page = admin.get("/admin/quotas/models").get_data(as_text=True)
     assert "Service tokens excluded" in page and "1 rate rule" in page
-    assert 'name="rule_requests_0"' in page and 'value="4"' in page
+    assert f'href="/admin/quotas/models/{big["id"]}"' in page and 'name="rule_requests_0"' not in page
+    page = admin.get(f"/admin/quotas/models/{big['id']}").get_data(as_text=True)  # the model's own page
+    assert 'name="rule_requests_0"' in page and 'value="4"' in page and page.count("data-page-save") == 1
     with app.app_context():
         from bananachat import db
         db.execute("UPDATE ai_models SET is_reasoning=1, reasoning_levels=? WHERE id=?",
@@ -1249,6 +1251,33 @@ def test_admins_change_effort_settings(app, admin):
         assert (settings["default"], settings["tokens"], settings["ceiling"]) == ("low", 500_000, "max")
     wrong = admin.post("/admin/quotas/effort", {**form, "effort_auto_active_days": "40"}, follow_redirects=True)
     assert "cannot be more than the days of the period" in wrong.get_data(as_text=True)
+
+
+def test_the_effort_page_saves_the_defaults_and_the_model_defaults_with_its_one_save(app, admin):
+    from bananachat import db
+    from bananachat.db import catalog
+    from bananachat.db import limits as store
+
+    big = _models(app)["qwen3:4b"]
+    with app.app_context():
+        db.execute("UPDATE ai_models SET is_reasoning=1, reasoning_levels=? WHERE id=?",
+                   ('["low", "medium", "high"]', big["id"]))
+    page = admin.get("/admin/quotas/effort").get_data(as_text=True)
+    assert page.count("data-page-save") == 1 and page.count(">Save</button>") == 1
+    assert f'name="model-{big["id"]}-effort_default"' in page
+    form = {"effort_gating_enabled": "1", "effort_default_level": "low", "effort_auto_unlock": "1",
+            "effort_auto_active_days": "10", "effort_auto_tokens": "500k", "effort_auto_period_days": "30",
+            "effort_auto_clean_days": "30", "effort_auto_ceiling": "max", "effort_models": str(big["id"]),
+            f"model-{big['id']}-effort_default": "high", f"model-{big['id']}-effort_gating_off": "1"}
+    refused = admin.post("/admin/quotas/effort", {**form, "effort_auto_active_days": "40"})
+    assert refused.status_code == 400 and '<option value="high" selected>' in refused.get_data(as_text=True)
+    with app.app_context():
+        assert store.get_model_policy(catalog.get(big["id"]))["effort_default"] is None  # nothing saved
+    assert admin.post("/admin/quotas/effort", form).status_code == 302
+    with app.app_context():
+        policy = store.get_model_policy(catalog.get(big["id"]))
+        assert policy["effort_default"] == "high" and policy["effort_gating_off"]
+        assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='admin.limits_effort_model'") == 1
 
 
 @pytest.mark.parametrize(("language", "texts"), [
@@ -1354,11 +1383,31 @@ def test_the_grant_form_keeps_what_was_typed_and_never_defaults_to_everyone(app,
     assert 'name="target" value="user" checked' in page and 'name="duration" value="7d" checked' in page
 
 
-def test_changing_one_models_limits_for_an_account_keeps_its_other_settings(app, admin, make_user):
-    """A model with custom limits has its own filled-in form, so changing one setting keeps the lock and the
-    other limits."""
+def page_form(html: str, form_id: str) -> dict:
+    """The values a browser sends for the form *form_id* of *html* (inputs and selected options)."""
     import re
 
+    fields = {}
+    body = html.split(f'id="{form_id}"', 1)[1].split("</form>", 1)[0]
+    for tag in re.findall(r"<input[^>]*>", body):
+        name, value = re.search(r'name="([\w-]+)"', tag), re.search(r'value="([^"]*)"', tag)
+        if ' form="' in tag or not name or not value:
+            continue  # another form's field
+        if (' type="checkbox"' in tag or ' type="radio"' in tag) and " checked" not in tag:
+            continue
+        fields.setdefault(name.group(1), []).append(value.group(1))
+    for name, options in re.findall(r'<select[^>]*name="([\w-]+)"[^>]*>(.*?)</select>', body, re.S):
+        selected = re.search(r'<option value="([^"]*)" selected>', options)
+        if selected:
+            fields.setdefault(name, []).append(selected.group(1))
+    fields.pop("csrf_token", None)
+    return fields
+
+
+def test_changing_one_models_limits_for_an_account_keeps_its_other_settings(app, admin, make_user):
+    """A model with custom limits shows them filled in, so the page's Save with one setting changed keeps the lock
+    and the other limits, and leaves everything else of the account as it was."""
+    from bananachat import db
     from bananachat.db import limits as store
 
     models = _models(app)
@@ -1366,24 +1415,48 @@ def test_changing_one_models_limits_for_an_account_keeps_its_other_settings(app,
     user = make_user("lou")
     with app.app_context():
         store.set_model_override(user["id"], big["id"], None, locked=True, window_tokens=40_000)
+        store.set_override(user["id"], "chat", None, window_tokens=90_000, automatic=True)
     page = admin.get(f"/admin/users/{user['id']}/limits").get_data(as_text=True)
-    own = page.split(f'id="model-form-{big["id"]}"', 1)[1].split("</form>", 1)[0]
-    assert 'name="locked" value="1" checked' in own and 'value="40k"' in own
+    prefix = f"model-{big['id']}-"
+    own = page.split(f'name="override_models" value="{big["id"]}"', 1)[1].split("</details>", 1)[0]
+    assert f'name="{prefix}locked" value="1" checked' in own and 'value="40k"' in own
+    assert page.count("data-page-save") == 1 and page.count(">Save</button>") == 1
     # The form for other models does not offer one that has its own form.
     generic = page.split('id="model-override-model"', 1)[1].split("</select>", 1)[0]
     assert f'value="{big["id"]}"' not in generic and f'value="{models["llama3.2:3b"]["id"]}"' in generic
-    # Sending the filled-in form back with a weekly limit added keeps the lock and the 5-hour limit.
-    fields = {}
-    for tag in re.findall(r"<input[^>]*>", own):
-        name, value = re.search(r'name="(\w+)"', tag), re.search(r'value="([^"]*)"', tag)
-        if name and value and (' type="checkbox"' not in tag or " checked" in tag):
-            fields[name.group(1)] = value.group(1)
-    fields.update(weekly_tokens="100k", locked="1")
-    fields.pop("csrf_token", None)
-    assert admin.post(f"/admin/users/{user['id']}/limits/model", fields).status_code == 302
+    # Sending the page back with a weekly limit added keeps the lock and the 5-hour limit.
+    fields = page_form(page, "user-limits-form")
+    fields[f"{prefix}weekly_tokens"] = ["100k"]
+    assert admin.post(f"/admin/users/{user['id']}/limits", fields).status_code == 302
     with app.app_context():
         override = store.get_model_override(user["id"], big["id"])
         assert (override.locked, override.window_tokens, override.weekly_tokens) == (True, 40_000, 100_000)
+        assert "window_tokens" in store.get_override(user["id"], "chat").automatic  # unchanged, still automatic
+        actions = [row["action"] for row in db.query("SELECT action FROM audit_log WHERE action LIKE 'admin.%'")]
+    assert actions == ["admin.limits_user_model"]  # only what changed
+
+
+def test_the_account_limits_page_checks_every_section_before_saving_any(app, admin, make_user):
+    from bananachat.db import limits as store
+
+    user = make_user("ines")
+    page = admin.get(f"/admin/users/{user['id']}/limits").get_data(as_text=True)
+    fields = {**page_form(page, "user-limits-form"), "chat-window_tokens": ["12q"], "speed": ["slow"],
+              "token_exempt": ["1"]}
+    refused = admin.post(f"/admin/users/{user['id']}/limits", fields)
+    assert refused.status_code == 400
+    html = refused.get_data(as_text=True)
+    assert "Chat: " in html and 'value="12q"' in html and 'name="speed" value="slow" checked' in html
+    with app.app_context():
+        assert store.user_settings(user["id"]).speed == "normal" and not store.user_settings(user["id"]).token_exempt
+    with app.app_context():
+        top = store.list_tiers()[-1]
+    fields.update({"chat-window_tokens": ["70k"], "tier_id": [str(top["id"])], "tier_locked": ["1"]})
+    assert admin.post(f"/admin/users/{user['id']}/limits", fields).status_code == 302
+    with app.app_context():
+        settings = store.user_settings(user["id"])
+        assert settings.speed == "slow" and settings.token_exempt and settings.tier_id == top["id"]
+        assert settings.tier_locked and store.get_override(user["id"], "chat").window_tokens == 70_000
 
 
 def test_refused_limit_forms_come_back_as_typed(app, admin, make_user):
@@ -1405,15 +1478,15 @@ def test_refused_limit_forms_come_back_as_typed(app, admin, make_user):
             {"rate_enabled": "1", "rule_requests_0": "7", "rule_per_0": "hour", "rule_burst_0": "3",
              "window_enabled": "1", "window_tokens": "50kk", "window_slow_tokens": "5k", "weekly_tokens": "900k",
              "weekly_enabled": "1"},
-            'value="50kk"', 'value="900k"', r'name="rule_requests_0"[^>]*value="7"', r'<option value="hour" selected>',
-            r'name="weekly_enabled" value="1" checked')
+            'value="50kk"', 'value="900k"', r'name="api-rule_requests_0"[^>]*value="7"',
+            r'<option value="hour" selected>', r'name="api-weekly_enabled" value="1" checked')
     refused("/admin/quotas", {"quota_auto_approve_enabled": "1", "quota_auto_approve_max_tokens": "lots"},
             'value="lots"', r'name="quota_auto_approve_enabled" value="1" checked')
     page = refused(f"/admin/quotas/models/{big['id']}",
                    {"action": "save", "weight": "3", "sensitivity": "2", "enabled": "1", "window_tokens": "abc",
                     "weekly_tokens": "1M", "counts_toward_pool": "no", "rule_requests_0": "6", "rule_per_0": "minute"},
                    'value="abc"', 'value="1M"', r'<option value="no" selected>')
-    assert f'id="model-{big["id"]}" open' in page
+    assert 'id="model-limits-form"' in page and "Demand and tier adjustments</summary>" in page
     refused(f"/admin/users/{user['id']}/limits/custom", {"pool": "chat", "window_tokens": "12q", "weekly_tokens": "300k"},
             'value="12q"', 'value="300k"', r'id="pool-chat"')
     refused(f"/admin/users/{user['id']}/limits/model",

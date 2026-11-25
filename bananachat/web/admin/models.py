@@ -3,6 +3,7 @@ and model recovery after a restore."""
 
 from __future__ import annotations
 
+import json
 import logging
 
 from filelock import Timeout
@@ -12,11 +13,14 @@ from werkzeug.routing import BuildError
 from bananachat import db, security
 from bananachat.db import access as access_db
 from bananachat.db import catalog
+from bananachat.db import external_providers as external_store
 from bananachat.db import model_lifecycle as lifecycle_db
 from bananachat.db import pulls as pulls_db
 from bananachat.numbers import ascii_int
 from bananachat.security import admin_required
-from bananachat.services import checkpoint_agent, model_lifecycle, model_recovery, ollama, pulls
+from bananachat.services import (
+    checkpoint_agent, external_api, external_providers, model_lifecycle, model_recovery, ollama, pulls,
+)
 from bananachat.services.upstream import UpstreamError
 
 from . import bp
@@ -28,7 +32,8 @@ log = logging.getLogger("bananachat.admin")
 SYSTEM_PROMPT_MAX = 4000
 DIRECTIONS = ("up", "down", "top", "bottom")
 # The per-model limits of the limits area, linked when they exist: (endpoint, takes model_id).
-MODEL_LIMITS_ENDPOINTS = (("admin.model_limits", True), ("admin.limit_models", False))
+MODEL_LIMITS_ENDPOINTS = (("admin.limit_model", True), ("admin.model_limits", True),
+                          ("admin.limit_models", False))
 # An ignored model is published only after it is restored (which takes its name off the ignore list).
 IGNORED_MESSAGE = "{name} is on the ignore list. Restore it in Settings first; then publish it."
 REASONING_CHOICES = {"auto": "Detected automatically", "none": "No reasoning", "boolean": "Off / on",
@@ -203,9 +208,11 @@ def _edit_context(model) -> dict:
               if row["id"] != model["id"] and not row["retired_at"] and row["enrollment"] != "ignored"]
     replacement = catalog.get(model["replacement_id"]) if model["replacement_id"] else None
     levels = model_lifecycle.reasoning_levels(model)
-    level_choice = "auto" if not model["reasoning_levels_locked"] else (
-        "levels" if len(levels) > 2 else "boolean" if levels else "none")
-    return {"events": lifecycle_db.events_for(model["id"], 30), "badges": model_lifecycle.badges(model),
+    level_choice = _level_choice(model)
+    provider = external_store.get(model["external_provider_id"]) if model["backend"] == "external" else None
+    return {"provider": provider, "cap_tools": "tools" in _json_list(model["capabilities"]),
+            "cap_settings": external_api.model_settings(model) if provider else None,
+            "events": lifecycle_db.events_for(model["id"], 30), "badges": model_lifecycle.badges(model),
             "caps": model_lifecycle.capabilities(model), "levels": levels, "level_choice": level_choice,
             "level_choices": REASONING_CHOICES, "replacements": others, "replacement": replacement,
             "presets": model_lifecycle.PRESET_LABELS, "suggested_preset": model_lifecycle.preset_for(model),
@@ -213,25 +220,132 @@ def _edit_context(model) -> dict:
             "in_use": model_lifecycle.in_use(model) if model["backend"] == "ollama" else 0}
 
 
+def _level_choice(model) -> str:
+    """Which of REASONING_CHOICES the model's reasoning levels are now."""
+    levels = model_lifecycle.reasoning_levels(model)
+    return "auto" if not model["reasoning_levels_locked"] else (
+        "levels" if len(levels) > 2 else "boolean" if levels else "none")
+
+
+def _json_list(text) -> list:
+    try:
+        value = json.loads(text or "[]")
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _capabilities_form(model, provider) -> dict | None:
+    """The capabilities of a model of an external API as the page's form changes them, or None when unchanged (so
+    saving the page does not touch the model's availability)."""
+    thinking = choice("thinking", external_providers.THINKING_STYLES, label="Thinking control", default="adaptive") \
+        if provider["protocol"] == "anthropic" else None
+    wanted = {"vision": flag("vision"), "tools": flag("tools"), "sampling": flag("sampling"), "thinking": thinking,
+              "reasoning": sorted(set(request.form.getlist("reasoning")))}
+    settings = external_api.model_settings(model)
+    sampling = provider["protocol"] != "anthropic" if settings["sampling"] is None else settings["sampling"]
+    current = {"vision": bool(model["supports_vision"]), "tools": "tools" in _json_list(model["capabilities"]),
+               "sampling": sampling,
+               "thinking": settings["thinking"] if thinking is not None else None,
+               "reasoning": sorted(model_lifecycle.reasoning_levels(model))}
+    if wanted == current:
+        return None
+    try:
+        manual = bool(json.loads(model["external_config"] or "{}").get("manual"))
+    except (TypeError, ValueError, AttributeError):
+        manual = False
+    return {**wanted, "manual": manual}
+
+
+def _deprecation_form(model) -> dict | None:
+    """The deprecation of a deprecated model as the page's form changes it, or None when it is unchanged (so an
+    unchanged past retirement date is not refused and no lifecycle event is recorded)."""
+    typed = {"replacement_id": (request.form.get("replacement_id") or "").strip(),
+             "retire_at": (request.form.get("retire_at") or "").strip(),
+             "note": (request.form.get("note") or "").strip()}
+    shown = {"replacement_id": str(model["replacement_id"] or ""),
+             "retire_at": (model["retire_at"] or "").replace(" ", "T")[:16],
+             "note": model["deprecation_note"] or ""}
+    if model["is_image_generation"]:
+        typed["replacement_id"] = shown["replacement_id"]  # checkpoints have no replacement field
+    if typed == shown:
+        return None
+    replacement = typed["replacement_id"]
+    if replacement and ascii_int(replacement) is None:
+        raise FormError("Choose a valid replacement.")
+    moment = utc_datetime("retire_at", label="Retirement date")
+    return {"replacement_id": ascii_int(replacement) if replacement else None,
+            "retire_at": db.timestamp(moment) if moment else None,
+            "note": text("note", max_length=500, label="Note")}
+
+
 @bp.route("/models/<int:model_id>/edit", methods=["GET", "POST"], endpoint="model_edit")
 @admin_required
 def edit(model_id):
+    """The model's page. Its one Save keeps the details and behaviour, the reasoning levels of a model on the
+    model server, the capabilities of a model of an external API and, while the model is deprecated, the
+    deprecation's replacement, date and note."""
     model = _model_or_404(model_id)
     all_categories = catalog.list_categories()
     selected = [row["id"] for row in catalog.model_categories(model_id)]
     if request.method == "POST":
+        errors, levels, deprecation, capabilities = [], None, None, None
+        provider = external_store.get(model["external_provider_id"]) if model["backend"] == "external" else None
         try:
             fields, category_ids = _edit_form(model, {row["id"] for row in all_categories})
         except FormError as error:
+            errors.append(str(error))
+        if model["backend"] == "ollama" and "reasoning_levels" in request.form:
+            try:
+                levels = choice("reasoning_levels", REASONING_CHOICES, label="Reasoning levels")
+            except FormError as error:
+                errors.append(str(error))
+        if provider is not None and provider["enabled"] and "capabilities_present" in request.form:
+            try:
+                capabilities = _capabilities_form(model, provider)
+            except FormError as error:
+                errors.append(str(error))
+        if "deprecation_present" in request.form and model["deprecated_at"] and not model["retired_at"]:
+            try:
+                deprecation = _deprecation_form(model)
+            except FormError as error:
+                errors.append(str(error))
+        if errors:
+            for error in errors:
+                flash(error, "error")
+            return _render("admin/model_edit.html", model=model, form=request.form, all_categories=all_categories,
+                           selected=_form_categories(), limits=_limits(), system_prompt_max=SYSTEM_PROMPT_MAX,
+                           **_edit_context(model)), 400
+        actor = me()
+        try:
+            with db.transaction():
+                catalog.update(model_id, **fields)
+                catalog.set_model_categories(model_id, category_ids)
+                if levels is not None and levels != _level_choice(model):
+                    model_lifecycle.set_reasoning_levels(model, levels, actor)
+                else:
+                    levels = None
+                if deprecation is not None:
+                    model_lifecycle.deprecate(model, actor, **deprecation)
+                if capabilities is not None:
+                    name = model["backend_model_name"]
+                    external_providers.enroll(provider, name, listing=external_providers.discovered(provider).get(name),
+                                              **capabilities)
+        except ValueError as error:  # a replacement or capabilities the model cannot have; nothing was saved
             flash(str(error), "error")
             return _render("admin/model_edit.html", model=model, form=request.form, all_categories=all_categories,
                            selected=_form_categories(), limits=_limits(), system_prompt_max=SYSTEM_PROMPT_MAX,
                            **_edit_context(model)), 400
-        with db.transaction():
-            catalog.update(model_id, **fields)
-            catalog.set_model_categories(model_id, category_ids)
         audit("model_edit", model["ollama_name"], {key: value for key, value in fields.items()
                                                    if key != "system_prompt"})
+        if levels is not None:
+            audit("model_reasoning", model["ollama_name"], {"reasoning_levels": levels})
+        if deprecation is not None:
+            audit("model_deprecate", model["ollama_name"], {key: request.form.get(key) for key in (
+                "replacement_id", "retire_at", "note") if request.form.get(key)})
+        if capabilities is not None:
+            audit("external_model_enroll", model["ollama_name"], {"provider_id": provider["id"],
+                                                                  "model_id": model["id"]})
         flash(f"{fields['display_name']} saved.", "success")
         return back("admin.models", _anchor=f"model-{model_id}")
     return _render("admin/model_edit.html", model=model, form=None, all_categories=all_categories, selected=selected,

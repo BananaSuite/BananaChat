@@ -4,40 +4,41 @@
 {% block title %}Tiers · Limits{% endblock %}
 {% block admin_content %}
 {#- entry: the first tier, whose requirements are never checked; they stay editable in the form data
-    (read-only, so they are kept if the tier moves) but look inactive. -#}
-{% macro tier_fields(tier, prefix, entry=false) -%}
+    (read-only, so they are kept if the tier moves) but look inactive. `names` starts each field's name: the
+    tiers share the page's one form ("tier-3-name"). A refused Save shows the values as typed (strings). -#}
+{% macro tier_fields(tier, prefix, entry=false, names="") -%}
 {%- set inactive = (' readonly aria-describedby="' ~ prefix ~ '-entry-hint"') | safe if entry else '' -%}
 <div class="form-grid">
   <div class="field">
     <label for="{{ prefix }}-name" class="required">Name</label>
-    <input type="text" id="{{ prefix }}-name" name="name" required maxlength="40" value="{{ tier.name if tier else '' }}">
+    <input type="text" id="{{ prefix }}-name" name="{{ names }}name" required maxlength="40" value="{{ tier.name if tier else '' }}">
   </div>
   <div class="field">
     <label for="{{ prefix }}-multiplier" class="required">Token multiplier</label>
-    <input type="number" id="{{ prefix }}-multiplier" name="multiplier" required min="0" max="100" step="any" value="{{ ('%g' | format(tier.multiplier)) if tier else 1 }}" aria-describedby="{{ prefix }}-multiplier-hint">
+    <input type="number" id="{{ prefix }}-multiplier" name="{{ names }}multiplier" required min="0" max="100" step="any" value="{{ (tier.multiplier if tier.multiplier is string else '%g' | format(tier.multiplier)) if tier else 1 }}" aria-describedby="{{ prefix }}-multiplier-hint">
     <span class="hint" id="{{ prefix }}-multiplier-hint">× the 5-hour and weekly tokens where tiers are on.</span>
   </div>
   <div class="field{{ ' tier-entry-field' if entry }}">
     <label for="{{ prefix }}-age">Account age (days)</label>
-    <input type="number" id="{{ prefix }}-age" name="min_account_days" min="0" max="3650" step="1" value="{{ tier.min_account_days if tier else 0 }}"{{ inactive }}>
+    <input type="number" id="{{ prefix }}-age" name="{{ names }}min_account_days" min="0" max="3650" step="1" value="{{ tier.min_account_days if tier else 0 }}"{{ inactive }}>
   </div>
   <div class="field{{ ' tier-entry-field' if entry }}">
     <label for="{{ prefix }}-active">Active days (of the last 30)</label>
-    <input type="number" id="{{ prefix }}-active" name="min_active_days" min="0" max="30" step="1" value="{{ tier.min_active_days if tier else 0 }}"{{ inactive }}>
+    <input type="number" id="{{ prefix }}-active" name="{{ names }}min_active_days" min="0" max="30" step="1" value="{{ tier.min_active_days if tier else 0 }}"{{ inactive }}>
   </div>
   <div class="field{{ ' tier-entry-field' if entry }}">
     <label for="{{ prefix }}-tokens">Tokens used in the last 30 days</label>
-    <input type="text" id="{{ prefix }}-tokens" name="min_tokens_30d" inputmode="decimal" autocomplete="off" maxlength="20" value="{{ (tier.min_tokens_30d | token_input) if tier else 0 }}" aria-describedby="{{ prefix }}-tokens-hint{% if entry %} {{ prefix }}-entry-hint{% endif %}"{% if entry %} readonly{% endif %}>
+    <input type="text" id="{{ prefix }}-tokens" name="{{ names }}min_tokens_30d" inputmode="decimal" autocomplete="off" maxlength="20" value="{{ (tier.min_tokens_30d if tier.min_tokens_30d is string else tier.min_tokens_30d | token_input) if tier else 0 }}" aria-describedby="{{ prefix }}-tokens-hint{% if entry %} {{ prefix }}-entry-hint{% endif %}"{% if entry %} readonly{% endif %}>
     <span class="hint" id="{{ prefix }}-tokens-hint">Weighted by model, for example 200k.</span>
   </div>
   <div class="field{{ ' tier-entry-field' if entry }}">
     <label for="{{ prefix }}-clean">Days without a suspension</label>
-    <input type="number" id="{{ prefix }}-clean" name="clean_days" min="0" max="3650" step="1" value="{{ tier.clean_days if tier else 0 }}"{{ inactive }}>
+    <input type="number" id="{{ prefix }}-clean" name="{{ names }}clean_days" min="0" max="3650" step="1" value="{{ tier.clean_days if tier else 0 }}"{{ inactive }}>
   </div>
 </div>
 {%- endmacro %}
 
-{{ header("Limits") }}
+{{ header("Limits", save="tiers-form") }}
 {% include "admin/_limits_tabs.html" %}
 
 <div class="alert {{ 'alert-success' if applies else 'alert-info' }} mb-3">{{ icon("info") }}
@@ -46,26 +47,34 @@
 </div>
 
 <div class="section-stack">
+  {#- Every tier's fields are one form, saved by the header's Save. Moving and deleting a tier are their own
+      (hidden) forms, after it. -#}
+  <form method="post" action="{{ url_for('admin.limit_tiers_save') }}" class="form-contents" id="tiers-form">
+  {{ csrf() }}
   {% for tier in tiers %}
-  <form method="post" action="{{ url_for('admin.limit_tier_update', tier_id=tier.id) }}" class="settings-section stack" aria-labelledby="tier-{{ tier.id }}-title">
-    {{ csrf() }}
+  <section class="settings-section stack" aria-labelledby="tier-{{ tier.id }}-title">
     <div class="section-header">
-      <h2 id="tier-{{ tier.id }}-title">{{ loop.index }}. {{ tier.name }} <span class="badge">×{{ "%g" | format(tier.multiplier) }}</span>
+      <h2 id="tier-{{ tier.id }}-title">{{ loop.index }}. {{ tier.name }} <span class="badge">×{{ tier.multiplier if tier.multiplier is string else "%g" | format(tier.multiplier) }}</span>
         {% set tier_accounts = counts.get(tier.id, 0) + (counts.get(none, 0) if loop.first else 0) %}
         <span class="badge badge-info">{{ tier_accounts | number }} account{{ "" if tier_accounts == 1 else "s" }}</span>
         {% if loop.first %}<span class="badge">entry tier</span>{% endif %}</h2>
       <div class="row">
-        <button type="submit" name="action" value="up" class="btn btn-sm" formnovalidate{% if loop.first %} disabled{% endif %} aria-label="Move {{ tier.name }} up">{{ icon("arrow-up") }}</button>
-        <button type="submit" name="action" value="down" class="btn btn-sm" formnovalidate{% if loop.last %} disabled{% endif %} aria-label="Move {{ tier.name }} down">{{ icon("arrow-down") }}</button>
+        <button type="submit" form="tier-up-{{ tier.id }}" class="btn btn-sm"{% if loop.first %} disabled{% endif %} aria-label="Move {{ tier.name }} up">{{ icon("arrow-up") }}</button>
+        <button type="submit" form="tier-down-{{ tier.id }}" class="btn btn-sm"{% if loop.last %} disabled{% endif %} aria-label="Move {{ tier.name }} down">{{ icon("arrow-down") }}</button>
+        {% if tiers | length > 1 %}<button type="submit" form="tier-delete-{{ tier.id }}" class="btn btn-sm btn-danger">Delete</button>{% endif %}
       </div>
     </div>
-    {{ tier_fields(tier, "tier-" ~ tier.id, entry=loop.first) }}
+    {{ tier_fields(tier, "tier-" ~ tier.id, entry=loop.first, names="tier-" ~ tier.id ~ "-") }}
     {% if loop.first %}<p class="hint mb-0" id="tier-{{ tier.id }}-entry-hint">Every account starts here, so these requirements are not checked.</p>{% endif %}
-    <div class="form-actions">
-      <button type="submit" name="action" value="save" class="btn">Save</button>
-      {% if tiers | length > 1 %}<button type="submit" form="tier-delete-{{ tier.id }}" class="btn btn-danger">Delete</button>{% endif %}
-    </div>
+  </section>
+  {% endfor %}
   </form>
+  {% for tier in tiers %}
+  {% for direction in ["up", "down"] %}
+  <form method="post" action="{{ url_for('admin.limit_tier_update', tier_id=tier.id) }}" id="tier-{{ direction }}-{{ tier.id }}" hidden{% if typed %} data-confirm="Move tier {{ tier.name }} {{ direction }}? Unsaved changes on this page are lost."{% endif %}>
+    {{ csrf() }}<input type="hidden" name="action" value="{{ direction }}">
+  </form>
+  {% endfor %}
   {% if tiers | length > 1 %}
   <form method="post" action="{{ url_for('admin.limit_tier_update', tier_id=tier.id) }}" id="tier-delete-{{ tier.id }}" hidden data-confirm="Delete tier {{ tier.name }}? Its accounts go back to the first tier." data-confirm-danger>
     {{ csrf() }}<input type="hidden" name="action" value="delete">

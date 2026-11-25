@@ -1034,6 +1034,33 @@ def test_admins_edit_tiers(app, admin, make_user):
         assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action LIKE 'admin.limits_tier%'") == 5
 
 
+def test_the_tiers_page_saves_every_tier_with_its_one_save(app, admin):
+    from bananachat import db
+    from bananachat.db import limits as store
+
+    page = admin.get("/admin/quotas/tiers").get_data(as_text=True)
+    assert page.count("data-page-save") == 1 and page.count(">Save</button>") == 1
+    with app.app_context():
+        tiers = [row.to_dict() for row in store.list_tiers()]
+    form = {}
+    for tier in tiers:
+        form.update({f"tier-{tier['id']}-{name}": str(tier[name]) for name in (
+            "name", "multiplier", "min_account_days", "min_active_days", "min_tokens_30d", "clean_days")})
+    first, last = tiers[0]["id"], tiers[-1]["id"]
+    refused = admin.post("/admin/quotas/tiers/save", {**form, f"tier-{first}-multiplier": "3",
+                                                      f"tier-{last}-name": ""})
+    assert refused.status_code == 400
+    html = refused.get_data(as_text=True)
+    assert "Name is required" in html and f'name="tier-{first}-multiplier"' in html and 'value="3"' in html
+    with app.app_context():
+        assert store.get_tier(first)["multiplier"] == tiers[0]["multiplier"]  # nothing saved
+    assert admin.post("/admin/quotas/tiers/save", {**form, f"tier-{first}-multiplier": "3",
+                                                   f"tier-{last}-name": "Elite"}).status_code == 302
+    with app.app_context():
+        assert store.get_tier(first)["multiplier"] == 3 and store.get_tier(last)["name"] == "Elite"
+        assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='admin.limits_tier_update'") == 2
+
+
 def test_global_resets_and_restoring_defaults(app, admin, make_user):
     from bananachat.db import credits
     from bananachat.db import limits as store

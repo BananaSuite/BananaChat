@@ -1,4 +1,5 @@
-{#- Form fields shared by the Limits pages: switches, token amounts and request-rate rules. -#}
+{#- Form fields shared by the Limits pages: switches, token amounts and request-rate rules. `form` names the form
+    a field belongs to when it sits outside it (the HTML form attribute). -#}
 
 {% macro toggle(name, label, checked, hint=None) -%}
 <label class="switch">
@@ -8,25 +9,27 @@
 </label>
 {%- endmacro %}
 
-{% macro checkbox(name, label, checked=false, hint=None) -%}
+{% macro checkbox(name, label, checked=false, hint=None, form=None) -%}
 <label class="check">
-  <input type="checkbox" name="{{ name }}" value="1"{% if checked %} checked{% endif %}>
+  <input type="checkbox" name="{{ name }}" value="1"{% if checked %} checked{% endif %}{% if form %} form="{{ form }}"{% endif %}>
   <span>{{ label }}{% if hint %}<small>{{ hint }}</small>{% endif %}</span>
 </label>
 {%- endmacro %}
 
 {#- A token amount: typed as 50000, 50k or 1.5M (a string is shown as typed, for a refused form).
     `placeholder` shows what an empty field means. -#}
-{% macro token_field(name, label, value, id, hint=None, required=true, placeholder=None) -%}
+{% macro token_field(name, label, value, id, hint=None, required=true, placeholder=None, form=None) -%}
 <div class="field">
   <label for="{{ id }}"{% if required %} class="required"{% endif %}>{{ label }}</label>
-  <input type="text" id="{{ id }}" name="{{ name }}" inputmode="decimal" autocomplete="off" spellcheck="false" maxlength="20"{% if required %} required{% endif %} value="{{ value if value is string else (value | token_input) }}"{% if placeholder %} placeholder="{{ placeholder }}"{% endif %} aria-describedby="{{ id }}-hint">
+  <input type="text" id="{{ id }}" name="{{ name }}" inputmode="decimal" autocomplete="off" spellcheck="false" maxlength="20"{% if required %} required{% endif %} value="{{ value if value is string else (value | token_input) }}"{% if placeholder %} placeholder="{{ placeholder }}"{% endif %}{% if form %} form="{{ form }}"{% endif %} aria-describedby="{{ id }}-hint">
   <span class="hint" id="{{ id }}-hint">{{ hint or "For example 50000, 50k or 1.5M." }}</span>
 </div>
 {%- endmacro %}
 
-{#- Rows of request-rate rules ("N requests per unit, bursts of B"). Empty rows are ignored when saved. -#}
-{% macro rules_editor(rules, id, units, rows=4, legend="Rules", hint=None, placeholders=None) -%}
+{#- Rows of request-rate rules ("N requests per unit, bursts of B"). Empty rows are ignored when saved. The
+    fields are <name>_requests_N, <name>_per_N and <name>_burst_N (web/admin/_quota_ui.rules_from_form). -#}
+{% macro rules_editor(rules, id, units, rows=4, legend="Rules", hint=None, placeholders=None, name="rule", form=None) -%}
+{%- set owner = (' form="' ~ form ~ '"') | safe if form else "" -%}
 <fieldset class="admin-fieldset rule-list" aria-describedby="{{ id }}-hint">
   <legend class="label">{{ legend }}</legend>
   {#- The rules there are, plus one empty row to add another (up to `rows`). -#}
@@ -35,17 +38,17 @@
   {% set shown = placeholders[index] if placeholders and index < (placeholders | length) else none %}
   <div class="rule-row">
     <label class="visually-hidden" for="{{ id }}-requests-{{ index }}">Rule {{ index + 1 }}: number of requests</label>
-    <input type="number" id="{{ id }}-requests-{{ index }}" name="rule_requests_{{ index }}" min="1" step="1" inputmode="numeric" value="{{ rule.requests if rule else '' }}"{% if shown %} placeholder="{{ shown.requests }}"{% endif %}>
+    <input type="number" id="{{ id }}-requests-{{ index }}" name="{{ name }}_requests_{{ index }}"{{ owner }} min="1" step="1" inputmode="numeric" value="{{ rule.requests if rule else '' }}"{% if shown %} placeholder="{{ shown.requests }}"{% endif %}>
     <span class="rule-word" aria-hidden="true">requests per</span>
     <label class="visually-hidden" for="{{ id }}-per-{{ index }}">Rule {{ index + 1 }}: time unit</label>
-    <select id="{{ id }}-per-{{ index }}" name="rule_per_{{ index }}">
+    <select id="{{ id }}-per-{{ index }}" name="{{ name }}_per_{{ index }}"{{ owner }}>
       {% for unit in units %}<option value="{{ unit }}"{% if (rule and rule.per == unit) or (not rule and ((shown and shown.per == unit) or (not shown and unit == "minute"))) %} selected{% endif %}>{{ unit }}</option>{% endfor %}
     </select>
     {#- The burst part wraps as one unit, so a narrow row never starts with a lone "· bursts of". -#}
     <span class="rule-burst">
       <span class="rule-word" aria-hidden="true"><span class="rule-separator">· </span>bursts of</span>
       <label class="visually-hidden" for="{{ id }}-burst-{{ index }}">Rule {{ index + 1 }}: burst (optional)</label>
-      <input type="number" id="{{ id }}-burst-{{ index }}" name="rule_burst_{{ index }}" min="1" step="1" inputmode="numeric" value="{{ rule.burst if rule else '' }}" placeholder="{{ shown.burst if shown else 'same' }}">
+      <input type="number" id="{{ id }}-burst-{{ index }}" name="{{ name }}_burst_{{ index }}"{{ owner }} min="1" step="1" inputmode="numeric" value="{{ rule.burst if rule else '' }}" placeholder="{{ shown.burst if shown else 'same' }}">
     </span>
   </div>
   {% endfor %}
@@ -53,14 +56,15 @@
 </fieldset>
 {%- endmacro %}
 
-{#- Both existing and new account overrides use the same fields and access controls. -#}
-{% macro model_override_fields(shown, id, units, rows, username) -%}
-{{ rules_editor(shown.rate_rules if shown else none, id ~ "-rules", units, rows, "Request rate", "Leave every row empty to use the model policy.") }}
+{#- Both existing and new account overrides use the same fields and access controls. `names` starts each field's
+    name (the existing overrides share the page's one form: "model-7-window_tokens"). -#}
+{% macro model_override_fields(shown, id, units, rows, username, names="", form=None) -%}
+{{ rules_editor(shown.rate_rules if shown else none, id ~ "-rules", units, rows, "Request rate", "Leave every row empty to use the model policy.", name=names ~ "rule", form=form) }}
 <div class="form-grid">
-  {{ token_field("window_tokens", "Tokens per 5 hours", shown.window_tokens if shown else none, id ~ "-window", "Empty: use the model policy.", false) }}
-  {{ token_field("weekly_tokens", "Tokens per week", shown.weekly_tokens if shown else none, id ~ "-weekly", "Empty: use the model policy.", false) }}
+  {{ token_field(names ~ "window_tokens", "Tokens per 5 hours", shown.window_tokens if shown else none, id ~ "-window", "Empty: use the model policy.", false, form=form) }}
+  {{ token_field(names ~ "weekly_tokens", "Tokens per week", shown.weekly_tokens if shown else none, id ~ "-weekly", "Empty: use the model policy.", false, form=form) }}
 </div>
-{{ checkbox("locked", "Lock this model for " ~ username, shown.locked if shown else false, "Blocks chat, API and agents until unlocked.") }}
-{{ checkbox("token_exempt", "Exempt from this model's token limits", shown.token_exempt if shown else false, "Service token limits still apply.") }}
-{{ checkbox("rate_exempt", "Exempt from this model's request-rate limits", shown.rate_exempt if shown else false, "Service request rates still apply.") }}
+{{ checkbox(names ~ "locked", "Lock this model for " ~ username, shown.locked if shown else false, "Blocks chat, API and agents until unlocked.", form=form) }}
+{{ checkbox(names ~ "token_exempt", "Exempt from this model's token limits", shown.token_exempt if shown else false, "Service token limits still apply.", form=form) }}
+{{ checkbox(names ~ "rate_exempt", "Exempt from this model's request-rate limits", shown.rate_exempt if shown else false, "Service request rates still apply.", form=form) }}
 {%- endmacro %}

@@ -54,13 +54,14 @@ def test_save_merges_validates_and_applies(app, make_user):
 
     user = make_user("quinn")
     browser = _signed_in(app, "quinn")
-    response = browser.post_json("/api/preferences", {"theme_mode": "light", "contrast": 3, "font_scale": 1.18,
-                                                      "custom_primary": "#AABBCC", "semantic_code": 2,
+    response = browser.post_json("/api/preferences", {"theme_mode": "light", "contrast": 1, "font_scale": 1.18,
+                                                      "custom_primary": "#AABBCC", "highlight": 2,
                                                       "custom_bg": "red", "sidebar_width": 9999,
                                                       "background_image": "0" * 32 + ".jpg", "unknown": 1})
     assert response.status_code == 200
     saved = response.get_json()["preferences"]
-    assert saved["theme_mode"] == "light" and saved["contrast"] == 3 and saved["font_scale"] == 1.2
+    assert saved["theme_mode"] == "light" and saved["contrast"] == 1 and saved["font_scale"] == 1.2
+    assert saved["highlight"] == 2
     assert saved["custom_primary"] == "#aabbcc" and saved["custom_bg"] == ""
     assert saved["sidebar_width"] == users.PREFERENCE_DEFAULTS["sidebar_width"]
     assert saved["background_image"] == "" and "unknown" not in saved
@@ -68,12 +69,33 @@ def test_save_merges_validates_and_applies(app, make_user):
     browser.post_json("/api/preferences", {"reduce_motion": True})
     with app.app_context():
         prefs = users.get_preferences(user["id"])
-    assert prefs["reduce_motion"] is True and prefs["contrast"] == 3
+    assert prefs["reduce_motion"] is True and prefs["contrast"] == 1
     html = browser.get("/account").get_data(as_text=True)
-    assert 'data-theme="light"' in html and "contrast-3" in html and "sem-code-2" in html and "reduce-motion" in html
+    assert 'data-theme="light"' in html and "contrast-1" in html and "highlight-2" in html and "reduce-motion" in html
     assert "--palette-primary: #aabbcc" in html
-    assert browser.fetch("/api/preferences").get_json()["preferences"]["contrast"] == 3
+    assert browser.fetch("/api/preferences").get_json()["preferences"]["contrast"] == 1
     assert browser.post_json("/api/preferences", ["not", "an", "object"]).status_code == 400
+
+
+def test_contrast_and_highlighting_have_three_levels(app, make_user):
+    from bananachat.db import users
+
+    make_user("ines")
+    browser = _signed_in(app, "ines")
+    page = browser.get("/customize").get_data(as_text=True)
+    assert page.count('name="contrast"') == 3 and page.count('name="highlight"') == 3
+    assert "semantic_" not in page
+    # Letter spacing, the sidebar width and the easter eggs are under Advanced, closed.
+    advanced = page[page.index('id="more-appearance"'):]
+    for name in ('name="letter_spacing"', 'name="sidebar_width"', 'name="egg_konami"'):
+        assert name in advanced
+    assert "<details open" not in advanced
+    saved = browser.post_json("/api/preferences", {"contrast": 5, "highlight": 3}).get_json()["preferences"]
+    assert saved["contrast"] == 0 and saved["highlight"] == 0  # out of range: the defaults
+    # A preference object from before version 32 (a restored backup): six contrast levels, five highlights.
+    legacy = users.clean_preferences({"contrast": 3, "semantic_code": 1, "semantic_heading": 2})
+    assert legacy["contrast"] == 1 and legacy["highlight"] == 2 and "semantic_code" not in legacy
+    assert users.clean_preferences({"contrast": 5})["contrast"] == 2
 
 
 def test_language_preference_switches_the_interface(app, make_user):
@@ -205,7 +227,7 @@ def test_reset_restores_defaults_and_deletes_the_background(app, make_user):
     user = make_user("yuri")
     browser = _signed_in(app, "yuri")
     name = _upload(browser, _image()).get_json()["preferences"]["background_image"]
-    browser.post_json("/api/preferences", {"contrast": 4})
+    browser.post_json("/api/preferences", {"contrast": 2})
     assert browser.post_json("/api/preferences/reset", {}).status_code == 200
     with app.app_context():
         assert users.get_preferences(user["id"]) == users.PREFERENCE_DEFAULTS

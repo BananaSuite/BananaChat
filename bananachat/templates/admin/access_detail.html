@@ -1,26 +1,28 @@
 {% extends "admin/_layout.html" %}
 {% from "admin/_macros.html" import header, csrf, when, utc_input %}
 {% from "partials/icons.html" import icon %}
+{% from "partials/page_header.html" import save_button %}
 {% block title %}Access · {{ resource.name }}{% endblock %}
 {% block admin_content %}
 {% set scope_labels = {"uncensored": "Uncensored models", "image_generation": "Image generation", "custom_personality": "Custom personalities", "agents": "Cloud sessions", "category": "Category", "model": "Model"} %}
 <p class="breadcrumb"><a href="{{ url_for('admin.access') }}">{{ icon("chevron-left") }}Access</a></p>
 {% if resource.scope == "model" %}
 {#- A model's description is its technical id: monospace, like on the Access overview. -#}
-<header class="page-header admin-header">
-  <div>
+<header class="page-header page-header-save admin-header">
+  <div class="page-header-title">
     <h1>{{ resource.kind ~ ": " ~ resource.name }}</h1>
     {% if resource.description %}<p class="mono">{{ resource.description }}</p>{% endif %}
   </div>
+  <div class="page-header-actions">{{ save_button("access-policy-form", "Save") }}</div>
 </header>
 {% else %}
-{{ header(resource.kind ~ ": " ~ resource.name, resource.description) }}
+{{ header(resource.kind ~ ": " ~ resource.name, resource.description, save="access-policy-form") }}
 {% endif %}
 
 <div class="grid grid-2 mb-3">
   <section class="settings-section" aria-labelledby="rule-title">
     <h2 id="rule-title">Who may use it</h2>
-    <form method="post" action="{{ url_for('admin.access_policy', scope=resource.scope, resource_id=resource.id) }}" class="stack">
+    <form method="post" action="{{ url_for('admin.access_policy', scope=resource.scope, resource_id=resource.id) }}" class="stack" id="access-policy-form">
       {{ csrf() }}
       <fieldset class="admin-fieldset">
         <legend class="visually-hidden">Access mode</legend>
@@ -31,10 +33,9 @@
       <label class="switch">
         <input type="checkbox" name="requests_enabled" value="1"{% if policy.requests_enabled %} checked{% endif %}>
         <span class="track" aria-hidden="true"></span>
-        <span>Let people ask for access<small class="block hint">People without access can send a request.</small></span>
+        <span>Let people ask for access</span>
       </label>
       {% if not policy.persisted %}<p class="hint">Default rule.</p>{% endif %}
-      <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
     </form>
   </section>
 

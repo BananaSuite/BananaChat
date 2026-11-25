@@ -3,6 +3,7 @@ account (custom limits per service and per model, effort levels, usage resets, s
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from flask import abort, flash, render_template, request
@@ -81,23 +82,72 @@ def _model_or_404(model_id: int):
 @bp.get("/quotas/tiers", endpoint="limit_tiers")
 @admin_required
 def tiers():
+    return _tiers_page()
+
+
+def _tiers_page(typed_tiers: dict | None = None):
+    """The tiers page; *typed_tiers* (tier id: values as typed) shows a refused Save again."""
     policies = limits_db.all_policies()
     labels = {"window": "5-hour", "weekly": "weekly"}
     applies = [f"{POOL_LABELS[pool]} ({', '.join(labels[period] for period in limits_db.PERIODS if policy[period]['auto_tiers'])})"
                for pool, policy in policies.items() if policy["window"]["auto_tiers"] or policy["weekly"]["auto_tiers"]]
     applies += [f"{model['display_name']} (model limits)" for model in _models()
                 if (policy := limits_db.get_model_policy(model))["auto_tiers"] and policy["enabled"]]
-    return render_template("admin/limit_tiers.html", tab="tiers", tiers=limits_db.list_tiers(),
+    tiers = [{**tier.to_dict(), **(typed_tiers or {}).get(tier["id"], {})} for tier in limits_db.list_tiers()]
+    return render_template("admin/limit_tiers.html", tab="tiers", tiers=tiers, typed=bool(typed_tiers),
                            counts=limits_db.tier_counts(), applies=applies, **quota_tabs_context())
 
 
-def _tier_form() -> dict:
-    return {"name": text("name", max_length=limits_db.TIER_NAME_MAX, required=True, label="Name"),
-            "multiplier": number("multiplier", minimum=0, maximum=limits_db.TIER_MULTIPLIER_MAX, label="Multiplier"),
-            "min_account_days": integer("min_account_days", minimum=0, maximum=3650, label="Account age", default=0),
-            "min_active_days": integer("min_active_days", minimum=0, maximum=30, label="Active days", default=0),
-            "min_tokens_30d": tokens("min_tokens_30d", label="Tokens used", default=0),
-            "clean_days": integer("clean_days", minimum=0, maximum=3650, label="Days without suspension", default=0)}
+TIER_FIELDS = ("name", "multiplier", "min_account_days", "min_active_days", "min_tokens_30d", "clean_days")
+
+
+def _tier_form(prefix: str = "") -> dict:
+    """A tier's fields; on the tiers page's one form each tier's start with ``tier-<id>-`` (*prefix*)."""
+    def field(name):
+        return prefix + name
+    return {"name": text(field("name"), max_length=limits_db.TIER_NAME_MAX, required=True, label="Name"),
+            "multiplier": number(field("multiplier"), minimum=0, maximum=limits_db.TIER_MULTIPLIER_MAX,
+                                 label="Multiplier"),
+            "min_account_days": integer(field("min_account_days"), minimum=0, maximum=3650, label="Account age",
+                                        default=0),
+            "min_active_days": integer(field("min_active_days"), minimum=0, maximum=30, label="Active days",
+                                       default=0),
+            "min_tokens_30d": tokens(field("min_tokens_30d"), label="Tokens used", default=0),
+            "clean_days": integer(field("clean_days"), minimum=0, maximum=3650, label="Days without suspension",
+                                  default=0)}
+
+
+@bp.post("/quotas/tiers/save", endpoint="limit_tiers_save")
+@admin_required
+def save_tiers():
+    """The tiers page's one Save: every tier, each checked before any is saved; only changed tiers are written
+    and audited."""
+    stored = {tier["id"]: tier for tier in limits_db.list_tiers()}
+    changes, errors = {}, []
+    for tier_id, tier in stored.items():
+        prefix = f"tier-{tier_id}-"
+        if prefix + "name" not in request.form:
+            continue  # added after the page was loaded: kept as it is
+        try:
+            values = limits_db.validate_tier(_tier_form(prefix))
+        except (FormError, ValueError) as error:
+            errors.append(f"{tier['name']}: {error}")
+            continue
+        if any(values[name] != limits_db.validate_tier(tier.to_dict())[name] for name in TIER_FIELDS):
+            changes[tier_id] = values
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        typed_tiers = {tier_id: {name: typed(f"tier-{tier_id}-{name}") for name in TIER_FIELDS}
+                       for tier_id in stored if f"tier-{tier_id}-name" in request.form}
+        return _tiers_page(typed_tiers), 400
+    with db.transaction():
+        for tier_id, values in changes.items():
+            limits_db.update_tier(tier_id, values)
+    for tier_id, values in changes.items():
+        audit("limits_tier_update", stored[tier_id]["name"], values)
+    flash("Tiers saved." if changes else "No changes to save.", "success")
+    return back("admin.limit_tiers")
 
 
 @bp.post("/quotas/tiers", endpoint="limit_tier_create")
@@ -311,20 +361,33 @@ def models_page():
     return _models_page()
 
 
-def _models_page(refused: dict | None = None):
-    """The models page; *refused* (``{"model_id", "policy"}``) shows a refused form again as typed."""
+def _models_page():
+    """Every model's limits in one line each; each model's settings have their own page."""
     models = _models()
     policies = limits_db.model_policies(models)
     stored = {row[0] for row in db.query("SELECT model_id FROM model_limit_policy")}
     items = [{"model": model, "policy": policies[model["id"]], "configured": model["id"] in stored,
-              "facts": model_summary(model, policies[model["id"]]),
-              "counts_default": limits.is_local(model),
-              "efforts": limits.supported_efforts(model)} for model in models]
-    for item in items:
-        if refused and item["model"]["id"] == refused["model_id"]:
-            item["policy"] = refused["policy"]
+              "facts": model_summary(model, policies[model["id"]])} for model in models]
     return render_template("admin/limit_models.html", tab="models", items=items, presets=limits_db.PRESETS,
-                           preset_help=PRESET_HELP, efforts=limits_db.EFFORT_LEVELS, refused=refused or {},
+                           preset_help=PRESET_HELP, **quota_tabs_context())
+
+
+@bp.get("/quotas/models/<int:model_id>", endpoint="limit_model")
+@admin_required
+def model_page(model_id):
+    return _model_page(_model_or_404(model_id))
+
+
+def _model_page(model, refused: dict | None = None):
+    """One model's limits; *refused* (a policy as typed) shows a refused Save again."""
+    if model not in _models():
+        abort(404)
+    stored = db.scalar("SELECT 1 FROM model_limit_policy WHERE model_id=?", (model["id"],))
+    return render_template("admin/limit_model.html", tab="models", model=model,
+                           policy=refused or limits_db.get_model_policy(model), refused=bool(refused),
+                           configured=bool(stored), counts_default=limits.is_local(model),
+                           efforts_supported=limits.supported_efforts(model), presets=limits_db.PRESETS,
+                           preset_help=PRESET_HELP, efforts=limits_db.EFFORT_LEVELS,
                            site_effort=limits.effort_settings()["default"], **quota_tabs_context())
 
 
@@ -372,18 +435,20 @@ def save_model(model_id):
     except (FormError, ValueError) as error:
         flash(f"{model['display_name']}: {error}", "error")
         if action != "save":
-            return back("admin.limit_models", _anchor=f"model-{model_id}")
+            return back("admin.limit_model", model_id=model_id)
         counts = request.form.get("counts_toward_pool")
-        return _models_page({"model_id": model_id, "policy": {
+        return _model_page(model, {
             **current, **_model_controls(current), "weight": typed("weight"), "sensitivity": typed("sensitivity"),
             "enabled": flag("enabled"),
             "dynamic": flag("dynamic"), "auto_tiers": flag("auto_tiers"), "rate_rules": typed_rules(),
             "window_tokens": typed("window_tokens"), "weekly_tokens": typed("weekly_tokens"),
             "counts_toward_pool": {"yes": True, "no": False}.get(counts),
-            "effort_default": request.form.get("effort_default") or None}}), 400
+            "effort_default": request.form.get("effort_default") or None}), 400
     audit("limits_model", model["ollama_name"], {"action": action, **config})
     flash(message, "success")
-    return back("admin.limit_models", _anchor=f"model-{model_id}")
+    if action == "save":
+        return back("admin.limit_models", _anchor=f"model-{model_id}")
+    return back("admin.limit_model", model_id=model_id)
 
 
 # ----- reasoning effort ---------------------------------------------------------------------
@@ -394,8 +459,9 @@ def effort_page():
     return _effort_page()
 
 
-def _effort_page(refused: dict | None = None):
-    """The reasoning-effort page; *refused* is the settings form as typed, when it was refused."""
+def _effort_page(refused: dict | None = None, typed_models: dict | None = None):
+    """The reasoning-effort page; *refused* is the settings form as typed, when it was refused, and
+    *typed_models* (model id: ``{"default", "policy"}``) the model defaults as typed."""
     rows = db.query("SELECT e.*, u.username, m.display_name AS model_name, a.username AS updated_by_name "
                     "FROM user_effort_levels e JOIN users u ON u.id=e.user_id "
                     "LEFT JOIN ai_models m ON m.id=e.model_id LEFT JOIN users a ON a.id=e.updated_by "
@@ -406,13 +472,54 @@ def _effort_page(refused: dict | None = None):
                            levels=limits_db.EFFORT_LEVELS, unlocks=rows,
                            models=[{"model": model, "levels": limits.supported_efforts(model),
                                     "default": policies[model["id"]]["effort_default"],
-                                    "policy": policies[model["id"]]} for model in reasoning],
+                                    "policy": policies[model["id"]],
+                                    **(typed_models or {}).get(model["id"], {})} for model in reasoning],
                            **quota_tabs_context())
+
+
+EFFORT_MODEL_FLAGS = ("effort_gating_off", "effort_auto_unlock_off")
+
+
+def _effort_model_changes(errors: list) -> dict:
+    """The model defaults of the effort page's form that differ from the saved ones: {model: changes}. Each
+    model's fields start with ``model-<id>-``. Refused values go to *errors*."""
+    changes = {}
+    for raw in request.form.getlist("effort_models"):
+        model = catalog.get(ascii_int(raw, 18) or 0)
+        if model is None or not limits.supported_efforts(model):
+            continue
+        prefix = f"model-{model['id']}-"
+        try:
+            level = choice(prefix + "effort_default", ("", *limits_db.EFFORT_LEVELS), label="Level", default="")
+        except FormError as error:
+            errors.append(f"{model['display_name']}: {error}")
+            continue
+        wanted = {"effort_default": level or None, **{name: flag(prefix + name) for name in EFFORT_MODEL_FLAGS}}
+        current = limits_db.get_model_policy(model)
+        if any(current[name] != value for name, value in wanted.items()):
+            changes[model["id"]] = (model, current, wanted)
+    return changes
+
+
+def _typed_effort_models() -> dict:
+    typed_models = {}
+    for raw in request.form.getlist("effort_models"):
+        model_id = ascii_int(raw, 18)
+        if model_id is None:
+            continue
+        prefix = f"model-{model_id}-"
+        level = request.form.get(prefix + "effort_default") or None
+        typed_models[model_id] = {"default": level, "policy": {
+            "effort_default": level, **{name: flag(prefix + name) for name in EFFORT_MODEL_FLAGS}}}
+    return typed_models
 
 
 @bp.post("/quotas/effort", endpoint="limit_effort_save")
 @admin_required
 def save_effort():
+    """The effort page's one Save: the default access and, when the form has them, the model defaults. All are
+    checked before anything is saved."""
+    errors = []
     try:
         values = {
             "effort_gating_enabled": 1 if flag("effort_gating_enabled") else 0,
@@ -431,14 +538,31 @@ def save_effort():
         if values["effort_auto_active_days"] > values["effort_auto_period_days"]:
             raise FormError("The active days cannot be more than the days of the period.")
     except FormError as error:
-        flash(str(error), "error")
+        errors.append(str(error))
+    model_changes = _effort_model_changes(errors)
+    if errors:
+        for error in errors:
+            flash(error, "error")
         return _effort_page({
             "gating": flag("effort_gating_enabled"), "default": request.form.get("effort_default_level"),
             "auto": flag("effort_auto_unlock"), "active_days": typed("effort_auto_active_days"),
             "tokens": typed("effort_auto_tokens"), "period_days": typed("effort_auto_period_days"),
-            "clean_days": typed("effort_auto_clean_days"), "ceiling": request.form.get("effort_auto_ceiling")}), 400
-    site_settings.update(**values)
-    audit("limits_effort_settings", "site", values)
+            "clean_days": typed("effort_auto_clean_days"), "ceiling": request.form.get("effort_auto_ceiling")},
+            _typed_effort_models()), 400
+    current = site_settings.get()
+    try:
+        with db.transaction():
+            site_settings.update(**values)
+            for model, policy, wanted in model_changes.values():
+                limits_db.set_model_policy(model["id"], {**policy, **wanted}, me()["id"])
+    except ValueError as error:
+        flash(str(error), "error")
+        return back("admin.limit_effort")
+    if any(current.get(name) != value for name, value in values.items()):
+        audit("limits_effort_settings", "site", values)
+    for model, _policy, wanted in model_changes.values():
+        audit("limits_effort_model", model["ollama_name"], {"default": wanted["effort_default"],
+                                                            **{name: wanted[name] for name in EFFORT_MODEL_FLAGS}})
     flash("Reasoning effort settings saved.", "success")
     return back("admin.limit_effort")
 
@@ -526,16 +650,20 @@ def user_limits(user_id):
 
 
 def _user_limits_page(user, refused: dict | None = None):
-    """An account's limits page; *refused* shows a refused custom-limit form again as typed
-    (``{"pool": ..., "override": ...}`` or ``{"model_id": ..., "override": ...}``)."""
+    """An account's limits page; *refused* shows a refused form again as typed: ``{"pool": ..., "override":
+    ...}`` or ``{"model_id": ..., "override": ...}`` from one section's old form, or ``{"pools": {pool:
+    override}, "models": {model_id: override}, "settings": {...}}`` from the page's Save."""
+    refused = refused or {}
     user_id = user["id"]
-    settings = limits_db.user_settings(user_id)
+    saved = limits_db.user_settings(user_id)
+    settings = replace(saved, **refused["settings"]) if refused.get("settings") else saved
     models = _models()
     policies = limits_db.model_policies(models)
     return render_template(
-        "admin/user_limits.html", section="users", user=user, settings=settings, refused=refused or {},
+        "admin/user_limits.html", section="users", user=user, settings=settings, saved=saved, refused=refused,
         pools=[_pool_view(user, pool) for pool in limits_db.POOLS], tiers=limits_db.list_tiers(),
-        tier=limits.resolve_tier(settings.tier_id), progress=limits.tier_progress(user),
+        tier=limits.resolve_tier(settings.tier_id), saved_tier=limits.resolve_tier(saved.tier_id),
+        progress=limits.tier_progress(user),
         auto_tiers=limits.auto_tiers_enabled(), models=models,
         model_views=_model_views(user, models, policies),
         effort_views=_effort_views(user, models, policies, settings),
@@ -547,10 +675,151 @@ def _user_limits_page(user, refused: dict | None = None):
         **rate_form_context())
 
 
-def _typed_override() -> dict:
+def _typed_override(prefix: str = "") -> dict:
     """A refused custom-limit form as typed, in the shape of an override."""
-    return {"rate_rules": typed_rules() or None, "window_tokens": typed("window_tokens"),
-            "weekly_tokens": typed("weekly_tokens")}
+    return {"rate_rules": typed_rules(prefix + "rule") or None, "window_tokens": typed(prefix + "window_tokens"),
+            "weekly_tokens": typed(prefix + "weekly_tokens")}
+
+
+# ----- the account limits page's Save -------------------------------------------------------------
+# The page's one form holds the exemptions, each service's and each customised model's limits, the reasoning
+# switches, the queue lane, the tier and the demand exemption. Every section is read and checked first; then only
+# what changed is saved, in one transaction, with each section's own audit entry. Sections a form does not have
+# (marked by their hidden fields) are left as they are.
+
+MODEL_OVERRIDE_FLAGS = ("locked", "token_exempt", "rate_exempt")
+EFFORT_ACCOUNT_FLAGS = ("effort_gating_off", "effort_auto_unlock_off")
+
+
+def _pool_values(prefix: str) -> dict:
+    return {"rate_rules": rules_from_form(prefix + "rule") or None,
+            "window_tokens": tokens(prefix + "window_tokens", maximum=limits_db.OVERRIDE_WINDOW_MAX,
+                                    label="Tokens per 5 hours", optional=True),
+            "weekly_tokens": tokens(prefix + "weekly_tokens", label="Tokens per week", optional=True)}
+
+
+def _model_values(prefix: str) -> dict:
+    return {"rate_rules": rules_from_form(prefix + "rule") or None,
+            "window_tokens": tokens(prefix + "window_tokens", label="Tokens per 5 hours", optional=True),
+            "weekly_tokens": tokens(prefix + "weekly_tokens", label="Tokens per week", optional=True),
+            **{name: flag(prefix + name) for name in MODEL_OVERRIDE_FLAGS}}
+
+
+def _changed(current, values: dict) -> bool:
+    """Whether *values* differ from *current* (an override or the account's settings)."""
+    def same(name, value):
+        stored = getattr(current, name)
+        if name == "rate_rules":
+            return list(stored or []) == list(value or [])
+        return stored == value
+    return not all(same(name, value) for name, value in values.items())
+
+
+def _typed_account_settings() -> dict:
+    shown = {name: flag(name) for name in ("token_exempt", "rate_exempt", "dynamic_exempt", "tier_locked")}
+    if "effort_gating_present" in request.form:
+        shown.update({name: flag(name) for name in EFFORT_ACCOUNT_FLAGS})
+    if request.form.get("speed") in limits_db.SPEEDS:
+        shown["speed"] = request.form["speed"]
+    tier_id = ascii_int(request.form.get("tier_id") or "", 18)
+    if tier_id is not None and limits_db.get_tier(tier_id) is not None:
+        shown["tier_id"] = tier_id
+    return shown
+
+
+@bp.post("/users/<user_id>/limits", endpoint="user_limits_save")
+@admin_required
+def save_user_limits(user_id):
+    user = user_or_404(user_id)
+    settings = limits_db.user_settings(user_id)
+    actor = me()["id"]
+    errors, pools, models = [], {}, {}
+    for pool in [pool for pool in request.form.getlist("pools") if pool in limits_db.POOLS]:
+        try:
+            values = _pool_values(f"{pool}-")
+        except FormError as error:
+            errors.append(f"{POOL_LABELS[pool]}: {error}")
+            continue
+        if _changed(limits_db.get_override(user_id, pool) or limits_db.Override(pool), values):
+            pools[pool] = values
+    for raw in request.form.getlist("override_models"):
+        model = catalog.get(ascii_int(raw, 18) or 0)
+        if model is None:
+            continue
+        try:
+            values = _model_values(f"model-{model['id']}-")
+        except FormError as error:
+            errors.append(f"{model['display_name']}: {error}")
+            continue
+        current = limits_db.get_model_override(user_id, model["id"]) or limits_db.ModelOverride(model["id"])
+        if _changed(current, values):
+            models[model["id"]] = (model, values)
+    account = {name: flag(name) for name in ("token_exempt", "rate_exempt", "dynamic_exempt")}
+    if "effort_gating_present" in request.form:
+        account.update({name: flag(name) for name in EFFORT_ACCOUNT_FLAGS})
+    speed, tier = settings.speed, None
+    try:
+        speed = choice("speed", limits_db.SPEEDS, label="Speed", default=settings.speed)
+        tier_id = integer("tier_id", minimum=1, maximum=2**31, label="Tier", optional=True)
+        if tier_id is not None:
+            tier = limits_db.get_tier(tier_id)
+            if tier is None:
+                raise FormError("That tier does not exist.")
+            account.update(tier_locked=flag("tier_locked"))
+    except FormError as error:
+        errors.append(str(error))
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return _user_limits_page(user, {
+            "pools": {pool: _typed_override(f"{pool}-") for pool in request.form.getlist("pools")
+                      if pool in limits_db.POOLS},
+            "models": {model_id: {**_typed_override(f"model-{model_id}-"),
+                                  **{name: flag(f"model-{model_id}-{name}") for name in MODEL_OVERRIDE_FLAGS}}
+                       for model_id in map(lambda raw: ascii_int(raw, 18), request.form.getlist("override_models"))
+                       if model_id is not None},
+            "settings": _typed_account_settings()}), 400
+    shown_tier = limits.resolve_tier(settings.tier_id)  # what the page showed: no tier yet is the first one
+    tier_changed = tier is not None and (tier["id"] != (shown_tier["id"] if shown_tier else None)
+                                         or account["tier_locked"] != settings.tier_locked)
+    account = {name: value for name, value in account.items() if getattr(settings, name) != value}
+    try:
+        with db.transaction():
+            if account or tier_changed:
+                limits_db.update_user_settings(user_id, actor, **account, **(
+                    {"tier_id": tier["id"], "tier_changed_at": db.now()} if tier_changed else {}))
+            for pool, values in pools.items():
+                limits_db.set_override(user_id, pool, actor, **values)
+            for model, values in models.values():
+                limits_db.set_model_override(user_id, model["id"], actor, **values)
+            if speed != settings.speed:
+                limits.set_speed(user_id, speed, adjust_rate=flag("adjust_rate"), updated_by=actor)
+    except ValueError as error:
+        flash(str(error), "error")
+        return back("admin.user_limits", user_id=user_id)
+    name = user["username"]
+    exemptions = {key: account[key] for key in ("token_exempt", "rate_exempt") if key in account}
+    if exemptions:
+        audit("limits_user_exemptions", name, exemptions)
+    for pool, values in pools.items():
+        audit("limits_user_custom", name, {"pool": pool, **values})
+    for model, values in models.values():
+        audit("limits_user_model", name, {"model": model["ollama_name"], **values})
+    gating = {key: account[key] for key in EFFORT_ACCOUNT_FLAGS if key in account}
+    if gating:
+        audit("limits_user_effort_gating", name, gating)
+    if speed != settings.speed:
+        audit("limits_user_speed", name, {"speed": speed, "adjust_rate": flag("adjust_rate")})
+    if tier_changed:
+        audit("limits_user_tier", name, {"tier": tier["name"],
+                                         "locked": account.get("tier_locked", settings.tier_locked)})
+    if "dynamic_exempt" in account:
+        audit("limits_user_dynamic", name, {"exempt": account["dynamic_exempt"]})
+    flash(f"Limits of {name} saved.", "success")
+    return back("admin.user_limits", user_id=user_id)
+
+
+# ----- each section's own form (pages open from before the page had one Save) ---------------------
 
 
 @bp.post("/users/<user_id>/limits/custom", endpoint="user_limits_custom")

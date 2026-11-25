@@ -140,7 +140,7 @@ def test_removing_a_provider_and_its_key_needs_a_confirmation(app, admin):
                                               secret_ref=provider_secrets.save("sk-test-key-123"))
         reference = external_providers.get(provider_id)["secret_ref"]
     _stale(app)
-    page = admin.get("/admin/models/providers").get_data(as_text=True)
+    page = admin.get(f"/admin/models/providers/{provider_id}").get_data(as_text=True)  # the provider's page
     assert f'id="provider-remove-{provider_id}-reauth"' in page  # the field is inside the removal form
     admin.post(f"/admin/models/providers/{provider_id}/remove", {})
     with app.app_context():
@@ -160,7 +160,7 @@ def test_opening_sign_up_to_everyone_needs_a_confirmation(app, admin, field, val
             **{f"{prefix}{key}_color": "#123456" for prefix in ("", "light_")
                for key in ("primary", "secondary", "accent", "text", "sidebar", "bg")}}
     _stale(app)
-    assert "to change this requirement or the sign-in mode, or to open sign-up" in admin.get("/admin/settings").get_data(as_text=True)
+    assert "to change this requirement, the sign-in mode, acting administrators or the portal API token, or to open sign-up" in admin.get("/admin/settings").get_data(as_text=True)
     admin.post("/admin/settings", {**form, field: value})
     assert (_changed_settings(app)[field] == value) is not needs
     admin.post("/admin/settings", {**form, field: value, "reauth_secret": ADMIN_PASSWORD})

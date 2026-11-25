@@ -17,8 +17,8 @@
 {% else %}Not limited <span class="muted">({{ window.used | tokens }} used)</span>{% endif %}
 {%- endmacro %}
 <p class="breadcrumb"><a href="{{ url_for('admin.user_detail', user_id=user.id) }}">{{ icon("chevron-left") }}{{ user.username }}</a></p>
-{% call header(user.username ~ " · Limits") %}
-  {% if settings.speed == "slow" %}<span class="badge badge-warning">Slowed down</span>{% elif settings.speed == "fast" %}<span class="badge badge-info">Sped up</span>{% endif %}
+{% call header(user.username ~ " · Limits", save="user-limits-form") %}
+  {% if saved.speed == "slow" %}<span class="badge badge-warning">Slowed down</span>{% elif saved.speed == "fast" %}<span class="badge badge-info">Sped up</span>{% endif %}
 {% endcall %}
 
 {% if user.role == "admin" %}
@@ -31,16 +31,19 @@
   </div>
 </nav>
 
+{#- One form for every setting of the page, saved by the header's Save (admin.user_limits_save). Adding a model
+    override, setting a reasoning level, resets and grants are their own forms; their buttons and fields name them
+    (the form attribute), and the forms follow this one. A refused Save shows again as typed. -#}
+<form method="post" action="{{ url_for('admin.user_limits_save', user_id=user.id) }}" class="form-contents" id="user-limits-form">
+{{ csrf() }}
 <div class="section-stack">
   <section class="settings-section stack" id="exemptions" aria-labelledby="exemptions-title">
     <h2 id="exemptions-title">Account exemptions</h2>
     <p class="muted small mb-0">Usage is still recorded. Model locks and access rules still apply.</p>
-    <form method="post" action="{{ url_for('admin.user_limits_exemptions', user_id=user.id) }}" class="stack">
-      {{ csrf() }}
+    <div class="stack">
       {{ checkbox("token_exempt", "Exempt from token limits", settings.token_exempt) }}
       {{ checkbox("rate_exempt", "Exempt from request-rate limits", settings.rate_exempt, "The image-generation safety cap still applies.") }}
-      <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-    </form>
+    </div>
   </section>
   {% for item in pools %}
   {% set current = item.current %}
@@ -56,21 +59,22 @@
       <dd>{{ window_text(current.weekly, item.label ~ " weekly tokens") }}{{ reasons(item.reasons.weekly) }}</dd>
     </dl>
     {#- A refused form shows again, open and as typed. -#}
-    {% set shown = refused.override if refused.pool == item.pool else override %}
-    <details class="inline-details"{% if not override.empty or refused.pool == item.pool %} open{% endif %}>
+    {% set typed = (refused.pools or {}).get(item.pool) or (refused.override if refused.pool == item.pool else none) %}
+    {% set shown = typed or override %}
+    {% set name = item.pool ~ "-" %}
+    <details class="inline-details"{% if not override.empty or typed %} open{% endif %}>
       <summary>Edit service limits{{ icon("chevron-down") }}</summary>
-      <form method="post" action="{{ url_for('admin.user_limits_custom', user_id=user.id) }}" class="stack">
-        {{ csrf() }}<input type="hidden" name="pool" value="{{ item.pool }}">
+      <div class="stack">
+        <input type="hidden" name="pools" value="{{ item.pool }}">
         <p class="hint mb-0">Empty fields use the site policy shown in them.</p>
         {% set automatic_fields = override.automatic | reject("equalto", "window_slow_tokens") | list %}
         {% if automatic_fields %}<p class="hint mb-0">Auto-approved, not below the tier amount: {{ automatic_fields | map("replace", "window_tokens", "tokens per 5 hours") | map("replace", "weekly_tokens", "tokens per week") | sort | join(", ") }}. Enter an amount to make it exact.</p>{% endif %}
-        {{ rules_editor(shown.rate_rules, item.pool ~ "-rules", units, rule_rows, "Request rate", placeholders=item.policy.rate.rules) }}
+        {{ rules_editor(shown.rate_rules, item.pool ~ "-rules", units, rule_rows, "Request rate", placeholders=item.policy.rate.rules, name=name ~ "rule") }}
         <div class="form-grid">
-          {{ token_field("window_tokens", "Tokens per 5 hours", shown.window_tokens, item.pool ~ "-window", "Empty: site policy.", false, item.policy.window.tokens | token_input) }}
-          {{ token_field("weekly_tokens", "Tokens per week", shown.weekly_tokens, item.pool ~ "-weekly", "Empty: site policy.", false, item.policy.weekly.tokens | token_input) }}
+          {{ token_field(name ~ "window_tokens", "Tokens per 5 hours", shown.window_tokens, item.pool ~ "-window", "Empty: site policy.", false, item.policy.window.tokens | token_input) }}
+          {{ token_field(name ~ "weekly_tokens", "Tokens per week", shown.weekly_tokens, item.pool ~ "-weekly", "Empty: site policy.", false, item.policy.weekly.tokens | token_input) }}
         </div>
-        <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-      </form>
+      </div>
     </details>
   </section>
   {% endfor %}
@@ -87,22 +91,18 @@
         <dt>Week</dt><dd>{{ window_text(current.weekly, view.model.display_name ~ " weekly tokens") }}{{ reasons(view.reasons.weekly) }}</dd>
       </dl>
       {% if not view.override.empty %}
-      {#- Its own form, filled in: saving one value must not unlock the model or drop its other limits. -#}
+      {#- Filled in: saving one value must not unlock the model or drop its other limits. -#}
       {% set key = "model-" ~ view.model.id %}
-      {% set shown = refused.override if refused.model_id == view.model.id else view.override %}
-      <details class="inline-details"{% if refused.model_id == view.model.id %} open{% endif %}>
+      {% set typed = (refused.models or {}).get(view.model.id) or (refused.override if refused.model_id == view.model.id else none) %}
+      {% set shown = typed or view.override %}
+      <details class="inline-details"{% if typed %} open{% endif %}>
         <summary>Edit model limits{{ icon("chevron-down") }}</summary>
-        <form method="post" action="{{ url_for('admin.user_limits_model', user_id=user.id) }}" class="stack" id="model-form-{{ view.model.id }}">
-          {{ csrf() }}<input type="hidden" name="model_id" value="{{ view.model.id }}">
-          <input type="hidden" name="limit_controls" value="1">
-          {{ model_override_fields(shown, key, units, rule_rows, user.username) }}
-          <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-        </form>
+        <div class="stack">
+          <input type="hidden" name="override_models" value="{{ view.model.id }}">
+          {{ model_override_fields(shown, key, units, rule_rows, user.username, names=key ~ "-") }}
+        </div>
       </details>
-      <form method="post" action="{{ url_for('admin.user_limits_model', user_id=user.id) }}" data-confirm="Remove the custom limits and lock of {{ user.username }} for {{ view.model.display_name }}?">
-        {{ csrf() }}<input type="hidden" name="model_id" value="{{ view.model.id }}"><input type="hidden" name="action" value="clear">
-        <button type="submit" class="btn btn-sm">Remove custom limits</button>
-      </form>
+      <div><button type="submit" form="model-clear-{{ view.model.id }}" class="btn btn-sm">Remove custom limits</button></div>
       {% endif %}
     </div>
     {% else %}
@@ -114,18 +114,17 @@
     {% set typed_model = refused.override if refused.model_id in (others | map(attribute="id") | list) else none %}
     <details class="inline-details"{% if typed_model %} open{% endif %}>
       <summary>Add a model override{{ icon("chevron-down") }}</summary>
-      <form method="post" action="{{ url_for('admin.user_limits_model', user_id=user.id) }}" class="stack">
-        {{ csrf() }}
-        <input type="hidden" name="limit_controls" value="1">
+      {#- Its own form (model-add-form, after the page's form): adding is not part of the page's Save. -#}
+      <div class="stack">
         <div class="field field-narrow">
           <label for="model-override-model" class="required">Model</label>
-          <select id="model-override-model" name="model_id" required>
+          <select id="model-override-model" name="model_id" form="model-add-form" required>
             {% for model in others %}<option value="{{ model.id }}"{% if typed_model and refused.model_id == model.id %} selected{% endif %}>{{ model.display_name }}</option>{% endfor %}
           </select>
         </div>
-        {{ model_override_fields(typed_model, "model", units, rule_rows, user.username) }}
-        <div class="form-actions"><button type="submit" class="btn">Add override</button></div>
-      </form>
+        {{ model_override_fields(typed_model, "model", units, rule_rows, user.username, form="model-add-form") }}
+        <div class="form-actions"><button type="submit" form="model-add-form" class="btn">Add override</button></div>
+      </div>
     </details>
     {% endif %}
   </section>
@@ -157,62 +156,57 @@
       </table>
     </div>
     {% endif %}
-    <form method="post" action="{{ url_for('admin.user_limits_effort', user_id=user.id) }}" class="stack">
-      {{ csrf() }}
+    {#- Setting a level is its own form (effort-set-form, after the page's form), like a grant. -#}
+    <div class="stack">
       <div class="form-grid">
         <div class="field">
           <label for="effort-model">Model</label>
-          <select id="effort-model" name="model_id">
+          <select id="effort-model" name="model_id" form="effort-set-form">
             <option value="all">All models</option>
             {% for view in effort_views %}<option value="{{ view.model.id }}">{{ view.model.display_name }}</option>{% endfor %}
           </select>
         </div>
         <div class="field">
           <label for="effort-level">Maximum level</label>
-          <select id="effort-level" name="level">
+          <select id="effort-level" name="level" form="effort-set-form">
             <option value="">Default (remove this account's level)</option>
             {% for level in efforts %}<option value="{{ level }}">{{ level | capitalize }}</option>{% endfor %}
           </select>
         </div>
       </div>
-      {{ checkbox("pinned", "Keep this level", hint="Automatic unlocks leave it unchanged.") }}
-      <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-    </form>
-    <form method="post" action="{{ url_for('admin.user_limits_effort', user_id=user.id) }}" class="stack">
-      {{ csrf() }}<input type="hidden" name="action" value="gating">
-      <input type="hidden" name="limit_controls" value="1">
+      {{ checkbox("pinned", "Keep this level", hint="Automatic unlocks leave it unchanged.", form="effort-set-form") }}
+      <div class="form-actions"><button type="submit" form="effort-set-form" class="btn">Set level</button></div>
+    </div>
+    <div class="stack">
+      <input type="hidden" name="effort_gating_present" value="1">
       {{ checkbox("effort_gating_off", "Allow all reasoning levels", settings.effort_gating_off) }}
       {{ checkbox("effort_auto_unlock_off", "Disable automatic unlocks", settings.effort_auto_unlock_off) }}
-      <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-    </form>
+    </div>
   </section>
 
   <div class="grid grid-2">
     <section class="settings-section stack" aria-labelledby="speed-title">
       <h2 id="speed-title">Queue priority</h2>
-      <form method="post" action="{{ url_for('admin.user_limits_speed', user_id=user.id) }}" class="stack">
-        {{ csrf() }}
+      <div class="stack">
         <fieldset class="admin-fieldset">
           <legend>Queue lane</legend>
           {% for value, label in [("slow", "Slow down"), ("normal", "Normal"), ("fast", "Speed up")] %}
           <label class="check"><input type="radio" name="speed" value="{{ value }}"{% if settings.speed == value %} checked{% endif %}><span>{{ label }}</span></label>
           {% endfor %}
         </fieldset>
-        {{ checkbox("adjust_rate", "Also change request rates", true, "Slow halves service rates; fast doubles them. Normal removes custom service rates.") }}
-        <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-      </form>
+        {{ checkbox("adjust_rate", "Also change request rates", true, "When the lane changes: slow halves service rates; fast doubles them. Normal removes custom service rates.") }}
+      </div>
     </section>
 
     <section class="settings-section stack" aria-labelledby="tier-title">
       <h2 id="tier-title">Tier</h2>
-      <p class="mb-0">{{ tier.name if tier else "—" }}{% if tier %} <span class="badge">×{{ "%g" | format(tier.multiplier) }}</span>{% endif %}{% if settings.tier_locked %} <span class="badge badge-warning">locked</span>{% endif %}
+      <p class="mb-0">{{ saved_tier.name if saved_tier else "—" }}{% if saved_tier %} <span class="badge">×{{ "%g" | format(saved_tier.multiplier) }}</span>{% endif %}{% if saved.tier_locked %} <span class="badge badge-warning">locked</span>{% endif %}
         {% if not auto_tiers %}<span class="hint">No service uses tiers at the moment.</span>{% endif %}</p>
       {% if progress and progress.next and not settings.tier_locked %}
       <p class="hint mb-0">Next: {{ progress.next.name }} ·
         {% for req in progress.requirements %}{{ {"account_days": "account age", "active_days": "active days", "tokens": "tokens in 30 days", "clean_days": "no recent suspension"}[req.key] }} {% if req.met %}✓{% else %}✗{% endif %}{% if req.have is not none %} ({% if req.key == "tokens" %}{{ req.have | compact }}/{{ req.need | compact }}{% else %}{{ req.have }}/{{ req.need }}{% endif %}){% endif %}{{ ", " if not loop.last }}{% endfor %}</p>
       {% endif %}
-      <form method="post" action="{{ url_for('admin.user_limits_tier', user_id=user.id) }}" class="stack">
-        {{ csrf() }}
+      <div class="stack">
         <div class="field">
           <label for="tier-select">Tier</label>
           <select id="tier-select" name="tier_id">
@@ -220,37 +214,50 @@
           </select>
         </div>
         {{ checkbox("tier_locked", "Keep this tier", settings.tier_locked, "No automatic promotion.") }}
-        <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-      </form>
+      </div>
     </section>
 
     <section class="settings-section stack" aria-labelledby="dynamic-title">
       <h2 id="dynamic-title">Demand adjustment</h2>
       {% set dyn = pools[0].current.dynamic %}
       <p class="muted small mb-0">{% if settings.dynamic_exempt %}This account is exempt from demand adjustments.{% elif dyn %}Now ×{{ "%g" | format(dyn.multiplier) }} (demand ×{{ "%g" | format(dyn.demand) }}, usage pattern ×{{ "%g" | format(dyn.personal) }}).{% else %}No API limit follows demand at the moment.{% endif %}</p>
-      <form method="post" action="{{ url_for('admin.user_limits_dynamic', user_id=user.id) }}" class="stack">
-        {{ csrf() }}
-        {{ checkbox("dynamic_exempt", "Exempt from demand adjustments", settings.dynamic_exempt) }}
-        <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-      </form>
+      {{ checkbox("dynamic_exempt", "Exempt from demand adjustments", settings.dynamic_exempt) }}
     </section>
 
     <section class="settings-section stack" aria-labelledby="reset-title">
       <h2 id="reset-title">Reset and restore</h2>
       <p class="muted small mb-0">Usage counts from zero again. History is kept.{% if settings.usage_reset_at or settings.weekly_reset_at %} Last reset: {{ [settings.usage_reset_at or "", settings.weekly_reset_at or ""] | max | datetime }}.{% endif %}</p>
       <div class="row">
-        <form method="post" action="{{ url_for('admin.user_limits_reset', user_id=user.id) }}" data-confirm="Reset the 5-hour usage of {{ user.username }}?">
-          {{ csrf() }}<input type="hidden" name="period" value="window"><button type="submit" class="btn">Reset 5-hour usage</button>
-        </form>
-        <form method="post" action="{{ url_for('admin.user_limits_reset', user_id=user.id) }}" data-confirm="Reset the weekly usage of {{ user.username }}?">
-          {{ csrf() }}<input type="hidden" name="period" value="week"><button type="submit" class="btn">Reset weekly usage</button>
-        </form>
+        <button type="submit" form="reset-window" class="btn">Reset 5-hour usage</button>
+        <button type="submit" form="reset-week" class="btn">Reset weekly usage</button>
       </div>
-      <form method="post" action="{{ url_for('admin.user_limits_restore', user_id=user.id) }}" data-confirm="Remove the custom limits, token/rate exemptions, model locks and speed setting of {{ user.username }}?" data-confirm-danger>
-        {{ csrf() }}<button type="submit" class="btn btn-danger">Restore default limits</button>
-      </form>
+      <div><button type="submit" form="restore-defaults" class="btn btn-danger">Restore default limits</button></div>
     </section>
   </div>
+</div>
+</form>
+
+{#- The page's other forms, named by their buttons and fields above. -#}
+{% for view in model_views if not view.override.empty %}
+<form method="post" action="{{ url_for('admin.user_limits_model', user_id=user.id) }}" id="model-clear-{{ view.model.id }}" hidden data-confirm="Remove the custom limits and lock of {{ user.username }} for {{ view.model.display_name }}?">
+  {{ csrf() }}<input type="hidden" name="model_id" value="{{ view.model.id }}"><input type="hidden" name="action" value="clear">
+</form>
+{% endfor %}
+<form method="post" action="{{ url_for('admin.user_limits_model', user_id=user.id) }}" id="model-add-form" hidden>
+  {{ csrf() }}<input type="hidden" name="limit_controls" value="1">
+</form>
+<form method="post" action="{{ url_for('admin.user_limits_effort', user_id=user.id) }}" id="effort-set-form" hidden>{{ csrf() }}</form>
+<form method="post" action="{{ url_for('admin.user_limits_reset', user_id=user.id) }}" id="reset-window" hidden data-confirm="Reset the 5-hour usage of {{ user.username }}?">
+  {{ csrf() }}<input type="hidden" name="period" value="window">
+</form>
+<form method="post" action="{{ url_for('admin.user_limits_reset', user_id=user.id) }}" id="reset-week" hidden data-confirm="Reset the weekly usage of {{ user.username }}?">
+  {{ csrf() }}<input type="hidden" name="period" value="week">
+</form>
+<form method="post" action="{{ url_for('admin.user_limits_restore', user_id=user.id) }}" id="restore-defaults" hidden data-confirm="Remove the custom limits, token/rate exemptions, model locks and speed setting of {{ user.username }}?" data-confirm-danger>
+  {{ csrf() }}
+</form>
+
+<div class="section-stack">
 
   <section class="settings-section" aria-labelledby="grants-title">
     <div class="section-header">

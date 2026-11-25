@@ -1,0 +1,53 @@
+{% extends "admin/_layout.html" %}
+{#- The settings of one account of a subscription pool, with the page's one Save (web/admin/subscriptions.py).
+    Expects `provider`, `setup` and `account`. -#}
+{% from "admin/_macros.html" import header, csrf, status_badge %}
+{% from "admin/_limit_fields.html" import token_field %}
+{% from "admin/_reauth.html" import reauth_field with context %}
+{% from "partials/icons.html" import icon %}
+{% macro share(value) %}{% if value is none %}unknown{% else %}{{ (value * 100) | round(1) }}%{% endif %}{% endmacro %}
+{#- A whole percentage of the provider's own allowance; empty means no cap. -#}
+{% macro percent_field(name, label, value, id, hint=None) -%}
+<div class="field">
+  <label for="{{ id }}">{{ label }}</label>
+  <input type="number" id="{{ id }}" name="{{ name }}" min="1" max="100" step="1" inputmode="numeric" value="{{ value if value is not none else '' }}" placeholder="No cap"{% if hint %} aria-describedby="{{ id }}-hint"{% endif %}>
+  {% if hint %}<span class="hint" id="{{ id }}-hint">{{ hint }}</span>{% endif %}
+</div>
+{%- endmacro %}
+{% block title %}{{ account.label }} · {{ setup.name }} accounts{% endblock %}
+{% block admin_content %}
+{% set endpoint = "admin." ~ provider %}
+{% set prefix = provider ~ "-" ~ account.id %}
+<p class="breadcrumb"><a href="{{ url_for(endpoint ~ '_pool', _anchor='account-' ~ account.id) }}">{{ icon("chevron-left") }}{{ setup.name }} accounts</a></p>
+{% call header(account.label, save="account-form") %}{{ status_badge(account.status) }}{% if account.id in busy %}<span class="badge badge-info">Answering a request</span>{% endif %}{% endcall %}
+
+<form method="post" action="{{ url_for(endpoint ~ '_account_save', account_id=account.id) }}" class="settings-section stack" id="account-form" data-busy>
+  {{ csrf() }}<input type="hidden" name="action" value="save">
+  <div class="form-grid">
+    {% if profiled %}<div class="field"><label for="{{ prefix }}-profile">{{ setup.client }} profile</label><select id="{{ prefix }}-profile" name="profile" required>{% if bindings[account.id] not in profiles %}<option value="">Select a profile</option>{% endif %}{% for profile in profiles %}<option value="{{ profile }}"{% if bindings[account.id] == profile %} selected{% endif %}>{{ profile }}</option>{% endfor %}</select></div>{% endif %}
+    <div class="field"><label for="{{ prefix }}-status">Status</label><select id="{{ prefix }}-status" name="status">{% for value in ["active", "disabled", "error"] %}<option value="{{ value }}"{% if account.status == value %} selected{% endif %}>{{ value | capitalize }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="{{ prefix }}-priority">Priority</label><input id="{{ prefix }}-priority" name="priority" type="number" value="{{ account.priority }}" min="-100" max="100"></div>
+    {{ token_field("window_limit", "5-hour token budget", account.window_limit, prefix ~ "-window", "Required to serve requests.", false) }}
+    {{ token_field("weekly_limit", "Weekly token budget (optional)", account.weekly_limit, prefix ~ "-weekly", none, false) }}
+    {{ percent_field("window_cap_pct", "Stop at % of the 5-hour allowance", account.window_cap_pct, prefix ~ "-window-cap", "Empty: no cap.") }}
+    {{ percent_field("weekly_cap_pct", "Stop at % of the weekly allowance", account.weekly_cap_pct, prefix ~ "-weekly-cap", "Empty: no cap.") }}
+  </div>
+  <div class="field form-width"><label for="{{ prefix }}-note">Note</label><input type="text" id="{{ prefix }}-note" name="note" value="{{ account.note }}" maxlength="500"></div>
+  <details class="inline-details"{% if account.id in family_capped %} open{% endif %}><summary>Model family caps{{ icon("chevron-down") }}</summary>
+    <div class="stack mt-2">
+      <p class="muted small">Stop this account for one model family at a share of that family's allowance or after a token budget. Leave a family empty for no cap.</p>
+      {% for family, name in families.items() %}{% set cap = caps[account.id][family] %}
+      <fieldset class="admin-fieldset">
+        <legend class="label">{{ name }}</legend>
+        <div class="form-grid">
+          {{ percent_field("cap_pct_" ~ family, "Stop at % of its allowance", cap.cap_pct, prefix ~ "-" ~ family ~ "-cap") }}
+          {{ token_field("window_cap_" ~ family, "5-hour tokens", cap.window_cap, prefix ~ "-" ~ family ~ "-window", "Empty: no family budget.", false) }}
+          {{ token_field("weekly_cap_" ~ family, "Weekly tokens", cap.weekly_cap, prefix ~ "-" ~ family ~ "-weekly", "Empty: no family budget.", false) }}
+        </div>
+      </fieldset>
+      {% endfor %}
+    </div>
+  </details>
+  {% if profiled %}{{ reauth_field(prefix ~ "-reauth", needed_for="to change the profile") }}{% endif %}
+</form>
+{% endblock %}

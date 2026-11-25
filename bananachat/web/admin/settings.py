@@ -2,9 +2,11 @@
 verification for administrators, default theme and palettes, and the easter eggs (the shared BananaSuite
 editor, ``static/banana-eggs/banana-eggs-admin.js``; :mod:`bananachat.eggs` checks what it sends).
 
-Changing the two-step requirement for administrators or the sign-in mode, or opening sign-up to
-everyone, needs a recent confirmation (:mod:`._reauth`). Only an administrator whose own account is
-connected to BananaWiki Hosting can switch to hosting-only sign-in."""
+Changing the two-step requirement for administrators or the sign-in mode, opening sign-up to everyone,
+letting hosting administrators act as users again or changing the linking tool's portal API token needs a
+recent confirmation (:mod:`._reauth`). Hosting-only sign-in needs every active administrator connected to
+BananaWiki Hosting (:func:`hosting_only_problem`). The portal API token is stored encrypted and never shown
+or audited."""
 
 from __future__ import annotations
 
@@ -21,6 +23,10 @@ from . import _reauth, bp
 from ._helpers import FormError, audit, back, choice, flag, me, text
 
 SIGNUP_MODES = ("invite", "open", "disabled")
+# Who decides BM mode, one choice for two columns: each person (bm_mode_self_service=1), administrators per
+# account (bm_mode_self_service=0), or nobody because it is on for everyone (bm_mode_global=1; the other column
+# keeps its value for when it is per account again).
+BM_MODE_POLICIES = ("person", "admin", "everyone")
 THEMES = ("dark", "light")
 COLOR_LABELS = {"bg": "Background", "sidebar": "Panels and sidebar", "secondary": "Raised surfaces",
                 "text": "Text", "primary": "Primary (buttons, links)", "accent": "Accent"}
@@ -82,6 +88,23 @@ def _egg_editor(settings: dict, draft: str | None = None, errors: list | None = 
             "errors": [_egg_error(*error) for error in errors or []]}
 
 
+def hosting_only_problem() -> str | None:
+    """Why hosting-only sign-in cannot be switched on now (for the administrator), or None.
+
+    Every active administrator must be connected to BananaWiki Hosting, the one switching included: an
+    administrator who is not could only use the recovery page afterwards.
+    """
+    if hosting_links.link_of(me()["id"]) is None:
+        return ("Connect your own account to BananaWiki Hosting first (Account → Security), so you can still "
+                "sign in once only BananaWiki Hosting accounts can.")
+    unlinked = hosting_links.unlinked_admins()
+    if unlinked:
+        names = ", ".join(unlinked[:10]) + (f" and {len(unlinked) - 10} more" if len(unlinked) > 10 else "")
+        return (f"Connect every administrator to BananaWiki Hosting first. Not connected: {names}. Link them in "
+                "Users → BananaWiki Hosting, or change their role.")
+    return None
+
+
 def _palette_fields(mode: str) -> dict:
     prefix = "light_" if mode == "light" else ""
     return {key: f"{prefix}{key}_color" for key in site_settings.PALETTE_KEYS}
@@ -105,7 +128,9 @@ def _page(settings: dict, *, egg_draft: str | None = None, egg_errors: list | No
                                     "effective": hosting_signin.effective_mode(settings),
                                     "url": config.hosting_oauth_url, "client_id": config.hosting_oauth_client_id,
                                     "callback": hosting_signin.callback_url(),
-                                    "own_link": hosting_links.link_of(me()["id"])},
+                                    "own_link": hosting_links.link_of(me()["id"]),
+                                    "allow_acting": hosting_signin.acting_allowed(settings),
+                                    "lookup": hosting_signin.lookup_state(settings)},
                            defaults={"dark": site_settings.DARK_PALETTE, "light": site_settings.LIGHT_PALETTE},
                            color_labels=COLOR_LABELS, fields={mode: _palette_fields(mode) for mode in THEMES},
                            page_data={"defaults": {"dark": site_settings.DARK_PALETTE,
@@ -121,7 +146,6 @@ def save():
             "signup_mode": choice("signup_mode", SIGNUP_MODES, label="Sign-up"),
             "maintenance_mode": 1 if flag("maintenance_mode") else 0,
             "maintenance_message": text("maintenance_message", max_length=1000, label="Maintenance message"),
-            "warning_banner_enabled": 1 if flag("warning_banner_enabled") else 0,
             "warning_banner_dismissible": 1 if flag("warning_banner_dismissible") else 0,
             "warning_banner_message": text("warning_banner_message", max_length=500, label="Banner message"),
             "default_theme_mode": choice("default_theme_mode", THEMES, label="Default theme"),
@@ -134,8 +158,14 @@ def save():
             for egg in site_settings.EASTER_EGGS:
                 values[f"easter_{egg}"] = 1 if flag(f"easter_{egg}") else 0
         if request.form.get("bm_mode_present") == "1":
-            values["bm_mode_global"] = 1 if request.form.get("bm_mode_global") == "1" else 0
-            values["bm_mode_self_service"] = 1 if flag("bm_mode_self_service") else 0
+            if "bm_mode_policy" in request.form:
+                policy = choice("bm_mode_policy", BM_MODE_POLICIES, label="BM mode")
+                values["bm_mode_global"] = int(policy == "everyone")
+                if policy != "everyone":
+                    values["bm_mode_self_service"] = int(policy == "person")
+            else:  # a page cached from a release with two controls
+                values["bm_mode_global"] = 1 if request.form.get("bm_mode_global") == "1" else 0
+                values["bm_mode_self_service"] = 1 if flag("bm_mode_self_service") else 0
         if request.form.get("admin_two_step_present") == "1":
             values[two_step.REQUIRED_SETTING] = 1 if flag(two_step.REQUIRED_SETTING) else 0
             if values[two_step.REQUIRED_SETTING] and not two_step.enabled(me()["id"]):
@@ -144,12 +174,25 @@ def save():
         # Only offered (and only kept) while the portal is configured; the mode stays as it was otherwise.
         if request.form.get("signin_mode_present") == "1" and hosting_signin.configured():
             values["signin_mode"] = choice("signin_mode", hosting_signin.MODES, label="Sign-in mode")
-            if (values["signin_mode"] == "hosting" and hosting_signin.stored_mode() != "hosting"
-                    and hosting_links.link_of(me()["id"]) is None):
-                raise FormError("Connect your own account to BananaWiki Hosting first (Account → Security), "
-                                "so you can still sign in once only BananaWiki Hosting accounts can.")
-        if values["warning_banner_enabled"] and not values["warning_banner_message"]:
-            raise FormError("Write the banner message before turning the banner on.")
+            if values["signin_mode"] == "hosting" and hosting_signin.stored_mode() != "hosting":
+                problem = hosting_only_problem()
+                if problem:
+                    raise FormError(problem)
+            if request.form.get("hosting_acting_present") == "1":  # not in pages cached from older releases
+                values[hosting_signin.SETTING_ALLOW_ACTING] = 1 if flag(hosting_signin.SETTING_ALLOW_ACTING) else 0
+            token = (request.form.get("hosting_lookup_token") or "").strip()
+            if flag("hosting_lookup_token_remove"):
+                values["hosting_lookup_token"] = None
+            elif token:
+                problem = hosting_signin.token_problem(token)
+                if problem:
+                    raise FormError(problem)
+                values["hosting_lookup_token"] = hosting_signin.encrypt_lookup_token(token)
+        # The announcement shows whenever it has a text (schema 34). A page cached from an older release still
+        # sends the former switch: switched off, its text is dropped, as the migration did.
+        if request.form.get("announcement_present") != "1" and not flag("warning_banner_enabled"):
+            values["warning_banner_message"] = ""
+        values["warning_banner_enabled"] = 1 if values["warning_banner_message"] else 0
         for mode in THEMES:
             for key, column in _palette_fields(mode).items():
                 value = (request.form.get(column) or "").strip()
@@ -174,13 +217,19 @@ def save():
             values["easter_egg_configs"] = cleaned
     requirement = values.get(two_step.REQUIRED_SETTING)
     mode = values.get("signin_mode")
+    acting = values.get(hosting_signin.SETTING_ALLOW_ACTING)
+    token_changed = "hosting_lookup_token" in values and (values["hosting_lookup_token"] is not None
+                                                          or before.get("hosting_lookup_token") is not None)
     sensitive = (requirement is not None and requirement != before.get(two_step.REQUIRED_SETTING)) or (
         values["signup_mode"] == "open" and before.get("signup_mode") != "open") or (
-        mode is not None and mode != hosting_signin.stored_mode(before))
+        mode is not None and mode != hosting_signin.stored_mode(before)) or (
+        acting == 1 and not hosting_signin.acting_allowed(before)) or token_changed
     if sensitive and not _reauth.confirmed():
         return back("admin.settings")
     site_settings.update(**values)
     changed = {key: value for key, value in values.items() if before.get(key) != value}
+    if "hosting_lookup_token" in changed:  # never the token, not even encrypted
+        changed["hosting_lookup_token"] = "removed" if values["hosting_lookup_token"] is None else "replaced"
     if "easter_egg_configs" in changed:  # the egg ids, not the whole list (audit details are short)
         changed["easter_egg_configs"] = [egg["id"] + ("" if egg["enabled"] else " (off)")
                                          for egg in eggs.clean(changed["easter_egg_configs"])["eggs"]]

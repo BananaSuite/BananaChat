@@ -1,6 +1,7 @@
 {% extends "admin/_layout.html" %}
 {% from "admin/_macros.html" import header, csrf, when, utc_input %}
 {% from "partials/icons.html" import icon %}
+{% from "admin/_provider_fields.html" import capabilities with context %}
 {% block title %}Edit {{ model.display_name }}{% endblock %}
 {% block admin_content %}
 {% set v = form if form else model %}
@@ -8,9 +9,9 @@
 {% macro checked(name) -%}{% if v.get(name) in (1, "1", "on", true) %} checked{% endif %}{%- endmacro %}
 {% macro value(name) -%}{{ "" if v.get(name) is none else v.get(name) }}{%- endmacro %}
 <p class="breadcrumb"><a href="{{ url_for('admin.models') }}">{{ icon("chevron-left") }}Models</a></p>
-{{ header("Edit " ~ model.display_name, model.ollama_name) }}
+{{ header("Edit " ~ model.display_name, model.ollama_name, save="model-form") }}
 
-<form method="post" action="{{ url_for('admin.model_edit', model_id=model.id) }}" class="section-stack" novalidate>
+<form method="post" action="{{ url_for('admin.model_edit', model_id=model.id) }}" class="section-stack" id="model-form" novalidate>
   {{ csrf() }}
   <section class="settings-section stack" aria-labelledby="general-title">
     <h2 id="general-title">Details</h2>
@@ -20,8 +21,7 @@
     </div>
     <div class="field">
       <label for="description">Description</label>
-      <textarea id="description" name="description" maxlength="1000" rows="3" aria-describedby="description-hint">{{ value('description') }}</textarea>
-      <span class="hint" id="description-hint">Shown in the model picker.</span>
+      <textarea id="description" name="description" maxlength="1000" rows="3">{{ value('description') }}</textarea>
     </div>
     <fieldset class="admin-fieldset">
       <legend>Categories</legend>
@@ -35,7 +35,7 @@
       <p class="muted small">No categories yet. <a href="{{ url_for('admin.categories') }}">Create one</a></p>
       {% endif %}
     </fieldset>
-    <fieldset class="admin-fieldset">
+    <fieldset class="admin-fieldset" id="capabilities">
       <legend>Capabilities</legend>
       {% if text_model %}
       <label class="check"><input type="checkbox" name="supports_vision" value="1"{{ checked('supports_vision') }}><span>Understands images</span></label>
@@ -43,7 +43,18 @@
       {% endif %}
       <label class="check"><input type="checkbox" name="is_uncensored" value="1"{{ checked('is_uncensored') }}><span>Uncensored<small>Only people allowed by the “Uncensored models” access rule can use it.</small></span></label>
       {% if model.backend == "external" %}
-      <p class="hint mt-1 mb-0">Images, tools and reasoning levels are set with its provider under <a href="{{ url_for('admin.external_providers') }}">External APIs</a>.{% if limits_url %} <a href="{{ limits_url }}">Limits for this model</a>{% endif %}</p>
+      {% if provider and provider.enabled %}
+      {#- What the provider's model supports; part of the page's Save. -#}
+      <input type="hidden" name="capabilities_present" value="1">
+      {% if form %}
+      {{ capabilities("model-caps", provider.protocol, form.getlist("reasoning"), form.get("vision"), form.get("tools"), {"sampling": form.get("sampling") is not none, "thinking": form.get("thinking")}) }}
+      {% else %}
+      {{ capabilities("model-caps", provider.protocol, levels, model.supports_vision, cap_tools, cap_settings) }}
+      {% endif %}
+      {% else %}
+      <p class="hint mt-1 mb-0">Its provider is off: turn it on under <a href="{{ url_for('admin.external_providers') }}">External APIs</a> to change images, tools and reasoning levels.</p>
+      {% endif %}
+      {% if limits_url %}<p class="hint mt-1 mb-0"><a href="{{ limits_url }}">Limits for this model</a></p>{% endif %}
       {% endif %}
     </fieldset>
   </section>
@@ -91,10 +102,6 @@
   </section>
   {% endif %}
 
-  <div class="form-actions form-actions-end">
-    <a class="btn btn-ghost" href="{{ url_for('admin.models') }}">Cancel</a>
-    <button type="submit" class="btn btn-primary">Save</button>
-  </div>
 </form>
 
 <section class="settings-section stack mt-3" id="lifecycle" aria-labelledby="lifecycle-title">
@@ -130,18 +137,17 @@
       </div>
       <div class="form-actions"><button type="submit" name="action" value="preset" class="btn btn-sm">Apply preset</button></div>
     </form>
-    <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" class="stack sub-card">
-      {{ csrf() }}
+    {#- Part of the page's form (the `form` attribute): the header's Save keeps it. -#}
+    <div class="stack sub-card">
       <h3>Reasoning levels</h3>
       <div class="field">
         <label for="reasoning-levels">Levels the model accepts</label>
-        <select id="reasoning-levels" name="reasoning_levels" aria-describedby="reasoning-levels-hint">
-          {% for key, label in level_choices.items() %}<option value="{{ key }}"{% if key == level_choice %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        <select id="reasoning-levels" name="reasoning_levels" form="model-form" aria-describedby="reasoning-levels-hint">
+          {% for key, label in level_choices.items() %}<option value="{{ key }}"{% if key == (v.get("reasoning_levels") if form else level_choice) %} selected{% endif %}>{{ label }}</option>{% endfor %}
         </select>
         <span class="hint" id="reasoning-levels-hint">Now: {{ levels | join(" / ") if levels else "none" }}.</span>
       </div>
-      <div class="form-actions"><button type="submit" name="action" value="reasoning" class="btn btn-sm">Save levels</button></div>
-    </form>
+    </div>
   </div>
   {% endif %}
 
@@ -159,47 +165,69 @@
 
   <div class="sub-card stack">
   <h3>Deprecation</h3>
+  {#- Deprecating is an action of its own; once deprecated, the replacement, date and note are part of the
+      page's form (the `form` attribute) and the header's Save keeps them. -#}
+  {% set dep = namespace(form_attr="") %}
+  {% if model.deprecated_at and not model.retired_at %}{% set dep.form_attr = ' form="model-form"' | safe %}{% endif %}
+  {% if model.retired_at %}
   <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" class="stack">
     {{ csrf() }}
-    {% if model.retired_at %}
     {% if model.is_image_generation %}
     <p class="small mb-0">Retired {{ when(model.retired_at) }}. It is hidden from users and requests that name it are refused.</p>
     {% else %}
     <p class="small mb-0">Retired {{ when(model.retired_at) }}.{% if replacement %} Chats move to <strong>{{ replacement.display_name }}</strong>.{% endif %} The API refuses it.</p>
     {% endif %}
     <div class="form-actions"><button type="submit" name="action" value="undeprecate" class="btn btn-sm">Restore</button></div>
-    {% else %}
+  </form>
+  {% else %}
+  {% set typed = form if form and dep.form_attr else none %}
+  {% set shown_replacement = (typed.get("replacement_id") | int(0)) if typed else model.replacement_id %}
+  {% set shown_retire = typed.get("retire_at", "") if typed else ((model.retire_at | replace(" ", "T"))[:16] if model.retire_at else "") %}
+  {% set shown_note = typed.get("note", "") if typed else (model.deprecation_note or "") %}
+  {% if model.deprecated_at %}<div class="stack">{% else %}<form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" class="stack">
+    {{ csrf() }}{% endif %}
     {% if model.is_image_generation %}
     <p class="small muted mb-0">A deprecated checkpoint leaves the image picker. Requests that name it work until it is retired.</p>
     {% else %}
     <p class="small muted mb-0">A deprecated model leaves the chat picker and its chats move to the replacement. The API serves it until it is retired.</p>
     {% endif %}
+    {% if dep.form_attr %}<input type="hidden" name="deprecation_present" value="1"{{ dep.form_attr }}>{% endif %}
     <div class="form-grid">
       {#- Chats and personalities move to a replacement; image requests never do, so checkpoints have none. -#}
       {% if not model.is_image_generation %}
       <div class="field">
         <label for="replacement">Replacement</label>
-        <select id="replacement" name="replacement_id">
+        <select id="replacement" name="replacement_id"{{ dep.form_attr }}>
           <option value="">Best available model</option>
-          {% for other in replacements %}<option value="{{ other.id }}"{% if other.id == model.replacement_id %} selected{% endif %}>{{ other.display_name }} ({{ other.ollama_name }})</option>{% endfor %}
+          {% for other in replacements %}<option value="{{ other.id }}"{% if other.id == shown_replacement %} selected{% endif %}>{{ other.display_name }} ({{ other.ollama_name }})</option>{% endfor %}
         </select>
       </div>
       {% endif %}
-      {{ utc_input("retire_at", "retire-at", "Retire on", "UTC. Leave empty to retire it by hand.", (model.retire_at | replace(" ", "T"))[:16] if model.retire_at else "", utc_min) }}
+      <div class="field">
+        <label for="retire-at">Retire on</label>
+        <input type="datetime-local" id="retire-at" name="retire_at" value="{{ shown_retire }}" min="{{ utc_min }}" aria-describedby="retire-at-hint"{{ dep.form_attr }}>
+        <span class="hint" id="retire-at-hint">UTC. Leave empty to retire it by hand.</span>
+      </div>
       <div class="field">
         <label for="deprecation-note">Note</label>
-        <input type="text" id="deprecation-note" name="note" maxlength="500" value="{{ model.deprecation_note or '' }}">
+        <input type="text" id="deprecation-note" name="note" maxlength="500" value="{{ shown_note }}"{{ dep.form_attr }}>
       </div>
     </div>
     <div class="form-actions">
-      <button type="submit" name="action" value="deprecate" class="btn btn-sm">{{ "Save deprecation" if model.deprecated_at else "Deprecate" }}</button>
-      {% if model.deprecated_at %}<button type="submit" name="action" value="undeprecate" class="btn btn-sm" formnovalidate>Undo deprecation</button>{% endif %}
+      {% if model.deprecated_at %}
+      <button type="submit" form="undeprecate-{{ model.id }}" class="btn btn-sm">Undo deprecation</button>
+      {% else %}
+      <button type="submit" name="action" value="deprecate" class="btn btn-sm">Deprecate</button>
+      {% endif %}
       {#- Its own (hidden) form, for its confirmation; the button sits with the other lifecycle actions. -#}
       <button type="submit" form="retire-{{ model.id }}" name="action" value="retire" class="btn btn-sm btn-danger">Retire now</button>
     </div>
-    {% endif %}
+  {% if model.deprecated_at %}</div>{% else %}</form>{% endif %}
+  {% if model.deprecated_at %}
+  <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" id="undeprecate-{{ model.id }}" hidden>
+    {{ csrf() }}<input type="hidden" name="action" value="undeprecate">
   </form>
-  {% if not model.retired_at %}
+  {% endif %}
   <form method="post" action="{{ url_for('admin.model_lifecycle', model_id=model.id) }}" id="retire-{{ model.id }}" hidden data-confirm="Retire {{ model.display_name }} now? {% if model.is_image_generation %}It is hidden from users and requests that name it are refused.{% else %}It is hidden, chats move to its replacement and the API refuses it.{% endif %}" data-confirm-danger>
     {{ csrf() }}
   </form>

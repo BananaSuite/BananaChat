@@ -153,7 +153,7 @@ def test_admin_control_changes_live_banner_without_changing_service_status(worke
     toggle.focus()
     admin.keyboard.press("Space")
     assert not toggle.is_checked()
-    admin.get_by_role("button", name="Save settings", exact=True).click()
+    admin.get_by_role("button", name="Save", exact=True).click()
     admin.wait_for_load_state("networkidle")
     with worker_browser.app.app_context():
         assert settings.get()["worker_offline_warning_enabled"] == 0
@@ -167,7 +167,7 @@ def test_admin_control_changes_live_banner_without_changing_service_status(worke
     toggle.focus()
     admin.keyboard.press("Space")
     assert toggle.is_checked()
-    admin.get_by_role("button", name="Save settings", exact=True).click()
+    admin.get_by_role("button", name="Save", exact=True).click()
     admin.wait_for_load_state("networkidle")
     _poll(page)
     page.wait_for_selector(WORKER)

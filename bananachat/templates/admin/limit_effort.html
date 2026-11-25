@@ -4,7 +4,7 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Reasoning effort · Limits{% endblock %}
 {% block admin_content %}
-{{ header("Limits") }}
+{{ header("Limits", save="effort-form") }}
 {% include "admin/_limits_tabs.html" %}
 
 <details class="settings-section admin-help mb-3">
@@ -16,10 +16,12 @@
 </details>
 
 <div class="section-stack">
-  {#- A refused form shows again as typed. -#}
+  {#- One form for the default access and the model defaults, saved by the header's Save. A refused Save
+      shows again as typed. -#}
   {% set shown = typed_settings or settings %}
-  <form method="post" action="{{ url_for('admin.limit_effort_save') }}" class="settings-section stack" id="settings" aria-labelledby="effort-settings-title">
-    {{ csrf() }}
+  <form method="post" action="{{ url_for('admin.limit_effort_save') }}" class="form-contents" id="effort-form">
+  {{ csrf() }}
+  <section class="settings-section stack" id="settings" aria-labelledby="effort-settings-title">
     <h2 id="effort-settings-title">Default access</h2>
     {{ toggle("effort_gating_enabled", "Limit reasoning effort", shown.gating, "Off allows every level each model supports.") }}
     <div class="field field-narrow">
@@ -31,7 +33,10 @@
     </div>
     <fieldset class="admin-fieldset stack">
       <legend>Automatic unlocks</legend>
-      {{ toggle("effort_auto_unlock", "Unlock the next level after sustained use", shown.auto, "Checked hourly, one level at a time.") }}
+      <div class="row-between effort-check">
+        {{ toggle("effort_auto_unlock", "Unlock the next level after sustained use", shown.auto, "Checked hourly, one level at a time.") }}
+        <button type="submit" form="effort-auto-check" class="btn btn-sm">Check now</button>
+      </div>
       <details class="admin-help admin-options"{% if typed_settings %} open{% endif %}>
         <summary>{{ icon("chevron-down") }}Eligibility requirements</summary>
         <div class="form-grid">
@@ -57,14 +62,7 @@
         </div>
       </details>
     </fieldset>
-    <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
-  </form>
-  {#- Next to the automatic-unlock settings it belongs to (a form cannot sit inside the settings form). -#}
-  <form method="post" action="{{ url_for('admin.limit_effort_auto') }}" class="settings-section row-between effort-check">
-    {{ csrf() }}
-    <p class="muted small mb-0">Automatic unlocks</p>
-    <button type="submit" class="btn">Check now</button>
-  </form>
+  </section>
 
   <section class="settings-section stack" id="models" aria-labelledby="effort-models-title">
     <h2 id="effort-models-title">Model defaults</h2>
@@ -74,23 +72,22 @@
       {% for item in models %}
       <li class="list-item">
         {#- Like the model cards on Limits > Models: the name first, the chevron at the right. -#}
-        <details class="model-card effort-model grow">
+        <details class="model-card effort-model grow"{% if typed_settings %} open{% endif %}>
           <summary><strong>{{ item.model.display_name }}</strong><span class="limit-summary">{% if not settings.gating or item.policy.effort_gating_off %}All supported levels{% else %}Up to {{ (item.default or settings.default) | capitalize }}{% endif %}</span><span class="chevron" aria-hidden="true">{{ icon("chevron-down") }}</span></summary>
-          <form method="post" action="{{ url_for('admin.limit_effort_model', model_id=item.model.id) }}" class="stack">
-            {{ csrf() }}
-            <input type="hidden" name="limit_controls" value="1">
+          {% set name = "model-" ~ item.model.id ~ "-" %}
+          <div class="stack">
+            <input type="hidden" name="effort_models" value="{{ item.model.id }}">
             <div class="field field-narrow">
               <label for="effort-model-{{ item.model.id }}">Maximum level for {{ item.model.display_name }}</label>
-              <select id="effort-model-{{ item.model.id }}" name="effort_default" aria-describedby="effort-model-{{ item.model.id }}-hint">
+              <select id="effort-model-{{ item.model.id }}" name="{{ name }}effort_default" aria-describedby="effort-model-{{ item.model.id }}-hint">
                 <option value="">Site default ({{ settings.default }})</option>
                 {% for level in levels %}<option value="{{ level }}"{% if item.default == level %} selected{% endif %}>{{ level | capitalize }}</option>{% endfor %}
               </select>
               <span class="hint" id="effort-model-{{ item.model.id }}-hint">Supported levels: {{ item.levels | join(", ") }}.</span>
             </div>
-            {{ toggle("effort_gating_off", "Allow all reasoning levels", item.policy.effort_gating_off) }}
-            {{ toggle("effort_auto_unlock_off", "Disable automatic unlocks", item.policy.effort_auto_unlock_off) }}
-            <div class="form-actions"><button type="submit" class="btn btn-sm">Save</button></div>
-          </form>
+            {{ toggle(name ~ "effort_gating_off", "Allow all reasoning levels", item.policy.effort_gating_off) }}
+            {{ toggle(name ~ "effort_auto_unlock_off", "Disable automatic unlocks", item.policy.effort_auto_unlock_off) }}
+          </div>
         </details>
       </li>
       {% endfor %}
@@ -99,6 +96,8 @@
     <p class="muted mb-0">No models support reasoning levels yet.</p>
     {% endif %}
   </section>
+  </form>
+  <form method="post" action="{{ url_for('admin.limit_effort_auto') }}" id="effort-auto-check" hidden>{{ csrf() }}</form>
 </div>
 
 <section class="mt-3" aria-labelledby="unlocks-title">

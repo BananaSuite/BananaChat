@@ -21,7 +21,7 @@
       <button type="button" class="btn btn-danger" id="stop-button"{% if not task.active %} hidden{% endif %}>{{ icon("stop") }}{{ t("agents.stop") }}</button>
       <form method="post" action="{{ url_for('agents.delete', task_id=task.id) }}" data-confirm="{{ t('agents.delete_confirm') }}" data-confirm-danger>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-ghost">{{ icon("trash") }}{{ t("agents.delete") }}</button>
+        <button type="submit" class="btn btn-ghost">{{ t("agents.delete") }}</button>
       </form>
     </div>
   </header>
@@ -46,7 +46,7 @@
         <textarea id="follow-up-input" rows="2" maxlength="{{ max_message }}" placeholder="{{ t('agents.follow_up_placeholder') }}"></textarea>
         <div class="agent-composer-bar">
           <span class="hint" id="follow-up-hint"></span>
-          <button type="submit" class="btn btn-primary" id="follow-up-send" data-send>{{ icon("arrow-up") }}{{ t("agents.send") }}</button>
+          <button type="submit" class="btn btn-primary" id="follow-up-send" data-send>{{ t("agents.send") }}</button>
         </div>
       </form>
       {% if access != "ok" %}<p class="hint">{{ t("agents.read_only") }}</p>{% endif %}
@@ -55,7 +55,7 @@
     <aside class="agent-side" aria-labelledby="workspace-title">
       <section class="workspace" id="workspace">
         <div class="workspace-head">
-          <h2 id="workspace-title">{{ icon("file") }}{{ t("agents.workspace") }}</h2>
+          <h2 id="workspace-title">{{ t("agents.workspace") }}</h2>
           <button type="button" class="icon-btn" id="workspace-refresh" aria-label="{{ t('agents.workspace_refresh') }}" title="{{ t('agents.workspace_refresh') }}">{{ icon("refresh") }}</button>
         </div>
         <nav class="workspace-crumbs" id="workspace-crumbs" aria-label="{{ t('agents.workspace_path') }}"></nav>
@@ -63,14 +63,14 @@
         <div class="workspace-preview" id="workspace-preview" hidden>
           <div class="workspace-preview-head">
             <strong class="truncate mono" id="workspace-file-name"></strong>
-            <a class="btn btn-sm" id="workspace-file-download" href="#">{{ icon("download") }}{{ t("agents.download") }}</a>
+            <a class="btn btn-sm" id="workspace-file-download" href="#">{{ t("agents.download") }}</a>
           </div>
           <pre class="workspace-file" id="workspace-file" tabindex="0"></pre>
         </div>
         <p class="hint workspace-note" id="workspace-note"></p>
         <div class="workspace-actions">
-          <a class="btn btn-sm" id="archive-link" href="{{ data.urls.archive }}" download>{{ icon("download") }}{{ t("agents.download_archive") }}</a>
-          <a class="btn btn-sm" id="patch-link" href="{{ data.urls.patch }}" download{% if not (task.workspace and task.repository and task.repository.git) %} hidden{% endif %}>{{ icon("code") }}<span>{{ t("agents.download_patch") }}</span></a>
+          <a class="btn btn-sm" id="archive-link" href="{{ data.urls.archive }}" download>{{ t("agents.download_archive") }}</a>
+          <a class="btn btn-sm" id="patch-link" href="{{ data.urls.patch }}" download{% if not (task.workspace and task.repository and task.repository.git) %} hidden{% endif %}>{{ t("agents.download_patch") }}</a>
           {% if access == "ok" %}
           <label class="btn btn-sm" for="workspace-upload">{{ icon("paperclip") }}{{ t("agents.upload") }}</label>
           <input type="file" id="workspace-upload" multiple class="visually-hidden">

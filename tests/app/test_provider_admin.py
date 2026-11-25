@@ -88,7 +88,7 @@ def test_extra_headers_are_validated_and_kept_out_of_the_secret_slot(app, admin_
     with app.app_context():
         row = store.list_providers()[0]
     assert json.loads(row['extra_headers']) == {'X-Title': 'Banana', 'HTTP-Referer': 'https://x.example'}
-    assert 'HTTP-Referer: https://x.example' in admin_browser.get('/admin/models/providers').get_data(as_text=True)
+    assert 'HTTP-Referer: https://x.example' in admin_browser.get(f"/admin/models/providers/{row['id']}").get_data(as_text=True)
 
 
 # ----- connection test ----------------------------------------------------------------------------------------
@@ -212,6 +212,30 @@ def test_capabilities_form_saves_sampling_and_thinking_style(app, fake, admin_br
         row = catalog.get_by_name(service.public_id(provider['id'], 'claude-old'))
     config = json.loads(row['external_config'])
     assert config['sampling'] is True and config['thinking'] == 'budget' and config['manual'] is True
+
+
+def test_the_providers_page_has_no_save_and_each_page_has_one(app, fake, admin_browser):
+    """A provider's connection and a model's capabilities are saved on their own pages, with one Save each."""
+    provider = make_provider(app, fake, protocol='anthropic')
+    model = make_model(app, provider, 'claude-new', reasoning=['off', 'low'])
+    listing = admin_browser.get('/admin/models/providers').get_data(as_text=True)
+    assert 'data-page-save' not in listing and 'Save connection' not in listing and 'Save capabilities' not in listing
+    assert f'href="/admin/models/providers/{provider["id"]}"' in listing
+    assert f'href="/admin/models/{model["id"]}/edit#capabilities"' in listing
+    page = admin_browser.get(f'/admin/models/providers/{provider["id"]}').get_data(as_text=True)
+    assert page.count('data-page-save') == 1 and 'form="provider-form"' in page and 'name="base_url"' in page
+    edit = admin_browser.get(f'/admin/models/{model["id"]}/edit').get_data(as_text=True)
+    assert edit.count('data-page-save') == 1 and 'name="capabilities_present"' in edit
+    fields = {'display_name': model['display_name'], 'capabilities_present': '1', 'reasoning': ['off', 'low']}
+    assert admin_browser.post(f'/admin/models/{model["id"]}/edit', fields).status_code == 302
+    with app.app_context():
+        assert catalog.get(model['id'])['external_config'] == model['external_config']  # unchanged: untouched
+    fields.update(vision='on', thinking='budget', reasoning=['off', 'low', 'high'])
+    assert admin_browser.post(f'/admin/models/{model["id"]}/edit', fields).status_code == 302
+    with app.app_context():
+        row = catalog.get(model['id'])
+    assert row['supports_vision'] and json.loads(row['reasoning_levels']) == ['off', 'low', 'high']
+    assert json.loads(row['external_config'])['thinking'] == 'budget'
 
 
 # ----- what chat users see ------------------------------------------------------------------------------------

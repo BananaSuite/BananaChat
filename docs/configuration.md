@@ -167,7 +167,11 @@ Optional: people sign in with their BananaWiki Hosting account. All three are
 needed (a missing or invalid one leaves the feature off with a warning), and
 the administrators then choose the sign-in mode in Admin → Settings → Sign-in.
 See [sign in with BananaWiki Hosting](hosting-signin.md), which also gives the
-redirect URI to register on the portal.
+redirect URI to register on the portal. Two more choices are made on that
+settings page, not in the environment: whether hosting administrators acting
+as a person may sign in as them (on by default), and the portal API token of
+the linking tool's account lookup (Advanced; stored encrypted in the database
+with a key derived from the server's secret key).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

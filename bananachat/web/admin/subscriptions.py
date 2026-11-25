@@ -175,6 +175,18 @@ def pool_page(provider):
                    **_context(provider))
 
 
+@bp.get("/models/claude/accounts/<int:account_id>", endpoint="claude_account", defaults={"provider": "claude"})
+@bp.get("/models/codex/accounts/<int:account_id>", endpoint="codex_account", defaults={"provider": "codex"})
+@admin_required
+def account_page(provider, account_id):
+    """One account's settings, with the page's one Save; its sign-in and removal stay on the pool page."""
+    from .models import _render
+
+    account = _account(provider, account_id)
+    return _render("admin/subscription_account.html", tab=provider, provider=provider, setup=SETUP[provider],
+                   account=account, **_context(provider))
+
+
 def _allowance_caps() -> dict:
     return {"window_cap_pct": integer("window_cap_pct", minimum=1, maximum=100, label="The 5-hour allowance cap",
                                       optional=True),
@@ -328,7 +340,7 @@ def account_save(provider, account_id):
         profile = _profile(provider)
         rebinding = profile is not None and profile != adapter.bindings().get(str(account_id), row["label"])
         if rebinding and not _reauth.confirmed():
-            return back(pool, _anchor=f"account-{account_id}")
+            return back(f"admin.{provider}_account", account_id=account_id)
         with db.transaction():
             if profile is not None:
                 _bind(adapter, row, profile)
@@ -340,7 +352,7 @@ def account_save(provider, account_id):
                 pool_db.clear_cooldown(account_id)
     except (FormError, ValueError) as error:
         flash(str(error), "error")
-        return back(pool, _anchor=f"account-{account_id}")
+        return back(f"admin.{provider}_account", account_id=account_id)
     if rebinding:
         # The previous profile's percentages must not admit a request if the refresh below fails.
         subscription_pool.forget_report(provider, account_id)

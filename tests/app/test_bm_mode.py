@@ -156,15 +156,32 @@ def test_administrators_choose_the_site_rules(app):
 
     admin = _signed_in(app, "admin")
     page = admin.get("/admin/settings").get_data(as_text=True)
-    assert 'name="bm_mode_global"' in page and 'name="bm_mode_self_service"' in page
-    form = {"site_name": "Test Chat", "signup_mode": "invite", "default_theme_mode": "dark",
-            "bm_mode_present": "1", "bm_mode_global": "1"}
+    # One choice decides who switches BM mode: no separate "on for everyone" and "self-service" controls.
+    assert page.count('name="bm_mode_policy"') == 3
+    assert 'name="bm_mode_global"' not in page and 'name="bm_mode_self_service"' not in page
+    assert 'name="bm_mode_policy" value="person" checked' in page
+    form = {"site_name": "Test Chat", "signup_mode": "invite", "default_theme_mode": "dark", "bm_mode_present": "1"}
     for prefix, palette in (("", site_settings.DARK_PALETTE), ("light_", site_settings.LIGHT_PALETTE)):
         form.update({f"{prefix}{key}_color": value for key, value in palette.items()})
-    assert admin.post("/admin/settings", form).status_code == 302
+
+    def save(**fields):
+        assert admin.post("/admin/settings", {**form, **fields}).status_code == 302
+        with app.app_context():
+            values = site_settings.get()
+        return values["bm_mode_global"], values["bm_mode_self_service"]
+
+    assert save(bm_mode_policy="admin") == (0, 0)
+    assert 'name="bm_mode_policy" value="admin" checked' in admin.get("/admin/settings").get_data(as_text=True)
+    # On for everyone keeps who decides for when it is per account again.
+    assert save(bm_mode_policy="everyone") == (1, 0)
+    assert save(bm_mode_policy="person") == (0, 1)
+    assert save(bm_mode_policy="everyone") == (1, 1)
+    assert admin.post("/admin/settings", {**form, "bm_mode_policy": "nobody"}).status_code == 302
     with app.app_context():
-        values = site_settings.get()
-    assert (values["bm_mode_global"], values["bm_mode_self_service"]) == (1, 0)
+        assert site_settings.get()["bm_mode_global"] == 1  # refused, nothing saved
+    # A settings page cached from the previous release still sends the two former controls.
+    assert save(bm_mode_global="0") == (0, 0)
+    assert save(bm_mode_global="0", bm_mode_self_service="on") == (0, 1)
 
 
 @pytest.fixture

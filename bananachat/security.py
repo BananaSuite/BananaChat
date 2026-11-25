@@ -241,13 +241,31 @@ def current_user():
     return getattr(g, "user", None)
 
 
+def acting() -> dict | None:
+    """``{"sub", "name", "until"}`` when a hosting administrator opened this session while acting as the
+    account (services.hosting_signin), else None. Such a session refuses the account's sensitive actions."""
+    row = getattr(g, "auth_session", None)
+    if row is None:
+        return None
+    try:
+        sub = row["acting_sub"]
+    except (IndexError, KeyError):
+        return None
+    if not sub:
+        return None
+    return {"sub": sub, "name": row["acting_name"] or sub, "until": row["acting_until"]}
+
+
 def is_admin() -> bool:
     user = current_user()
     return bool(user and user["role"] == "admin")
 
 
-def login(user, *, remember_language: bool = True) -> None:
-    """Start a fresh session for *user* (prevents session fixation)."""
+def login(user, *, remember_language: bool = True, acting: dict | None = None) -> None:
+    """Start a fresh session for *user* (prevents session fixation).
+
+    *acting* (``{"sub", "name", "until"}``) marks the session of a hosting administrator acting as *user*.
+    """
     language = session.get("language")
     session.clear()
     if language and remember_language:
@@ -255,7 +273,8 @@ def login(user, *, remember_language: bool = True) -> None:
     session.permanent = True
     config = current_app.config["BC"]
     token = users.create_session(user["id"], config.session_days,
-                                 user_agent=request.headers.get("User-Agent", ""), ip_address=client_ip())
+                                 user_agent=request.headers.get("User-Agent", ""), ip_address=client_ip(),
+                                 acting=acting)
     session["sid"] = token
     g.user = user
     g.auth_session = None

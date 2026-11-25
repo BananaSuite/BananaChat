@@ -66,7 +66,7 @@
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <label for="rename-{{ token.id }}" class="label">{{ t("developer.token_name") }}</label>
                         <input type="text" id="rename-{{ token.id }}" name="name" value="{{ token.name }}" maxlength="64" required>
-                        <button type="submit" class="btn btn-sm btn-primary">{{ t("common.save") }}</button>
+                        <button type="submit" class="btn btn-sm">{{ t("developer.rename") }}</button>
                       </form>
                     </div>
                   </details>

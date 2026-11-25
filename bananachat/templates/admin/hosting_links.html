@@ -1,0 +1,155 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf, empty, pagination %}
+{% from "admin/_reauth.html" import reauth_field with context %}
+{% block title %}BananaWiki Hosting links{% endblock %}
+{% block admin_content %}
+{{ header("Users") }}
+{% set tab = "hosting" %}
+{% include "admin/_users_tabs.html" %}
+
+{% if not configured %}
+<p class="admin-empty">Sign-in with BananaWiki Hosting is not configured. Set <code>BC_HOSTING_OAUTH_URL</code>, <code>BC_HOSTING_OAUTH_CLIENT_ID</code> and <code>BC_HOSTING_OAUTH_CLIENT_SECRET</code> on the server. Existing links are below.</p>
+{% else %}
+<p class="muted">{{ summary.linked | number }} of {{ summary.users | number }} account{{ "s" if summary.users != 1 }} {{ "is" if summary.linked == 1 else "are" }} connected to BananaWiki Hosting.
+  {%- if summary.admins_unlinked %} {{ summary.admins_unlinked }} active administrator{{ "s are" if summary.admins_unlinked != 1 else " is" }} not.{% endif %}
+  Sign-in mode: {{ {"local": "local accounts only", "both": "both", "hosting": "BananaWiki Hosting accounts only"}[mode] }} (<a href="{{ url_for('admin.settings', _anchor='sign-in') }}">Settings</a>).</p>
+
+{#- ----- link accounts: always a preview first ----- -#}
+<section class="settings-section" id="link" aria-labelledby="link-title">
+  <h2 id="link-title">Link accounts</h2>
+  <p class="hint">A linked BananaWiki Hosting account signs in to the account here. Nothing changes until you apply a preview.{% if lookup != "ready" %} Without a portal API token (Settings → Sign-in, Advanced), enter portal account ids.{% endif %}</p>
+  <form method="post" action="{{ url_for('admin.hosting_link_preview') }}" class="stack form-width" data-busy>
+    {{ csrf() }}
+    <fieldset class="admin-fieldset">
+      <legend>Match</legend>
+      <label class="check"><input type="radio" name="rule" value="one"{% if inputs.rule == "one" %} checked{% endif %}><span>One account</span></label>
+      <label class="check"><input type="radio" name="rule" value="username"{% if inputs.rule == "username" %} checked{% endif %}{% if lookup != "ready" %} disabled{% endif %}><span>Same user name<small>Each account to the BananaWiki Hosting account of the same name, ignoring case.{% if lookup != "ready" %} Needs the portal API token.{% endif %}</small></span></label>
+      <label class="check"><input type="radio" name="rule" value="list"{% if inputs.rule == "list" %} checked{% endif %}><span>A pasted list<small>One line per account: <code>local_username,hosting_account</code>, at most {{ max_lines }} lines.</small></span></label>
+    </fieldset>
+    <div class="form-grid">
+      <div class="field">
+        <label for="link-local">User name here (one account)</label>
+        <input type="text" id="link-local" name="local_username" maxlength="64" autocomplete="off" spellcheck="false" value="{{ inputs.local_username or '' }}">
+      </div>
+      <div class="field">
+        <label for="link-hosting">BananaWiki Hosting account (one account)</label>
+        <input type="text" id="link-hosting" name="hosting_account" maxlength="200" autocomplete="off" spellcheck="false" value="{{ inputs.hosting_account or '' }}">
+      </div>
+    </div>
+    <div class="field">
+      <label for="link-lines">List (pasted list)</label>
+      <textarea id="link-lines" name="lines" rows="5" maxlength="65536" class="mono" spellcheck="false" placeholder="alice,alice.hosting">{{ inputs.lines if inputs.rule == "list" else "" }}</textarea>
+    </div>
+    <fieldset class="admin-fieldset">
+      <legend>The BananaWiki Hosting accounts are given as</legend>
+      <label class="check"><input type="radio" name="column" value="username"{% if inputs.column == "username" %} checked{% endif %}{% if lookup != "ready" %} disabled{% endif %}><span>User names</span></label>
+      <label class="check"><input type="radio" name="column" value="sub"{% if inputs.column == "sub" %} checked{% endif %}><span>Portal account ids (<code>sub</code>)</span></label>
+    </fieldset>
+    <label class="check"><input type="checkbox" name="include_admins" value="1"{% if inputs.include_admins %} checked{% endif %}><span>Include administrators</span></label>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Preview</button></div>
+  </form>
+</section>
+
+{% if rows is not none %}
+<section class="settings-section" id="preview" aria-labelledby="preview-title">
+  <h2 id="preview-title">Preview: {{ rule_labels[inputs.rule] }}</h2>
+  <p class="muted">{% for key, label in labels.items() if counts[key] %}{{ label }}: {{ counts[key] }}{% if not loop.last %} · {% endif %}{% else %}Nothing matched.{% endfor %}</p>
+  {% if rows %}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <caption class="visually-hidden">What Apply would do</caption>
+      <thead><tr><th scope="col">Account here</th><th scope="col">BananaWiki Hosting account</th><th scope="col">Result</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td class="cell-full"><strong>{{ row.local }}</strong>{% if row.role == "admin" %} <span class="badge">administrator</span>{% endif %}</td>
+          <td data-label="BananaWiki Hosting:">{{ row.portal_username or row.target }}{% if row.sub %} <span class="muted small mono">{{ row.sub }}</span>{% endif %}</td>
+          <td data-label="Result:"><span class="badge {{ badges[row.status] }}">{{ labels[row.status] }}</span>{% if row.reason %} <span class="small">{{ row.reason }}</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if counts.will_link %}
+  <form method="post" action="{{ url_for('admin.hosting_link_apply') }}" class="stack mt-2" data-busy data-confirm="Link {{ counts.will_link }} account{{ 's' if counts.will_link != 1 }} to BananaWiki Hosting?">
+    {{ csrf() }}
+    <input type="hidden" name="rule" value="{{ inputs.rule }}">
+    <input type="hidden" name="column" value="{{ inputs.column }}">
+    <input type="hidden" name="local_username" value="{{ inputs.local_username or '' }}">
+    <input type="hidden" name="hosting_account" value="{{ inputs.hosting_account or '' }}">
+    <textarea name="lines" hidden>{{ inputs.lines if inputs.rule == "list" else "" }}</textarea>
+    {% if inputs.include_admins %}<input type="hidden" name="include_admins" value="1">{% endif %}
+    <input type="hidden" name="digest" value="{{ digest }}">
+    {{ reauth_field("link-reauth") }}
+    <p class="hint mb-0">Only rows marked Will link are linked, and only if nothing changed since the preview.</p>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Link {{ counts.will_link }} account{{ "s" if counts.will_link != 1 }}</button></div>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+{#- ----- hosting-only sign-in ----- -#}
+<section class="settings-section" id="hosting-only" aria-labelledby="hosting-only-title">
+  <h2 id="hosting-only-title">Hosting-only sign-in</h2>
+  {% if mode == "hosting" %}
+  <p class="mb-0">Only BananaWiki Hosting accounts sign in. Administrators can still use the recovery page, <code>{{ url_for('hosting.recovery', _external=True) }}</code>.</p>
+  {% elif hosting_only %}
+  <p class="mb-0">{{ hosting_only }}</p>
+  {% else %}
+  <form method="post" action="{{ url_for('admin.hosting_only') }}" class="stack" data-busy data-confirm="Turn off password sign-in? Only BananaWiki Hosting accounts will sign in.">
+    {{ csrf() }}
+    <p class="hint mb-0">Every active administrator is connected. Other accounts connect with their password at their first BananaWiki Hosting sign-in.</p>
+    {{ reauth_field("hosting-only-reauth") }}
+    <div class="form-actions"><button type="submit" class="btn">Switch to hosting-only sign-in</button></div>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+{#- ----- every account with its link ----- -#}
+<section class="settings-section" id="accounts" aria-labelledby="accounts-title">
+  <h2 id="accounts-title">Accounts</h2>
+  <div class="toolbar mb-2">
+    <form method="get" action="{{ url_for('admin.hosting_links') }}" class="search-form" role="search">
+      <label class="visually-hidden" for="link-search">Search by username</label>
+      <input type="search" id="link-search" name="q" value="{{ search }}" placeholder="Search by username" maxlength="64">
+      <label class="visually-hidden" for="link-state">Show</label>
+      <select id="link-state" name="state">
+        <option value=""{% if not state %} selected{% endif %}>All accounts</option>
+        <option value="linked"{% if state == "linked" %} selected{% endif %}>Connected</option>
+        <option value="unlinked"{% if state == "unlinked" %} selected{% endif %}>Not connected</option>
+      </select>
+      <button type="submit" class="btn">Show</button>
+    </form>
+  </div>
+  {% if accounts %}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <caption class="visually-hidden">Accounts and their BananaWiki Hosting links</caption>
+      <thead><tr><th scope="col">Username</th><th scope="col">Role</th><th scope="col">BananaWiki Hosting</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+      {% for account in accounts %}
+        <tr>
+          <td class="cell-full"><a href="{{ url_for('admin.user_detail', user_id=account.id) }}"><strong>{{ account.username }}</strong></a>{% if account.suspended %} <span class="badge badge-danger">Suspended</span>{% endif %}{% if not account.password_set %} <span class="badge" title="Made through BananaWiki Hosting; it has no password here">No password</span>{% endif %}</td>
+          <td data-label="Role:">{% if account.role == "admin" %}Administrator{% else %}User{% endif %}</td>
+          <td data-label="BananaWiki Hosting:">{% if account.account_id %}<span class="badge badge-success">Connected</span> {{ account.portal_username or "—" }} <span class="muted small mono">{{ account.account_id }}</span> <span class="muted small">since {{ account.linked_at | datetime }}</span>{% else %}<span class="muted">Not connected</span>{% endif %}</td>
+          <td class="actions">
+            {% if account.account_id and not (account.id == me_id and effective == "hosting") %}
+            <form method="post" action="{{ url_for('admin.user_hosting_unlink', user_id=account.id) }}" data-confirm="Remove the BananaWiki Hosting link of {{ account.username }}{% if account.id != me_id %} and sign them out everywhere{% endif %}?{% if not account.password_set %} The account has no password here: it can't sign in again until it is linked again or given a password.{% endif %}" data-confirm-danger>
+              {{ csrf() }}<input type="hidden" name="return_to" value="links">
+              <button type="submit" class="btn btn-sm" aria-label="Unlink {{ account.username }}">Unlink</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {{ pagination(page, "admin.hosting_links", "Account pages", q=search or None, state=state or None) }}
+  {% else %}
+  {{ empty("users", "No accounts match.") }}
+  {% endif %}
+</section>
+{% endblock %}

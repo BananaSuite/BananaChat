@@ -1,13 +1,28 @@
 {#- Shared building blocks for administrator pages. -#}
 {% from "partials/icons.html" import icon %}
+{% from "partials/page_header.html" import save_button %}
 
 {% macro csrf() -%}
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 {%- endmacro %}
 
 {#- The page title, with optional actions beside it (call block). `description` is for a fact the page
-    cannot show otherwise; most pages pass none. -#}
-{% macro header(title, description=None) -%}
+    cannot show otherwise; most pages pass none. A page that saves settings passes `save`, the id of its
+    form: the page's one Save then sits at the top right of this header, which stays in view while the page
+    scrolls (partials/page_header.html). -#}
+{% macro header(title, description=None, save=None, save_label="Save", save_disabled=False) -%}
+{% if save %}
+<header class="page-header page-header-save admin-header">
+  <div class="page-header-title">
+    <h1>{{ title }}</h1>
+    {% if description %}<p>{{ description }}</p>{% endif %}
+  </div>
+  <div class="page-header-actions">
+    {%- if caller %}{{ caller() }}{% endif -%}
+    {{ save_button(save, save_label, save_disabled) }}
+  </div>
+</header>
+{% else %}
 <header class="page-header admin-header">
   <div>
     <h1>{{ title }}</h1>
@@ -15,6 +30,7 @@
   </div>
   {% if caller %}<div class="row-end">{{ caller() }}</div>{% endif %}
 </header>
+{% endif %}
 {%- endmacro %}
 
 {#- A row of tabs: items are (key, url, label, badge) and the one whose key is `current` is marked.

@@ -1,0 +1,32 @@
+{% extends "admin/_layout.html" %}
+{% from "admin/_macros.html" import header, csrf %}
+{% from "partials/icons.html" import icon %}
+{% from "admin/_reauth.html" import reauth_field with context %}
+{% from "admin/_provider_fields.html" import connection with context %}
+{% block title %}{{ provider.name }} · External API providers{% endblock %}
+{% block admin_content %}
+{#- One provider's connection, with the page's one Save; its models stay on the providers page. -#}
+<p class="breadcrumb"><a href="{{ url_for('admin.external_providers', _anchor='provider-' ~ provider.id) }}">{{ icon("chevron-left") }}External APIs</a></p>
+{% call header(provider.name, save="provider-form") %}
+  <span class="badge">{{ presets[provider.preset].label if provider.preset in presets else 'Custom' }}</span>
+  {% if not provider.enabled %}<span class="badge">Disabled</span>{% endif %}
+{% endcall %}
+
+<form method="post" action="{{ url_for('admin.external_provider_save', provider_id=provider.id) }}" class="settings-section stack" id="provider-form" data-busy data-provider-form>
+  {{ csrf() }}
+  <h2 class="visually-hidden">Connection</h2>
+  {{ connection('provider-' ~ provider.id, provider) }}
+</form>
+
+<section class="settings-section settings-section-danger stack" aria-labelledby="remove-title">
+  <h2 id="remove-title">Remove this provider</h2>
+  <form id="provider-remove-{{ provider.id }}" method="post" action="{{ url_for('admin.external_provider_remove', provider_id=provider.id) }}" class="stack" data-confirm="Remove this provider and its key? Its models are retired. Chats are kept." data-confirm-danger>
+    {{ csrf() }}
+    <p class="muted small mb-0">Its key is deleted and its models are retired. Chats are kept.</p>
+    {{ reauth_field('provider-remove-' ~ provider.id ~ '-reauth') }}
+    <div class="form-actions"><button class="btn btn-danger" type="submit">Remove provider</button></div>
+  </form>
+</section>
+<script type="application/json" id="page-data">{{ page_data | tojson }}</script>
+{% endblock %}
+{% block scripts %}<script type="module" src="{{ url_for('static', filename='js/admin-providers.js') }}"></script>{% endblock %}

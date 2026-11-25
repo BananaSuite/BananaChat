@@ -18,7 +18,8 @@
 {% block admin_content %}
 {% set endpoint = "admin." ~ provider %}
 {#- The same title as the other tabs of the Models area, so it does not change when switching tabs. -#}
-{{ header("Models") }}
+{#- The page's one Save keeps the models to offer; each account's settings have their own page. -#}
+{{ header("Models", save=(provider ~ "-models-form") if available else None) }}
 {% include "admin/_models_tabs.html" %}
 
 {% set setup_ok = setup_checks | selectattr("ok", "false") | list | length == 0 %}
@@ -33,8 +34,8 @@
       </li>
       {% endfor %}
     </ul>
-    <p class="small muted mb-0">On a managed server, <code>sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py</code> sets this up once and restarts BananaChat. See <em>docs/subscription-router.md</em>.</p>
-    <p class="small muted mb-0 mt-1">{{ setup.name }} subscriptions are personal plans. Check the provider's terms before using them for other people.</p>
+    <p class="small muted mb-0">On a managed server, <code>sudo python3 /opt/bananachat/current/scripts/setup_subscriptions.py</code> sets this up and restarts BananaChat (<em>docs/subscription-router.md</em>).</p>
+    <p class="small muted mb-0 mt-1">{{ setup.name }} subscriptions are personal plans. Check the provider's terms before sharing them.</p>
   </details>
 </section>
 
@@ -43,9 +44,9 @@
     <form method="post" action="{{ url_for(endpoint ~ '_refresh') }}" data-busy>{{ csrf() }}<button class="btn btn-sm" type="submit">Refresh quota</button></form>
   </div>
   {% if extension_error %}
-  <div class="alert alert-warning" role="status">{{ icon("alert") }}<p>The {{ setup.name }} adapter could not initialise, so {{ setup.name }} stays disconnected. The <a href="#setup">setup checklist</a> says why.</p></div>
+  <div class="alert alert-warning" role="status">{{ icon("alert") }}<p>The {{ setup.name }} adapter could not start, so {{ setup.name }} is disconnected. See the <a href="#setup">setup checklist</a>.</p></div>
   {% elif not connected %}
-  <div class="alert alert-warning" role="status">{{ icon("alert") }}<p><strong>Disconnected.</strong> {{ setup.name }} requests need the {{ setup.client }} connector on this server. Follow the <a href="#setup">setup checklist</a>.</p></div>
+  <div class="alert alert-warning" role="status">{{ icon("alert") }}<p><strong>Disconnected.</strong> {{ setup.name }} needs the {{ setup.client }} connector on this server. See the <a href="#setup">setup checklist</a>.</p></div>
   {% else %}
   <p><strong>{{ setup.client ~ " configured." if profiled else "Adapter configured." }}</strong></p>
   {% endif %}
@@ -65,7 +66,7 @@
 
 <section class="settings-section mb-3" aria-labelledby="accounts-title">
   <div class="section-header"><h2 id="accounts-title">Accounts ({{ accounts | length }})</h2></div>
-  <p class="muted small">{% if managed %}Add an account with a new profile, then sign it in on {{ "Anthropic's" if provider == "claude" else "OpenAI's" }} page. The login stays in the account's private profile on this server. {% endif %}{% if profiled %}Each profile can be used by one account.{% if not managed %} Sign profiles in on the server.{% endif %}{% else %}Use the account labels expected by your adapter. Credentials belong in its server configuration.{% endif %}</p>
+  <p class="muted small">{% if managed %}Add an account with a new profile, then sign it in on {{ "Anthropic's" if provider == "claude" else "OpenAI's" }} page. The login stays on this server. {% endif %}{% if profiled %}One account per profile.{% if not managed %} Sign profiles in on the server.{% endif %}{% else %}Use the account labels your adapter expects. Credentials go in its server configuration.{% endif %}</p>
   <form method="post" action="{{ url_for(endpoint ~ '_account_add') }}" class="stack" data-busy>
     {{ csrf() }}
     <div class="form-grid">
@@ -116,39 +117,10 @@
     </div>
     {% elif profiled %}<p class="small muted mb-0">Plan and usage not reported yet.</p>{% endif %}
     {% if account.id in blind %}<div class="alert alert-warning" role="status">{{ icon("alert") }}<p>This account has an allowance cap but no fresh report of that allowance, so it does not answer. Refresh quota or clear the cap.</p></div>{% endif %}
-    <form method="post" action="{{ url_for(endpoint ~ '_account_save', account_id=account.id) }}" class="stack" data-busy>
-      {{ csrf() }}
-      <div class="form-grid">
-        {% if profiled %}<div class="field"><label for="{{ prefix }}-profile">{{ setup.client }} profile</label><select id="{{ prefix }}-profile" name="profile" required>{% if bindings[account.id] not in profiles %}<option value="">Select a profile</option>{% endif %}{% for profile in profiles %}<option value="{{ profile }}"{% if bindings[account.id] == profile %} selected{% endif %}>{{ profile }}</option>{% endfor %}</select></div>{% endif %}
-        <div class="field"><label for="{{ prefix }}-status">Status</label><select id="{{ prefix }}-status" name="status">{% for value in ["active", "disabled", "error"] %}<option value="{{ value }}"{% if account.status == value %} selected{% endif %}>{{ value | capitalize }}</option>{% endfor %}</select></div>
-        <div class="field"><label for="{{ prefix }}-priority">Priority</label><input id="{{ prefix }}-priority" name="priority" type="number" value="{{ account.priority }}" min="-100" max="100"></div>
-        {{ token_field("window_limit", "5-hour token budget", account.window_limit, prefix ~ "-window", "Required to serve requests.", false) }}
-        {{ token_field("weekly_limit", "Weekly token budget (optional)", account.weekly_limit, prefix ~ "-weekly", none, false) }}
-        {{ percent_field("window_cap_pct", "Stop at % of the 5-hour allowance", account.window_cap_pct, prefix ~ "-window-cap", "Empty: no cap.") }}
-        {{ percent_field("weekly_cap_pct", "Stop at % of the weekly allowance", account.weekly_cap_pct, prefix ~ "-weekly-cap", "Empty: no cap.") }}
-      </div>
-      <div class="field form-width"><label for="{{ prefix }}-note">Note</label><input type="text" id="{{ prefix }}-note" name="note" value="{{ account.note }}" maxlength="500"></div>
-      <details class="inline-details"{% if account.id in family_capped %} open{% endif %}><summary>Model family caps{{ icon("chevron-down") }}</summary>
-        <div class="stack mt-2">
-          <p class="muted small">Stop this account for one model family at a share of that family's allowance or after a token budget. Leave a family empty for no cap.</p>
-          {% for family, name in families.items() %}{% set cap = caps[account.id][family] %}
-          <fieldset class="admin-fieldset">
-            <legend class="label">{{ name }}</legend>
-            <div class="form-grid">
-              {{ percent_field("cap_pct_" ~ family, "Stop at % of its allowance", cap.cap_pct, prefix ~ "-" ~ family ~ "-cap") }}
-              {{ token_field("window_cap_" ~ family, "5-hour tokens", cap.window_cap, prefix ~ "-" ~ family ~ "-window", "Empty: no family budget.", false) }}
-              {{ token_field("weekly_cap_" ~ family, "Weekly tokens", cap.weekly_cap, prefix ~ "-" ~ family ~ "-weekly", "Empty: no family budget.", false) }}
-            </div>
-          </fieldset>
-          {% endfor %}
-        </div>
-      </details>
-      {% if profiled %}{{ reauth_field(prefix ~ "-reauth", needed_for="to change the profile") }}{% endif %}
-      <div class="form-actions form-actions-start">
-        <button class="btn btn-primary" type="submit" name="action" value="save">Save</button>
-        {% if profiled %}<button class="btn" type="submit" form="{{ prefix }}-check">Check login</button>{% endif %}
-      </div>
-    </form>
+    <div class="form-actions form-actions-start">
+      <a class="btn" href="{{ url_for(endpoint ~ '_account', account_id=account.id) }}">Account settings</a>
+      {% if profiled %}<button class="btn" type="submit" form="{{ prefix }}-check">Check login</button>{% endif %}
+    </div>
     {% if profiled %}<form id="{{ prefix }}-check" method="post" action="{{ url_for(endpoint ~ '_account_check', account_id=account.id) }}" data-busy>{{ csrf() }}</form>{% endif %}
     <details class="inline-details"><summary>Remove this account{{ icon("chevron-down") }}</summary>
       <form id="{{ prefix }}-remove" method="post" action="{{ url_for(endpoint ~ '_account_save', account_id=account.id) }}" class="stack mt-2" data-confirm="Remove {{ account.label }} from the pool?" data-confirm-danger>
@@ -168,7 +140,7 @@
   </div>
   {% if discovery.note %}<p class="muted">{{ discovery.note }}</p>{% endif %}
   {% if available %}
-  <form method="post" action="{{ url_for(endpoint ~ '_sync') }}" class="stack" data-busy>
+  <form method="post" action="{{ url_for(endpoint ~ '_sync') }}" class="stack" id="{{ provider }}-models-form" data-busy>
     {{ csrf() }}
     <div class="field form-width"><label for="{{ provider }}-enrollment">New model enrolment</label><select id="{{ provider }}-enrollment" name="enrollment" aria-describedby="{{ provider }}-enrollment-hint"><option value="manual"{% if not automatic_enrollment %} selected{% endif %}>Manual review</option><option value="automatic"{% if automatic_enrollment %} selected{% endif %}>Automatic with strict limits</option></select><span class="hint" id="{{ provider }}-enrollment-hint">Automatic publishes new models with their family's strict limits.</span></div>
     <fieldset class="admin-fieldset">
@@ -181,7 +153,6 @@
         {% endfor %}
       </div>
     </fieldset>
-    <div class="form-actions form-actions-start"><button class="btn btn-primary" type="submit">Save selected models</button></div>
   </form>
   {% endif %}
 </section>

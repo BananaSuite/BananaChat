@@ -114,6 +114,11 @@ def _page(browser, provider="claude"):
     return browser.get(f"/admin/models/{provider}").get_data(as_text=True)
 
 
+def _account_page(browser, account_id, provider="claude"):
+    """An account's own page, where its settings are saved."""
+    return browser.get(f"/admin/models/{provider}/accounts/{account_id}").get_data(as_text=True)
+
+
 def _admin_log(monkeypatch, caplog):
     # The app's own handler stops propagation and the test app logs errors only.
     monkeypatch.setattr(logging.getLogger("bananachat"), "propagate", True)
@@ -253,7 +258,7 @@ def test_admin_page_explains_disconnected_adapter_and_only_offers_discovered_mod
     assert "Local token budget" not in html  # no configured accounts yet
     app.extensions[f"{provider}_transport"] = {"configured": False, "error": True}
     html = admin.get(f"/admin/models/{provider}").get_data(as_text=True)
-    assert "could not initialise" in html and manifest in html
+    assert "could not start" in html and manifest in html
     pool.reset_transport()
 
 
@@ -417,7 +422,8 @@ def test_the_codex_page_shows_only_codex_accounts_with_their_own_plans(site, bro
     assert "Codex CLI configured." in html and "codex-main" in html and "claude-main" not in html
     assert "Subscription: ChatGPT Plus" in html
     assert "5-hour remaining: 40.0%" in html and "Astra remaining: 25.0%" in html
-    assert f'value="{MODEL}"' in html and "<legend class=\"label\">Other GPT</legend>" in html
+    assert f'value="{MODEL}"' in html and html.count("data-page-save") == 1
+    assert "<legend class=\"label\">Other GPT</legend>" in _account_page(browser, codex["id"], "codex")
     html = _page(browser)
     assert "claude-main" in html and "codex-main" not in html and "Astra" not in html
     # The Claude manifest's "primary" is another profile: the providers never share bindings.
@@ -441,7 +447,7 @@ def test_an_adapter_without_profiles_pools_accounts_by_label(make_app, monkeypat
     browser = Browser(app)
     browser.login("admin")
     html = _page(browser)
-    assert "Adapter configured." in html and "Use the account labels expected by your adapter" in html
+    assert "Adapter configured." in html and "Use the account labels your adapter expects" in html
     assert 'name="profile"' not in html and "Check login" not in html
     browser.post("/admin/models/claude/accounts", {"label": "router-1", "window_limit": "1000"})
     row = accounts.get_by_label("router-1")
@@ -459,7 +465,8 @@ def test_allowance_caps_are_saved_and_shown_on_the_form(site, browser):
                                                    "window_cap_pct": "70", "weekly_cap_pct": "90"})
     row = accounts.get_by_label("capped")
     assert (row["window_cap_pct"], row["weekly_cap_pct"]) == (70, 90)
-    html = _page(browser)
+    html = _account_page(browser, row["id"])
+    assert html.count("data-page-save") == 1 and 'form="account-form"' in html
     assert f'id="claude-{row["id"]}-window-cap" name="window_cap_pct" min="1" max="100" step="1" ' \
            'inputmode="numeric" value="70"' in html
     browser.post(f"/admin/models/claude/accounts/{row['id']}", _form(profile="primary", window_cap_pct="50",
@@ -488,7 +495,7 @@ def test_family_caps_are_kept_per_family_and_cleared_when_empty(site, browser):
     assert accounts.scoped_caps(account_id) == {
         "fable": {"cap_pct": 60, "window_cap": None, "weekly_cap": None},
         "opus": {"cap_pct": None, "window_cap": 20_000, "weekly_cap": 1_500_000}}
-    html = _page(browser)
+    html = _account_page(browser, account_id)
     assert f'id="claude-{account_id}-opus-window" name="window_cap_opus"' in html and 'value="20k"' in html
     assert "<details class=\"inline-details\" open><summary>Model family caps" in html
     browser.post(url, _form(profile="primary", cap_pct_fable="60"))
@@ -561,8 +568,9 @@ def test_adding_rebinding_and_removing_need_a_confirmation_but_checks_do_not(sit
     assert row is not None
 
     _stale(site)
+    assert f'id="claude-{row["id"]}-reauth"' in _account_page(browser, row["id"])
+    assert "Needed to change the profile" in _account_page(browser, row["id"])
     html = _page(browser)
-    assert f'id="claude-{row["id"]}-reauth"' in html and "Needed to change the profile" in html
     assert f'id="claude-{row["id"]}-remove-reauth"' in html
     url = f"/admin/models/claude/accounts/{row['id']}"
     browser.post(url, _form(profile="secondary"))

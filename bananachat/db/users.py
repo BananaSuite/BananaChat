@@ -19,12 +19,15 @@ ROLES = ("user", "admin")
 # ----- preferences ----------------------------------------------------------
 
 FONT_SCALES = (0.85, 0.9, 1.0, 1.1, 1.2, 1.35)
+# contrast: 0 standard, 1 high, 2 maximum. highlight: 0 off, 1 subtle, 2 strong, for bold and italic text,
+# inline code, links and headings in answers at once. Version 32 converted the six contrast levels and the five
+# highlighting choices of earlier releases (migrations/v32_simpler_appearance.py).
 PREFERENCE_DEFAULTS = {
     "theme_mode": "default", "interface_language": "default", "font_scale": 1.0, "contrast": 0,
     "line_height": 0, "letter_spacing": 0, "reduce_motion": False, "sidebar_width": 250,
     "custom_bg": "", "custom_text": "", "custom_primary": "", "custom_secondary": "",
     "custom_accent": "", "custom_sidebar": "",
-    "semantic_bold": 0, "semantic_italic": 0, "semantic_code": 0, "semantic_link": 0, "semantic_heading": 0,
+    "highlight": 0,
     "background_image": "",
     # Easter eggs this person wants (each also needs the site to offer it).
     "egg_mascot_motion": True, "egg_mascot_shades": True, "egg_konami": True,
@@ -32,7 +35,10 @@ PREFERENCE_DEFAULTS = {
 EGG_KEYS = ("egg_mascot_motion", "egg_mascot_shades", "egg_konami")
 BM_MODE_CONTROLS = ("site", "self", "admin")
 COLOR_KEYS = ("custom_bg", "custom_text", "custom_primary", "custom_secondary", "custom_accent", "custom_sidebar")
-SEMANTIC_KEYS = ("semantic_bold", "semantic_italic", "semantic_code", "semantic_link", "semantic_heading")
+# The five highlighting choices of releases before version 32 (one "highlight" level now).
+LEGACY_SEMANTIC_KEYS = ("semantic_bold", "semantic_italic", "semantic_code", "semantic_link", "semantic_heading")
+# The six contrast levels of releases before version 32 (0 standard, 1-4 more, 5 maximum) on today's three.
+LEGACY_CONTRAST = {0: 0, 1: 1, 2: 1, 3: 1, 4: 1, 5: 2}
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _BACKGROUND = re.compile(r"^[0-9a-f]{32}\.jpe?g$")
 
@@ -59,7 +65,12 @@ def clean_preferences(raw) -> dict:
             prefs["font_scale"] = min(FONT_SCALES, key=lambda option: abs(option - scale))
     except (TypeError, ValueError, OverflowError):
         pass
-    prefs["contrast"] = _int_in(raw.get("contrast"), 0, 5, 0)
+    if "highlight" in raw:
+        prefs["contrast"] = _int_in(raw.get("contrast"), 0, 2, 0)
+        prefs["highlight"] = _int_in(raw.get("highlight"), 0, 2, 0)
+    else:  # stored or sent by a release before version 32
+        prefs["contrast"] = LEGACY_CONTRAST[_int_in(raw.get("contrast"), 0, 5, 0)]
+        prefs["highlight"] = max(_int_in(raw.get(key), 0, 2, 0) for key in LEGACY_SEMANTIC_KEYS)
     prefs["line_height"] = _int_in(raw.get("line_height"), 0, 2, 0)
     prefs["letter_spacing"] = _int_in(raw.get("letter_spacing"), 0, 2, 0)
     prefs["reduce_motion"] = raw.get("reduce_motion") is True or raw.get("reduce_motion") in (1, "1", "true")
@@ -67,8 +78,6 @@ def clean_preferences(raw) -> dict:
     for key in COLOR_KEYS:
         value = raw.get(key)
         prefs[key] = value.lower() if isinstance(value, str) and _HEX_COLOR.match(value) else ""
-    for key in SEMANTIC_KEYS:
-        prefs[key] = _int_in(raw.get(key), 0, 2, 0)
     for key in EGG_KEYS:
         if key in raw:
             prefs[key] = raw[key] is True or raw[key] in (1, "1", "true")
@@ -162,15 +171,20 @@ def _new_id() -> str:
     return "".join(secrets.choice(alphabet) for _ in range(12))
 
 
-def create(username: str, password_hash: str, *, role: str = "user", invite_code: str | None = None) -> str:
-    """Insert a user; must run inside ``db.transaction()`` when combined with other writes."""
+def create(username: str, password_hash: str, *, role: str = "user", invite_code: str | None = None,
+           password_set: bool = True) -> str:
+    """Insert a user; must run inside ``db.transaction()`` when combined with other writes.
+
+    *password_set* is False for an account whose password nobody knows (made through BananaWiki Hosting).
+    """
     if role not in ROLES:
         raise ValueError("Unknown role.")
     for _ in range(5):
         user_id = _new_id()
         if not db.one("SELECT 1 FROM users WHERE id=?", (user_id,)):
-            db.execute("INSERT INTO users (id, username, password, role, invite_code, created_at) VALUES (?,?,?,?,?,?)",
-                       (user_id, username, password_hash, role, invite_code, db.now()))
+            db.execute("INSERT INTO users (id, username, password, role, invite_code, created_at, password_set) "
+                       "VALUES (?,?,?,?,?,?,?)",
+                       (user_id, username, password_hash, role, invite_code, db.now(), 1 if password_set else 0))
             return user_id
     raise RuntimeError("Could not allocate a user id.")
 
@@ -236,8 +250,16 @@ def set_password(user_id: str, password_hash: str, *, keep_session: str | None =
     guard = (verified_credentials(user_id, expected_password, keep_session)
              if expected_password is not None else db.transaction())
     with guard:
-        db.execute("UPDATE users SET password=? WHERE id=?", (password_hash, user_id))
+        db.execute("UPDATE users SET password=?, password_set=1 WHERE id=?", (password_hash, user_id))
         revoke_sessions(user_id, except_hash=keep_session)
+
+
+def has_password(user) -> bool:
+    """False for an account made through BananaWiki Hosting that never set a password of its own."""
+    try:
+        return bool(user["password_set"])
+    except (IndexError, KeyError):
+        return True
 
 
 def set_role(user_id: str, role: str) -> None:
@@ -341,18 +363,26 @@ def _hash(token: str) -> str:
 MAX_SESSIONS_PER_ACCOUNT = 50
 
 
-def create_session(user_id: str, days: int, *, user_agent: str = "", ip_address: str = "") -> str:
+def create_session(user_id: str, days: int, *, user_agent: str = "", ip_address: str = "",
+                   acting: dict | None = None) -> str:
     """Start a login session; returns the raw token for the cookie.
 
     An account keeps at most :data:`MAX_SESSIONS_PER_ACCOUNT` sessions: the ones used least recently end.
+    *acting* (``{"sub", "name", "until"}``, ``until`` an aware datetime) marks a session a hosting
+    administrator opened while acting as the account: it ends at ``until``, whatever *days* says.
     """
     token = secrets.token_urlsafe(32)
+    expires = db.now(timedelta(days=days))
+    acting_values = (None, None, None)
+    if acting is not None:
+        until = db.timestamp(acting["until"])
+        expires = min(expires, until)
+        acting_values = (str(acting["sub"])[:64], str(acting["name"] or "")[:200], until)
     with db.transaction():
         db.execute(
             "INSERT INTO auth_sessions (id_hash, user_id, created_at, last_seen_at, expires_at, user_agent, "
-            "ip_address) VALUES (?,?,?,?,?,?,?)",
-            (_hash(token), user_id, db.now(), db.now(), db.now(timedelta(days=days)), user_agent[:300],
-             ip_address[:64]),
+            "ip_address, acting_sub, acting_name, acting_until) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (_hash(token), user_id, db.now(), db.now(), expires, user_agent[:300], ip_address[:64], *acting_values),
         )
         db.execute("DELETE FROM auth_sessions WHERE user_id=? AND id_hash NOT IN (SELECT id_hash FROM auth_sessions "
                    "WHERE user_id=? AND expires_at>? ORDER BY last_seen_at DESC, rowid DESC LIMIT ?)",
@@ -388,7 +418,8 @@ def move_session(token: str, *, user_agent: str, started_before: float) -> str |
             if other_started is None or other_started.timestamp() < started_before:
                 db.execute("DELETE FROM auth_sessions WHERE id_hash=?", (other["id_hash"],))
         fresh = secrets.token_urlsafe(32)
-        db.execute("UPDATE auth_sessions SET id_hash=?, verified_at=NULL WHERE id_hash=?", (_hash(fresh), row["id_hash"]))
+        db.execute("UPDATE auth_sessions SET id_hash=?, verified_at=NULL, hosting_confirmed_at=NULL WHERE id_hash=?",
+                   (_hash(fresh), row["id_hash"]))
         return fresh
 
 
@@ -396,7 +427,8 @@ def load_session(token: str):
     """Return ``(session_row, user_row)`` for a live session token, else ``(None, None)``."""
     if not token or len(token) > 128:
         return None, None
-    row = db.one("SELECT s.id_hash, s.user_id, s.last_seen_at, s.expires_at, s.created_at, s.user_agent "
+    row = db.one("SELECT s.id_hash, s.user_id, s.last_seen_at, s.expires_at, s.created_at, s.user_agent, "
+                 "s.acting_sub, s.acting_name, s.acting_until "
                  "FROM auth_sessions s WHERE s.id_hash=? AND s.expires_at>?", (_hash(token), db.now()))
     if row is None:
         return None, None
@@ -405,12 +437,14 @@ def load_session(token: str):
 
 
 def refresh_session(session_row, days: int) -> None:
-    """Slide the expiry forward, at most every five minutes."""
+    """Slide the expiry forward, at most every five minutes; never past the end of acting (``acting_until``)."""
     seen = db.parse_timestamp(session_row["last_seen_at"])
     if seen and datetime.now(timezone.utc) - seen < timedelta(minutes=5):
         return
-    db.execute("UPDATE auth_sessions SET last_seen_at=?, expires_at=? WHERE id_hash=?",
-               (db.now(), db.now(timedelta(days=days)), session_row["id_hash"]))
+    expires = db.now(timedelta(days=days))
+    db.execute("UPDATE auth_sessions SET last_seen_at=?, "
+               "expires_at=CASE WHEN acting_until IS NOT NULL AND acting_until<? THEN acting_until ELSE ? END "
+               "WHERE id_hash=?", (db.now(), expires, expires, session_row["id_hash"]))
 
 
 def end_session(token: str) -> None:
@@ -471,6 +505,25 @@ def mark_session_verified(id_hash: str | None) -> None:
     """Record that this login session just proved its password or code (see :func:`session_verified_within`)."""
     if id_hash:
         db.execute("UPDATE auth_sessions SET verified_at=? WHERE id_hash=?", (db.now(), id_hash))
+
+
+def mark_session_hosting_confirmed(id_hash: str | None) -> None:
+    """Record that this login session just confirmed with a fresh BananaWiki Hosting sign-in.
+
+    It counts as a confirmation for the administrator actions too (``verified_at``).
+    """
+    if id_hash:
+        now = db.now()
+        db.execute("UPDATE auth_sessions SET verified_at=?, hosting_confirmed_at=? WHERE id_hash=?",
+                   (now, now, id_hash))
+
+
+def session_hosting_confirmed_within(id_hash: str | None, seconds: int) -> bool:
+    """True when the session confirmed with BananaWiki Hosting in the last *seconds*."""
+    if not id_hash:
+        return False
+    return bool(db.one("SELECT 1 FROM auth_sessions WHERE id_hash=? AND expires_at>? AND hosting_confirmed_at>?",
+                       (id_hash, db.now(), db.now(-timedelta(seconds=seconds)))))
 
 
 def session_alive(id_hash: str | None, user_id: str) -> bool:
@@ -571,16 +624,48 @@ def purge_rate_limits(max_window_seconds: int = 86400) -> None:
 
 # ----- audit log ------------------------------------------------------------
 
-def audit(actor, action: str, target: str = "", details: dict | str | None = None, ip_address: str = "") -> None:
-    """Record an administrative or security-relevant action."""
+def audit(actor, action: str, target: str = "", details: dict | str | None = None, ip_address: str = "", *,
+          acting: dict | None = None) -> None:
+    """Record an administrative or security-relevant action.
+
+    An action of the signed-in account in a session a hosting administrator opened while acting as it is
+    recorded as "<administrator> on behalf of <account>", with the administrator's portal account id;
+    *acting* (``{"acting_sub", "acting_name"}``) says so for a session that is not the request's yet.
+    """
+    actor_name = actor["username"] if actor else ""
+    acting = acting if acting is not None and actor is not None else _acting_session(actor)
+    if acting is not None:
+        actor_name = f"{acting['acting_name'] or acting['acting_sub']} (BananaWiki Hosting) on behalf of {actor_name}"
+        extra = {"acting_admin": acting["acting_name"] or "", "acting_admin_sub": acting["acting_sub"]}
+        if details is None or isinstance(details, dict):
+            details = {**(details or {}), **extra}
+        else:
+            details = {"details": details, **extra}
     if isinstance(details, dict):
         details = json.dumps(details, ensure_ascii=False, sort_keys=True, default=str)
     db.execute(
         "INSERT INTO audit_log (actor_id, actor_name, action, target, details, ip_address, created_at) "
         "VALUES (?,?,?,?,?,?,?)",
-        (actor["id"] if actor else None, actor["username"] if actor else "", action[:80], str(target)[:200],
+        (actor["id"] if actor else None, actor_name[:200], action[:80], str(target)[:200],
          (details or "")[:4000], ip_address[:64], db.now()),
     )
+
+
+def _acting_session(actor):
+    """The request's login session when it is an acting administrator's session of *actor*, else None."""
+    if actor is None:
+        return None
+    from flask import g, has_app_context
+
+    if not has_app_context():
+        return None
+    row, user = g.get("auth_session"), g.get("user")
+    if row is None or user is None or user["id"] != actor["id"]:
+        return None
+    try:
+        return row if row["acting_sub"] else None
+    except (IndexError, KeyError):
+        return None
 
 
 def list_audit(limit: int = 100, offset: int = 0, action: str = ""):

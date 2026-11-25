@@ -110,7 +110,7 @@ def test_admin_rejects_missing_or_unknown_audience(app):
     admin.login("admin", "admin-password")
     for submitted in [{"access_mode_present": "1"},
                       {"access_mode_present": "1", "access_mode": "all"}]:
-        assert admin.post("/admin/agents/settings", {**_form(), **submitted}).status_code == 302
+        assert admin.post("/admin/agents/settings", {**_form(), **submitted}).status_code == 400
         with app.app_context():
             settings = agent_settings.current(fresh=True)
             assert not settings.enabled

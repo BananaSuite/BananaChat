@@ -4,79 +4,75 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}Limits{% endblock %}
 {% block admin_content %}
-{{ header("Limits", "Administrators have no limits.") }}
+{{ header("Limits", "Administrators have no limits.", save="limits-form") }}
 {% include "admin/_limits_tabs.html" %}
 <p class="muted small">{{ custom_count }} account{{ "" if custom_count == 1 else "s" }} with custom limits · {{ grant_count }} active grant{{ "" if grant_count == 1 else "s" }}</p>
 
 <div class="section-stack">
-  <form method="post" action="{{ url_for('admin.quotas_chat_consumption') }}" class="settings-section stack" id="chat-consumption" aria-labelledby="chat-consumption-title">
-    {{ csrf() }}
+  {#- One form for every section up to Model fallback, saved by the header's Save (admin.quotas_save_all). Each
+      service's fields start with its name ("chat-window_tokens"). A refused Save shows again as typed. -#}
+  <form method="post" action="{{ url_for('admin.quotas_save_all') }}" class="form-contents" id="limits-form">
+  {{ csrf() }}
+  <section class="settings-section stack" id="chat-consumption" aria-labelledby="chat-consumption-title">
     <h2 id="chat-consumption-title">Chat tokens</h2>
     {{ toggle("chat_local_token_consumption", "Apply token limits to local chats", s.chat_local_token_consumption, "Includes models on your compute servers.") }}
     {{ toggle("chat_cloud_token_consumption", "Apply token limits to cloud chats", s.chat_cloud_token_consumption) }}
-    <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-  </form>
+  </section>
 
   {% for pool, policy in policies.items() %}
-  {#- A refused form shows again as typed. -#}
-  {% if refused.pool == pool %}{% set policy = refused.policy %}{% endif %}
-  <form method="post" action="{{ url_for('admin.quotas_policy', pool=pool) }}" class="settings-section stack" id="policy-{{ pool }}" aria-labelledby="policy-{{ pool }}-title">
-    {{ csrf() }}
+  {% set name = pool ~ "-" %}
+  <section class="settings-section stack" id="policy-{{ pool }}" aria-labelledby="policy-{{ pool }}-title">
+    <input type="hidden" name="pools" value="{{ pool }}">
     <div>
       <h2 id="policy-{{ pool }}-title">{{ pool_labels[pool] }}</h2>
       <p class="limit-summary">{{ summaries[pool] }}</p>
     </div>
     <fieldset class="admin-fieldset stack">
       <legend>Request rate</legend>
-      {{ toggle("rate_enabled", "Limit requests per account", policy.rate.enabled) }}
-      {{ rules_editor(policy.rate.rules, "rules-" ~ pool, units, rule_rows) }}
+      {{ toggle(name ~ "rate_enabled", "Limit requests per account", policy.rate.enabled) }}
+      {{ rules_editor(policy.rate.rules, "rules-" ~ pool, units, rule_rows, name=name ~ "rule") }}
     </fieldset>
     <div class="grid grid-2">
       <fieldset class="admin-fieldset stack">
         <legend>Tokens per 5 hours</legend>
-        {{ toggle("window_enabled", "Limit usage per 5 hours", policy.window.enabled) }}
-        {{ token_field("window_tokens", "Tokens", policy.window.tokens, "window-" ~ pool, "Prompt and answer, e.g. 50k.") }}
+        {{ toggle(name ~ "window_enabled", "Limit usage per 5 hours", policy.window.enabled) }}
+        {{ token_field(name ~ "window_tokens", "Tokens", policy.window.tokens, "window-" ~ pool, "Prompt and answer, e.g. 50k.") }}
       </fieldset>
       <fieldset class="admin-fieldset stack">
         <legend>Tokens per week</legend>
-        {{ toggle("weekly_enabled", "Limit weekly usage", policy.weekly.enabled, "A 7-day window from the first request.") }}
-        {{ token_field("weekly_tokens", "Tokens", policy.weekly.tokens, "weekly-" ~ pool, "Prompt and answer, e.g. 500k.") }}
+        {{ toggle(name ~ "weekly_enabled", "Limit weekly usage", policy.weekly.enabled, "A 7-day window from the first request.") }}
+        {{ token_field(name ~ "weekly_tokens", "Tokens", policy.weekly.tokens, "weekly-" ~ pool, "Prompt and answer, e.g. 500k.") }}
       </fieldset>
     </div>
-    <details class="admin-help admin-options">
+    <details class="admin-help admin-options"{% if refused.policies or refused.pool == pool %} open{% endif %}>
       <summary>{{ icon("chevron-down") }}Demand and tier adjustments</summary>
       <div class="stack">
-        {{ toggle("rate_dynamic", "Reduce request rates under load", policy.rate.dynamic, "Custom account rates are unchanged.") }}
-        {{ toggle("window_dynamic", "Adjust 5-hour tokens to demand", policy.window.dynamic, "Between 0.5× and 2×.") }}
-        {{ toggle("window_auto_tiers", "Apply account tiers to 5-hour tokens", policy.window.auto_tiers, "Eligible accounts move up automatically.") }}
-        {{ toggle("weekly_dynamic", "Adjust weekly tokens to demand", policy.weekly.dynamic) }}
-        {{ toggle("weekly_auto_tiers", "Apply account tiers to weekly tokens", policy.weekly.auto_tiers) }}
+        {{ toggle(name ~ "rate_dynamic", "Reduce request rates under load", policy.rate.dynamic, "Custom account rates are unchanged.") }}
+        {{ toggle(name ~ "window_dynamic", "Adjust 5-hour tokens to demand", policy.window.dynamic, "Between 0.5× and 2×.") }}
+        {{ toggle(name ~ "window_auto_tiers", "Apply account tiers to 5-hour tokens", policy.window.auto_tiers, "Eligible accounts move up automatically.") }}
+        {{ toggle(name ~ "weekly_dynamic", "Adjust weekly tokens to demand", policy.weekly.dynamic) }}
+        {{ toggle(name ~ "weekly_auto_tiers", "Apply account tiers to weekly tokens", policy.weekly.auto_tiers) }}
       </div>
     </details>
-    <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-  </form>
+  </section>
   {% endfor %}
 
   <div class="section-stack">
-    {% if refused.options %}{% set s = refused.options %}{% endif %}
-    <details class="settings-section admin-disclosure"{% if refused.options %} open{% endif %}>
+    <details class="settings-section admin-disclosure" id="options"{% if refused.options or refused.settings %} open{% endif %}>
       <summary><span id="options-title">Automatic approval</span>{{ icon("chevron-down") }}</summary>
-      <form method="post" action="{{ url_for('admin.quotas_save') }}" class="stack" id="options" aria-labelledby="options-title">
-        {{ csrf() }}
+      <div class="stack" role="group" aria-labelledby="options-title">
         <p class="muted small mb-0">Token requests up to these totals are approved without review.</p>
         {{ toggle("quota_auto_approve_enabled", "Approve small requests automatically", s.quota_auto_approve_enabled) }}
         <div class="form-grid">
           {{ token_field("quota_auto_approve_max_tokens", "Maximum 5-hour allowance", s.quota_auto_approve_max_tokens or 0, "auto-tokens", "0: require administrator review.") }}
           {{ token_field("quota_auto_approve_max_weekly_tokens", "Maximum weekly allowance", s.quota_auto_approve_max_weekly_tokens or 0, "auto-weekly", "0: require administrator review.") }}
         </div>
-        <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-      </form>
+      </div>
     </details>
 
-    <details class="settings-section admin-disclosure">
+    <details class="settings-section admin-disclosure" id="community"{% if refused.community %} open{% endif %}>
       <summary><span id="community-title">Community consent{% if community_open %} <span class="badge">{{ community_open }} open</span>{% endif %}</span>{{ icon("chevron-down") }}</summary>
-      <form method="post" action="{{ url_for('admin.quotas_community') }}" class="stack" id="community" aria-labelledby="community-title">
-        {{ csrf() }}
+      <div class="stack" role="group" aria-labelledby="community-title">
         <p class="muted small mb-0">People can put requests to a vote. Supporters give part of their own allowance.{% if community_open %} {{ community_open }} request{{ "s" if community_open != 1 }} open for voting now.{% endif %}</p>
         {{ toggle("community_quota_enabled", "Let the community approve requests", community.enabled, "Off: only administrators decide.") }}
         <fieldset class="admin-fieldset stack-sm">
@@ -100,21 +96,21 @@
           </div>
           {% endfor %}
         </div>
-        <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-      </form>
+      </div>
     </details>
 
-    <details class="settings-section admin-disclosure">
+    <details class="settings-section admin-disclosure" id="fallback">
       <summary><span id="fallback-title">Model fallback</span>{{ icon("chevron-down") }}</summary>
-      <form method="post" action="{{ url_for('admin.quotas_fallback') }}" class="stack" id="fallback" aria-labelledby="fallback-title">
-        {{ csrf() }}
+      <div class="stack" role="group" aria-labelledby="fallback-title">
         <p class="muted small mb-0">When a model reaches its limit or fails before answering, a similar available model answers.</p>
         {{ toggle("quota_fallback_to_local", "Use local models when cloud models are unavailable", s.quota_fallback_to_local if s.quota_fallback_to_local is not none else 1) }}
         {{ toggle("quota_fallback_to_cloud", "Use cloud models when local models are unavailable", s.quota_fallback_to_cloud if s.quota_fallback_to_cloud is not none else 1) }}
-        <div class="form-actions"><button type="submit" class="btn">Save</button></div>
-      </form>
+      </div>
     </details>
+  </div>
+  </form>
 
+  <div class="section-stack">
     <details class="settings-section admin-disclosure">
       <summary><span id="global-title">Reset usage and custom limits</span>{{ icon("chevron-down") }}</summary>
       <section class="stack" id="global" aria-labelledby="global-title">

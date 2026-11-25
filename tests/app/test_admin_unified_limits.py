@@ -199,9 +199,61 @@ def test_refused_active_policy_preserves_fields_without_retired_input(app, admin
     html = response.get_data(as_text=True)
     assert_no_slow_fields(html)
     assert 'value="invalid active amount"' in html and 'value="500k"' in html
-    assert 'name="weekly_auto_tiers" value="1" checked' in html
+    assert 'name="chat-weekly_auto_tiers" value="1" checked' in html  # the page's form names each service
     with app.app_context():
         assert limits.get_policy("chat") == before
+
+
+def limits_page_form(**changes):
+    """The Limits page's one form as its Save sends it, every section filled in."""
+    from bananachat.services import community
+
+    form = {"pools": ["api", "chat", "agent"], "chat_cloud_token_consumption": "1",
+            "quota_auto_approve_max_tokens": "0", "quota_auto_approve_max_weekly_tokens": "0",
+            "quota_fallback_to_local": "1", "quota_fallback_to_cloud": "1",
+            **{f"community_{name}": str(community.DEFAULTS[name]) for name in community.BOUNDS}}
+    for pool in ("api", "chat", "agent"):
+        form.update({f"{pool}-{name}": value for name, value in POLICY_FORM.items()})
+    form.update(changes)
+    return form
+
+
+def test_the_limits_page_saves_every_section_with_its_one_save(app, admin):
+    from bananachat import db
+    from bananachat.db import limits, settings
+
+    page = admin.get("/admin/quotas").get_data(as_text=True)
+    assert page.count("data-page-save") == 1 and page.count('form="limits-form"') == 1
+    assert ">Save</button>" not in page.split('id="limits-form"')[1]  # no section keeps a button of its own
+    with app.app_context():
+        before = limits.get_policy("api")
+    refused = admin.post("/admin/quotas/save", limits_page_form(**{
+        "chat-window_tokens": "70k", "community_hours": "0", "quota_auto_approve_max_tokens": "lots"}))
+    assert refused.status_code == 400
+    html = refused.get_data(as_text=True)
+    assert "Community consent: Voting hours must be between" in html and "Automatic approval:" in html
+    assert 'value="70k"' in html and 'value="lots"' in html and 'id="community-hours" name="community_hours"' in html
+    with app.app_context():
+        assert limits.get_policy("chat")["window"]["tokens"] != 70_000  # nothing saved
+    response = admin.post("/admin/quotas/save", limits_page_form(**{
+        "chat-window_tokens": "70k", "chat_local_token_consumption": "1", "quota_auto_approve_enabled": "1",
+        "quota_auto_approve_max_tokens": "20k", "community_quota_enabled": "1", "community_hours": "30"}))
+    assert response.status_code == 302
+    with app.app_context():
+        saved = settings.get()
+        assert limits.get_policy("chat")["window"]["tokens"] == 70_000
+        assert limits.get_policy("api")["rate"]["rules"] != before["rate"]["rules"]
+        assert saved["chat_local_token_consumption"] == 1 and saved["quota_auto_approve_max_tokens"] == 20_000
+        assert saved["community_quota_enabled"] == 1 and saved["community_hours"] == 30
+        actions = [row["action"] for row in db.query("SELECT action FROM audit_log")]
+    assert actions.count("admin.limits_policy") == 3 and "admin.quotas_community" in actions
+    assert "admin.chat_token_consumption" in actions and "admin.quotas_save" in actions
+    # Saving the same page again changes nothing, so nothing more is audited.
+    admin.post("/admin/quotas/save", limits_page_form(**{
+        "chat-window_tokens": "70k", "chat_local_token_consumption": "1", "quota_auto_approve_enabled": "1",
+        "quota_auto_approve_max_tokens": "20k", "community_quota_enabled": "1", "community_hours": "30"}))
+    with app.app_context():
+        assert db.scalar("SELECT COUNT(*) FROM audit_log WHERE action='admin.limits_policy'") == 3
 
 
 def test_refused_active_override_preserves_fields_without_retired_input(app, admin, make_user):

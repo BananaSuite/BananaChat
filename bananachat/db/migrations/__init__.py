@@ -33,6 +33,9 @@ from .v28_device_epoch import upgrade as v28_device_epoch
 from .v29_community_kinds import upgrade as v29_community_kinds
 from .v30_hosting_signin import upgrade as v30_hosting_signin
 from .v31_easter_eggs import upgrade as v31_easter_eggs
+from .v32_simpler_appearance import upgrade as v32_simpler_appearance
+from .v33_hosting_signin_round3 import upgrade as v33_hosting_signin_round3
+from .v34_announcement_text import upgrade as v34_announcement_text
 
 # The on-disk identity of BananaChat databases. The value is ASCII "BAIA" and
 # dates from when the project was named BananaAI; every existing database
@@ -71,6 +74,9 @@ MIGRATIONS = (
     v29_community_kinds,
     v30_hosting_signin,
     v31_easter_eggs,
+    v32_simpler_appearance,
+    v33_hosting_signin_round3,
+    v34_announcement_text,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

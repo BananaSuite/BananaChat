@@ -17,8 +17,10 @@ database together.
 
 ## Unreleased
 
-Two database migrations (`v30_hosting_signin` and `v31_easter_eggs`, schema
-version 31, additive); to roll back, restore the backup the updater made.
+Four database migrations (`v30_hosting_signin`, `v31_easter_eggs`,
+`v32_simpler_appearance` and `v33_hosting_signin_round3`, schema version 33);
+to roll back, restore the backup the updater made. Version 32 converts the appearance preferences (fewer
+contrast and highlighting choices) without lowering anyone's.
 Sign-in stays as it was (*Local accounts only*) until an administrator chooses
 another mode, and the Konami code's banana shower stays the only easter egg
 typed on the keyboard until an administrator adds others.
@@ -30,10 +32,20 @@ typed on the keyboard until an administrator adds others.
   **Admin → Settings → Sign-in** ([guide](docs/hosting-signin.md)). Behind a
   reverse proxy, check that the redirect URI shown there starts with your
   public `https://` address (`BC_PROXY_MODE=1`).
-- Before choosing *BananaWiki Hosting accounts only*, connect your own account
-  (Account → Security). If administrators are ever locked out, use
+- Before choosing *BananaWiki Hosting accounts only*, connect every active
+  administrator's account (Account → Security, or Admin → Users → BananaWiki
+  Hosting); the switch is refused otherwise. If administrators are ever locked out, use
   `/login/recovery` or run `python -m bananachat.manage signin-mode both` on the
   server as the service's user.
+- **Hosting sign-ins no longer ask for BananaChat's two-step code** (the
+  portal asks for its own). Hosting administrators acting as a person can sign
+  in as that person's connected account unless you turn off **Allow hosting
+  administrators to sign in as users** (Settings → Sign-in); the portal's own
+  setting is off by default. Confirming with BananaWiki Hosting needs a portal
+  that sends `auth_time`; until then people keep confirming with their
+  password.
+- **Optional: the linking tool's account lookup** needs a portal API token with
+  the `accounts:lookup` scope (Settings → Sign-in → Advanced).
 - **Easter eggs.** The *Banana shower* switch in **Admin → Settings →
   Appearance** is now *Keyboard easter eggs*, with the egg editor under it.
   People who turned the banana shower off in Appearance get no keyboard eggs.

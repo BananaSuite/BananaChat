@@ -227,9 +227,9 @@ def test_participants_admin(app, admin, make_user):
         assert music.count_participants() == (0, 0)
 
     admin.post(f"/admin/music/users/{ids[1]}/force-in")
-    admin.post("/admin/music/hide")
-    with app.app_context():
-        assert settings.get()["music_visible"] == 0
+    # Hiding the programme is the "Visible to everyone" setting; there is no second button for it.
+    assert "Hide the programme" not in admin.get("/admin/music").get_data(as_text=True)
+    assert admin.post("/admin/music/hide").status_code == 404
     admin.post("/admin/music/remove")
     with app.app_context():
         assert settings.get()["music_enabled"] == 0

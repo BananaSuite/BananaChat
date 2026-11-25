@@ -4,13 +4,9 @@
 {% block title %}Edit {{ category.name }}{% endblock %}
 {% block admin_content %}
 <p class="breadcrumb"><a href="{{ url_for('admin.categories') }}">{{ icon("chevron-left") }}Categories</a></p>
-{{ header("Edit " ~ category.name) }}
-<form method="post" action="{{ url_for('admin.category_edit', category_id=category.id) }}" class="settings-section stack">
+{{ header("Edit " ~ category.name, save="category-form") }}
+<form method="post" action="{{ url_for('admin.category_edit', category_id=category.id) }}" class="settings-section stack" id="category-form">
   {{ csrf() }}
   {% include "admin/_category_fields.html" %}
-  <div class="form-actions form-actions-end">
-    <a class="btn btn-ghost" href="{{ url_for('admin.categories') }}">Cancel</a>
-    <button type="submit" class="btn btn-primary">Save</button>
-  </div>
 </form>
 {% endblock %}

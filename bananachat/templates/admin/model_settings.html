@@ -11,10 +11,10 @@
 {%- endmacro %}
 {% block title %}Model settings{% endblock %}
 {% block admin_content %}
-{{ header("Models") }}
+{{ header("Models", save="model-settings-form") }}
 {% include "admin/_models_tabs.html" %}
 
-<form method="post" action="{{ url_for('admin.model_settings_save') }}" class="section-stack mb-3">
+<form method="post" action="{{ url_for('admin.model_settings_save') }}" class="section-stack mb-3" id="model-settings-form">
   {{ csrf() }}
   <section class="settings-section stack" aria-labelledby="enrollment-title">
     <h2 id="enrollment-title">New models</h2>
@@ -49,7 +49,6 @@
       {{ number_field("stall_minutes", "Retry a download after this many minutes without progress") }}
     </div>
   </section>
-  <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
 </form>
 
 <section class="settings-section mb-3" id="ignore-list" aria-labelledby="ignore-title">

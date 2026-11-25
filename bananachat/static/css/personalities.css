@@ -211,13 +211,12 @@
 
 @media (max-width: 900px) {
   .persona-editor { grid-template-columns: minmax(0, 1fr); }
-  /* One column: the preview follows the first section it previews, before the form's buttons. */
+  /* One column: the preview follows the first section it previews. */
   .persona-editor { display: flex; flex-direction: column; align-items: stretch; gap: 1rem; }
   .persona-editor > .persona-form { display: contents; }
   .persona-form > * { order: 3; }
   .persona-form > fieldset:first-of-type { order: 1; }
   .persona-editor > .persona-preview { order: 2; }
-  .persona-form > .form-actions { order: 4; }
   .persona-preview { position: static; }
   /* The rule above comes from the Look section; one rule below separates it from Instructions. */
   .persona-preview-inner { padding: 0 0 1.25rem; border-left: 0; border-bottom: 1px solid var(--border); }

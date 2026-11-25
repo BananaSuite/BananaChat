@@ -36,6 +36,7 @@ class FakePortal:
         self.token_answer = None  # (status, body) to answer instead
         self.userinfo_answer = None
         self.failure = None  # an OAuthError raised for every call (portal unreachable)
+        self.signup = "open"  # what the OAuth metadata says about sign-up (None: no metadata)
 
     def authorize(self, location: str, sub: str, username: str = "", *, deny: bool = False) -> str:
         """The browser at the portal: the account *sub* consents; returns the callback URL."""
@@ -52,10 +53,13 @@ class FakePortal:
                             "redirect_uri": query["redirect_uri"]}
         return f"/login/hosting/callback?code={code}&state={query['state']}"
 
-    def request(self, method, path, *, headers, body=None):
+    def request(self, method, path, *, headers, body=None, max_bytes=None, timeout=None):
         self.calls.append((method, path))
         if self.failure is not None:
             raise self.failure
+        if path == "/.well-known/oauth-authorization-server":
+            assert method == "GET" and body is None
+            return (200, {"issuer": PORTAL, "signup": self.signup}) if self.signup else (404, None)
         if path == "/oauth/token":
             assert method == "POST" and headers["Content-Type"] == "application/x-www-form-urlencoded"
             expected = "Basic " + base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
@@ -256,13 +260,13 @@ def test_both_mode_offers_the_password_form_and_the_button(happ):
     assert 'action="/account/hosting/link"' in browser.get("/account").get_data(as_text=True)
 
 
-def test_hosting_mode_refuses_passwords_and_sends_sign_up_to_the_portal(happ):
+def test_hosting_mode_refuses_passwords_and_sends_sign_up_to_the_portal(happ, portal):
     _settings(happ, signin_mode="hosting")
     _make_user(happ, "bob")
     browser = _english(Browser(happ))
     page = browser.get("/login").get_data(as_text=True)
     assert 'name="password"' not in page and 'href="/login/hosting/start"' in page
-    assert "Sign in with BananaWiki Hosting to create one" in page
+    assert 'href="/login/hosting/start?create=1">Create an account</a>' in page
     response = browser.post("/login", {"username": "bob", "password": "bob-password"})
     assert response.status_code == 403 and "Signing in with a password is turned off" in response.get_data(as_text=True)
     assert _whoami(browser) is None
@@ -426,7 +430,8 @@ def test_an_administrator_sign_in_is_audited_as_one(happ, portal):
     assert json.loads(entries[-1]["details"]) == {"method": "hosting"}
 
 
-def test_a_linked_account_with_two_step_verification_still_gives_its_code(happ, portal):
+def test_two_step_codes_are_asked_after_a_password_sign_in_only(happ, portal):
+    """BananaWiki Hosting asks for its own second step: a hosting sign-in never asks for this site's code."""
     from bananachat import totp
     from bananachat.services import two_step
 
@@ -437,10 +442,12 @@ def test_a_linked_account_with_two_step_verification_still_gives_its_code(happ, 
         two_step.enable(bob["id"], secret, 0)
     browser = _english(Browser(happ))
     response = _hosting_sign_in(browser, portal, "sub-bob", "bob")
-    assert response.headers["Location"] == "/login/two-step"
-    assert _whoami(browser) is None
-    assert browser.post("/login/two-step", {"code": "000000"}).status_code == 401
-    assert _whoami(browser) is None
+    assert response.headers["Location"] == "/"
+    assert _whoami(browser) == "bob"
+    browser.logout()
+    # The password still asks for the code.
+    response = browser.post("/login", {"username": "bob", "password": "bob-password"})
+    assert response.headers["Location"] == "/login/two-step" and _whoami(browser) is None
     assert browser.post("/login/two-step", {"code": totp.totp_code(secret)}).status_code == 302
     assert _whoami(browser) == "bob"
 
@@ -483,7 +490,7 @@ def test_creating_an_account_links_it_and_signs_in(happ, portal):
 
     browser = _connect(happ, portal)
     page = browser.get("/login/hosting/connect").get_data(as_text=True)
-    assert "You signed in to BananaWiki Hosting as newbie" in page and 'value="newbie"' in page
+    assert "Signed in to BananaWiki Hosting as newbie" in page and 'value="newbie"' in page
     response = browser.post("/login/hosting/create", {"username": "newbie"})
     assert response.status_code == 302 and _whoami(browser) == "newbie"
     link = _link_of(happ, "newbie")
@@ -734,7 +741,11 @@ def test_linking_from_the_account_page_takes_the_password_first(happ, portal):
     assert _link_of(happ, "bob")["portal_username"] == "bob-on-hosting"
     page = browser.get("/account")
     assert "Connected to bob-on-hosting since" in page.get_data(as_text=True)
-    assert "form-action 'self';" in page.headers["Content-Security-Policy"]
+    # Linked: the page offers a confirmation with BananaWiki Hosting instead of the password, which goes there.
+    assert 'action="/account/hosting/confirm"' in page.get_data(as_text=True)
+    assert f"form-action 'self' {PORTAL};" in page.headers["Content-Security-Policy"]
+    _settings(happ, signin_mode="local")
+    assert "form-action 'self';" in browser.get("/account").headers["Content-Security-Policy"]
     assert json.loads(_audit(happ, "auth.hosting_link")[0]["details"])["via"] == "account page"
 
 
@@ -807,7 +818,7 @@ def test_an_administrator_sees_and_removes_a_link(happ):
     with happ.app_context():
         assert db.scalar("SELECT COUNT(*) FROM auth_sessions WHERE user_id=?", (bob["id"],)) == 0
     entry = _audit(happ, "admin.user_hosting_unlink")[0]
-    assert entry["target"] == "bob" and json.loads(entry["details"]) == {"portal_username": "bobby"}
+    assert entry["target"] == "bob" and json.loads(entry["details"]) == {"portal_username": "bobby", "sub": "sub-bob"}
 
 
 def test_an_administrator_cannot_remove_their_own_link_in_hosting_mode(happ):

@@ -36,43 +36,169 @@ def quotas():
 
 
 def _quotas_page(refused: dict | None = None):
-    """The services page; *refused* holds the form that was refused (``{"pool" or "options": ..., values}``) so
-    it shows again with what was typed."""
+    """The services page; *refused* holds a refused form so it shows again with what was typed: ``{"pool":
+    ..., "policy": ...}`` or ``{"options": ...}`` from one section's old form, or ``{"policies": {pool:
+    policy}, "settings": {...}, "community": {...}}`` from the page's Save."""
+    refused = refused or {}
     settings = site_settings.get()
     policies = limits_db.all_policies()
+    shown = dict(policies)
+    if refused.get("pool"):
+        shown[refused["pool"]] = refused["policy"]
+    shown.update(refused.get("policies") or {})
     people, slots = limits.current_people()
     return render_template(
-        "admin/quotas.html", tab="policies", s=settings, policies=policies, refused=refused or {},
+        "admin/quotas.html", tab="policies", s={**settings, **(refused.get("options") or {}),
+                                                **(refused.get("settings") or {})},
+        policies=shown, refused=refused,
         summaries={pool: policy_summary(policy) for pool, policy in policies.items()},
         custom_count=limits_db.count_custom(), grant_count=limits_db.count_active_grants(),
         demand=limits.current_demand(), people=people, slots=slots, peak_hours=limits.peak_hours(),
-        community=community.settings(settings), community_bounds=community.BOUNDS, kind_labels=KIND_LABELS,
+        community=refused.get("community") or community.settings(settings), community_bounds=community.BOUNDS,
+        kind_labels=KIND_LABELS,
         community_open=community.count_open(),
         limits={"tokens": TOKENS_MAX, "request": REQUEST_MAX, "weekly_request": WEEKLY_REQUEST_MAX,
                 "requests": limits_db.REQUESTS_MAX, "burst": limits_db.BURST_MAX},
         **quota_tabs_context())
 
 
-def _typed_policy() -> dict:
-    """A refused policy form as typed, in the shape of a policy."""
-    return {"rate": {"enabled": flag("rate_enabled"), "rules": typed_rules(), "dynamic": flag("rate_dynamic")},
-            "window": {"enabled": flag("window_enabled"), "tokens": typed("window_tokens"),
-                       "dynamic": flag("window_dynamic"),
-                       "auto_tiers": flag("window_auto_tiers")},
-            "weekly": {"enabled": flag("weekly_enabled"), "tokens": typed("weekly_tokens"),
-                       "dynamic": flag("weekly_dynamic"), "auto_tiers": flag("weekly_auto_tiers")}}
+def _typed_policy(prefix: str = "") -> dict:
+    """A refused policy form as typed, in the shape of a policy. On the page's one form every service's fields
+    start with ``<pool>-`` (*prefix*)."""
+    def on(name):
+        return flag(prefix + name)
+    return {"rate": {"enabled": on("rate_enabled"), "rules": typed_rules(prefix + "rule"),
+                     "dynamic": on("rate_dynamic")},
+            "window": {"enabled": on("window_enabled"), "tokens": typed(prefix + "window_tokens"),
+                       "dynamic": on("window_dynamic"), "auto_tiers": on("window_auto_tiers")},
+            "weekly": {"enabled": on("weekly_enabled"), "tokens": typed(prefix + "weekly_tokens"),
+                       "dynamic": on("weekly_dynamic"), "auto_tiers": on("weekly_auto_tiers")}}
 
 
-def _policy_from_form() -> dict:
+def _policy_from_form(prefix: str = "") -> dict:
+    def on(name):
+        return flag(prefix + name)
     return {
-        "rate": {"enabled": flag("rate_enabled"), "rules": rules_from_form(), "dynamic": flag("rate_dynamic")},
-        "window": {"enabled": flag("window_enabled"),
-                   "tokens": tokens("window_tokens", label="Tokens per 5 hours"),
-                   "dynamic": flag("window_dynamic"), "auto_tiers": flag("window_auto_tiers")},
-        "weekly": {"enabled": flag("weekly_enabled"),
-                   "tokens": tokens("weekly_tokens", label="Tokens per week"),
-                   "dynamic": flag("weekly_dynamic"), "auto_tiers": flag("weekly_auto_tiers")},
+        "rate": {"enabled": on("rate_enabled"), "rules": rules_from_form(prefix + "rule"),
+                 "dynamic": on("rate_dynamic")},
+        "window": {"enabled": on("window_enabled"),
+                   "tokens": tokens(prefix + "window_tokens", label="Tokens per 5 hours"),
+                   "dynamic": on("window_dynamic"), "auto_tiers": on("window_auto_tiers")},
+        "weekly": {"enabled": on("weekly_enabled"),
+                   "tokens": tokens(prefix + "weekly_tokens", label="Tokens per week"),
+                   "dynamic": on("weekly_dynamic"), "auto_tiers": on("weekly_auto_tiers")},
     }
+
+
+# ----- the page's Save ----------------------------------------------------------------------
+# Every section of the page is one form. Each section is read and checked first; only when all of them are
+# valid is anything saved, in one transaction, with each section's own audit entry when it changed.
+
+def _options_values() -> dict:
+    """Automatic approval; raises FormError."""
+    return {
+        "quota_auto_approve_enabled": 1 if flag("quota_auto_approve_enabled") else 0,
+        "quota_auto_approve_max_tokens": tokens("quota_auto_approve_max_tokens", maximum=REQUEST_MAX,
+                                                label="Automatic approval up to", default=0),
+        "quota_auto_approve_max_weekly_tokens": tokens("quota_auto_approve_max_weekly_tokens",
+                                                       maximum=WEEKLY_REQUEST_MAX,
+                                                       label="Automatic approval of weekly tokens up to",
+                                                       default=0),
+    }
+
+
+def _typed_options() -> dict:
+    return {"quota_auto_approve_enabled": flag("quota_auto_approve_enabled"),
+            **{name: typed(name) for name in ("quota_auto_approve_max_tokens",
+                                              "quota_auto_approve_max_weekly_tokens")}}
+
+
+COMMUNITY_LABELS = {"min_supporters": "Supporters needed", "approval_percent": "Share in favour",
+                    "coverage_percent": "Tokens covered", "hours": "Voting hours", "boost_hours": "Increase lasts",
+                    "min_account_days": "Account age to vote", "max_pledge_percent": "Most a person can renounce"}
+
+
+def _community_values() -> dict:
+    """Community consent; raises FormError."""
+    values = {"community_quota_enabled": 1 if flag("community_quota_enabled") else 0,
+              "community_kinds": ",".join(kind for kind in community.KINDS if flag(f"community_kind_{kind}"))}
+    for name, (low, high) in community.BOUNDS.items():
+        values[f"community_{name}"] = integer(f"community_{name}", minimum=low, maximum=high,
+                                              label=COMMUNITY_LABELS[name])
+    return values
+
+
+def _typed_community() -> dict:
+    return {"enabled": flag("community_quota_enabled"),
+            "kinds": tuple(kind for kind in community.KINDS if flag(f"community_kind_{kind}")),
+            **{name: typed(f"community_{name}") for name in community.BOUNDS}}
+
+
+def _fallback_values() -> dict:
+    return {"quota_fallback_to_local": 1 if flag("quota_fallback_to_local") else 0,
+            "quota_fallback_to_cloud": 1 if flag("quota_fallback_to_cloud") else 0}
+
+
+def _chat_consumption_values() -> dict:
+    return {"chat_local_token_consumption": int(flag("chat_local_token_consumption")),
+            "chat_cloud_token_consumption": int(flag("chat_cloud_token_consumption"))}
+
+
+def _same_policy(stored: dict, clean: dict) -> bool:
+    try:
+        return limits_db.validate_policy(stored) == clean
+    except ValueError:
+        return False
+
+
+@bp.post("/quotas/save", endpoint="quotas_save_all")
+@admin_required
+def save_all():
+    """The Limits page's one Save: chat tokens, every service policy, automatic approval, community consent
+    and model fallback."""
+    errors, policies, values = [], {}, {}
+    sections = (("chat_token_consumption", "chat", _chat_consumption_values, None),
+                ("quotas_save", "site", _options_values, "Automatic approval"),
+                ("quotas_community", "site", _community_values, "Community consent"),
+                ("quotas_fallback", "site", _fallback_values, None))
+    audited = []
+    pools = [pool for pool in request.form.getlist("pools") if pool in limits_db.POOLS]
+    for pool in pools:
+        try:
+            policies[pool] = limits_db.validate_policy(_policy_from_form(f"{pool}-"))
+        except (FormError, ValueError) as error:
+            errors.append(f"{POOL_LABELS[pool]}: {error}")
+    for action, target, read, label in sections:
+        try:
+            section = read()
+        except FormError as error:
+            errors.append(f"{label}: {error}" if label else str(error))
+            continue
+        values.update(section)
+        audited.append((action, target, section))
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        refused = {"policies": {pool: _typed_policy(f"{pool}-") for pool in pools},
+                   "settings": {**_chat_consumption_values(), **_fallback_values(), **_typed_options()},
+                   "community": _typed_community()}
+        return _quotas_page(refused), 400
+    actor = me()["id"]
+    stored, current = limits_db.all_policies(), site_settings.get()
+    with db.transaction():
+        for pool, clean in policies.items():
+            if not _same_policy(stored[pool], clean):
+                limits_db.set_policy(pool, clean, actor)
+                audit("limits_policy", pool, clean)
+        site_settings.update(**values)
+        for action, target, section in audited:
+            if any(current.get(key) != value for key, value in section.items()):
+                audit(action, target, section)
+    flash("Limits saved.", "success")
+    return back("admin.quotas")
+
+
+# ----- each section's own form (pages open from before the page had one Save) ----------------
 
 
 @bp.post("/quotas/policy/<pool>", endpoint="quotas_policy")
@@ -95,21 +221,10 @@ def save_policy(pool):
 def save():
     """Site-wide options for automatic approval of requests."""
     try:
-        values = {
-            "quota_auto_approve_enabled": 1 if flag("quota_auto_approve_enabled") else 0,
-            "quota_auto_approve_max_tokens": tokens("quota_auto_approve_max_tokens", maximum=REQUEST_MAX,
-                                                    label="Automatic approval up to", default=0),
-            "quota_auto_approve_max_weekly_tokens": tokens("quota_auto_approve_max_weekly_tokens",
-                                                           maximum=WEEKLY_REQUEST_MAX,
-                                                           label="Automatic approval of weekly tokens up to",
-                                                           default=0),
-        }
+        values = _options_values()
     except FormError as error:
         flash(str(error), "error")
-        return _quotas_page({"options": {
-            "quota_auto_approve_enabled": flag("quota_auto_approve_enabled"),
-            **{name: typed(name) for name in ("quota_auto_approve_max_tokens",
-                                              "quota_auto_approve_max_weekly_tokens")}}}), 400
+        return _quotas_page({"options": _typed_options()}), 400
     site_settings.update(**values)
     audit("quotas_save", "site", values)
     flash("Options saved.", "success")
@@ -121,13 +236,7 @@ def save():
 def save_community():
     """Community consent: on or off, which kinds of request, and how much consent approves one."""
     try:
-        values = {"community_quota_enabled": 1 if flag("community_quota_enabled") else 0,
-                  "community_kinds": ",".join(kind for kind in community.KINDS if flag(f"community_kind_{kind}"))}
-        labels = {"min_supporters": "Supporters needed", "approval_percent": "Share in favour",
-                  "coverage_percent": "Tokens covered", "hours": "Voting hours", "boost_hours": "Increase lasts",
-                  "min_account_days": "Account age to vote", "max_pledge_percent": "Most a person can renounce"}
-        for name, (low, high) in community.BOUNDS.items():
-            values[f"community_{name}"] = integer(f"community_{name}", minimum=low, maximum=high, label=labels[name])
+        values = _community_values()
     except FormError as error:
         flash(str(error), "error")
         return back("admin.quotas", _anchor="community")
@@ -141,8 +250,7 @@ def save_community():
 @admin_required
 def save_fallback():
     """Which way chat may switch models when someone's quota for the chosen model runs out."""
-    values = {"quota_fallback_to_local": 1 if flag("quota_fallback_to_local") else 0,
-              "quota_fallback_to_cloud": 1 if flag("quota_fallback_to_cloud") else 0}
+    values = _fallback_values()
     site_settings.update(**values)
     audit("quotas_fallback", "site", values)
     flash("Model fallback saved.", "success")
@@ -153,8 +261,7 @@ def save_fallback():
 @admin_required
 def save_chat_consumption():
     """Choose which chats consume token allowances without changing request-rate protection."""
-    values = {"chat_local_token_consumption": int(flag("chat_local_token_consumption")),
-              "chat_cloud_token_consumption": int(flag("chat_cloud_token_consumption"))}
+    values = _chat_consumption_values()
     with db.transaction():
         site_settings.update(**values)
         audit("chat_token_consumption", "chat", values)

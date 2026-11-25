@@ -8,6 +8,7 @@ log (``admin.agents.*``).
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from flask import abort, flash, redirect, render_template, request, url_for
 
@@ -71,7 +72,13 @@ def _runner_warnings(health: dict) -> list[str]:
 @bp.get("/agents", endpoint="agents")
 @admin_required
 def overview():
+    return _overview()
+
+
+def _overview(shown=None):
+    """The page; *shown* replaces the saved settings in the settings form (a refused form, as typed)."""
     settings = agent_settings.current(fresh=True)
+    shown = shown or settings
     health = runner_mod.health(fresh=request.args.get("refresh") == "1")
     caps = agents_db.model_caps()
     models = []
@@ -87,7 +94,7 @@ def overview():
             info = {"supports_tools": isinstance(capabilities, list) and "tools" in capabilities,
                     "supports_thinking": bool(model["is_reasoning"]), "checked_at": None}
         models.append({"row": model, "caps": info, "text": is_text_model(model),
-                       "override": settings.model_overrides.get(str(model["id"]), ""),
+                       "override": shown.model_overrides.get(str(model["id"]), ""),
                        "usable": is_text_model(model) and agent_settings.supports_tools(model, caps,
                                                                                         settings.model_overrides)})
     status_filter = request.args.get("status") if request.args.get("status") in STATUS_FILTERS else None
@@ -101,40 +108,117 @@ def overview():
                         "download their changes as a patch. Build and allow the agent image "
                         "(compute/sandbox-image, see docs/agents.md).")
     return render_template(
-        "admin/agents.html", section="agents", settings=settings, health=health, models=models, tasks=tasks,
-        image=image, git_labels=GIT_LABELS, git_hosts_text="\n".join(settings.git_hosts),
+        "admin/agents.html", section="agents", settings=shown, saved=settings, health=health, models=models,
+        tasks=tasks, image=image, git_labels=GIT_LABELS, git_hosts_text="\n".join(shown.git_hosts),
         listing=listing, status_filter=status_filter, statuses=STATUS_FILTERS, limit_labels=LIMIT_LABELS,
         limit_ranges=agent_settings.INTEGER_FIELDS, warnings=warnings,
         active=agents_db.active_count(), runner_configured=runner_mod.configured())
 
 
+# The page's one form saves three sections; each marks itself present, so a form without one (an older
+# page) leaves that section's settings as they are.
+
+def _read_settings(values: dict) -> None:
+    """The Settings section into *values*; raises FormError."""
+    values["enabled"] = flag("enabled")
+    if "access_mode_present" in request.form:
+        mode = request.form.get("access_mode", "")
+        if mode not in agent_settings.ACCESS_MODES:
+            raise FormError("Choose who can use cloud sessions.")
+        values["access_mode"] = mode
+    values["swarms_enabled"] = flag("swarms_enabled")
+    for name, (label, _) in LIMIT_LABELS.items():
+        _, low, high = agent_settings.INTEGER_FIELDS[name]
+        values[name] = integer(name, minimum=low, maximum=high, label=label)
+
+
+def _read_git(values: dict) -> None:
+    """The Git repositories section into *values*; raises FormError."""
+    values["git_enabled"] = flag("git_enabled")
+    for name, (label, _) in GIT_LABELS.items():
+        _, low, high = agent_settings.INTEGER_FIELDS[name]
+        values[name] = integer(name, minimum=low, maximum=high, label=label)
+    entries = [line.strip() for line in text("git_hosts", max_length=4000, label="Allowed hosts").splitlines()
+               if line.strip()]
+    if len(entries) > gitfetch.MAX_HOSTS:
+        raise FormError(f"List at most {gitfetch.MAX_HOSTS} hosts.")
+    for entry in entries:
+        try:
+            gitfetch.parse_host_entry(entry)
+        except ValueError as error:
+            raise FormError(f"Allowed hosts: {entry[:80]!r} is not valid ({error}).") from None
+    values["git_hosts"] = entries
+
+
+def _read_models(values: dict) -> None:
+    """The Models section (which models sessions may use) into *values*."""
+    overrides = {}
+    for model in catalog.list_models():
+        if model["backend"] not in ("ollama", "external"):
+            continue
+        choice = request.form.get(f"override_{model['id']}", "")
+        if choice in agent_settings.OVERRIDES:
+            overrides[str(model["id"])] = choice
+    values["model_overrides"] = overrides
+
+
+def _typed(current) -> SimpleNamespace:
+    """A refused form as typed, in the shape of the settings (the sections it did not send as saved)."""
+    shown = current.to_dict()
+    values = dict(shown)
+    _read_models(values)
+    if "models_present" in request.form:
+        shown["model_overrides"] = values["model_overrides"]
+    shown["enabled"], shown["swarms_enabled"] = flag("enabled"), flag("swarms_enabled")
+    if "access_mode_present" in request.form:
+        shown["access_mode"] = request.form.get("access_mode", "")
+    if "git_present" in request.form:
+        shown["git_enabled"] = flag("git_enabled")
+        shown["git_hosts"] = (request.form.get("git_hosts") or "")[:4000].splitlines()
+    for name in (*LIMIT_LABELS, *GIT_LABELS):
+        if name in request.form:
+            shown[name] = (request.form.get(name) or "").strip()[:20]
+    return SimpleNamespace(**shown)
+
+
 @bp.post("/agents/settings", endpoint="agents_settings")
 @admin_required
 def save_settings():
+    """The page's Save: settings, Git repositories and models, each checked before anything is saved."""
     current = agent_settings.current(fresh=True)
-    values = current.to_dict()
-    try:
-        values["enabled"] = flag("enabled")
-        if "access_mode_present" in request.form:
-            mode = request.form.get("access_mode", "")
-            if mode not in agent_settings.ACCESS_MODES:
-                raise FormError("Choose who can use cloud sessions.")
-            values["access_mode"] = mode
-        values["swarms_enabled"] = flag("swarms_enabled")
-        for name, (label, _) in LIMIT_LABELS.items():
-            _, low, high = agent_settings.INTEGER_FIELDS[name]
-            values[name] = integer(name, minimum=low, maximum=high, label=label)
-    except FormError as error:
-        flash(str(error), "error")
-        return back("admin.agents")
+    before = current.to_dict()
+    values = dict(before)
+    sections = [_read_settings]
+    if "git_present" in request.form:
+        sections.append(_read_git)
+    if "models_present" in request.form:
+        sections.append(_read_models)
+    errors = []
+    for read in sections:
+        try:
+            read(values)
+        except FormError as error:
+            errors.append(str(error))
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return _overview(_typed(current)), 400
     saved = agent_settings.save(values, me()["id"])
-    changes = {key: value for key, value in saved.to_dict().items()
-               if key != "model_overrides" and current.to_dict().get(key) != value}
-    audit("agents.settings", "agents", changes)
+    after = saved.to_dict()
+    changed = {key: value for key, value in after.items() if before.get(key) != value}
+    audit("agents.settings", "agents", {key: value for key, value in changed.items()
+                                        if key != "model_overrides" and not key.startswith("git_")})
+    git_changes = {key: value for key, value in changed.items() if key.startswith("git_")}
+    if git_changes:
+        audit("agents.git", "agents", git_changes)
+    if "model_overrides" in changed:
+        audit("agents.models", "agents", {"overrides": after["model_overrides"]})
     flash("Agent settings saved." + (" Agents are now enabled." if saved.enabled and not current.enabled else ""),
           "success")
     return back("admin.agents")
 
+
+# The two forms the page had before its sections shared one Save, for pages still open from before.
 
 @bp.post("/agents/git", endpoint="agents_git")
 @admin_required
@@ -142,20 +226,7 @@ def save_git_settings():
     current = agent_settings.current(fresh=True)
     values = current.to_dict()
     try:
-        values["git_enabled"] = flag("git_enabled")
-        for name, (label, _) in GIT_LABELS.items():
-            _, low, high = agent_settings.INTEGER_FIELDS[name]
-            values[name] = integer(name, minimum=low, maximum=high, label=label)
-        entries = [line.strip() for line in text("git_hosts", max_length=4000, label="Allowed hosts").splitlines()
-                   if line.strip()]
-        if len(entries) > gitfetch.MAX_HOSTS:
-            raise FormError(f"List at most {gitfetch.MAX_HOSTS} hosts.")
-        for entry in entries:
-            try:
-                gitfetch.parse_host_entry(entry)
-            except ValueError as error:
-                raise FormError(f"Allowed hosts: {entry[:80]!r} is not valid ({error}).") from None
-        values["git_hosts"] = entries
+        _read_git(values)
     except FormError as error:
         flash(str(error), "error")
         return redirect(url_for("admin.agents", _anchor="git"))
@@ -166,6 +237,17 @@ def save_git_settings():
     audit("agents.git", "agents", changes)
     flash("Git import settings saved.", "success")
     return redirect(url_for("admin.agents", _anchor="git"))
+
+
+@bp.post("/agents/models", endpoint="agents_models")
+@admin_required
+def save_models():
+    values = agent_settings.current(fresh=True).to_dict()
+    _read_models(values)
+    agent_settings.save(values, me()["id"])
+    audit("agents.models", "agents", {"overrides": values["model_overrides"]})
+    flash("Model choices saved.", "success")
+    return redirect(url_for("admin.agents", _anchor="models"))
 
 
 @bp.post("/agents/image-check", endpoint="agents_image_check")
@@ -182,25 +264,6 @@ def check_image():
     else:
         flash("The sandbox image has no Git. Imports work, patch export doesn't.", "warning")
     return redirect(url_for("admin.agents", _anchor="git"))
-
-
-@bp.post("/agents/models", endpoint="agents_models")
-@admin_required
-def save_models():
-    current = agent_settings.current(fresh=True)
-    values = current.to_dict()
-    overrides = {}
-    for model in catalog.list_models():
-        if model["backend"] not in ("ollama", "external"):
-            continue
-        choice = request.form.get(f"override_{model['id']}", "")
-        if choice in agent_settings.OVERRIDES:
-            overrides[str(model["id"])] = choice
-    values["model_overrides"] = overrides
-    agent_settings.save(values, me()["id"])
-    audit("agents.models", "agents", {"overrides": overrides})
-    flash("Model choices saved.", "success")
-    return redirect(url_for("admin.agents", _anchor="models"))
 
 
 @bp.post("/agents/models/refresh", endpoint="agents_models_refresh")

@@ -359,6 +359,7 @@ def _install_template_helpers(app: Flask) -> None:
             "settings": settings,
             "site_name": settings.get("site_name") or PRODUCT_NAME,
             "current_user": user,
+            "acting": security.acting() if user is not None else None,
             "is_admin": bool(user and user["role"] == "admin"),
             "lang": language,
             "t": t,

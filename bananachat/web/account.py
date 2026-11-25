@@ -313,9 +313,10 @@ def _page(draft: dict | None = None):
     form = _request_form(user) if user["role"] != "admin" else None
     hosting_mode = hosting_signin.effective_mode(settings)
     hosting_link = hosting_links.link_of(user["id"]) if hosting_mode != "local" else None
-    if hosting_mode != "local" and hosting_link is None:
-        # The link form continues to the portal once the password is confirmed.
-        g.form_action_origins = (hosting_signin.portal_origin(),)
+    can_confirm = hosting_signin.can_confirm(user)
+    if hosting_mode != "local" and (hosting_link is None or can_confirm):
+        # The link and confirmation forms continue to the portal.
+        hosting_signin.allow_portal_form_action()
     if draft is None and form is not None and request.args.get("request") == "effort":
         # "Request access" from a locked level in the chat composer.
         draft = {"form": "quota", "kind": "effort", "effort_model": (request.args.get("model") or "")[:300],
@@ -348,6 +349,9 @@ def _page(draft: dict | None = None):
         two_step_required=two_step.required(user),
         hosting_mode=hosting_mode,
         hosting_link=hosting_link,
+        has_password=users.has_password(user),
+        can_confirm=can_confirm,
+        hosting_confirmed=hosting_signin.confirmed_recently(),
         api_token_count=tokens.count_active(user["id"]), share_link_count=chats.count_shared(user["id"]),
         access=access,
         requestable=[{"value": f"{scope}:{resource_id}", "label": gate.label,
@@ -501,7 +505,10 @@ def _amount(value) -> str:
 @security.login_required
 @security.rate_limit("account-password", 10, 900, per_user=True)
 def change_password():
+    """Change the password, or set the first one of an account made through BananaWiki Hosting (after a
+    confirmation there: it has no password to type)."""
     user = security.current_user()
+    first = not users.has_password(user)
     current = request.form.get("current_password") or ""
     new = request.form.get("new_password") or ""
     if not _password_confirmed(user, current):
@@ -510,7 +517,7 @@ def change_password():
     if problem:
         flash(_t(problem), "error")
         return _back("password")
-    if new == current:
+    if current and new == current:
         flash(_t("account.password_same"), "error")
         return _back("password")
     try:
@@ -519,15 +526,29 @@ def change_password():
     except users.AuthenticationChanged:
         return _authentication_changed()
     security.renew_device_cookie(user["id"])
-    users.audit(user, "account.password_change", user["id"], ip_address=security.client_ip())
-    flash(_t("account.password_changed"), "success")
+    users.audit(user, "account.password_change", user["id"], {"first": True} if first else None,
+                security.client_ip())
+    flash(_t("account.password_set_done" if first else "account.password_changed"), "success")
     _revoke_api_tokens_if_asked(user)
     _stop_share_links_if_asked(user)
     return _back("password")
 
 
 def _password_confirmed(user, password: str) -> bool:
-    """Check the password typed to confirm an action (counted with every other confirmation); says why not."""
+    """Check what confirms a sensitive action; says why not.
+
+    The password typed with it (counted with every other confirmation), or a confirmation with BananaWiki
+    Hosting in the last ten minutes (the only way for an account without a password of its own). Never in a
+    session a hosting administrator opened while acting as the account.
+    """
+    if security.acting() is not None:
+        flash(_t("hosting.acting_refused"), "error")
+        return False
+    if hosting_signin.confirmed_recently():
+        return True
+    if not users.has_password(user):
+        flash(_t("hosting.confirm_needed"), "error")
+        return False
     confirmed = security.confirm_password(user, password)
     if not confirmed:
         flash(_t("account.password_wrong" if confirmed is False else "auth.too_many_attempts"), "error")
@@ -642,11 +663,19 @@ def two_step_page():
     """Set up, make new recovery codes or turn off; also where required administrators are sent."""
     user = security.current_user()
     state = two_step.state(user["id"])
-    secret = "" if state else _enrolment_secret()
+    has_password = users.has_password(user)
+    # Codes are asked after a password sign-in: an account without a password sets one up first.
+    secret = "" if state or not has_password else _enrolment_secret()
     issuer = g.settings.get("site_name") or PRODUCT_NAME
+    can_confirm = hosting_signin.can_confirm(user)
+    if can_confirm:
+        hosting_signin.allow_portal_form_action()
     return render_template("account/two_step.html", user=user, state=state, secret=secret,
                            required=two_step.required(user), api_token_count=tokens.count_active(user["id"]), share_link_count=chats.count_shared(user["id"]),
-                           qr=two_step.provisioning_qr(secret, user["username"], issuer) if secret else "")
+                           qr=two_step.provisioning_qr(secret, user["username"], issuer) if secret else "",
+                           has_password=has_password, can_confirm=can_confirm,
+                           hosting_confirmed=hosting_signin.confirmed_recently(),
+                           hosting_mode=hosting_signin.effective_mode())
 
 
 def _show_codes(codes: list[str]):
@@ -670,9 +699,8 @@ def two_step_change():
     action = request.form.get("action", "")
     if action not in TWO_STEP_ACTIONS:
         abort(400)
-    confirmed = security.confirm_password(user, request.form.get("password") or "")
-    if not confirmed:
-        return _two_step_back("account.password_wrong" if confirmed is False else "auth.too_many_attempts")
+    if not _password_confirmed(user, request.form.get("password") or ""):
+        return redirect(url_for("account.two_step"))
     code = (request.form.get("code") or "")[:128]
     current = security.current_session_hash()
     if action == "enable":

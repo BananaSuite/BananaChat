@@ -82,3 +82,8 @@
 .two-step-key { font-size: var(--text-base); letter-spacing: .04em; overflow-wrap: anywhere; user-select: all; }
 .two-step-codes { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: .5rem 1.5rem; margin: 0; padding: 0; list-style: none; font-size: 1rem; }
 .two-step-codes li { user-select: all; }
+/* Sign-in methods (account/index.html): BananaWiki Hosting, the password and two-step codes, one after another. */
+.sign-in-method { padding-block: 1rem; scroll-margin-top: calc(var(--topbar-height) + 1rem); }
+.sign-in-method + .sign-in-method { border-top: 1px solid var(--border); }
+.sign-in-method:last-child { padding-bottom: 0; }
+.confirm-hosting { align-items: center; flex-wrap: wrap; }

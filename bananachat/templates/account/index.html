@@ -25,6 +25,27 @@
 {% endif %}
 <p class="hint mb-0">{% if window.open %}{{ t_html("account." ~ period ~ ("_blocked" if window.blocked else "_resets"), time=(window.resets_at | local_time("auto")), left=(window.resets_at | time_left_html)) }}{% else %}{{ t("account." ~ period ~ "_not_started") }}{% endif %}</p>
 {%- endmacro %}
+{#- What confirms a sensitive change (web/account.py): the password, or a fresh sign-in at BananaWiki Hosting in
+    the last ten minutes (its button submits the "hosting-confirm" form and comes back to *anchor*). An account
+    without a password of its own has only the second. -#}
+{% macro confirm_field(id, anchor, label=None, name="password") -%}
+{% if hosting_confirmed %}
+<p class="hint mb-0">{{ t("hosting.confirmed_short") }}</p>
+{% else %}
+{% if has_password %}
+<div class="field">
+  <label for="{{ id }}">{{ label or t("account.confirm_with_password") }}</label>
+  <input type="password" id="{{ id }}" name="{{ name }}" autocomplete="current-password" required maxlength="1024">
+</div>
+{% endif %}
+{% if can_confirm %}
+<div class="row confirm-hosting">
+  <span class="hint">{{ t("hosting.confirm_instead") if has_password else t("hosting.confirm_first") }}</span>
+  <button type="submit" class="btn btn-sm" form="hosting-confirm" name="next" value="{{ url_for('account.index', _anchor=anchor) }}">{{ t("hosting.confirm_button") }}</button>
+</div>
+{% endif %}
+{% endif %}
+{%- endmacro %}
 {% block content %}
 <div class="page page-narrow account-page">
   <header class="page-header">
@@ -54,92 +75,114 @@
       </section>
 
       <div class="account-panel section-stack" id="security">
-        {# ----- password ----- #}
-        <section class="settings-section" id="password" aria-labelledby="password-title">
-          <h2 id="password-title">{{ t("account.password") }}</h2>
-          <form method="post" action="{{ url_for('account.change_password') }}" class="stack" data-busy>
-            {{ csrf() }}
-            <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
-            <div class="form-grid">
-              <div class="field">
-                <label for="current_password">{{ t("account.current_password") }}</label>
-                <input type="password" id="current_password" name="current_password" autocomplete="current-password" required maxlength="1024">
-              </div>
-              <div class="field">
-                <label for="new_password">{{ t("account.new_password") }}</label>
-                <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="8" maxlength="1024" aria-describedby="new_password_hint">
-                <span class="hint" id="new_password_hint">{{ t("auth.password_length") }}</span>
-              </div>
-              <div class="field">
-                <label for="confirm_password">{{ t("auth.confirm_password") }}</label>
-                <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" required minlength="8" maxlength="1024">
-              </div>
-            </div>
-            {% if api_token_count %}
-            <label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>{{ t("account.revoke_api_tokens", count=api_token_count) }}</span></label>
-            {% endif %}
-            {% if share_link_count %}
-            <label class="check"><input type="checkbox" name="revoke_share_links" value="1" checked><span>{{ t("account.revoke_share_links", count=share_link_count) }}</span></label>
-            {% endif %}
-            <p class="hint mb-0">{{ t("account.password_intro") }}</p>
-            <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("account.change_password") }}</button></div>
-          </form>
-        </section>
+        {#- Sign-in methods: BananaWiki Hosting, the password and two-step codes. Sensitive changes take the password,
+            or a fresh sign-in at BananaWiki Hosting (confirm_field), and are refused while an administrator acts. -#}
+        <section class="settings-section" id="sign-in-methods" aria-labelledby="sign-in-methods-title">
+          <h2 id="sign-in-methods-title">{{ t("account.sign_in_methods") }}</h2>
+          {% if acting %}
+          <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("hosting.acting_account_notice") }}</p></div>
+          {% elif hosting_confirmed %}
+          <p class="hint">{{ t("hosting.confirmed_notice") }}</p>
+          {% endif %}
 
-        {# ----- two-step verification ----- #}
-        <section class="settings-section" id="two-step" aria-labelledby="two-step-title">
-          <div class="section-header">
-            <h2 id="two-step-title">{{ t("two_step.title") }}</h2>
-            {% if two_step_state %}<span class="badge badge-success">{{ t("two_step.on") }}</span>{% else %}<span class="badge">{{ t("two_step.off") }}</span>{% endif %}
+          {# ----- BananaWiki Hosting ----- #}
+          {% if hosting_mode != "local" %}
+          <div class="sign-in-method" id="hosting">
+            <div class="section-header">
+              <h3 id="hosting-title">{{ t("hosting.account_title") }}</h3>
+              {% if hosting_link %}<span class="badge badge-success">{{ t("hosting.account_connected") }}</span>{% else %}<span class="badge">{{ t("hosting.account_not_connected") }}</span>{% endif %}
+            </div>
+            {% if hosting_link %}
+            <p>{{ t_html("hosting.account_linked", name=(hosting_link.portal_username or "—"), when=(hosting_link.linked_at | local_time)) }}</p>
+            {% if hosting_mode == "hosting" %}
+            <p class="hint mb-0">{{ t("hosting.account_unlink_hosting_only") }}</p>
+            {% elif not has_password %}
+            <p class="hint mb-0">{{ t("hosting.account_unlink_no_password") }}</p>
+            {% elif not acting %}
+            <form method="post" action="{{ url_for('hosting.unlink') }}" class="stack" data-busy data-confirm="{{ t('hosting.account_unlink_confirm') }}">
+              {{ csrf() }}
+              <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
+              {{ confirm_field("hosting_unlink_password", "hosting") }}
+              <div class="form-actions"><button type="submit" class="btn">{{ t("hosting.account_unlink") }}</button></div>
+            </form>
+            {% endif %}
+            {% else %}
+            {% if not acting %}
+            <form method="post" action="{{ url_for('hosting.link') }}" class="stack" data-busy>
+              {{ csrf() }}
+              <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
+              <div class="field">
+                <label for="hosting_link_password">{{ t("account.confirm_with_password") }}</label>
+                <input type="password" id="hosting_link_password" name="password" autocomplete="current-password" required maxlength="1024">
+              </div>
+              <div class="form-actions"><button type="submit" class="btn">{{ t("hosting.account_link") }}</button></div>
+            </form>
+            {% endif %}
+            {% endif %}
           </div>
-          <p class="muted">{{ t("two_step.intro") }}</p>
-          {% if two_step_state %}
-          <p>{{ t_html("two_step.on_since", when=(two_step_state.enabled_at | local_time)) }} {{ t("two_step.codes_left", count=two_step_state.codes_left) }}</p>
-          {% if not two_step_state.readable %}
-          <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("two_step.unreadable") }}</p></div>
           {% endif %}
-          {% elif two_step_required %}
-          <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("two_step.required_notice") }}</p></div>
-          {% endif %}
-          <div class="form-actions"><a class="btn{% if not two_step_state %} btn-primary{% endif %}" href="{{ url_for('account.two_step') }}">{{ t("two_step.manage") if two_step_state else t("two_step.set_up") }}</a></div>
-        </section>
 
-        {# ----- BananaWiki Hosting ----- #}
-        {% if hosting_mode != "local" %}
-        <section class="settings-section" id="hosting" aria-labelledby="hosting-title">
-          <div class="section-header">
-            <h2 id="hosting-title">{{ t("hosting.account_title") }}</h2>
-            {% if hosting_link %}<span class="badge badge-success">{{ t("hosting.account_connected") }}</span>{% else %}<span class="badge">{{ t("hosting.account_not_connected") }}</span>{% endif %}
+          {# ----- password ----- #}
+          <div class="sign-in-method" id="password">
+            <div class="section-header">
+              <h3 id="password-title">{{ t("account.password") }}</h3>
+              {% if has_password %}<span class="badge badge-success">{{ t("account.password_is_set") }}</span>{% else %}<span class="badge">{{ t("account.password_not_set") }}</span>{% endif %}
+            </div>
+            {% if acting %}
+            {% elif has_password or hosting_confirmed %}
+            {% if not has_password %}<p class="muted">{{ t("account.password_set_intro") }}</p>{% endif %}
+            <form method="post" action="{{ url_for('account.change_password') }}" class="stack" data-busy>
+              {{ csrf() }}
+              <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
+              {% if has_password %}{{ confirm_field("current_password", "password", t("account.current_password"), "current_password") }}{% endif %}
+              <div class="form-grid">
+                <div class="field">
+                  <label for="new_password">{{ t("account.new_password") }}</label>
+                  <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="8" maxlength="1024" aria-describedby="new_password_hint">
+                  <span class="hint" id="new_password_hint">{{ t("auth.password_length") }}</span>
+                </div>
+                <div class="field">
+                  <label for="confirm_password">{{ t("auth.confirm_password") }}</label>
+                  <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" required minlength="8" maxlength="1024">
+                </div>
+              </div>
+              {% if api_token_count %}
+              <label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>{{ t("account.revoke_api_tokens", count=api_token_count) }}</span></label>
+              {% endif %}
+              {% if share_link_count %}
+              <label class="check"><input type="checkbox" name="revoke_share_links" value="1" checked><span>{{ t("account.revoke_share_links", count=share_link_count) }}</span></label>
+              {% endif %}
+              <p class="hint mb-0">{{ t("account.password_intro") }}</p>
+              <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("account.change_password") if has_password else t("account.set_password") }}</button></div>
+            </form>
+            {% else %}
+            <p class="muted">{{ t("account.password_set_intro") }}</p>
+            {{ confirm_field("set_password_confirm", "password") }}
+            {% endif %}
           </div>
-          {% if hosting_link %}
-          <p>{{ t_html("hosting.account_linked", name=(hosting_link.portal_username or "—"), when=(hosting_link.linked_at | local_time)) }}</p>
-          {% if hosting_mode == "hosting" %}
-          <p class="hint mb-0">{{ t("hosting.account_unlink_hosting_only") }}</p>
-          {% else %}
-          <form method="post" action="{{ url_for('hosting.unlink') }}" class="stack" data-busy data-confirm="{{ t('hosting.account_unlink_confirm') }}">
-            {{ csrf() }}
-            <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
-            <div class="field">
-              <label for="hosting_unlink_password">{{ t("account.confirm_with_password") }}</label>
-              <input type="password" id="hosting_unlink_password" name="password" autocomplete="current-password" required maxlength="1024">
+
+          {# ----- two-step verification ----- #}
+          <div class="sign-in-method" id="two-step">
+            <div class="section-header">
+              <h3 id="two-step-title">{{ t("two_step.title") }}</h3>
+              {% if two_step_state %}<span class="badge badge-success">{{ t("two_step.on") }}</span>{% else %}<span class="badge">{{ t("two_step.off") }}</span>{% endif %}
             </div>
-            <div class="form-actions"><button type="submit" class="btn">{{ t("hosting.account_unlink") }}</button></div>
-          </form>
-          {% endif %}
-          {% else %}
-          <p class="muted">{{ t("hosting.account_intro") }}</p>
-          <form method="post" action="{{ url_for('hosting.link') }}" class="stack" data-busy>
-            {{ csrf() }}
-            <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
-            <div class="field">
-              <label for="hosting_link_password">{{ t("account.confirm_with_password") }}</label>
-              <input type="password" id="hosting_link_password" name="password" autocomplete="current-password" required maxlength="1024">
-            </div>
-            <div class="form-actions"><button type="submit" class="btn btn-primary">{{ t("hosting.account_link") }}</button></div>
-          </form>
-          {% endif %}
+            <p class="muted">{{ t("two_step.intro") }}{% if hosting_mode != "local" %} {{ t("two_step.password_only_note") }}{% endif %}</p>
+            {% if two_step_state %}
+            <p>{{ t_html("two_step.on_since", when=(two_step_state.enabled_at | local_time)) }} {{ t("two_step.codes_left", count=two_step_state.codes_left) }}</p>
+            {% if not two_step_state.readable %}
+            <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("two_step.unreadable") }}</p></div>
+            {% endif %}
+            {% elif two_step_required %}
+            <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("two_step.required_notice") }}</p></div>
+            {% endif %}
+            {% if not acting and (two_step_state or has_password) %}
+            <div class="form-actions"><a class="btn{% if not two_step_state %} btn-primary{% endif %}" href="{{ url_for('account.two_step') }}">{{ t("two_step.manage") if two_step_state else t("two_step.set_up") }}</a></div>
+            {% elif not has_password %}
+            <p class="hint mb-0">{{ t("two_step.needs_password") }}</p>
+            {% endif %}
+          </div>
         </section>
-        {% endif %}
 
         {# ----- sessions ----- #}
         <section class="settings-section" id="sessions" aria-labelledby="sessions-title">
@@ -545,12 +588,11 @@
           <h2 id="delete-chats-title">{{ t("account.delete_chats") }}</h2>
           <form method="post" action="{{ url_for('account.delete_chats') }}" class="stack" aria-labelledby="delete-chats-title" data-confirm="{{ t('account.delete_chats_confirm') }}" data-confirm-danger>
             {{ csrf() }}
-            <div class="field">
-              <label for="delete_chats_password">{{ t("account.confirm_with_password") }}</label>
-              <input type="password" id="delete_chats_password" name="password" autocomplete="current-password" required maxlength="1024" aria-describedby="delete-chats-hint">
-              <span class="hint" id="delete-chats-hint">{{ t("account.delete_chats_intro", count=retention_days) if retention_days else t("account.delete_chats_intro_now") }}</span>
-            </div>
+            <p class="hint mb-0" id="delete-chats-hint">{{ t("account.delete_chats_intro", count=retention_days) if retention_days else t("account.delete_chats_intro_now") }}</p>
+            {% if acting %}<p class="hint mb-0">{{ t("hosting.acting_refused") }}</p>{% else %}
+            {{ confirm_field("delete_chats_password", "delete-chats") }}
             <div class="form-actions"><button type="submit" class="btn btn-danger">{{ t("account.delete_chats_submit") }}</button></div>
+            {% endif %}
           </form>
         </section>
 
@@ -559,6 +601,8 @@
           <h2 id="delete-title">{{ t("account.delete") }}</h2>
           {% if is_last_admin %}
           <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("account.delete_last_admin") }}</p></div>
+          {% elif acting %}
+          <p class="hint mb-0">{{ t("hosting.acting_refused") }}</p>
           {% else %}
           <p class="hint">{{ t("account.delete_intro") }}</p>
           <form method="post" action="{{ url_for('account.delete') }}" class="stack" data-confirm="{{ t('account.delete_confirm') }}" data-confirm-danger>
@@ -568,17 +612,18 @@
                 <label for="confirm_username">{{ t("account.delete_type_username", username=user.username) }}</label>
                 <input type="text" id="confirm_username" name="confirm_username" required autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="64">
               </div>
-              <div class="field">
-                <label for="delete_password">{{ t("auth.password") }}</label>
-                <input type="password" id="delete_password" name="password" autocomplete="current-password" required maxlength="1024">
-              </div>
             </div>
+            {{ confirm_field("delete_password", "delete", t("auth.password")) }}
             <div class="form-actions"><button type="submit" class="btn btn-danger">{{ t("account.delete_submit") }}</button></div>
           </form>
           {% endif %}
         </section>
       </div>
   </div>
+  {#- "Confirm with BananaWiki Hosting" buttons (confirm_field) submit this form, outside every other one. -#}
+  {% if can_confirm and not hosting_confirmed %}
+  <form method="post" action="{{ url_for('hosting.confirm') }}" id="hosting-confirm" hidden>{{ csrf() }}</form>
+  {% endif %}
 </div>
 {% endblock %}
 {% block scripts %}<script type="module" src="{{ url_for('static', filename='js/account.js') }}"></script>{% endblock %}

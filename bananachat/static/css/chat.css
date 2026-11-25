@@ -6,7 +6,7 @@
 body.chat-page { height: 100vh; height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 body.chat-page > main { flex: 1 1 0; min-height: 0; display: flex; }
 /* The top bar and service notices keep their size; only the conversation area gives way. */
-body.chat-page > .topbar, body.chat-page > .status-region { flex: none; }
+body.chat-page > .topbar, body.chat-page > .status-region, body.chat-page > .acting-banner { flex: none; }
 body.chat-page > main:focus { outline: none; }
 /* Conversation feedback stays above the message area, clear of the composer. */
 body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto; }
@@ -19,13 +19,12 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 /* ----- sidebar -------------------------------------------------------------- */
 .chat-sidebar {
   display: flex; flex-direction: column; min-height: 0; overflow: hidden;
-  background: var(--surface); border-right: 1px solid var(--border);
+  background: var(--sidebar); border-right: 1px solid var(--border);
 }
 .sidebar-head { display: flex; flex-direction: column; gap: .625rem; padding: .875rem .75rem .75rem; }
 .sidebar-new { display: flex; gap: .4rem; }
 .sidebar-new form { margin: 0; }
-.sidebar-new .btn { font-weight: 550; background: var(--raised); justify-content: flex-start; }
-.sidebar-new .btn:hover { background: var(--hover); border-color: var(--border-strong); }
+.sidebar-new .btn { justify-content: flex-start; }
 .sidebar-new .btn-icon { justify-content: center; }
 .sidebar-new .btn svg { color: inherit; }
 .sidebar-new .btn-icon { padding: 0; width: var(--control-height); background: transparent; border-color: transparent; }
@@ -220,12 +219,12 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 .model-picker { position: relative; min-width: 0; }
 .model-button { max-width: 240px; min-width: 0; gap: .3rem; }
 .model-button svg { width: .9375rem; height: .9375rem; }
-#model-picker > .model-button { border-color: var(--border); background: var(--raised); color: var(--text); }
+#model-picker > .model-button { color: var(--text); }
 #model-picker > .model-button:hover, .model-button[aria-expanded="true"] { border-color: var(--border-strong); background: var(--hover); color: var(--text); }
 .model-popover {
   position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 70; width: min(380px, calc(100vw - 2rem));
   max-height: min(440px, 60vh); display: flex; flex-direction: column; padding: .5rem;
-  background: var(--overlay); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  background: var(--overlay); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow-lg);
 }
 .model-list { list-style: none; margin: .4rem 0 0; padding: 0; overflow-y: auto; }
 .model-option { display: flex; flex-direction: column; gap: .15rem; padding: .5rem .6rem; border-radius: var(--radius-sm); cursor: pointer; border: 1px solid transparent; }
@@ -256,7 +255,7 @@ body.chat-page .toasts { top: calc(var(--topbar-height) + 3.5rem); bottom: auto;
 /* ----- menus and overlays ---------------------------------------------------- */
 .popup-menu {
   position: fixed; z-index: 90; min-width: 210px; display: flex; flex-direction: column; padding: .35rem;
-  background: var(--overlay); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  background: var(--overlay); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow-lg);
 }
 .popup-menu button {
   display: flex; align-items: center; gap: .6rem; width: 100%; padding: .55rem .7rem; border: 0; border-radius: var(--radius-sm);

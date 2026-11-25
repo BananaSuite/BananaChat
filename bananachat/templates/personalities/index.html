@@ -26,7 +26,7 @@
               <input type="file" id="import-file" name="file" accept=".json,application/json" required aria-describedby="import-hint">
               <span class="hint" id="import-hint">{{ t("personality.import_hint", size=max_import_kb) }}</span>
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">{{ t("personality.import_submit") }}</button>
+            <button type="submit" class="btn btn-sm">{{ t("personality.import_submit") }}</button>
           </form>
         </div>
       </details>
@@ -63,7 +63,7 @@
           {% for row in shared_by_admins %}<option value="{{ row.id }}"{% if row.id == default_id %} selected{% endif %}>{{ (row.avatar ~ " ") if row.avatar }}{{ row.name }}</option>{% endfor %}
         </optgroup>{% endif %}
       </select>
-      <button type="submit" class="btn">{{ t("common.save") }}</button>
+      <button type="submit" class="btn">{{ t("personality.default_submit") }}</button>
     </form>
   </section>
   {% endif %}

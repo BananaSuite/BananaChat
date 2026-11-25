@@ -984,7 +984,9 @@ def test_admin_settings_models_and_audit(env, fake_ollama):
     page = admin.get("/admin/agents").get_data(as_text=True)
     assert "Sandbox runner" in page and "podman" in page and "Stop all sessions" in page
     response = admin.post("/admin/agents/settings", {"enabled": "1", "max_steps": "100000", "max_minutes": "20"})
-    assert response.status_code == 302
+    assert response.status_code == 400  # refused: the page again, as typed
+    refused = response.get_data(as_text=True)
+    assert 'value="100000"' in refused and "Steps per run must be between" in refused
     set_values = {name: str(value) for name, value in FAST_SETTINGS.items() if name != "enabled"}
     from bananachat.services.agents import settings as agent_settings
     with env.app.app_context():
@@ -1005,6 +1007,32 @@ def test_admin_settings_models_and_audit(env, fake_ollama):
     assert "admin.agents.settings" in actions and "admin.agents.models" in actions
     assert Browser(env.app).get("/admin/agents").status_code == 302  # signed out
     assert env.browser.get("/admin/agents").status_code == 403       # not an administrator
+
+
+def test_one_save_keeps_every_section_or_none(app, admin):
+    """The settings, Git and model sections share the page's one Save: all are checked first, so a refused
+    section saves nothing and the page shows again as typed."""
+    from bananachat import db
+    from bananachat.services.agents import settings as agent_settings
+
+    page = admin.get("/admin/agents").get_data(as_text=True)
+    assert page.count('form="agents-settings-form"') == 1 and page.count(">Save<") == 1
+    form = {**{name: str(default) for name, (default, _, _) in agent_settings.INTEGER_FIELDS.items()},
+            "enabled": "1", "access_mode_present": "1", "access_mode": "everyone", "max_steps": "12",
+            "git_present": "1", "git_enabled": "1", "git_hosts": "github.com", "models_present": "1"}
+    refused = admin.post("/admin/agents/settings", {**form, "git_hosts": "http://github.com"})
+    assert refused.status_code == 400
+    shown = refused.get_data(as_text=True)
+    assert "is not valid" in shown and "http://github.com" in shown and 'value="12"' in shown
+    with app.app_context():
+        assert agent_settings.current(fresh=True).max_steps == 40  # nothing saved
+    assert admin.post("/admin/agents/settings", form).status_code == 302
+    with app.app_context():
+        saved = agent_settings.current(fresh=True)
+        actions = [row["action"] for row in db.query("SELECT action FROM audit_log")]
+    assert saved.enabled and saved.max_steps == 12 and saved.access_mode == "everyone"
+    assert saved.git_enabled and saved.git_hosts == ("github.com",)
+    assert "admin.agents.settings" in actions and "admin.agents.git" in actions
 
 
 def test_the_agents_settings_speak_of_tokens_and_limits_not_credits(app, admin):

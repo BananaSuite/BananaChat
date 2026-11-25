@@ -30,7 +30,7 @@ def test_admin_model_forms_render_and_preserve_fourth_daily_rule(app, admin, mak
     with app.app_context():
         store.set_model_policy(model["id"], {"enabled": True, "rate_rules": _rules()}, None)
         store.set_model_override(user["id"], model["id"], None, rate_rules=_rules())
-    html = admin.get("/admin/quotas/models").get_data(as_text=True)
+    html = admin.get(f'/admin/quotas/models/{model["id"]}').get_data(as_text=True)
     assert f'id="m{model["id"]}-rules-requests-3"' in html
     html = admin.get(f'/admin/users/{user["id"]}/limits').get_data(as_text=True)
     assert f'id="model-{model["id"]}-rules-requests-3"' in html

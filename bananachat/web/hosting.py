@@ -2,12 +2,24 @@
 administrators' recovery sign-in.
 
 * ``/login/hosting/start`` and ``/login/hosting/callback``: the OAuth flow (see services.hosting_signin).
-  A linked account signs in as with its password, its two-step code included.
+  A linked account signs in without this site's two-step code: BananaWiki Hosting asked for its own.
+  A hosting administrator acting as an account (``act``) signs in to that account only when it is
+  already linked and the site allows it; the session shows who is acting, refuses the account's
+  sensitive actions and ends when acting ends. Acting never links or creates an account.
+* ``/login/hosting/start?create=1`` (``hosting`` mode): "Create an account" on the sign-in page. The portal
+  shows its sign-up form first (``prompt=create``); back here, the new portal account gets its account at
+  once, named like it, under the sign-up policy (the connect page takes over when that cannot be: the name
+  is taken, an invitation is needed). Never while acting.
 * ``/login/hosting/connect``: the first sign-in of a portal account here. It creates a new account
-  (``/login/hosting/create``, under the sign-up policy, with an unusable random password) or connects
+  (``/login/hosting/create``, under the sign-up policy, with an unusable random password and
+  ``password_set`` 0: it can set one later, after confirming with BananaWiki Hosting) or connects
   one that exists, proven with its password (``/login/hosting/connect-existing``) and its two-step code
   (``/login/hosting/connect/code``). Nothing is ever matched by user name or email.
-* ``/account/hosting/link`` and ``/account/hosting/unlink``: from the account page, with the password.
+* ``/account/hosting/link`` and ``/account/hosting/unlink``: from the account page, with the password
+  (or a recent confirmation). Disconnecting needs a password of the account's own: without one nothing
+  else signs it in.
+* ``/account/hosting/confirm``: a fresh sign-in at BananaWiki Hosting confirms the signed-in, linked
+  person instead of the password (services.hosting_signin), for ten minutes.
 * ``/login/recovery``: in ``hosting`` mode, administrators can still sign in with their password (and
   two-step code). Not linked from the sign-in page, rate-limited, every attempt audited.
 
@@ -51,7 +63,7 @@ def _t(key, **params):
 
 @bp.app_context_processor
 def _template_helpers():
-    return {"signin_mode": hosting_signin.effective_mode}
+    return {"signin_mode": hosting_signin.effective_mode, "hosting_signup_open": hosting_signin.portal_signup_open}
 
 
 def _enabled(view):
@@ -84,7 +96,9 @@ def start():
         return redirect(url_for("core.index"))
     next_url = security.safe_next_url(request.args.get("next")) or ""
     invite = (request.args.get("invite") or "").strip()[:32]
-    return redirect(hosting_signin.authorize_url("login", next_url=next_url, invite=invite))
+    # "Create an account" on the sign-in page, which only BananaWiki Hosting signs in to.
+    create = request.args.get("create") == "1" and hosting_signin.effective_mode() == "hosting"
+    return redirect(hosting_signin.authorize_url("login", next_url=next_url, invite=invite, create=create))
 
 
 @bp.get("/login/hosting/callback", endpoint="callback")
@@ -99,25 +113,38 @@ def callback():
         return _fail(error, "account.index" if security.current_user() else "auth.login")
     if entry["purpose"] == "link":
         return _link_callback(entry, state)
+    if entry["purpose"] == "confirm":
+        return _confirm_callback(entry, state)
     try:
         if request.args.get("error"):
             raise OAuthError("hosting.error_cancelled", "the portal answered " + _printable(request.args["error"]))
-        account_id, portal_username = hosting_signin.complete(request.args.get("code", ""), state)
+        profile = hosting_signin.complete(request.args.get("code", ""), state)
     except OAuthError as error:
         return _fail(error)
     next_url = security.safe_next_url(entry.get("next")) or ""
-    user = hosting_signin.linked_user(account_id)
+    user = hosting_signin.linked_user(profile.sub)
+    if profile.act is not None:
+        session.pop(PENDING_KEY, None)
+        return _acting_sign_in(profile, user, next_url)
     if user is not None:
         session.pop(PENDING_KEY, None)
         return _finish(user, next_url)
     session.pop(CONNECT_CODE_KEY, None)
-    session[PENDING_KEY] = {"sub": account_id, "username": portal_username, "next": next_url,
-                            "invite": str(entry.get("invite") or "")[:32], "at": time.time()}
+    pending = {"sub": profile.sub, "username": profile.username, "next": next_url,
+               "invite": str(entry.get("invite") or "")[:32], "at": time.time()}
+    session[PENDING_KEY] = pending
+    if entry.get("create"):
+        # The portal account was just made for this site: nothing to choose, its account here follows.
+        return _create_within_budgets(pending, (profile.username or "")[:64], pending["invite"])
     return redirect(url_for("hosting.connect"))
 
 
 def _finish(user, next_url: str, *, code_given: str | None = None):
-    """Sign *user* in after BananaWiki Hosting vouched for it: its two-step code first, unless *code_given*."""
+    """Sign *user* in after BananaWiki Hosting vouched for it.
+
+    No two-step code is asked here: BananaWiki Hosting asked for its own. *code_given* names the code given
+    when an existing account was connected with its password (for the administrators' audit entry).
+    """
     with db.transaction():
         fresh = users.get(user["id"])
         if fresh is None:
@@ -126,14 +153,44 @@ def _finish(user, next_url: str, *, code_given: str | None = None):
         if users.is_suspended(fresh):
             flash(_t("auth.suspended"), "error")
             return redirect(url_for("auth.login"))
-        if code_given is None and two_step.enabled(fresh["id"]):
-            auth.await_code(fresh, next_url, "hosting")
-            return redirect(url_for("auth.two_step"))
         auth.start_session(fresh, "hosting" + (f"+{code_given}" if code_given else ""))
     _audit_sign_in(fresh)
     response = redirect(auth.landing(fresh, next_url or None))
     security.set_device_cookie(response, fresh)
     return response
+
+
+def _acting_sign_in(profile, user, next_url: str):
+    """A hosting administrator acting as the account: signed in to an existing link only, if the site allows it.
+
+    The session ends when acting ends; it gets no device cookie (the browser is the administrator's).
+    """
+    admin_name = profile.act.get("name") or profile.act["sub"]
+    details = {"acting_admin": admin_name, "acting_admin_sub": profile.act["sub"],
+               "until": db.timestamp(profile.act_until)}
+    if not hosting_signin.acting_allowed():
+        users.audit(None, "auth.hosting_acting_refused", user["id"] if user else profile.sub,
+                    {**details, "reason": "not allowed"}, security.client_ip())
+        return _fail(OAuthError("hosting.error_acting_off", f"{admin_name} acting refused by the site setting"))
+    if user is None:
+        users.audit(None, "auth.hosting_acting_refused", profile.sub, {**details, "reason": "not linked"},
+                    security.client_ip())
+        return _fail(OAuthError("hosting.error_acting_unknown", f"{admin_name} acting as an account not linked here"))
+    with db.transaction():
+        fresh = users.get(user["id"])
+        if fresh is None:
+            flash(_t("hosting.error_expired"), "error")
+            return redirect(url_for("auth.login"))
+        if users.is_suspended(fresh):
+            flash(_t("auth.suspended"), "error")
+            return redirect(url_for("auth.login"))
+        users.touch_login(fresh["id"])
+        security.login(fresh, acting={**profile.act, "until": profile.act_until})
+    # Recorded under the administrator's name (users.audit reads it from the session for the next requests).
+    users.audit(fresh, "auth.hosting_acting_login", fresh["id"], details, security.client_ip(),
+                acting={"acting_sub": profile.act["sub"], "acting_name": profile.act.get("name") or ""})
+    log.info("%s (BananaWiki Hosting) signed in as %s", admin_name, fresh["username"])
+    return redirect(next_url or url_for("core.index"))
 
 
 def _audit_sign_in(user) -> None:
@@ -206,7 +263,11 @@ def create():
     code = (request.form.get("invite_code") or "").strip()[:32]
     if not security.form_looks_human():
         return _connect_page(pending, 400, create_error=_t("auth.form_expired"), username=username, invite=code)
-    # Counted like /signup: accounts made and failed attempts per address, the same budgets.
+    return _create_within_budgets(pending, username, code)
+
+
+def _create_within_budgets(pending, username: str, code: str):
+    """:func:`_create`, counted like /signup: accounts made and failed attempts per address, the same budgets."""
     config = current_app.config["BC"]
     address = security.client_key()
     attempt = users.reserve([("signup:" + address, config.signups_per_hour),
@@ -250,7 +311,7 @@ def _create(pending, username: str, code: str, created: list):
             if users.get_by_username(username):
                 raise LookupError
             user_id = users.create(username, password_hash, role=role,
-                                   invite_code=invite["code"].upper() if invite else None)
+                                   invite_code=invite["code"].upper() if invite else None, password_set=False)
             hosting_links.create(user_id, pending["sub"], pending.get("username") or "")
             if mode == "invite":
                 invites.consume(code, user_id)
@@ -382,10 +443,64 @@ def _account(anchor: str = "hosting"):
 
 
 def _confirmed(user) -> bool:
+    """The password typed with the form, or a confirmation with BananaWiki Hosting in the last ten minutes."""
+    if hosting_signin.confirmed_recently():
+        return True
     confirmed = security.confirm_password(user, request.form.get("password") or "")
     if not confirmed:
         flash(_t("account.password_wrong" if confirmed is False else "auth.too_many_attempts"), "error")
     return bool(confirmed)
+
+
+# ----- confirming with BananaWiki Hosting -------------------------------------------------
+
+@bp.post("/account/hosting/confirm", endpoint="confirm")
+@security.login_required
+@_enabled
+@security.rate_limit("account-hosting-confirm", 20, 900, per_user=True)
+def confirm():
+    """Start a confirmation: a fresh sign-in at BananaWiki Hosting stands for the password for ten minutes."""
+    user = security.current_user()
+    next_url = security.safe_next_url(request.form.get("next")) or url_for("account.index", _anchor="security")
+    if security.acting() is not None:
+        flash(_t("hosting.acting_refused"), "error")
+        return redirect(next_url)
+    if hosting_links.link_of(user["id"]) is None:
+        flash(_t("hosting.not_linked"), "info")
+        return redirect(next_url)
+    return redirect(hosting_signin.authorize_url("confirm", next_url=next_url, user_id=user["id"],
+                                                 session_hash=security.current_session_hash() or ""))
+
+
+def _confirm_callback(entry, state: str):
+    user = security.current_user()
+    next_url = security.safe_next_url(entry.get("next")) or url_for("account.index", _anchor="security")
+    try:
+        session_hash = security.current_session_hash() or ""
+        if (user is None or not hmac.compare_digest(str(entry.get("uid") or ""), user["id"])
+                or not session_hash or not hmac.compare_digest(str(entry.get("sid") or ""), session_hash)):
+            raise OAuthError("hosting.error_expired", "a confirmation finished in another session")
+        if security.acting() is not None:
+            raise OAuthError("hosting.acting_refused", "a confirmation in an acting session")
+        if request.args.get("error"):
+            raise OAuthError("hosting.error_cancelled", "the portal answered " + _printable(request.args["error"]))
+        profile = hosting_signin.complete(request.args.get("code", ""), state)
+        link = hosting_links.link_of(user["id"])
+        problem = hosting_signin.confirmation_problem(profile, link["account_id"] if link else "",
+                                                      float(entry.get("at") or 0))
+        if problem:
+            raise OAuthError(problem, f"confirmation refused: {problem.split('.')[-1]}")
+    except OAuthError as error:
+        if user is None:
+            return _fail(error)
+        log.warning("Confirming with BananaWiki Hosting failed: %s", error)
+        flash(_t(error.key), "error")
+        return redirect(next_url)
+    users.mark_session_hosting_confirmed(security.current_session_hash())
+    users.audit(user, "account.hosting_confirm", user["id"], {"auth_time": profile.auth_time},
+                security.client_ip())
+    flash(_t("hosting.confirmed"), "success")
+    return redirect(next_url)
 
 
 @bp.post("/account/hosting/link", endpoint="link")
@@ -395,6 +510,9 @@ def _confirmed(user) -> bool:
 def link():
     """Connect the signed-in account: its password first, then the portal."""
     user = security.current_user()
+    if security.acting() is not None:
+        flash(_t("hosting.acting_refused"), "error")
+        return _account()
     if hosting_links.link_of(user["id"]) is not None:
         flash(_t("hosting.already_linked"), "info")
         return _account()
@@ -408,9 +526,14 @@ def _link_callback(entry, state: str):
     try:
         if user is None or not hmac.compare_digest(str(entry.get("uid") or ""), user["id"]):
             raise OAuthError("hosting.error_expired", "a link flow finished in another session")
+        if security.acting() is not None:
+            raise OAuthError("hosting.acting_refused", "a link flow finished in an acting session")
         if request.args.get("error"):
             raise OAuthError("hosting.error_cancelled", "the portal answered " + _printable(request.args["error"]))
-        account_id, portal_username = hosting_signin.complete(request.args.get("code", ""), state)
+        profile = hosting_signin.complete(request.args.get("code", ""), state)
+        if profile.act is not None:
+            raise OAuthError("hosting.error_acting_link", "an acting administrator tried to link an account")
+        account_id, portal_username = profile.sub, profile.username
         with db.transaction():
             if hosting_links.link_of(user["id"]) is not None:
                 raise OAuthError("hosting.error_local_linked")
@@ -430,10 +553,17 @@ def _link_callback(entry, state: str):
 @_enabled
 @security.rate_limit("account-hosting", 20, 900, per_user=True)
 def unlink():
-    """Disconnect the signed-in account, with its password; never in ``hosting`` mode (no other way in)."""
+    """Disconnect the signed-in account, with its password; never in ``hosting`` mode or without a password of
+    its own (no other way in)."""
     user = security.current_user()
+    if security.acting() is not None:
+        flash(_t("hosting.acting_refused"), "error")
+        return _account()
     if hosting_signin.effective_mode() == "hosting":
         flash(_t("hosting.unlink_refused"), "error")
+        return _account()
+    if not users.has_password(user):
+        flash(_t("hosting.unlink_no_password"), "error")
         return _account()
     if hosting_links.link_of(user["id"]) is None:
         flash(_t("hosting.not_linked"), "info")

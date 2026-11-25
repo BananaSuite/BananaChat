@@ -2,11 +2,19 @@
 
 ## Unreleased
 
-Two database migrations (schema version 31, additive): `v30_hosting_signin`
+Five database migrations (schema version 34): `v30_hosting_signin`
 adds the `hosting_links` table and `site_settings.signin_mode`; nothing changes
 until an administrator chooses another sign-in mode. `v31_easter_eggs` adds
 `site_settings.easter_egg_configs` and the `easter_egg_finds` table; the
 Konami code works as before until an administrator edits the easter eggs.
+`v32_simpler_appearance` converts each account's appearance preferences to the
+fewer choices below without lowering any (an older release still reads them).
+`v33_hosting_signin_round3` adds `users.password_set` (0 for accounts made
+through BananaWiki Hosting, found in the audit log), the acting and
+confirmation columns of `auth_sessions`, and
+`site_settings.hosting_allow_acting` and `hosting_lookup_token`.
+`v34_announcement_text` empties an announcement whose switch was off: the
+switch is gone and an announcement shows whenever it has a text.
 
 ### Easter eggs you design
 
@@ -36,17 +44,108 @@ Konami code works as before until an administrator edits the easter eggs.
   id only, never by user name or email. The first hosting sign-in creates a new
   account (under the sign-up setting and its invitations; a free name is
   suggested when the hosting name is taken) or connects an existing one with its
-  password and two-step code. Accounts with two-step verification still give
-  their code after the portal.
+  password and two-step code.
 - People connect and disconnect their account on **Account → Security** with
   their password; administrators see the connection in **Admin → Users** and
   can remove it (audited).
-- Switching to hosting-only sign-in needs the administrator's own account to be
-  connected first, and a recent confirmation. In that mode administrators can
+- Switching to hosting-only sign-in needs every active administrator's account
+  to be connected first, and a recent confirmation. In that mode administrators can
   still sign in with their password at `/login/recovery` (not linked, rate
   limited, every attempt audited), and the new operator command
   `python -m bananachat.manage signin-mode both` switches back.
 - The personal data export names the connected hosting account.
+- **Sign-in methods.** Account → Security has one *Sign-in methods* section:
+  BananaWiki Hosting (connect or disconnect), the password (change it, or set
+  one for an account made through BananaWiki Hosting) and two-step
+  verification. Disconnecting needs a password of the account's own.
+- **Confirm with BananaWiki Hosting.** Where a password confirms a sensitive
+  change (and for the administrators' confirmations), a connected account can
+  sign in again at BananaWiki Hosting instead (`prompt=login`, `max_age=0`;
+  accepted for the connected account with a fresh `auth_time` only) and goes
+  on without its password for ten minutes. Accounts without a password see only
+  this. A portal that doesn't send `auth_time` never confirms.
+- **No second two-step code.** A hosting sign-in no longer asks for
+  BananaChat's own two-step code: BananaWiki Hosting asks for its own. Password
+  sign-ins ask as before.
+- **Acting hosting administrators.** When BananaWiki Hosting lets its
+  administrators act as a person, they can sign in as that person's connected
+  account (never connect or create one). Every page says who is acting; the
+  session ends when acting ends; passwords, two-step codes, sign-in methods,
+  deleting the account, API keys and confirmed administrator actions are
+  refused; audited actions read "*administrator* on behalf of *user*". **Admin →
+  Settings → Sign-in → Allow hosting administrators to sign in as users** (on
+  by default) turns it off for this site.
+- **Linking tool.** **Admin → Users → BananaWiki Hosting** lists every account
+  with its link and links accounts one at a time, by the same user name or
+  from a pasted list, always after a preview (conflicts, skipped
+  administrators and suspended accounts are shown; a changed preview is
+  refused), with Unlink on each row. Hosting user names are looked up with a
+  portal API token stored encrypted under **Settings → Sign-in → Advanced**;
+  without one, portal account ids are entered. Hosting-only sign-in can be
+  switched on there, and anywhere, only while every active administrator is
+  connected.
+- The first hosting sign-in's page offers "I already have an account here"
+  first and "Create a new account" second, each with a plain explanation.
+- **Create an account from the sign-in page.** In hosting-only mode the
+  sign-in page links to BananaWiki Hosting's sign-up (`prompt=create`) while
+  the portal says it takes new accounts; back here the account is created at
+  once with the hosting name, under this site's sign-up setting (the first
+  sign-in's page takes over when the name is taken or an invitation is
+  needed). See [sign-up from an app](docs/hosting-signin.md#sign-up-from-an-app).
+
+### One Save per page, at the top right
+
+- Every page that changes settings has one **Save**, at the top right of its
+  title, and it stays there while the page scrolls (under the top bar, on
+  phones too). No page has a Save at the bottom or inside a card any more, and
+  none has several. Lists keep their own actions (add, remove, revoke, test).
+- Pages whose sections each had a Save now save every section at once, after
+  checking all of them: a refused value shows the page again as typed, with
+  each problem, and saves nothing. Only sections that changed are written and
+  audited. This covers **Limits → General** (chat tokens, each service,
+  automatic approval, community consent, model fallback), **Limits → Tiers**,
+  **Limits → Models → Reasoning effort**, an account's **Limits**, **Cloud
+  sessions** (settings, Git repositories, models) and a model's page (its
+  details, reasoning levels and, while deprecated, the replacement, date and
+  note). The easter-egg editor is saved by **Admin → Settings**' Save.
+- Things that are each their own concern moved to their own page with their
+  own Save: a model's limits (**Limits → Models**, one row per model), an
+  external API provider's connection (**Connection settings**), a subscription
+  account's settings (**Account settings**), and the images, tools and
+  reasoning levels of an external API model (on the model's page).
+- Actions are no longer labelled Save: the default personality is set with
+  **Use for new chats**, an API key is renamed with **Rename**, and a reasoning
+  level is given to one account with **Set level**.
+- The forms each section had before keep working for pages open from an
+  earlier version.
+
+### The same look as BananaWiki
+
+- BananaChat uses BananaWiki's colours (from the same palette, in both
+  themes), type sizes, 32px buttons and fields, radii, quiet danger buttons,
+  focus rings, ruled tables, badges, tinted messages and notices, menus and
+  dialogs. The chat keeps its layout. Touch screens keep 44px targets, and
+  secondary text has more contrast than before.
+- Labelled buttons have no decorative icons, and each page has one primary
+  action.
+
+### Fewer settings
+
+- **Contrast** has three levels, *Standard*, *High* and *Maximum*, instead of
+  six. Accounts on +1 to +4 get *High* (as strong as the former +4), *Maximum*
+  stays.
+- **Highlighting in answers** is one choice (*Off*, *Subtle*, *Strong*) for
+  bold and italic text, inline code, links and headings, instead of one per
+  kind. Accounts keep the strongest level they had chosen.
+- Rarely changed options are under **Advanced**, closed by default: letter
+  spacing and the chat sidebar width, highlighting, colours, the background
+  image and the easter eggs.
+- **Admin → Settings → General → BM mode** is one choice, *Each person
+  decides*, *Administrators decide* or *On for everyone*, instead of
+  *Per account*/*On for everyone* plus a self-service checkbox that did nothing
+  while it was on for everyone. An account's page can still make an exception.
+- **Admin → Music** has no *Hide the programme* button any more: the *Visible
+  to everyone* setting does the same.
 
 ### Fixes
 

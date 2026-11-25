@@ -1,0 +1,11 @@
+{#- A hosting administrator signed in as this account while acting as it (web/hosting.py): on every page,
+    with the end of the session and a way out. -#}
+{% if acting %}
+<section class="acting-banner" role="status" aria-labelledby="acting-banner-text">
+  <p id="acting-banner-text">{{ t_html("hosting.acting_banner", admin=acting.name, user=current_user.username, time=(acting.until | local_time("auto"))) }}</p>
+  <form method="post" action="{{ url_for('auth.logout') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-sm">{{ t("hosting.acting_sign_out") }}</button>
+  </form>
+</section>
+{% endif %}

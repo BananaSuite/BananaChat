@@ -1,6 +1,7 @@
-{#- Tabs of the Users area: accounts and invitations. -#}
+{#- Tabs of the Users area: accounts, invitations and BananaWiki Hosting links (web/admin/hosting.py). -#}
 {% from "admin/_macros.html" import tabs %}
 {{ tabs("Users", [
   ("users", url_for("admin.users"), "Users", None),
   ("invites", url_for("admin.invites"), "Invitations", None),
-], section) }}
+  ("hosting", url_for("admin.hosting_links"), "BananaWiki Hosting", None),
+], tab if tab is defined else section) }}

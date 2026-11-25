@@ -78,6 +78,17 @@ def page():
                    page_data={'presets': _preset_data()})
 
 
+@bp.get('/models/providers/<int:provider_id>', endpoint='external_provider')
+@admin_required
+def provider_page(provider_id):
+    """One provider's connection settings, with the page's one Save."""
+    from .models import _render
+    row = _provider(provider_id)
+    return _render('admin/provider_edit.html', tab='providers', provider=row,
+                   header_text={row['id']: _header_text(row)}, presets=provider_presets.PRESETS,
+                   auth_styles=provider_presets.AUTH_STYLES, page_data={'presets': _preset_data()})
+
+
 def _save(provider_id=None):
     existing = _provider(provider_id) if provider_id is not None else None
     reference = None
@@ -122,6 +133,8 @@ def _save(provider_id=None):
         flash('A provider with that name already exists.' if isinstance(error, sqlite3.IntegrityError) else
               'The private credential file could not be saved. Check server ownership and permissions.' if isinstance(error, OSError)
               else str(error), 'error')
+        if existing:
+            return back('admin.external_provider', provider_id=existing['id'])
         return back('admin.external_providers')
     if existing and (reference or flag('clear_key')):
         provider_secrets.remove(existing['secret_ref'])
@@ -146,7 +159,7 @@ def add():
 def save(provider_id):
     _provider(provider_id)
     if not _reauth.confirmed():
-        return back('admin.external_providers', _anchor=f'provider-{provider_id}')
+        return back('admin.external_provider', provider_id=provider_id)
     return _save(provider_id)
 
 

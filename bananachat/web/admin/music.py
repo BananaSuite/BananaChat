@@ -167,15 +167,6 @@ def music_settings():
     return _redirect("settings")
 
 
-@bp.post("/music/hide", endpoint="music_hide")
-@security.admin_required
-def music_hide():
-    site_settings.update(music_visible=0)
-    _audit("hide")
-    flash("Programme hidden. Participants keep their bonus.", "info")
-    return _redirect("settings")
-
-
 @bp.post("/music/remove", endpoint="music_remove")
 @security.admin_required
 def music_remove():

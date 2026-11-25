@@ -8,7 +8,7 @@
 {% set creativity_labels = {"precise": "Precise", "balanced": "Balanced", "creative": "Creative"} %}
 {% block admin_content %}
 <p class="breadcrumb"><a href="{{ url_for('admin.personalities', kind='featured') }}">{{ icon("chevron-left") }}Featured personalities</a></p>
-{{ header(("Edit " ~ row.name) if row else "New featured personality") }}
+{{ header(("Edit " ~ row.name) if row else "New featured personality", save="persona-form", save_label="Save" if row else "Create") }}
 
 <div class="persona-editor persona-page">
   <form method="post" action="{{ url_for('admin.personality_featured_update', personality_id=row.id) if row else url_for('admin.personality_featured_create') }}" class="stack persona-form" id="persona-form" data-busy>
@@ -108,10 +108,6 @@
     </fieldset>
 
     <label class="check"><input type="checkbox" name="enabled" value="1"{% if values.enabled %} checked{% endif %}><span>Published<small>Drafts are hidden from users.</small></span></label>
-    <div class="form-actions form-actions-end">
-      <a class="btn btn-ghost" href="{{ url_for('admin.personalities', kind='featured') }}">Cancel</a>
-      <button type="submit" class="btn btn-primary">{{ "Save" if row else "Create" }}</button>
-    </div>
   </form>
 
   <aside class="persona-preview" aria-labelledby="preview-title">

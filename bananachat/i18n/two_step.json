@@ -6,7 +6,6 @@
     "two_step.on": "On",
     "two_step.off": "Off",
     "two_step.on_since": "On since {when}.",
-    "two_step.off_state": "Two-step verification is off.",
     "two_step.codes_left": {
       "one": "1 recovery code left.",
       "other": "{count} recovery codes left."
@@ -14,7 +13,6 @@
     "two_step.manage": "Manage two-step verification",
     "two_step.set_up": "Set up two-step verification",
     "two_step.required_notice": "Administrators must use two-step verification. Set it up to open the administration pages.",
-    "two_step.required_hint": "Required for administrators.",
     "two_step.unreadable": "Your authenticator set-up can't be read because the server's secret key changed. Turn off two-step verification with a recovery code, then set it up again.",
     "two_step.setup_title": "Set up",
     "two_step.step_scan": "Scan this QR code with your authenticator app.",
@@ -30,7 +28,6 @@
     "two_step.setup_expired": "Set-up expired. Scan the new QR code and try again.",
     "two_step.invalid_code": "Wrong code. Codes change every 30 seconds.",
     "two_step.too_many": "Too many attempts. Wait a few minutes and try again.",
-    "two_step.codes_title": "Recovery codes",
     "two_step.renew": "Make new recovery codes",
     "two_step.renew_help": "New codes replace the old ones. Confirm with your password and a code.",
     "two_step.renewed": "New recovery codes made. The old ones no longer work.",
@@ -54,7 +51,9 @@
     "two_step.recovery_used": {
       "one": "You signed in with a recovery code. 1 recovery code left. Make new ones on your account page.",
       "other": "You signed in with a recovery code. {count} recovery codes left. Make new ones on your account page."
-    }
+    },
+    "two_step.password_only_note": "Codes are asked after signing in with a password, not with BananaWiki Hosting (it asks for its own).",
+    "two_step.needs_password": "Codes are asked after signing in with a password. Your account has no password here, so set one first."
   },
   "it": {
     "two_step.title": "Verifica in due passaggi",
@@ -63,7 +62,6 @@
     "two_step.on": "Attiva",
     "two_step.off": "Non attiva",
     "two_step.on_since": "Attiva dal {when}.",
-    "two_step.off_state": "La verifica in due passaggi non è attiva.",
     "two_step.codes_left": {
       "one": "Rimane 1 codice di recupero.",
       "other": "Rimangono {count} codici di recupero."
@@ -71,7 +69,6 @@
     "two_step.manage": "Gestisci la verifica in due passaggi",
     "two_step.set_up": "Configura la verifica in due passaggi",
     "two_step.required_notice": "Gli amministratori devono usare la verifica in due passaggi. Configurala per aprire le pagine di amministrazione.",
-    "two_step.required_hint": "Obbligatoria per gli amministratori.",
     "two_step.unreadable": "La configurazione dell'app non è leggibile perché la chiave segreta del server è cambiata. Disattiva la verifica in due passaggi con un codice di recupero, poi configurala di nuovo.",
     "two_step.setup_title": "Configurazione",
     "two_step.step_scan": "Inquadra questo codice QR con l'app di autenticazione.",
@@ -87,7 +84,6 @@
     "two_step.setup_expired": "Configurazione scaduta. Scansiona il nuovo codice QR e riprova.",
     "two_step.invalid_code": "Codice errato. I codici cambiano ogni 30 secondi.",
     "two_step.too_many": "Troppi tentativi. Attendi qualche minuto e riprova.",
-    "two_step.codes_title": "Codici di recupero",
     "two_step.renew": "Genera nuovi codici di recupero",
     "two_step.renew_help": "I nuovi codici sostituiscono quelli vecchi. Conferma con la password e un codice.",
     "two_step.renewed": "Nuovi codici di recupero generati. Quelli vecchi non valgono più.",
@@ -111,7 +107,9 @@
     "two_step.recovery_used": {
       "one": "Hai effettuato l'accesso con un codice di recupero. Rimane 1 codice di recupero. Generane di nuovi nella pagina del tuo account.",
       "other": "Hai effettuato l'accesso con un codice di recupero. Rimangono {count} codici di recupero. Generane di nuovi nella pagina del tuo account."
-    }
+    },
+    "two_step.password_only_note": "I codici vengono chiesti dopo l'accesso con la password, non con BananaWiki Hosting (che chiede i propri).",
+    "two_step.needs_password": "I codici vengono chiesti dopo l'accesso con la password. Il tuo account non ha una password qui, quindi impostane prima una."
   },
   "de": {
     "two_step.title": "Bestätigung in zwei Schritten",
@@ -120,7 +118,6 @@
     "two_step.on": "Eingeschaltet",
     "two_step.off": "Ausgeschaltet",
     "two_step.on_since": "Eingeschaltet seit {when}.",
-    "two_step.off_state": "Bestätigung in zwei Schritten ist deaktiviert.",
     "two_step.codes_left": {
       "one": "1 Wiederherstellungscode übrig.",
       "other": "{count} Wiederherstellungscodes übrig."
@@ -128,7 +125,6 @@
     "two_step.manage": "Bestätigung in zwei Schritten verwalten",
     "two_step.set_up": "Bestätigung in zwei Schritten einrichten",
     "two_step.required_notice": "Administratoren müssen die Bestätigung in zwei Schritten nutzen. Richte sie ein, um die Verwaltungsseiten zu öffnen.",
-    "two_step.required_hint": "Für Administratoren erforderlich.",
     "two_step.unreadable": "Die Einrichtung deiner Authenticator-App ist nicht lesbar, weil sich der geheime Schlüssel des Servers geändert hat. Schalte die Bestätigung in zwei Schritten mit einem Wiederherstellungscode aus und richte sie dann neu ein.",
     "two_step.setup_title": "Einrichtung",
     "two_step.step_scan": "Scanne diesen QR-Code mit deiner Authenticator-App.",
@@ -144,7 +140,6 @@
     "two_step.setup_expired": "Einrichtung abgelaufen. Scanne den neuen QR-Code und versuche es erneut.",
     "two_step.invalid_code": "Falscher Code. Codes ändern sich alle 30 Sekunden.",
     "two_step.too_many": "Zu viele Versuche. Warte einige Minuten und versuche es erneut.",
-    "two_step.codes_title": "Wiederherstellungscodes",
     "two_step.renew": "Neue Wiederherstellungscodes erstellen",
     "two_step.renew_help": "Neue Codes ersetzen die alten. Bestätige mit deinem Passwort und einem Code.",
     "two_step.renewed": "Neue Wiederherstellungscodes erstellt. Die alten funktionieren nicht mehr.",
@@ -168,6 +163,8 @@
     "two_step.recovery_used": {
       "one": "Du hast dich mit einem Wiederherstellungscode angemeldet. Dir bleibt noch 1 Wiederherstellungscode. Erstelle auf deiner Kontoseite neue.",
       "other": "Du hast dich mit einem Wiederherstellungscode angemeldet. Dir bleiben noch {count} Wiederherstellungscodes. Erstelle auf deiner Kontoseite neue."
-    }
+    },
+    "two_step.password_only_note": "Codes werden nach der Anmeldung mit Passwort verlangt, nicht mit BananaWiki Hosting (das fragt nach eigenen).",
+    "two_step.needs_password": "Codes werden nach der Anmeldung mit Passwort verlangt. Dein Konto hat hier kein Passwort, lege also zuerst eines fest."
   }
 }

@@ -51,6 +51,8 @@ COLUMNS = frozenset({
     "signin_mode",
     # The easter egg list (banana-eggs/v1 JSON, NULL for the default egg; schema version 31).
     "easter_egg_configs",
+    # Hosting administrators acting as users, and the linking tool's portal token, encrypted (schema version 33).
+    "hosting_allow_acting", "hosting_lookup_token",
 })
 # The easter eggs: the mascot's animations, its sunglasses (enough clicks on it) and the key-sequence eggs
 # (``easter_konami`` turns every egg of ``easter_egg_configs`` on or off, see bananachat.eggs).

@@ -1,0 +1,25 @@
+{#- The page header of a page that saves something: the title on the left and the page's one Save at the
+    top right. The header stays under the top bar while the page scrolls (.page-header-save in app.css), so
+    Save is always in reach. The button submits the form with the id `form_id` through the `form` attribute,
+    wherever that form is on the page; the forms themselves have no submit button of their own.
+
+    A call block adds things beside the title (badges, links). Administrator pages use admin/_macros.html's
+    `header(..., save=form_id)`, which renders this one. Import it `with context` on translated pages, so
+    the default label is translated. -#}
+
+{% macro save_button(form_id, label=None, disabled=False) -%}
+<button type="submit" class="btn btn-primary" form="{{ form_id }}" data-page-save{% if disabled %} disabled{% endif %}>{{ label or (t("common.save") if t is defined else "Save") }}</button>
+{%- endmacro %}
+
+{% macro page_header(title, form_id, label=None, description=None, class="", disabled=False) -%}
+<header class="page-header page-header-save{% if class %} {{ class }}{% endif %}">
+  <div class="page-header-title">
+    <h1>{{ title }}</h1>
+    {% if description %}<p>{{ description }}</p>{% endif %}
+  </div>
+  <div class="page-header-actions">
+    {%- if caller %}{{ caller() }}{% endif -%}
+    {{ save_button(form_id, label, disabled) }}
+  </div>
+</header>
+{%- endmacro %}

@@ -223,6 +223,9 @@ def _problem(message: str, status: int = 400, code: str = "bad_request"):
 @security.rate_limit("api-tokens", 30, 3600, per_user=True)
 def create_token():
     user = g.user
+    if security.acting() is not None:
+        # A key would outlive the session of the administrator acting as the account.
+        return _problem(_t("hosting.acting_refused"), 403, "acting")
     body = _body()
     name = " ".join(str(body.get("name") or "").split())[:64]
     scope = str(body.get("scope") or "full")
@@ -247,6 +250,8 @@ def create_token():
 @security.rate_limit("api-tokens", 30, 3600, per_user=True)
 def rotate_token(token_id):
     user = g.user
+    if security.acting() is not None:
+        return _problem(_t("hosting.acting_refused"), 403, "acting")
     try:
         new_id, raw = tokens.rotate(token_id, user["id"])
     except LookupError:

@@ -5,10 +5,13 @@ unlocked computer) has every administrator power while that session lasts. The
 actions in :data:`ALWAYS` and :data:`WHEN` could keep that power after the
 session ends, lock the real administrators out, copy everyone's data or send
 users' prompts somewhere new, so they ask the administrator to confirm it is
-them: with their password, or with a code from their authenticator app when
-two-step verification is on. Signing in counts as a confirmation, and a
+them: with their password, with a code from their authenticator app when
+two-step verification is on, or with a fresh sign-in at BananaWiki Hosting when
+their account is linked (``/account/hosting/confirm``; the only way for an
+account without a password of its own). Signing in counts as a confirmation, and a
 confirmation covers that browser session for ``WINDOW_SECONDS``
-(``auth_sessions.verified_at``).
+(``auth_sessions.verified_at``). A session a hosting administrator opened while
+acting as the account never confirms anything.
 
 Every administrator POST action is classified below; tests/app/test_reauth_coverage.py
 fails when one is added without a decision. Forms of the confirmed actions
@@ -19,16 +22,18 @@ renders only while a confirmation is due. A view calls :func:`confirmed` (or
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from flask import flash, request
 
 from bananachat import security, totp
 from bananachat.db import users
-from bananachat.services import two_step
+from bananachat.services import hosting_signin, two_step
 
 from . import bp
 from ._helpers import audit
 
-WINDOW_SECONDS = 10 * 60
+WINDOW_SECONDS = hosting_signin.CONFIRM_WINDOW_SECONDS
 FIELD = "reauth_secret"
 FAILURES = 10  # wrong confirmations per account in FAILURE_WINDOW
 FAILURE_WINDOW = 15 * 60
@@ -50,6 +55,8 @@ ALWAYS = {
     "admin.workers_key_create": "issues a lasting key that opens connections to worker PCs",
     "admin.claude_account_login": "signs a subscription in to this server; it then answers users' prompts",
     "admin.codex_account_login": "signs a subscription in to this server; it then answers users' prompts",
+    "admin.hosting_link_apply": "whoever holds the BananaWiki Hosting account signs in to the local one",
+    "admin.hosting_only": "turns off password sign-in for everyone",
 }
 # Confirmed in one case: endpoint -> when.
 WHEN = {
@@ -57,8 +64,9 @@ WHEN = {
     "admin.user_suspend": "when the account is an administrator",
     "admin.user_unsuspend": "when the account is an administrator",
     "admin.user_delete": "when the account is an administrator",
-    "admin.settings_save": "when the administrator requirement or the sign-in mode changes, or sign-up opens to "
-                           "everyone",
+    "admin.settings_save": "when the administrator requirement or the sign-in mode changes, sign-up opens to "
+                           "everyone, hosting administrators may act as users again, or the portal API token "
+                           "changes",
     "admin.claude_account_save": "when the account's profile changes or the account is removed",
     "admin.codex_account_save": "when the account's profile changes or the account is removed",
 }
@@ -91,6 +99,7 @@ EXEMPT = {
         "admin.user_limits_speed", "admin.user_limits_tier", "admin.user_limits_dynamic", "admin.quotas_save",
         "admin.quotas_policy", "admin.quotas_community", "admin.quotas_fallback", "admin.quotas_chat_consumption",
         "admin.quotas_reset_usage", "admin.quotas_restore_defaults", "admin.quota_request_resolve",
+        "admin.quotas_save_all", "admin.limit_tiers_save", "admin.user_limits_save",
         "admin.access_policy", "admin.access_member_add", "admin.access_member_remove",
         "admin.access_request_resolve",
     ),
@@ -127,11 +136,15 @@ EXEMPT = {
     "Downloads the request metrics the metrics page shows": (
         "admin.metrics_export",
     ),
+    # Only shows what Apply would do (the portal's lookup is read-only); Apply is confirmed.
+    "Shows a preview; changes nothing": (
+        "admin.hosting_link_preview",
+    ),
     "Site content, appearance and features": (
         "admin.settings_palette_reset", "admin.database_check", "admin.personality_create",
         "admin.personality_featured_create", "admin.personality_featured_update", "admin.personality_publish",
         "admin.agents_settings", "admin.agents_git", "admin.agents_models", "admin.agents_models_refresh",
-        "admin.agents_image_check", "admin.music_settings", "admin.music_hide", "admin.music_remove",
+        "admin.agents_image_check", "admin.music_settings", "admin.music_remove",
         "admin.music_upload", "admin.music_rename", "admin.music_move", "admin.music_delete",
         "admin.music_participant", "admin.music_opt_in_all", "admin.music_opt_out_all",
         "admin.settings_bm_mode_all", "admin.user_bm_mode",
@@ -144,9 +157,31 @@ def needed() -> bool:
     return not users.session_verified_within(security.current_session_hash(), WINDOW_SECONDS)
 
 
+def hosting_option() -> bool:
+    """Whether the confirmation field offers "Confirm with BananaWiki Hosting" (and its form may go there)."""
+    if not hosting_signin.can_confirm(security.current_user()):
+        return False
+    hosting_signin.allow_portal_form_action()
+    return True
+
+
+def _return_path() -> str:
+    """Where a confirmation with BananaWiki Hosting comes back to: this page, or for a page a form answered
+    (a preview), the page that form was on."""
+    if request.method == "GET":
+        return security.safe_next_url(request.full_path.rstrip("?")) or "/admin/"
+    referrer = urlsplit(request.referrer or "")
+    if referrer.netloc and referrer.netloc != request.host:
+        return "/admin/"
+    path = referrer.path + (f"?{referrer.query}" if referrer.query else "")
+    return security.safe_next_url(path) or "/admin/"
+
+
 @bp.context_processor
 def _template_helpers():
-    return {"reauth_needed": needed}
+    return {"reauth_needed": needed, "reauth_hosting": hosting_option, "reauth_return": _return_path,
+            "reauth_has_password": lambda: users.has_password(security.current_user()),
+            "reauth_two_step": lambda: two_step.enabled(security.current_user()["id"])}
 
 
 def refusal(secret: str | None = None) -> str | None:
@@ -154,12 +189,17 @@ def refusal(secret: str | None = None) -> str | None:
 
     *secret* is the password or code sent with the action; by default the form's ``reauth_secret``.
     """
+    if security.acting() is not None:
+        return ("Not while a BananaWiki Hosting administrator is signed in as this account: actions that need a "
+                "confirmation are refused.")
     if not needed():
         return None
     user = security.current_user()
     secret = ((request.form.get(FIELD) if secret is None else secret) or "")
     secret = secret[:1024] if isinstance(secret, str) else ""
     if not secret:
+        if not users.has_password(user) and not two_step.enabled(user["id"]):
+            return "Confirm it is you first with BananaWiki Hosting, then make this change."
         return ("Confirm it is you first: enter your password, or a code from your authenticator app, with this "
                 "change.")
     too_many = "Too many wrong confirmations. Wait a few minutes and try again."

@@ -39,4 +39,11 @@
     {% block admin_content %}{% endblock %}
   </div>
 </div>
+{#- "Confirm with BananaWiki Hosting" in admin/_reauth.html submits this form (outside every other one). -#}
+{% if reauth_needed is defined and reauth_needed() and not acting and reauth_hosting() %}
+<form method="post" action="{{ url_for('hosting.confirm') }}" id="reauth-hosting" hidden>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="next" value="{{ reauth_return() }}">
+</form>
+{% endif %}
 {% endblock %}

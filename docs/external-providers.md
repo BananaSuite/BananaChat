@@ -33,6 +33,8 @@ are not used.
    changing or removing a provider asks for your password (or an authenticator
    code) unless you signed in or confirmed in the last ten minutes, with or
    without a key: the connection decides where users' prompts are sent.
+   Later, **Connection settings** opens the provider's own page: change the
+   connection there and click **Save** at the top right, or remove the provider.
 4. Click **Test connection**. It checks the key and the model list. Enter a
    model ID (the field suggests listed ones) to also stream a short test answer:
    this costs a few tokens and shows whether the provider reports token usage.
@@ -160,7 +162,9 @@ Use the ID returned by BananaChat's `/v1/models`, not the raw provider ID, when
 calling BananaChat. This keeps providers with the same upstream model name and
 self-hosted models apart.
 
-Each model's settings (on the provider page, under the model) are:
+Each model's settings (on the model's own page, reached with **Capabilities and
+reasoning** under the model on the provider page, and kept by that page's
+**Save** with its other details) are:
 
 - **Images in conversations**, **Function tools for agents** and the
   **Supported reasoning levels**. Enable only what the model supports; the

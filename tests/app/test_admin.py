@@ -355,16 +355,24 @@ def test_settings_validate_colours_and_reset_palettes(app, admin):
     response = admin.post("/admin/settings", _settings_form(light_bg_color="#ABCDEF;x"), follow_redirects=True)
     assert "must be a colour" in response.get_data(as_text=True)
 
-    admin.post("/admin/settings", _settings_form(primary_color="#AA0011", warning_banner_enabled="1",
+    admin.post("/admin/settings", _settings_form(primary_color="#AA0011", announcement_present="1",
                                                  warning_banner_message="Heads up"))
     row = _one(app, "SELECT * FROM site_settings")
     assert (row["site_name"], row["signup_mode"], row["default_theme_mode"]) == ("Banana HQ", "open", "light")
-    assert row["primary_color"] == "#aa0011" and row["warning_banner_enabled"] == 1
+    assert row["primary_color"] == "#aa0011" and row["warning_banner_enabled"] == 1  # a text is the switch
     assert "Heads up" in admin.get("/admin/").get_data(as_text=True)
-    assert 'fill="#aa0011"' in admin.get("/admin/settings").get_data(as_text=True)
+    page = admin.get("/admin/settings").get_data(as_text=True)
+    assert 'fill="#aa0011"' in page and 'name="warning_banner_enabled"' not in page
 
-    response = admin.post("/admin/settings", _settings_form(warning_banner_enabled="1"), follow_redirects=True)
-    assert "Write the banner message" in response.get_data(as_text=True)
+    admin.post("/admin/settings", _settings_form(announcement_present="1", warning_banner_message=""))
+    assert _one(app, "SELECT warning_banner_enabled FROM site_settings")["warning_banner_enabled"] == 0
+    assert "Heads up" not in admin.get("/admin/").get_data(as_text=True)
+    # A page cached from the release with the switch: switched off, its text is not kept (nothing would show).
+    admin.post("/admin/settings", _settings_form(warning_banner_message="Old page"))
+    row = _one(app, "SELECT warning_banner_enabled, warning_banner_message FROM site_settings")
+    assert (row["warning_banner_enabled"], row["warning_banner_message"]) == (0, "")
+    admin.post("/admin/settings", _settings_form(warning_banner_enabled="1", warning_banner_message="Old page"))
+    assert _one(app, "SELECT warning_banner_enabled FROM site_settings")["warning_banner_enabled"] == 1
     admin.post("/admin/settings/palette/reset", {"mode": "dark"})
     assert _one(app, "SELECT primary_color FROM site_settings")["primary_color"] == "#e6be32"
     response = admin.post("/admin/settings", _settings_form(signup_mode="everyone"), follow_redirects=True)

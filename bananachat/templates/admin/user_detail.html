@@ -5,12 +5,12 @@
 {% block title %}{{ user.username }} · Users{% endblock %}
 {% block admin_content %}
 <p class="breadcrumb"><a href="{{ url_for('admin.users') }}">{{ icon("chevron-left") }}Users</a></p>
-{% call header(user.username, ("Administrator" if user.role == "admin" else "User") ~ " · created " ~ (user.created_at | datetime)) %}
+{% call header(user.username, ("Administrator" if user.role == "admin" else "User") ~ " · created " ~ (user.created_at | datetime), save="bm-mode-form") %}
   {% if suspended_now %}<span class="badge badge-danger">Suspended{% if user.suspended_until %} until {{ user.suspended_until | datetime }}{% endif %}</span>{% else %}<span class="badge badge-success">Active</span>{% endif %}
 {% endcall %}
 
 {% if is_self %}
-<div class="alert alert-info mb-3">{{ icon("info") }}<p>This is your account. Change your password or delete it on <a href="{{ url_for('account.index') }}">your account page</a>.</p></div>
+<div class="alert alert-info mb-3">{{ icon("info") }}<p>This is your account. Change its password or delete it on <a href="{{ url_for('account.index') }}">your account page</a>.</p></div>
 {% endif %}
 
 <div class="grid grid-2">
@@ -61,8 +61,8 @@
 
   <section class="settings-section" id="bm-mode" aria-labelledby="bm-mode-title">
     <h2 id="bm-mode-title">BM mode</h2>
-    {% if bm_mode_global %}<p class="muted small">BM mode is on for everyone in <a href="{{ url_for('admin.settings') }}#bm-mode">Settings</a>. This choice applies when it is per account again.</p>{% endif %}
-    <form method="post" action="{{ url_for('admin.user_bm_mode', user_id=user.id) }}" class="stack">
+    {% if bm_mode_global %}<p class="muted small">BM mode is on for everyone in <a href="{{ url_for('admin.settings') }}#bm-mode">Settings</a>. This choice applies once that is turned off.</p>{% endif %}
+    <form method="post" action="{{ url_for('admin.user_bm_mode', user_id=user.id) }}" class="stack" id="bm-mode-form">
       {{ csrf() }}
       <fieldset class="admin-fieldset">
         <legend class="visually-hidden">BM mode for this account</legend>
@@ -75,7 +75,6 @@
         <label class="check"><input type="radio" name="control" value="self"{% if user.bm_mode_control == "self" %} checked{% endif %}><span>{{ user.username }}</span></label>
         <label class="check"><input type="radio" name="control" value="admin"{% if user.bm_mode_control == "admin" %} checked{% endif %}><span>Administrators only</span></label>
       </fieldset>
-      <div class="form-actions"><button type="submit" class="btn">Save</button></div>
     </form>
   </section>
 
@@ -142,7 +141,7 @@
     {% if two_step %}
     <p><span class="badge badge-success">On</span> Since {{ two_step.enabled_at | datetime }}. Recovery codes left: {{ two_step.codes_left }}.</p>
     {% if not is_self %}
-    <p class="muted small">For when {{ user.username }} lost both the authenticator app and the recovery codes. They sign in with their password and set it up again.</p>
+    <p class="muted small">If {{ user.username }} lost both the authenticator app and the recovery codes. They then sign in with their password and set it up again.</p>
     <form method="post" action="{{ url_for('admin.user_two_step_reset', user_id=user.id) }}" class="stack" data-confirm="Reset two-step verification for {{ user.username }} and sign them out everywhere?" data-confirm-danger>
       {{ csrf() }}
       {% if api_tokens %}<label class="check"><input type="checkbox" name="revoke_api_tokens" value="1" checked><span>Also revoke their {{ "API key" if api_tokens == 1 else api_tokens ~ " API keys" }}</span></label>{% endif %}
@@ -151,7 +150,7 @@
       <div class="form-actions"><button type="submit" class="btn btn-danger">Reset two-step verification</button></div>
     </form>
     {% else %}
-    <p class="muted small">Manage your own on <a href="{{ url_for('account.two_step') }}">your account page</a>.</p>
+    <p class="muted small">Yours is on <a href="{{ url_for('account.two_step') }}">your account page</a>.</p>
     {% endif %}
     {% else %}
     <p><span class="badge">Off</span>{% if user.role == "admin" and two_step_required %} <span class="badge badge-warning">Required for administrators</span>{% endif %}</p>

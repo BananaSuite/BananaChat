@@ -6,7 +6,7 @@
 {% block admin_content %}
 {{ header("Activity") }}
 {% include "admin/_activity_tabs.html" %}
-<p class="muted small">Copies of no-history chats, kept until you delete them. The chats themselves are erased after {{ config.no_history_ttl_hours }} hours of inactivity. Users are told that administrators can read them.</p>
+<p class="muted small">Copies kept until you delete them. The chats themselves are erased after {{ config.no_history_ttl_hours }} hours of inactivity. Users are told that administrators can read them.</p>
 <form class="search-form mb-2" role="search" method="get" action="{{ url_for('admin.incognito') }}">
   <label class="visually-hidden" for="filter-user">Username</label>
   <input type="search" id="filter-user" name="user" value="{{ username }}" placeholder="Filter by username">

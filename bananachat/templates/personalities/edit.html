@@ -1,17 +1,14 @@
 {% extends "base.html" %}
 {% from "partials/icons.html" import icon %}
 {% from "personalities/_macros.html" import avatar %}
+{% from "partials/page_header.html" import page_header with context %}
 {% block title %}{{ t("personality.edit_title", name=row.name) if row else t("personality.create_title") }}{% endblock %}
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/personalities.css') }}">{% endblock %}
 {% block content %}
 <div class="page persona-page">
   <p class="breadcrumb"><a href="{{ url_for('personalities.index', _anchor=('personality-' ~ row.id) if row else None) }}">{{ icon("chevron-left") }}{{ t("personality.back") }}</a></p>
-  <header class="page-header">
-    <div>
-      <h1>{{ t("personality.edit_title", name=row.name) if row else t("personality.create_title") }}</h1>
-      {% if row %}<p>{{ t("personality.editor_subtitle") }}</p>{% endif %}
-    </div>
-  </header>
+  {{ page_header(t("personality.edit_title", name=row.name) if row else t("personality.create_title"), "persona-form",
+                 t("common.save") if row else t("personality.create"), t("personality.editor_subtitle") if row else None) }}
 
   {% if templates %}
   <nav class="template-strip mb-3" aria-labelledby="template-strip-label">
@@ -137,11 +134,6 @@
       </fieldset>
 
       <label class="check"><input type="checkbox" name="enabled" value="1"{% if values.enabled %} checked{% endif %}><span>{{ t("personality.enabled_label") }}<small>{{ t("personality.enabled_hint") }}</small></span></label>
-
-      <div class="form-actions form-actions-end">
-        <a class="btn btn-ghost" href="{{ url_for('personalities.index') }}">{{ t("common.cancel") }}</a>
-        <button type="submit" class="btn btn-primary">{{ t("common.save") if row else t("personality.create") }}</button>
-      </div>
     </form>
 
     <aside class="persona-preview" aria-labelledby="preview-title">

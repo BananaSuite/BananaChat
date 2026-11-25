@@ -23,6 +23,7 @@
 <body class="{% include 'partials/body_classes.html' %} {% block body_class %}{% endblock %}">
 <a class="skip-link" href="#main">{{ t("common.skip_to_content") }}</a>
 {% block topbar %}{% include "partials/topbar.html" %}{% endblock %}
+{% include "partials/acting_banner.html" %}
 {% block status %}{% include "partials/status_banner.html" %}{% endblock %}
 <main id="main" tabindex="-1">{% block content %}{% endblock %}</main>
 {% block footer %}{% include "partials/footer.html" %}{% endblock %}

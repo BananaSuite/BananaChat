@@ -11,14 +11,16 @@
 <p class="admin-empty">{{ title }}{% if text %} {{ text }}{% endif %}</p>
 {%- endmacro %}
 {% from "partials/icons.html" import icon %}
+{% from "partials/page_header.html" import save_button %}
 {% set section = "music" %}
 {% block title %}Music{% endblock %}
 {% block admin_content %}
-<header class="page-header admin-header">
-  <div>
+<header class="page-header page-header-save admin-header">
+  <div class="page-header-title">
     <h1>Music</h1>
-    <p>Participants hear music while they use the site and get larger token limits in exchange.</p>
+    <p>People who listen to music while they use the site get higher token limits.</p>
   </div>
+  <div class="page-header-actions">{{ save_button("music-settings-form", "Save") }}</div>
 </header>
 
 <div class="grid grid-4 admin-stats mb-3">
@@ -31,7 +33,7 @@
 <div class="section-stack">
 <section class="settings-section" id="settings" aria-labelledby="settings-title">
   <h2 id="settings-title">Settings</h2>
-  <form method="post" action="{{ url_for('admin.music_settings') }}" class="stack" data-busy>
+  <form method="post" action="{{ url_for('admin.music_settings') }}" class="stack" id="music-settings-form" data-busy>
     {{ csrf() }}
     <fieldset class="admin-fieldset stack-sm">
       <legend>Availability</legend>
@@ -71,14 +73,8 @@
         <option value="shuffle"{% if music.music_playback_mode == "shuffle" %} selected{% endif %}>Shuffled for each listener</option>
       </select>
     </div>
-    <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
   </form>
   <div class="section-footer row">
-    {% if music.music_visible %}
-    <form method="post" action="{{ url_for('admin.music_hide') }}" data-confirm="Hide the programme? Participants keep their bonus. Nobody else can join.">
-      {{ csrf() }}<button type="submit" class="btn">Hide the programme</button>
-    </form>
-    {% endif %}
     <form method="post" action="{{ url_for('admin.music_remove') }}" data-confirm="Remove the programme? Everyone is opted out (including people you enrolled) and the programme is switched off. Tracks are kept." data-confirm-danger>
       {{ csrf() }}<button type="submit" class="btn btn-danger">Remove the programme</button>
     </form>

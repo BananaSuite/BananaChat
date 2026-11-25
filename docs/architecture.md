@@ -109,8 +109,9 @@ with db.transaction():                                        # BEGIN IMMEDIATE 
   (`site_settings.bm_mode_global`) or per account (`users.bm_mode`). Who
   switches an account's: `users.bm_mode_control` (`self`, `admin`, or `site`:
   `site_settings.bm_mode_self_service`); see `db.users.bm_mode` and
-  `bm_mode_switchable`. The preferences API reports it as `bm_mode` and ignores
-  a change the account may not make.
+  `bm_mode_switchable`. **Admin → Settings** sets both site columns with one
+  choice (each person, administrators, or on for everyone). The preferences API
+  reports it as `bm_mode` and ignores a change the account may not make.
   While it is on, `<body>` has the class `bm-mode`, and every element with the
   class `bm-hide` is hidden: mark advanced controls and extra navigation with
   it. Hidden controls must not keep acting unseen: the chat sends no reasoning

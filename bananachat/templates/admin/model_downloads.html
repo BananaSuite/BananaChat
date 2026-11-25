@@ -13,7 +13,7 @@
       <form method="post" action="{{ url_for('admin.pulls_queue') }}">
         {{ csrf() }}
         {% if queue.queue_paused %}
-        <button type="submit" name="action" value="resume_all" class="btn btn-sm btn-primary">Resume all</button>
+        <button type="submit" name="action" value="resume_all" class="btn btn-sm">Resume all</button>
         {% else %}
         <button type="submit" name="action" value="pause_all" class="btn btn-sm">Pause all</button>
         {% endif %}

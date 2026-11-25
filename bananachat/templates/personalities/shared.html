@@ -48,7 +48,6 @@
       {% elif full %}
       <p class="hint mb-0">{{ t("personality.limit_reached", max=max_count) }}</p>
       {% else %}
-      <p class="hint mb-0">{{ t("personality.shared_copy_hint") }}</p>
       <form method="post" action="{{ url_for('personalities.save_shared', token=token) }}" class="persona-actions" data-busy>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-primary">{{ t("personality.shared_save") }}</button>

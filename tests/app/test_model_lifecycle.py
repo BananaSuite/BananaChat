@@ -642,6 +642,31 @@ def test_deprecated_models_move_chats_to_the_replacement_and_retire_on_their_dat
     assert model(app, "qwen3:4b")["retired_at"] is None and model(app, "qwen3:4b")["deprecated_at"] is None
 
 
+def test_the_model_page_keeps_details_levels_and_deprecation_with_its_one_save(app, admin):
+    sync(app)
+    qwen, llama = model(app, "qwen3:4b"), model(app, "llama3.2:3b")
+    admin.post(f"/admin/models/{qwen['id']}/lifecycle", {"action": "deprecate", "replacement_id": str(llama["id"]),
+                                                         "retire_at": "2999-01-01T00:00", "note": "Old"})
+    page = admin.get(f"/admin/models/{qwen['id']}/edit").get_data(as_text=True)
+    assert page.count("data-page-save") == 1 and "Save levels" not in page and "Save deprecation" not in page
+    assert page.count('form="model-form"') >= 5  # the levels and the deprecation's fields belong to the form
+    before = events(app, "qwen3:4b")
+    form = {"display_name": "Qwen", "reasoning_levels": "none", "deprecation_present": "1",
+            "replacement_id": str(llama["id"]), "retire_at": "2999-01-01T00:00", "note": "Old"}
+    assert admin.post(f"/admin/models/{qwen['id']}/edit", form).status_code == 302
+    row = model(app, "qwen3:4b")
+    assert row["display_name"] == "Qwen" and json.loads(row["reasoning_levels"]) == [] and row["reasoning_levels_locked"]
+    assert events(app, "qwen3:4b") == before  # an unchanged deprecation records nothing
+    refused = admin.post(f"/admin/models/{qwen['id']}/edit", {**form, "display_name": "Qwen 2",
+                                                              "retire_at": "2001-01-01T00:00"})
+    assert refused.status_code == 400
+    shown = refused.get_data(as_text=True)
+    assert "must be in the future" in shown and 'value="2001-01-01T00:00"' in shown and 'value="Qwen 2"' in shown
+    assert model(app, "qwen3:4b")["display_name"] == "Qwen"  # nothing saved
+    assert admin.post(f"/admin/models/{qwen['id']}/edit", {**form, "note": "Use Llama"}).status_code == 302
+    assert model(app, "qwen3:4b")["deprecation_note"] == "Use Llama" and events(app, "qwen3:4b")[-1] == "deprecated"
+
+
 def test_a_deprecated_model_without_replacement_keeps_answering(app, make_user):
     from bananachat.services import inference
     from bananachat.services.access import AccessContext

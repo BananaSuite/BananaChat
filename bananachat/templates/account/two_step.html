@@ -3,7 +3,8 @@
 {% block title %}{{ t("two_step.title") }}{% endblock %}
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/account.css') }}">{% endblock %}
 {% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
-{#- The password and a code from the app (or a recovery code) confirm every change; *id* keeps the fields apart. -#}
+{#- The password (or a confirmation with BananaWiki Hosting in the last ten minutes) and a code from the app (or a
+    recovery code) confirm every change; *id* keeps the fields apart. -#}
 {% macro confirm_fields(id, code_label) -%}
 <input type="text" name="username" autocomplete="username" value="{{ user.username }}" hidden>
 <div class="form-grid">
@@ -11,11 +12,21 @@
     <label for="{{ id }}-code">{{ code_label }}</label>
     <input type="text" id="{{ id }}-code" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" required maxlength="64">
   </div>
+  {% if has_password and not hosting_confirmed %}
   <div class="field">
     <label for="{{ id }}-password">{{ t("auth.password") }}</label>
     <input type="password" id="{{ id }}-password" name="password" autocomplete="current-password" required maxlength="1024">
   </div>
+  {% endif %}
 </div>
+{% if hosting_confirmed %}
+<p class="hint mb-0">{{ t("hosting.confirmed_short") }}</p>
+{% elif can_confirm %}
+<div class="row confirm-hosting">
+  <span class="hint">{{ t("hosting.confirm_instead") if has_password else t("hosting.confirm_first") }}</span>
+  <button type="submit" class="btn btn-sm" form="hosting-confirm" name="next" value="{{ url_for('account.two_step') }}">{{ t("hosting.confirm_button") }}</button>
+</div>
+{% endif %}
 {%- endmacro %}
 {% block content %}
 <div class="page page-narrow account-page">
@@ -29,6 +40,11 @@
 
   {% if required and not state %}
   <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("two_step.required_notice") }}</p></div>
+  {% endif %}
+  {% if acting %}
+  <div class="alert alert-warning">{{ icon("alert") }}<p>{{ t("hosting.acting_refused") }}</p></div>
+  {% elif hosting_mode != "local" %}
+  <p class="hint">{{ t("two_step.password_only_note") }}</p>
   {% endif %}
 
   <div class="section-stack account-sections">
@@ -62,6 +78,11 @@
         <div class="form-actions"><button type="submit" class="btn btn-danger">{{ t("two_step.disable") }}</button></div>
       </form>
     </section>
+    {% elif not has_password %}
+    <section class="settings-section" aria-labelledby="two-step-setup">
+      <h2 id="two-step-setup">{{ t("two_step.setup_title") }}</h2>
+      <p class="mb-0">{{ t("two_step.needs_password") }} <a href="{{ url_for('account.index', _anchor='password') }}">{{ t("account.set_password") }}</a></p>
+    </section>
     {% else %}
     <section class="settings-section" aria-labelledby="two-step-setup">
       <h2 id="two-step-setup">{{ t("two_step.setup_title") }}</h2>
@@ -92,5 +113,8 @@
     </section>
     {% endif %}
   </div>
+  {% if can_confirm and not hosting_confirmed %}
+  <form method="post" action="{{ url_for('hosting.confirm') }}" id="hosting-confirm" hidden>{{ csrf() }}</form>
+  {% endif %}
 </div>
 {% endblock %}

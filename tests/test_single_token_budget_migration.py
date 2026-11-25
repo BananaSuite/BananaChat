@@ -175,6 +175,7 @@ def test_capped_conversion_keeps_history_schema_and_is_idempotent(old_db):
     assert {row["name"] for row in old_db.execute("PRAGMA table_info(site_settings)")} == columns | {
         "music_bonus_fixed_weekly_tokens", "worker_offline_warning_enabled", "admin_two_step_required",
         "bm_mode_global", "bm_mode_self_service", "easter_mascot_motion", "easter_mascot_shades", "easter_konami",
+        "signin_mode", "easter_egg_configs",
     }
     for table, rows in history.items():
         assert [tuple(row) for row in old_db.execute(f'SELECT * FROM "{table}"')] == rows

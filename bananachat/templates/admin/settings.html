@@ -26,9 +26,9 @@
 </svg>
 {%- endmacro %}
 
-{{ header("Settings") }}
-{#- One form: the tabs show one part of it at a time (admin.js) and Save keeps all of it. Without
-    scripts every part shows and the tabs jump to it. -#}
+{{ header("Settings", save="settings-form") }}
+{#- One form: the tabs show one part of it at a time (admin.js) and the header's Save keeps all of it,
+    the easter-egg editor's list included. Without scripts every part shows and the tabs jump to it. -#}
 <nav class="tabs" aria-label="Settings" data-panel-tabs>
   <a href="#general">General</a>
   <a href="#sign-in">Sign-in</a>
@@ -49,17 +49,19 @@
       <fieldset class="admin-fieldset">
         <legend>Sign-up</legend>
         <label class="check"><input type="radio" name="signup_mode" value="invite"{% if s.signup_mode == "invite" %} checked{% endif %}><span>Invitation only<small>New accounts need an <a href="{{ url_for('admin.invites') }}">invitation</a>.</small></span></label>
-        <label class="check"><input type="radio" name="signup_mode" value="open"{% if s.signup_mode == "open" %} checked{% endif %}><span>Open<small>Anyone who can reach the site can create an account.</small></span></label>
+        <label class="check"><input type="radio" name="signup_mode" value="open"{% if s.signup_mode == "open" %} checked{% endif %}><span>Open<small>Anyone can create an account.</small></span></label>
         <label class="check"><input type="radio" name="signup_mode" value="disabled"{% if s.signup_mode == "disabled" %} checked{% endif %}><span>Closed<small>Only administrators create accounts.</small></span></label>
-        {% if s.signup_mode != "open" %}<p class="hint mt-1 mb-0">Open sign-up requires your password or a two-step code on the Sign-in tab.</p>{% endif %}
+        {% if s.signup_mode != "open" %}<p class="hint mt-1 mb-0">Opening sign-up asks for a confirmation on the Sign-in tab.</p>{% endif %}
       </fieldset>
+      {%- set bm_policy = "everyone" if s.bm_mode_global else ("person" if s.bm_mode_self_service != 0 else "admin") %}
       <fieldset class="admin-fieldset" id="bm-mode">
         <legend>BM mode (easy mode)</legend>
         <input type="hidden" name="bm_mode_present" value="1">
-        <p class="hint mt-0">A simpler interface with only the chat, the model choice and the essentials.</p>
-        <label class="check"><input type="radio" name="bm_mode_global" value="0"{% if not s.bm_mode_global %} checked{% endif %}><span>Per account</span></label>
-        <label class="check"><input type="radio" name="bm_mode_global" value="1"{% if s.bm_mode_global %} checked{% endif %}><span>On for everyone<small>Nobody can switch it off.</small></span></label>
-        <label class="check"><input type="checkbox" name="bm_mode_self_service"{% if s.bm_mode_self_service != 0 %} checked{% endif %}><span>People can switch it on and off themselves</span></label>
+        <p class="hint mt-0">Only the chat, the model choice and the essentials.</p>
+        <label class="check"><input type="radio" name="bm_mode_policy" value="person"{% if bm_policy == "person" %} checked{% endif %}><span>Each person decides<small>In Appearance and the account menu.</small></span></label>
+        <label class="check"><input type="radio" name="bm_mode_policy" value="admin"{% if bm_policy == "admin" %} checked{% endif %}><span>Administrators decide<small>On each account's page.</small></span></label>
+        <label class="check"><input type="radio" name="bm_mode_policy" value="everyone"{% if bm_policy == "everyone" %} checked{% endif %}><span>On for everyone</span></label>
+        <p class="hint mt-1 mb-0">Each account's page can override this.</p>
         <div class="row mt-1">
           <button type="submit" class="btn btn-sm" form="bm-all-on">Turn on for every account</button>
           <button type="submit" class="btn btn-sm" form="bm-all-off">Turn off for every account</button>
@@ -74,15 +76,29 @@
       <fieldset class="admin-fieldset stack-sm" id="signin-mode"{% if not hosting.configured %} disabled aria-describedby="signin-mode-off"{% endif %}>
         <legend>Sign-in with BananaWiki Hosting</legend>
         {% if hosting.configured %}<input type="hidden" name="signin_mode_present" value="1">{% endif %}
-        <label class="check"><input type="radio" name="signin_mode" value="local"{% if hosting.mode == "local" %} checked{% endif %}><span>Local accounts only<small>Username and password, as before. The BananaWiki Hosting pages are off.</small></span></label>
-        <label class="check"><input type="radio" name="signin_mode" value="both"{% if hosting.mode == "both" %} checked{% endif %}><span>Both<small>The sign-in page offers the password form and "Sign in with BananaWiki Hosting". People can connect their account on their account page.</small></span></label>
-        <label class="check"><input type="radio" name="signin_mode" value="hosting"{% if hosting.mode == "hosting" %} checked{% endif %}{% if hosting.configured and not hosting.own_link and hosting.mode != "hosting" %} disabled{% endif %}><span>BananaWiki Hosting accounts only<small>Only "Sign in with BananaWiki Hosting". New accounts are made through it, still following the sign-up setting and its invitations; existing accounts connect with their password on their first hosting sign-in.</small></span></label>
+        <label class="check"><input type="radio" name="signin_mode" value="local"{% if hosting.mode == "local" %} checked{% endif %}><span>Local accounts only<small>Username and password.</small></span></label>
+        <label class="check"><input type="radio" name="signin_mode" value="both"{% if hosting.mode == "both" %} checked{% endif %}><span>Both<small>Password or BananaWiki Hosting. People connect their account on their account page.</small></span></label>
+        <label class="check"><input type="radio" name="signin_mode" value="hosting"{% if hosting.mode == "hosting" %} checked{% endif %}{% if hosting.configured and not hosting.own_link and hosting.mode != "hosting" %} disabled{% endif %}><span>BananaWiki Hosting accounts only<small>New accounts still follow the sign-up setting. Existing accounts connect with their password at their first hosting sign-in.</small></span></label>
         {% if not hosting.configured %}
-        <p class="hint mb-0" id="signin-mode-off">Off: set <code>BC_HOSTING_OAUTH_URL</code>, <code>BC_HOSTING_OAUTH_CLIENT_ID</code> and <code>BC_HOSTING_OAUTH_CLIENT_SECRET</code> on the server and restart it. Until then everyone signs in with a password{% if hosting.mode != "local" %} (the saved choice, {{ hosting.mode }}, applies once it is configured){% endif %}.</p>
+        <p class="hint mb-0" id="signin-mode-off">Off until <code>BC_HOSTING_OAUTH_URL</code>, <code>BC_HOSTING_OAUTH_CLIENT_ID</code> and <code>BC_HOSTING_OAUTH_CLIENT_SECRET</code> are set on the server and it is restarted. Until then everyone signs in with a password{% if hosting.mode != "local" %} (the saved choice, {{ hosting.mode }}, applies after that){% endif %}.</p>
         {% else %}
-        <p class="hint mb-0">Portal <code>{{ hosting.url }}</code>, client <code>{{ hosting.client_id }}</code>. Register this redirect URI for the app on the portal (Account → Developer apps), exactly as shown: <code>{{ hosting.callback }}</code></p>
-        {% if not hosting.own_link %}<p class="hint mb-0">Hosting-only sign-in needs your own account connected first (choose Both, save, then connect it on <a href="{{ url_for('account.index', _anchor='hosting') }}">your account page</a>), so you can still sign in.</p>{% endif %}
-        <p class="hint mb-0">With hosting-only sign-in, administrators can still sign in with their password (and two-step code) at <code>{{ url_for('hosting.recovery', _external=True) }}</code>, which is not linked from the sign-in page; every attempt is in the audit log. On the server, <code>python -m bananachat.manage signin-mode both</code> switches back.</p>
+        <p class="hint mb-0">Portal <code>{{ hosting.url }}</code>, client <code>{{ hosting.client_id }}</code>. Redirect URI to register on the portal (Account → Developer apps): <code>{{ hosting.callback }}</code></p>
+        {% if not hosting.own_link %}<p class="hint mb-0">Hosting-only sign-in needs your own account connected first: choose Both, save, then connect it on <a href="{{ url_for('account.index', _anchor='hosting') }}">your account page</a>.</p>{% endif %}
+        <p class="hint mb-0">Connect the other administrators too: <a href="{{ url_for('admin.hosting_links') }}">Users → BananaWiki Hosting</a>.</p>
+        <p class="hint mb-0">Administrators can still sign in with their password at <code>{{ url_for('hosting.recovery', _external=True) }}</code>. It is not linked from the sign-in page and every attempt is logged. To switch back on the server: <code>python -m bananachat.manage signin-mode both</code>.</p>
+        <input type="hidden" name="hosting_acting_present" value="1">
+        {{ toggle("hosting_allow_acting", "Allow hosting administrators to sign in as users", hosting.allow_acting, "Each page shows who is acting and the session ends with it. They can't change the password, two-step codes or sign-in methods, delete the account or make API keys. BananaWiki Hosting must allow it too.") }}
+        <details class="admin-disclosure"{% if hosting.lookup == "unreadable" %} open{% endif %}>
+          <summary><span>Advanced</span>{{ icon("chevron-down") }}</summary>
+          <div class="stack-sm">
+            <div class="field">
+              <label for="hosting-lookup-token">Portal API token for looking up accounts</label>
+              <input type="password" id="hosting-lookup-token" name="hosting_lookup_token" maxlength="512" autocomplete="off" spellcheck="false" aria-describedby="hosting-lookup-token-hint">
+              <span class="hint" id="hosting-lookup-token-hint">{% if hosting.lookup == "ready" %}A token is stored. Type a new one to replace it.{% elif hosting.lookup == "unreadable" %}A token is stored but this server's secret key can't read it. Type it again.{% else %}None stored.{% endif %} A portal administrator's token with the <code>accounts:lookup</code> scope lets the linking tool find accounts by username. Without one it takes portal account ids only. Stored encrypted.</span>
+            </div>
+            {% if hosting.lookup != "none" %}<label class="check"><input type="checkbox" name="hosting_lookup_token_remove" value="1"><span>Remove the stored token</span></label>{% endif %}
+          </div>
+        </details>
         {% endif %}
       </fieldset>
       <fieldset class="admin-fieldset stack-sm">
@@ -94,7 +110,7 @@
         {% elif admins_without_two_step %}
         <p class="hint">{{ admins_without_two_step }} active administrator{{ "s have" if admins_without_two_step != 1 else " has" }} not set it up yet.</p>
         {% endif %}
-        {{ reauth_field("settings-reauth", needed_for="to change this requirement or the sign-in mode, or to open sign-up") }}
+        {{ reauth_field("settings-reauth", needed_for="to change this requirement, the sign-in mode, acting administrators or the portal API token, or to open sign-up") }}
       </fieldset>
     </div>
   </section>
@@ -108,8 +124,7 @@
         {{ toggle("maintenance_mode", "Pause new messages", s.maintenance_mode, "Only administrators can send messages.") }}
         <div class="field">
           <label for="maintenance-message">Maintenance message</label>
-          <textarea id="maintenance-message" name="maintenance_message" maxlength="1000" rows="3" data-preview-target="maintenance-preview" aria-describedby="maintenance-message-hint">{{ s.maintenance_message }}</textarea>
-          <span class="hint" id="maintenance-message-hint">For example, when you expect to be back.</span>
+          <textarea id="maintenance-message" name="maintenance_message" maxlength="1000" rows="3" data-preview-target="maintenance-preview">{{ s.maintenance_message }}</textarea>
         </div>
         <div class="notice-preview" aria-live="polite">
           <span class="small muted">Preview</span>
@@ -123,12 +138,14 @@
       </fieldset>
       <fieldset class="admin-fieldset stack-sm">
         <legend>Announcement</legend>
-        {{ toggle("warning_banner_enabled", "Show an announcement on every page", s.warning_banner_enabled) }}
-        {{ toggle("warning_banner_dismissible", "Users can dismiss it", s.warning_banner_dismissible, "It comes back in a new browser session or when the text changes.") }}
+        {#- Shown on every page whenever it has a text (schema 34). -#}
+        <input type="hidden" name="announcement_present" value="1">
         <div class="field">
-          <label for="banner-message">Announcement</label>
-          <textarea id="banner-message" name="warning_banner_message" maxlength="500" rows="2">{{ s.warning_banner_message }}</textarea>
+          <label for="banner-message">Text</label>
+          <textarea id="banner-message" name="warning_banner_message" maxlength="500" rows="2" aria-describedby="banner-message-hint">{{ s.warning_banner_message }}</textarea>
+          <span class="hint" id="banner-message-hint">Shown on every page. Leave empty for none.</span>
         </div>
+        {{ toggle("warning_banner_dismissible", "Users can dismiss it", s.warning_banner_dismissible, "It comes back in a new browser session or when the text changes.") }}
       </fieldset>
     </div>
   </section>
@@ -155,7 +172,7 @@
           date with the whole list as JSON; web/admin/settings.py checks it with bananachat.eggs. -#}
       <fieldset class="choice-group" id="easter-eggs">
         <legend>Keyboard easter eggs</legend>
-        <label class="check"><input type="checkbox" name="easter_konami"{% if s.easter_konami != 0 %} checked{% endif %}><span>Keyboard easter eggs<small>Typing a key sequence, such as the Konami code (↑ ↑ ↓ ↓ ← → ← → B A), drops emoji or the mascot down the page. Off turns every easter egg below off.</small></span></label>
+        <label class="check"><input type="checkbox" name="easter_konami"{% if s.easter_konami != 0 %} checked{% endif %}><span>On<small>Typing a key sequence, such as the Konami code (↑ ↑ ↓ ↓ ← → ← → B A), drops emoji or the mascot down the page. Off turns off every egg below.</small></span></label>
         <p class="hint mt-1">People can turn them off for themselves in Appearance, and see the ones they found on the <a href="{{ url_for('easter_eggs.index') }}">easter egg page</a>.</p>
         {% if egg_editor.errors %}
         <div class="alert alert-error" role="alert" id="easter-egg-errors">{{ icon("alert") }}<ul class="mb-0">{% for error in egg_editor.errors %}<li>{{ error }}</li>{% endfor %}</ul></div>
@@ -188,8 +205,6 @@
       {% endfor %}
     </div>
   </section>
-
-  <div class="form-actions"><button type="submit" class="btn btn-primary">Save settings</button></div>
 </form>
 
 {% for state in ["on", "off"] %}

@@ -1,0 +1,40 @@
+{#- The fields of an external API provider's connection and of one of its models' capabilities, shared by the
+    providers page, a provider's page and a model's page. Import it `with context` (presets, auth_styles,
+    header_text and the re-authentication field come from the page). -#}
+{% from "partials/icons.html" import icon %}
+{% from "admin/_reauth.html" import reauth_field with context %}
+{% macro capabilities(prefix, protocol, levels=[], vision=false, tools=false, settings=none) %}
+<details class="inline-details"><summary>Capabilities and reasoning{{ icon("chevron-down") }}</summary><div class="stack mt-2">
+  <p class="muted small">Enable only what the model supports.</p>
+  <label class="check"><input type="checkbox" name="vision"{% if vision %} checked{% endif %}><span>Images in conversations</span></label>
+  <label class="check"><input type="checkbox" name="tools"{% if tools %} checked{% endif %}><span>Function tools for agents</span></label>
+  {% set sampling = settings.sampling if settings and settings.sampling is not none else protocol != 'anthropic' %}
+  <label class="check"><input type="checkbox" name="sampling"{% if sampling %} checked{% endif %}><span>Sampling parameters<small>Send temperature and top_p when no reasoning level is used. Current Claude models refuse them.</small></span></label>
+  {% if protocol == 'anthropic' %}
+  <div class="field"><label for="{{ prefix }}-thinking">Thinking control</label><select id="{{ prefix }}-thinking" name="thinking"><option value="adaptive"{% if not settings or settings.thinking != 'budget' %} selected{% endif %}>Adaptive thinking with effort (Claude 4.6 and newer)</option><option value="budget"{% if settings and settings.thinking == 'budget' %} selected{% endif %}>Thinking budget (older Claude models)</option></select></div>
+  {% endif %}
+  <fieldset><legend>Supported reasoning levels</legend><div class="check-list">{% for level in ['off', 'low', 'medium', 'high', 'extra', 'max'] %}<label class="check"><input type="checkbox" name="reasoning" value="{{ level }}"{% if level in levels %} checked{% endif %}><span>{{ level|title }}</span></label>{% endfor %}</div></fieldset>
+</div></details>
+{% endmacro %}
+{% macro connection(prefix, provider=none) %}
+{% set preset = presets[provider.preset] if provider and provider.preset in presets else none %}
+<div class="form-grid">
+  <div class="field"><label for="{{ prefix }}-preset" class="required">Service</label><select id="{{ prefix }}-preset" name="preset" required data-preset-select aria-describedby="{{ prefix }}-preset-hint">{% if not provider %}<option value="">Choose a service…</option>{% endif %}{% for key, option in presets.items() %}<option value="{{ key }}"{% if provider and provider.preset == key %} selected{% endif %}>{{ option.label }}</option>{% endfor %}</select><span class="hint" id="{{ prefix }}-preset-hint" data-preset-hint>{{ preset.hint if preset else 'Fills in the address and the key header.' }}</span></div>
+  <div class="field"><label for="{{ prefix }}-name" class="required">Provider name</label><input type="text" id="{{ prefix }}-name" name="name" required maxlength="80" value="{{ provider.name if provider else '' }}" placeholder="OpenAI" data-preset-name></div>
+  <div class="field"><label for="{{ prefix }}-url">API base URL</label><input id="{{ prefix }}-url" name="base_url" type="url" maxlength="1000" value="{{ provider.base_url if provider else '' }}" placeholder="Service default" aria-describedby="{{ prefix }}-url-hint" data-preset-field="base_url"><span class="hint" id="{{ prefix }}-url-hint">The API root, without /chat/completions, /messages or /models.</span></div>
+  <div class="field"><label for="{{ prefix }}-key">API key</label><input id="{{ prefix }}-key" name="api_key" type="password" autocomplete="new-password" maxlength="8192" aria-describedby="{{ prefix }}-key-hint" placeholder="{{ 'Leave blank to keep the current key' if provider and provider.secret_ref else 'Server-side provider key' }}"><span class="hint" id="{{ prefix }}-key-hint">{{ 'Stored encrypted. Not shown again.' if provider and provider.secret_ref else 'Stored encrypted. Leave blank for a local endpoint without authentication.' }}</span></div>
+  <div class="field field-wide"><label for="{{ prefix }}-protocol">API format</label><select id="{{ prefix }}-protocol" name="protocol" data-preset-field="protocol"><option value="openai"{% if not provider or provider.protocol == 'openai' %} selected{% endif %}>OpenAI Chat Completions</option><option value="anthropic"{% if provider and provider.protocol == 'anthropic' %} selected{% endif %}>Anthropic Messages</option></select></div>
+  <div class="field field-wide"><label for="{{ prefix }}-auth">Key header</label><select id="{{ prefix }}-auth" name="auth_style" data-preset-field="auth_style">{% for value, label in auth_styles.items() %}<option value="{{ value }}"{% if (provider and provider.auth_style == value) or (not provider and value == 'bearer') %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+</div>
+<label class="check"><input type="checkbox" name="enabled"{% if not provider or provider.enabled %} checked{% endif %}><span>Enabled</span></label>
+<details class="inline-details"><summary>Advanced{{ icon("chevron-down") }}</summary><div class="stack mt-2">
+  <div class="field"><label for="{{ prefix }}-headers">Extra headers</label><textarea id="{{ prefix }}-headers" name="extra_headers" rows="3" maxlength="6000" spellcheck="false" class="mono" aria-describedby="{{ prefix }}-headers-hint" data-preset-field="headers">{{ header_text[provider.id] if provider else '' }}</textarea><span class="hint" id="{{ prefix }}-headers-hint">One “Name: value” per line. Headers are not secret. Put credentials in the API key field.</span></div>
+  <div class="field"><label for="{{ prefix }}-token-field">Output limit field (OpenAI-compatible)</label><select id="{{ prefix }}-token-field" name="token_parameter">{% for value, label in [('auto','Automatic'), ('max_tokens','max_tokens'), ('max_completion_tokens','max_completion_tokens')] %}<option value="{{ value }}"{% if provider and provider.token_parameter == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select><span class="hint">Automatic sends max_completion_tokens to OpenAI and Azure OpenAI, and max_tokens to other services.</span></div>
+  <div class="field"><label for="{{ prefix }}-usage">Streamed token usage (OpenAI-compatible)</label><select id="{{ prefix }}-usage" name="stream_usage"><option value="1"{% if not provider or provider.stream_usage %} selected{% endif %}>Request provider usage</option><option value="0"{% if provider and not provider.stream_usage %} selected{% endif %}>Endpoint has no stream_options support</option></select><span class="hint">Without the provider's counts, BananaChat estimates usage.</span></div>
+  <label class="check"><input type="checkbox" name="auto_enroll"{% if provider and provider.auto_enroll %} checked{% endif %}><span>Enrol new chat models automatically<small>Known chat model families publish with standard limits. Others wait for review.</small></span></label>
+  <label class="check"><input type="checkbox" name="allow_private" data-preset-field="local"{% if provider and provider.allow_private %} checked{% endif %}><span>Allow a local or private-network endpoint<small>For LM Studio, vLLM, llama.cpp or LiteLLM on this machine or your network. Plain HTTP is allowed there.</small></span></label>
+  <label class="check"><input type="checkbox" name="local_backend" data-preset-field="own_hardware"{% if provider and provider.local_backend %} checked{% endif %}><span>Runs on our own hardware (a local model server)<small>Its models count as local and hide while the server is off. Leave off for gateways to cloud services.</small></span></label>
+  {% if provider and provider.secret_ref %}<label class="check"><input type="checkbox" name="clear_key"><span>Remove the stored API key</span></label>{% endif %}
+</div></details>
+{{ reauth_field(prefix ~ '-reauth') }}
+{% endmacro %}

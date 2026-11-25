@@ -25,9 +25,8 @@ if (initialSettingsTarget?.closest(".customize-extra")) keepInitialFragmentVisib
 
 const COLOUR_KEYS = ["custom_bg", "custom_text", "custom_primary", "custom_secondary", "custom_accent", "custom_sidebar"];
 const PALETTE_NAME = { custom_bg: "bg", custom_text: "text", custom_primary: "primary", custom_secondary: "secondary", custom_accent: "accent", custom_sidebar: "sidebar" };
-const INTEGER_KEYS = new Set(["contrast", "line_height", "letter_spacing", "sidebar_width", "semantic_bold", "semantic_italic", "semantic_code", "semantic_link", "semantic_heading"]);
-const SEMANTIC = ["bold", "italic", "code", "link", "heading"];
-const LINE_HEIGHTS = ["1.55", "1.8", "2.05"];
+const INTEGER_KEYS = new Set(["contrast", "line_height", "letter_spacing", "sidebar_width", "highlight"]);
+const LINE_HEIGHTS = ["1.6", "1.8", "2.05"];
 const LETTER_SPACINGS = ["0em", "0.03em", "0.07em"];
 
 let prefs = { ...data.preferences };
@@ -59,7 +58,7 @@ function apply() {
 
   const body = document.body;
   for (const name of [...body.classList]) {
-    if (/^contrast-\d$/.test(name) || /^sem-[a-z]+-\d$/.test(name)) body.classList.remove(name);
+    if (/^(contrast|highlight)-\d$/.test(name)) body.classList.remove(name);
   }
   if (prefs.contrast) body.classList.add(`contrast-${prefs.contrast}`);
   body.classList.toggle("reduce-motion", Boolean(prefs.reduce_motion));
@@ -75,10 +74,7 @@ function apply() {
     }
     mascot.dispatchEvent(new CustomEvent("bananachat:eggs"));
   }
-  for (const kind of SEMANTIC) {
-    const level = prefs[`semantic_${kind}`];
-    if (level) body.classList.add(`sem-${kind}-${level}`);
-  }
+  if (prefs.highlight) body.classList.add(`highlight-${prefs.highlight}`);
   if (backgroundUrl) root.style.setProperty("--background-image", `url("${backgroundUrl}")`);
   else root.style.removeProperty("--background-image");
   body.classList.toggle("has-background", Boolean(backgroundUrl));

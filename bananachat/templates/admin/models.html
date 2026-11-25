@@ -117,7 +117,7 @@
         {% if model.details_error %}<p class="danger-text small mb-0">Details could not be read: {{ model.details_error }}</p>{% endif %}
       </div>
       <div class="row lifecycle-actions">
-        {% if not model.embedding_only %}<a class="btn btn-sm btn-primary" href="{{ url_for('admin.model_enable', model_id=model.id) }}">Enable…</a>{% endif %}
+        {% if not model.embedding_only %}<a class="btn btn-sm" href="{{ url_for('admin.model_enable', model_id=model.id) }}">Enable…</a>{% endif %}
         <form method="post" action="{{ url_for('admin.model_ignore', model_id=model.id) }}">
           {{ csrf() }}<button type="submit" class="btn btn-sm btn-ghost" aria-label="Ignore {{ model.ollama_name }}">Ignore</button>
         </form>

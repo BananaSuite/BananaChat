@@ -2,9 +2,9 @@
 {% from "partials/icons.html" import icon %}
 {% block title %}{{ t("customize.title") }}{% endblock %}
 {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/customization.css') }}">{% endblock %}
-{% macro choice(name, options, current, legend, hint=None) -%}
+{% macro choice(name, options, current, legend, hint=None, legend_hidden=False) -%}
 <fieldset class="choice-group">
-  <legend>{{ legend }}</legend>
+  <legend{% if legend_hidden %} class="visually-hidden"{% endif %}>{{ legend }}</legend>
   {% if hint %}<p class="hint">{{ hint }}</p>{% endif %}
   <div class="segmented">
     {% for value, label in options %}
@@ -61,23 +61,16 @@
               {% endfor %}
             </select>
           </div>
-          {{ choice("contrast", [(0, t("customize.standard"))] + [(1, "+1"), (2, "+2"), (3, "+3"), (4, "+4"), (5, t("customize.contrast_max"))], prefs.contrast, t("customize.contrast"), t("customize.contrast_hint")) }}
+          {{ choice("contrast", [(0, t("customize.standard")), (1, t("customize.contrast_high")), (2, t("customize.contrast_max"))], prefs.contrast, t("customize.contrast")) }}
         </div>
         <div class="preference-grid">
           {{ choice("line_height", [(0, t("customize.standard")), (1, t("customize.wide")), (2, t("customize.extra_wide"))], prefs.line_height, t("customize.line_spacing")) }}
-          {{ choice("letter_spacing", [(0, t("customize.standard")), (1, t("customize.wide")), (2, t("customize.extra_wide"))], prefs.letter_spacing, t("customize.letter_spacing")) }}
-        </div>
-        <div class="preference-grid">
           <div class="motion-preference">
             <label class="switch">
               <input type="checkbox" name="reduce_motion" value="1"{% if prefs.reduce_motion %} checked{% endif %}>
               <span class="track" aria-hidden="true"></span>
               <span>{{ t("customize.reduce_motion") }}</span>
             </label>
-          </div>
-          <div class="field">
-            <label for="sidebar_width">{{ t("customize.sidebar_width") }} <output for="sidebar_width" id="sidebar_width_value">{{ prefs.sidebar_width }} px</output></label>
-            <input type="range" id="sidebar_width" name="sidebar_width" min="200" max="420" step="10" value="{{ prefs.sidebar_width }}">
           </div>
         </div>
       </section>
@@ -99,15 +92,24 @@
       </section>
 
       <section class="customize-options" id="more-appearance" aria-labelledby="more-appearance-title">
-        <h2 class="customize-options-heading" id="more-appearance-title">{{ t("customize.more_options") }}</h2>
+        <h2 class="customize-options-heading" id="more-appearance-title">{{ t("customize.advanced") }}</h2>
+        <details class="customize-extra" id="layout">
+          <summary><span id="layout-title">{{ t("customize.layout") }}</span>{{ icon("chevron-down") }}</summary>
+          <div class="customize-extra-body stack">
+            <div class="preference-grid">
+              {{ choice("letter_spacing", [(0, t("customize.standard")), (1, t("customize.wide")), (2, t("customize.extra_wide"))], prefs.letter_spacing, t("customize.letter_spacing")) }}
+              <div class="field">
+                <label for="sidebar_width">{{ t("customize.sidebar_width") }} <output for="sidebar_width" id="sidebar_width_value">{{ prefs.sidebar_width }} px</output></label>
+                <input type="range" id="sidebar_width" name="sidebar_width" min="200" max="420" step="10" value="{{ prefs.sidebar_width }}">
+              </div>
+            </div>
+          </div>
+        </details>
+
         <details class="customize-extra" id="highlighting">
           <summary><span id="semantic-title">{{ t("customize.semantic") }}</span>{{ icon("chevron-down") }}</summary>
           <div class="customize-extra-body stack">
-            <div class="semantic-grid">
-              {% for key in ["bold", "italic", "code", "link", "heading"] %}
-              {{ choice("semantic_" ~ key, [(0, t("customize.off")), (1, t("customize.subtle")), (2, t("customize.strong"))], prefs["semantic_" ~ key], t("customize.semantic_" ~ key)) }}
-              {% endfor %}
-            </div>
+            {{ choice("highlight", [(0, t("customize.off")), (1, t("customize.subtle")), (2, t("customize.strong"))], prefs.highlight, t("customize.semantic"), t("customize.highlight_hint"), legend_hidden=True) }}
           </div>
         </details>
 
@@ -159,24 +161,26 @@
             </div>
           </div>
         </details>
-      </section>
 
-      <section class="settings-section stack" id="easter-eggs" aria-labelledby="easter-eggs-title">
-        <h2 id="easter-eggs-title">{{ t("customize.eggs") }}</h2>
-        <div class="preference-grid">
-          {% for egg in ["mascot_motion", "mascot_shades", "konami"] %}
-          {%- set offered = settings.get("easter_" ~ egg, 1) %}
-          <div class="motion-preference">
-            <label class="switch">
-              <input type="checkbox" name="egg_{{ egg }}" value="1"{% if prefs["egg_" ~ egg] %} checked{% endif %}{% if not offered %} disabled aria-describedby="egg-{{ egg }}-hint"{% endif %}>
-              <span class="track" aria-hidden="true"></span>
-              <span>{{ t("customize.egg_" ~ egg) }}</span>
-            </label>
-            {% if not offered %}<p class="hint mt-0" id="egg-{{ egg }}-hint">{{ t("customize.egg_site_off") }}</p>{% endif %}
+        <details class="customize-extra" id="easter-eggs">
+          <summary><span id="easter-eggs-title">{{ t("customize.eggs") }}</span>{{ icon("chevron-down") }}</summary>
+          <div class="customize-extra-body stack">
+            <div class="preference-grid">
+              {% for egg in ["mascot_motion", "mascot_shades", "konami"] %}
+              {%- set offered = settings.get("easter_" ~ egg, 1) %}
+              <div class="motion-preference">
+                <label class="switch">
+                  <input type="checkbox" name="egg_{{ egg }}" value="1"{% if prefs["egg_" ~ egg] %} checked{% endif %}{% if not offered %} disabled aria-describedby="egg-{{ egg }}-hint"{% endif %}>
+                  <span class="track" aria-hidden="true"></span>
+                  <span>{{ t("customize.egg_" ~ egg) }}</span>
+                </label>
+                {% if not offered %}<p class="hint mt-0" id="egg-{{ egg }}-hint">{{ t("customize.egg_site_off") }}</p>{% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            <p class="mb-0"><a href="{{ url_for('easter_eggs.index') }}">{{ t("eggs.page_link") }}</a></p>
           </div>
-          {% endfor %}
-        </div>
-        <p class="mb-0"><a href="{{ url_for('easter_eggs.index') }}">{{ t("eggs.page_link") }}</a></p>
+        </details>
       </section>
     </form>
   </div>

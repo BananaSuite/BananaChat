@@ -1,12 +1,26 @@
 {#- Confirmation before a high-impact action (web/admin/_reauth.py). Import it "with context": the field
     renders only while this browser session has not signed in or confirmed in the last ten minutes.
-    With *needed_for*, the field is optional and its hint says when the action needs it. -#}
+    With *needed_for*, the field is optional and its hint says when the action needs it. A linked account
+    can also confirm with BananaWiki Hosting (the form at the end of admin/_layout.html); an account
+    without a password of its own (and without two-step codes) only that way. -#}
 {% macro reauth_field(id, needed_for=none) -%}
 {% if reauth_needed() %}
+{% if acting %}
+<p class="hint" id="{{ id }}-hint">{% if needed_for %}A confirmation is needed {{ needed_for }}, and {% else %}This needs a confirmation, which {% endif %}is refused while a BananaWiki Hosting administrator is signed in as this account.</p>
+{% else %}
+{%- set with_password = reauth_has_password() %}
+{%- set with_secret = with_password or reauth_two_step() %}
+{%- set with_hosting = reauth_hosting() %}
 <div class="field field-narrow">
-  <label for="{{ id }}"{% if not needed_for %} class="required"{% endif %}>Your password or authenticator code</label>
-  <input type="password" id="{{ id }}" name="reauth_secret"{% if not needed_for %} required{% endif %} maxlength="1024" autocomplete="current-password" spellcheck="false" aria-describedby="{{ id }}-hint">
-  <span class="hint" id="{{ id }}-hint">{% if needed_for %}Needed {{ needed_for }}. {% endif %}Not asked again for 10 minutes.</span>
+  {% if with_secret %}
+  <label for="{{ id }}"{% if not needed_for and not with_hosting %} class="required"{% endif %}>{{ "Your password or authenticator code" if with_password else "Your authenticator code" }}</label>
+  <input type="password" id="{{ id }}" name="reauth_secret"{% if not needed_for and not with_hosting %} required{% endif %} maxlength="1024" autocomplete="current-password" spellcheck="false" aria-describedby="{{ id }}-hint">
+  {% endif %}
+  {% if with_hosting %}
+  <div class="row"><button type="submit" class="btn btn-sm" form="reauth-hosting">Confirm with BananaWiki Hosting</button></div>
+  {% endif %}
+  <span class="hint" id="{{ id }}-hint">{% if needed_for %}Needed {{ needed_for }}. {% endif %}{% if with_hosting and with_secret %}Enter it, or confirm with BananaWiki Hosting first. {% elif with_hosting %}Confirm with BananaWiki Hosting first. {% elif not with_secret %}Set a password or two-step codes on your account page to confirm. {% endif %}Not asked again for 10 minutes.</span>
 </div>
+{% endif %}
 {% endif %}
 {%- endmacro %}
